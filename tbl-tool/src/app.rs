@@ -182,12 +182,14 @@ impl TblApp {
                 for row in 0..table.records.len() {
                     for (col, msg) in validate_table_row(table, row) {
                         let val = table.records[row].get(col).map(|s| s.as_str()).unwrap_or("");
-                        errors.push(format!("[验证] {}/{} 第{}行第{}列: \"{}\" {}", group.name, table.name, row + 1, col + 1, val, msg));
+                        let pos = format!("{}{}", crate::ui::grid::col_letter(col), row + 1);
+                        errors.push(format!("[验证] {}/{} {}: \"{}\" {}", group.name, table.name, pos, val, msg));
                     }
                     if let Some(idx) = index_col {
                         let id = table.records[row].get(idx).map(|s| s.as_str()).unwrap_or("");
                         if !id.is_empty() && !seen_ids.insert(id.to_string()) {
-                            errors.push(format!("[验证] {}/{} 第{}行: ID \"{}\" 重复", group.name, table.name, row + 1, id));
+                            let pos = format!("{}{}", crate::ui::grid::col_letter(idx), row + 1);
+                            errors.push(format!("[验证] {}/{} {}: ID \"{}\" 重复", group.name, table.name, pos, id));
                         }
                     }
                 }
@@ -198,11 +200,13 @@ impl TblApp {
                 for row in 0..constant.entries.len() {
                     for (col, msg) in validate_constant_row(constant, row) {
                         let val = match col { 0 => &constant.entries[row].name, 2 => &constant.entries[row].value, _ => "" };
-                        errors.push(format!("[验证] {}/{} 第{}行第{}列: \"{}\" {}", group.name, constant.name, row + 1, col + 1, val, msg));
+                        let pos = format!("{}{}", crate::ui::grid::col_letter(col), row + 1);
+                        errors.push(format!("[验证] {}/{} {}: \"{}\" {}", group.name, constant.name, pos, val, msg));
                     }
                     let n = &constant.entries[row].name;
                     if !n.is_empty() && !seen_names.insert(n.clone()) {
-                        errors.push(format!("[验证] {}/{} 第{}行: name \"{}\" 重复", group.name, constant.name, row + 1, n));
+                        let pos = format!("A{}", row + 1);
+                        errors.push(format!("[验证] {}/{} {}: name \"{}\" 重复", group.name, constant.name, pos, n));
                     }
                 }
             }
