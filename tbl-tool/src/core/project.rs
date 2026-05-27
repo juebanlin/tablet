@@ -30,10 +30,12 @@ output = "gen/client"
 [ui]
 # 点击空白区域时自动保存当前编辑 (false 则只有回车才保存)
 auto_commit_on_blur = true
+# 日志文件级别: debug, info, warn, error
+log_level = "debug"
 "#;
 
 pub fn load_project(workdir: &Path) -> Result<Project> {
-    let config_path = workdir.join("tbl-tool.toml");
+    let config_path = workdir.join(crate::CONFIG_FILE);
 
     if !config_path.exists() {
         std::fs::write(&config_path, DEFAULT_CONFIG)?;

@@ -43,7 +43,8 @@ pub fn render(ui: &mut egui::Ui, app: &mut TblApp) {
                 .body(|ui| {
                     for table in &group.tables {
                         let selected = matches!(&app.selected, Some(SelectedNode::Table { group: g, name: n }) if g == &group.name && n == &table.name);
-                        let resp = ui.selectable_label(selected, format!("  📊 {}", table.name));
+                        let label = if table.dirty { format!("  📊 {} *", table.name) } else { format!("  📊 {}", table.name) };
+                        let resp = ui.selectable_label(selected, label);
                         if resp.clicked() {
                             app.selected = Some(SelectedNode::Table {
                                 group: group.name.clone(),
@@ -78,7 +79,8 @@ pub fn render(ui: &mut egui::Ui, app: &mut TblApp) {
                     }
                     for constant in &group.constants {
                         let selected = matches!(&app.selected, Some(SelectedNode::Constant { group: g, name: n }) if g == &group.name && n == &constant.name);
-                        let resp = ui.selectable_label(selected, format!("  📋 {}", constant.name));
+                        let label = if constant.dirty { format!("  📋 {} *", constant.name) } else { format!("  📋 {}", constant.name) };
+                        let resp = ui.selectable_label(selected, label);
                         if resp.clicked() {
                             app.selected = Some(SelectedNode::Constant {
                                 group: group.name.clone(),

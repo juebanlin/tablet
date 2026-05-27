@@ -13,6 +13,7 @@ pub struct TblApp {
     pub context_row: Option<usize>,
     pub context_pos: egui::Pos2,
     pub auto_commit_on_blur: bool,
+    theme_applied: bool,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -79,9 +80,29 @@ impl TblApp {
             context_row: None,
             context_pos: egui::Pos2::ZERO,
             auto_commit_on_blur: auto_commit,
+            theme_applied: false,
         };
         app.log(format!("已加载 {} 个 Group", group_count));
         app
+    }
+
+    fn apply_theme(&self, ctx: &egui::Context) {
+        let mut visuals = egui::Visuals::light();
+        visuals.window_rounding = egui::Rounding::ZERO;
+        visuals.window_shadow = egui::epaint::Shadow::NONE;
+        visuals.popup_shadow = egui::epaint::Shadow::NONE;
+        visuals.widgets.noninteractive.rounding = egui::Rounding::ZERO;
+        visuals.widgets.inactive.rounding = egui::Rounding::ZERO;
+        visuals.widgets.hovered.rounding = egui::Rounding::ZERO;
+        visuals.widgets.active.rounding = egui::Rounding::ZERO;
+        visuals.widgets.open.rounding = egui::Rounding::ZERO;
+        visuals.menu_rounding = egui::Rounding::ZERO;
+        ctx.set_visuals(visuals);
+
+        let mut style = (*ctx.style()).clone();
+        style.spacing.button_padding = egui::vec2(4.0, 2.0);
+        style.spacing.item_spacing = egui::vec2(6.0, 4.0);
+        ctx.set_style(style);
     }
 
     pub fn find_table(&self, group: &str, name: &str) -> Option<&Table> {
@@ -103,6 +124,54 @@ impl TblApp {
         self.logs.push(format!("{} {}", now, msg));
     }
 
+    pub fn mark_table_dirty(&mut self, group: &str, name: &str) {
+        if let Some(g) = self.project.groups.iter_mut().find(|g| g.name == group) {
+            if let Some(t) = g.tables.iter_mut().find(|t| t.name == name) {
+                t.update_dirty();
+            }
+        }
+    }
+
+    pub fn mark_constant_dirty(&mut self, group: &str, name: &str) {
+        if let Some(g) = self.project.groups.iter_mut().find(|g| g.name == group) {
+            if let Some(c) = g.constants.iter_mut().find(|c| c.name == name) {
+                c.update_dirty();
+            }
+        }
+    }
+
+    pub fn save_all(&mut self) {
+        use crate::core::tbl;
+        let mut count = 0;
+        for group in &mut self.project.groups {
+            for table in &mut group.tables {
+                if table.dirty {
+                    let content = tbl::serialize_table(table);
+                    if std::fs::write(&table.path, &content).is_ok() {
+                        table.original = content;
+                        table.dirty = false;
+                        count += 1;
+                    }
+                }
+            }
+            for constant in &mut group.constants {
+                if constant.dirty {
+                    let content = tbl::serialize_constant(constant);
+                    if std::fs::write(&constant.path, &content).is_ok() {
+                        constant.original = content;
+                        constant.dirty = false;
+                        count += 1;
+                    }
+                }
+            }
+        }
+        if count > 0 {
+            self.log(format!("已保存 {} 个文件", count));
+        } else {
+            self.log("无修改需要保存".to_string());
+        }
+    }
+
     pub fn reload(&mut self) {
         match crate::core::project::load_project(&self.project.workdir) {
             Ok(p) => {
@@ -119,7 +188,6 @@ impl TblApp {
         let val = self.edit_state.edit_buffer.clone();
         if let Some(g) = self.project.groups.iter_mut().find(|g| g.name == group) {
             if let Some(t) = g.tables.iter_mut().find(|t| t.name == name) {
-                // Only auto-expand if value is non-empty
                 if !val.is_empty() {
                     let cols = t.schema.fields.len();
                     while t.records.len() <= row {
@@ -130,12 +198,14 @@ impl TblApp {
                     while record.len() <= col { record.push(String::new()); }
                     record[col] = val;
                 }
+                t.update_dirty();
             }
         }
         self.edit_state.editing = None;
     }
 
     pub fn commit_header_edit(&mut self, group: &str, name: &str, header_row: usize, col: usize) {
+        let mut keyword_err = None;
         if let Some(g) = self.project.groups.iter_mut().find(|g| g.name == group) {
             if let Some(t) = g.tables.iter_mut().find(|t| t.name == name) {
                 if let Some(field) = t.schema.fields.get_mut(col) {
@@ -149,13 +219,17 @@ impl TblApp {
                             if !is_reserved_keyword(&v) {
                                 field.name = v;
                             } else {
-                                self.log(format!("字段名 '{}' 是保留关键字，不允许使用", val));
+                                keyword_err = Some(val);
                             }
                         }
                         _ => {}
                     }
                 }
+                t.update_dirty();
             }
+        }
+        if let Some(kw) = keyword_err {
+            self.log(format!("字段名 '{}' 是保留关键字，不允许使用", kw));
         }
         self.edit_state.editing = None;
     }
@@ -167,6 +241,7 @@ impl TblApp {
                 let row = vec![String::new(); cols];
                 let at = at.min(t.records.len());
                 t.records.insert(at, row);
+                t.update_dirty();
             }
         }
     }
@@ -176,6 +251,7 @@ impl TblApp {
             if let Some(t) = g.tables.iter_mut().find(|t| t.name == name) {
                 if at < t.records.len() {
                     t.records.remove(at);
+                    t.update_dirty();
                 }
             }
         }
@@ -194,6 +270,7 @@ impl TblApp {
                 for record in &mut t.records {
                     record.insert(at.min(record.len()), String::new());
                 }
+                t.update_dirty();
             }
         }
     }
@@ -206,6 +283,7 @@ impl TblApp {
                     for record in &mut t.records {
                         if at < record.len() { record.remove(at); }
                     }
+                    t.update_dirty();
                 }
             }
         }
@@ -225,6 +303,7 @@ impl TblApp {
                             while record.len() <= col { record.push(String::new()); }
                             record[col] = val.to_string();
                         }
+                        t.update_dirty();
                     }
                 }
             }
@@ -247,6 +326,7 @@ impl TblApp {
                                 _ => {}
                             }
                         }
+                        c.update_dirty();
                     }
                 }
             }
@@ -278,6 +358,7 @@ impl TblApp {
                                 }
                             }
                         }
+                        t.update_dirty();
                     }
                 }
                 GridSource::Constant => {
@@ -304,6 +385,7 @@ impl TblApp {
                                 }
                             }
                         }
+                        c.update_dirty();
                     }
                 }
             }
@@ -362,6 +444,7 @@ impl TblApp {
                 let end = end.min(t.records.len());
                 if start < end {
                     t.records.drain(start..end);
+                    t.update_dirty();
                     self.log(format!("已删除 {} 行", end - start));
                 }
             }
@@ -405,6 +488,7 @@ impl TblApp {
                                 _ => {}
                             }
                         }
+                        c.update_dirty();
                     }
                 }
                 self.edit_state.editing = None;
@@ -419,6 +503,7 @@ impl TblApp {
                 if let Some(g) = self.project.groups.iter_mut().find(|g| g.name == group) {
                     if let Some(t) = g.tables.iter_mut().find(|t| t.name == name) {
                         clear_cells(&self.edit_state.selected, &mut t.records);
+                        t.update_dirty();
                     }
                 }
             }
@@ -466,6 +551,7 @@ impl TblApp {
                             }
                             Selection::None => {}
                         }
+                        c.update_dirty();
                     }
                 }
             }
@@ -505,6 +591,10 @@ impl TblApp {
 
 impl eframe::App for TblApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        if !self.theme_applied {
+            self.apply_theme(ctx);
+            self.theme_applied = true;
+        }
         egui::SidePanel::left("tree_panel")
             .default_width(200.0)
             .show(ctx, |ui| {
@@ -524,7 +614,10 @@ impl eframe::App for TblApp {
                     self.log("Excel 编辑功能待实现".to_string());
                 }
                 if ui.button("保存").clicked() {
-                    self.log("保存功能待实现".to_string());
+                    self.save_all();
+                }
+                if ui.button("重新加载").clicked() {
+                    self.reload();
                 }
             });
         });
@@ -723,8 +816,8 @@ impl TblApp {
             PendingAction::NewTable { group } => {
                 if let Some(g) = self.project.groups.iter_mut().find(|g| g.name == *group) {
                     let path = g.dir.join(format!("{}.tbl", &self.input_name));
-                    let content = "#!tbl v2\n#mode table\n#index id\n#desc ID\n#type int\n#export 前后端\n#field id\n---\n";
-                    let _ = std::fs::write(&path, content);
+                    let content = "#!tbl v2\n#mode table\n#index id\n#desc ID\n#type int\n#export \n#field id\n---\n".to_string();
+                    let _ = std::fs::write(&path, &content);
                     g.tables.push(Table {
                         name: self.input_name.clone(),
                         path: path.clone(),
@@ -738,6 +831,8 @@ impl TblApp {
                             index: "id".to_string(),
                         },
                         records: Vec::new(),
+                        dirty: false,
+                        original: content,
                     });
                     self.log(format!("新建 Table: {}/{}", group, self.input_name));
                 }
@@ -745,12 +840,14 @@ impl TblApp {
             PendingAction::NewConstant { group } => {
                 if let Some(g) = self.project.groups.iter_mut().find(|g| g.name == *group) {
                     let path = g.dir.join(format!("{}.tbl", &self.input_name));
-                    let content = "#!tbl v2\n#mode constant\n---\n";
-                    let _ = std::fs::write(&path, content);
+                    let content = "#!tbl v2\n#mode constant\n---\n".to_string();
+                    let _ = std::fs::write(&path, &content);
                     g.constants.push(Constant {
                         name: self.input_name.clone(),
                         path: path.clone(),
                         entries: Vec::new(),
+                        dirty: false,
+                        original: content,
                     });
                     self.log(format!("新建 Constant: {}/{}", group, self.input_name));
                 }

@@ -139,9 +139,13 @@ fn build_table_grid(app: &TblApp, group: &str, name: &str) -> Option<GridData> {
 fn build_constant_grid(app: &TblApp, group: &str, name: &str) -> Option<GridData> {
     let constant = app.find_constant(group, name)?;
 
-    let header_row: Vec<HeaderCell> = ["name", "type", "value", "export", "desc"].iter().map(|&n| HeaderCell {
-        text: n.to_string(), kind: CellKind::ReadOnly, color: egui::Color32::BLACK,
-    }).collect();
+    let header_row = vec![
+        HeaderCell { text: "name".to_string(), kind: CellKind::ReadOnly, color: egui::Color32::BLACK },
+        HeaderCell { text: "type".to_string(), kind: CellKind::ReadOnly, color: egui::Color32::from_rgb(80, 130, 210) },
+        HeaderCell { text: "value".to_string(), kind: CellKind::ReadOnly, color: egui::Color32::BLACK },
+        HeaderCell { text: "export".to_string(), kind: CellKind::ReadOnly, color: egui::Color32::from_rgb(80, 160, 80) },
+        HeaderCell { text: "desc".to_string(), kind: CellKind::ReadOnly, color: egui::Color32::BLACK },
+    ];
 
     let col_defs = vec![
         ColDef { kind: CellKind::Text },

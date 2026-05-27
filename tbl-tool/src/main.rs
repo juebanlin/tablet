@@ -10,6 +10,10 @@ use clap::Parser;
 use log::info;
 use simplelog::*;
 
+pub const CONFIG_FILE: &str = "tbl-tool.toml";
+pub const LOCK_FILE: &str = ".tbl-tool.lock";
+pub const LOG_FILE: &str = "tbl-tool.log";
+
 #[derive(Parser)]
 #[command(name = "tbl-tool", version = "0.1.0")]
 struct Cli {
@@ -29,15 +33,34 @@ fn main() -> anyhow::Result<()> {
         }
     };
 
-    let log_path = workdir.join("tbl-tool.log");
-    let log_file = std::fs::File::create(&log_path)?;
-    CombinedLogger::init(vec![
-        WriteLogger::new(LevelFilter::Info, Config::default(), log_file),
-    ])?;
-
-    info!("workdir: {}", workdir.display());
+    let lock_path = workdir.join(LOCK_FILE);
+    if let Ok(content) = std::fs::read_to_string(&lock_path) {
+        if let Ok(pid) = content.trim().parse::<u32>() {
+            if is_process_alive(pid) {
+                eprintln!("另一个 TBL Tool 实例正在运行 (PID: {})", pid);
+                std::process::exit(1);
+            }
+        }
+    }
+    std::fs::write(&lock_path, std::process::id().to_string())?;
 
     let project = core::project::load_project(&workdir)?;
+
+    let log_level = project.config.ui.as_ref()
+        .and_then(|u| u.log_level.as_deref())
+        .unwrap_or("debug");
+    let file_level = match log_level {
+        "info" => LevelFilter::Info,
+        "warn" => LevelFilter::Warn,
+        "error" => LevelFilter::Error,
+        _ => LevelFilter::Debug,
+    };
+
+    let log_path = workdir.join(LOG_FILE);
+    let log_file = std::fs::File::create(&log_path)?;
+    CombinedLogger::init(vec![
+        WriteLogger::new(file_level, Config::default(), log_file),
+    ])?;
     info!("loaded {} groups", project.groups.len());
 
     let options = eframe::NativeOptions {
@@ -48,14 +71,26 @@ fn main() -> anyhow::Result<()> {
         ..Default::default()
     };
 
-    eframe::run_native(
+    let result = eframe::run_native(
         "TBL Tool",
         options,
         Box::new(|cc| {
             setup_fonts(&cc.egui_ctx);
             Ok(Box::new(app::TblApp::new(project)))
         }),
-    ).map_err(|e| anyhow::anyhow!("{}", e))
+    ).map_err(|e| anyhow::anyhow!("{}", e));
+
+    let _ = std::fs::remove_file(&lock_path);
+    result
+}
+
+fn is_process_alive(pid: u32) -> bool {
+    use std::process::Command;
+    Command::new("tasklist")
+        .args(["/FI", &format!("PID eq {}", pid), "/NH"])
+        .output()
+        .map(|o| String::from_utf8_lossy(&o.stdout).contains(&pid.to_string()))
+        .unwrap_or(false)
 }
 
 fn setup_fonts(ctx: &eframe::egui::Context) {

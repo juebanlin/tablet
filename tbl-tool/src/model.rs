@@ -40,6 +40,7 @@ pub struct ClientExport {
 pub struct UiConfig {
     #[serde(default = "default_true")]
     pub auto_commit_on_blur: bool,
+    pub log_level: Option<String>,
 }
 
 fn default_true() -> bool { true }
@@ -70,6 +71,14 @@ pub struct Table {
     pub path: PathBuf,
     pub schema: TableSchema,
     pub records: Vec<Vec<String>>,
+    pub dirty: bool,
+    pub original: String,
+}
+
+impl Table {
+    pub fn update_dirty(&mut self) {
+        self.dirty = crate::core::tbl::serialize_table(self) != self.original;
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -91,6 +100,14 @@ pub struct Constant {
     pub name: String,
     pub path: PathBuf,
     pub entries: Vec<ConstEntry>,
+    pub dirty: bool,
+    pub original: String,
+}
+
+impl Constant {
+    pub fn update_dirty(&mut self) {
+        self.dirty = crate::core::tbl::serialize_constant(self) != self.original;
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -126,6 +143,15 @@ impl Export {
         match self {
             Self::Unselected => "",
             Self::ClientServer => "前后端",
+            Self::ClientOnly => "客户端",
+            Self::ServerOnly => "服务器",
+            Self::None => "不导出",
+        }
+    }
+
+    pub fn to_tbl(&self) -> &str {
+        match self {
+            Self::ClientServer | Self::Unselected => "",
             Self::ClientOnly => "客户端",
             Self::ServerOnly => "服务器",
             Self::None => "不导出",

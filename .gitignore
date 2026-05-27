@@ -13,6 +13,8 @@ Thumbs.db
 
 # Tool cache
 .tbl-cache/
+.tbl-tool.lock
+tbl-tool.log
 
 # Claude
 .claude/

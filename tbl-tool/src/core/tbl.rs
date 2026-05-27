@@ -86,7 +86,7 @@ fn parse_table(
 
     let name = path.file_stem().unwrap_or_default().to_string_lossy().to_string();
 
-    Ok(TblFile::Table(Table {
+    let mut table = Table {
         name,
         path: path.to_path_buf(),
         schema: TableSchema {
@@ -94,7 +94,11 @@ fn parse_table(
             index: index.to_string(),
         },
         records,
-    }))
+        dirty: false,
+        original: String::new(),
+    };
+    table.original = serialize_table(&table);
+    Ok(TblFile::Table(table))
 }
 
 fn parse_constant(path: &Path, data_lines: &[&str]) -> Result<TblFile> {
@@ -116,14 +120,47 @@ fn parse_constant(path: &Path, data_lines: &[&str]) -> Result<TblFile> {
 
     let name = path.file_stem().unwrap_or_default().to_string_lossy().to_string();
 
-    Ok(TblFile::Constant(Constant {
+    let mut constant = Constant {
         name,
         path: path.to_path_buf(),
         entries,
-    }))
+        dirty: false,
+        original: String::new(),
+    };
+    constant.original = serialize_constant(&constant);
+    Ok(TblFile::Constant(constant))
 }
 
 pub enum TblFile {
     Table(Table),
     Constant(Constant),
+}
+
+pub fn serialize_table(table: &Table) -> String {
+    let fields = &table.schema.fields;
+    let mut s = String::new();
+    s.push_str("#!tbl v2\n");
+    s.push_str("#mode table\n");
+    s.push_str(&format!("#index {}\n", table.schema.index));
+    s.push_str(&format!("#desc {}\n", fields.iter().map(|f| f.desc.as_str()).collect::<Vec<_>>().join("|")));
+    s.push_str(&format!("#type {}\n", fields.iter().map(|f| f.tbl_type.as_str()).collect::<Vec<_>>().join("|")));
+    s.push_str(&format!("#export {}\n", fields.iter().map(|f| f.export.to_tbl()).collect::<Vec<_>>().join("|")));
+    s.push_str(&format!("#field {}\n", fields.iter().map(|f| f.name.as_str()).collect::<Vec<_>>().join("|")));
+    s.push_str("---\n");
+    for row in &table.records {
+        s.push_str(&row.join("|"));
+        s.push('\n');
+    }
+    s
+}
+
+pub fn serialize_constant(constant: &Constant) -> String {
+    let mut s = String::new();
+    s.push_str("#!tbl v2\n");
+    s.push_str("#mode constant\n");
+    s.push_str("---\n");
+    for e in &constant.entries {
+        s.push_str(&format!("{}|{}|{}|{}|{}\n", e.name, e.tbl_type, e.value, e.export.to_tbl(), e.desc));
+    }
+    s
 }
