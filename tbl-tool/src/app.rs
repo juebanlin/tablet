@@ -167,7 +167,57 @@ impl TblApp {
         }
     }
 
+    fn validate(&self) -> Vec<String> {
+        let mut errors = Vec::new();
+        for group in &self.project.groups {
+            for table in &group.tables {
+                if table.deleted { continue; }
+                let index_col = table.schema.fields.iter().position(|f| f.name == table.schema.index);
+                if let Some(idx) = index_col {
+                    let mut seen_ids = std::collections::HashSet::new();
+                    for (i, row) in table.records.iter().enumerate() {
+                        let id = row.get(idx).map(|s| s.as_str()).unwrap_or("");
+                        if id.is_empty() { continue; }
+                        if id.parse::<i64>().is_err() {
+                            errors.push(format!("[验证] {}/{} 第{}行: ID \"{}\" 必须是数字", group.name, table.name, i + 1, id));
+                        }
+                        if !seen_ids.insert(id.to_string()) {
+                            errors.push(format!("[验证] {}/{} 第{}行: ID \"{}\" 重复", group.name, table.name, i + 1, id));
+                        }
+                    }
+                }
+            }
+            for constant in &group.constants {
+                if constant.deleted { continue; }
+                let mut seen_names = std::collections::HashSet::new();
+                for (i, entry) in constant.entries.iter().enumerate() {
+                    if entry.name.is_empty() { continue; }
+                    if entry.name.contains(' ') {
+                        errors.push(format!("[验证] {}/{} 第{}行: name \"{}\" 不能含空格", group.name, constant.name, i + 1, entry.name));
+                    }
+                    if !is_valid_identifier(&entry.name) {
+                        errors.push(format!("[验证] {}/{} 第{}行: name \"{}\" 不是合法标识符", group.name, constant.name, i + 1, entry.name));
+                    }
+                    if is_java_keyword(&entry.name) || is_lua_keyword(&entry.name) {
+                        errors.push(format!("[验证] {}/{} 第{}行: name \"{}\" 是语言关键字", group.name, constant.name, i + 1, entry.name));
+                    }
+                    if !seen_names.insert(&entry.name) {
+                        errors.push(format!("[验证] {}/{} 第{}行: name \"{}\" 重复", group.name, constant.name, i + 1, entry.name));
+                    }
+                }
+            }
+        }
+        errors
+    }
+
     pub fn save_all(&mut self) {
+        let errors = self.validate();
+        if !errors.is_empty() {
+            for e in &errors { self.logs.push(e.clone()); }
+            self.logs.push(format!("[保存失败] 共 {} 个验证错误", errors.len()));
+            return;
+        }
+
         use crate::core::tbl;
         let mut count = 0;
         let mut deleted = 0;
@@ -368,7 +418,7 @@ impl TblApp {
                         }
                         if let Some(entry) = c.entries.get_mut(row) {
                             match col {
-                                0 => entry.name = val.to_string(),
+                                0 => entry.name = val.trim().replace(' ', ""),
                                 2 => entry.value = val.to_string(),
                                 4 => entry.desc = val.to_string(),
                                 _ => {}
@@ -972,4 +1022,35 @@ fn clear_cells(sel: &Selection, data: &mut Vec<Vec<String>>) {
         Selection::Col(c) => { for row in data.iter_mut() { if let Some(cell) = row.get_mut(*c) { cell.clear(); } } }
         Selection::None => {}
     }
+}
+
+fn is_valid_identifier(s: &str) -> bool {
+    let mut chars = s.chars();
+    match chars.next() {
+        Some(c) if c.is_ascii_alphabetic() || c == '_' => {}
+        _ => return false,
+    }
+    chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
+
+fn is_java_keyword(s: &str) -> bool {
+    matches!(s,
+        "abstract" | "assert" | "boolean" | "break" | "byte" | "case" | "catch" |
+        "char" | "class" | "const" | "continue" | "default" | "do" | "double" |
+        "else" | "enum" | "extends" | "final" | "finally" | "float" | "for" |
+        "goto" | "if" | "implements" | "import" | "instanceof" | "int" |
+        "interface" | "long" | "native" | "new" | "package" | "private" |
+        "protected" | "public" | "return" | "short" | "static" | "strictfp" |
+        "super" | "switch" | "synchronized" | "this" | "throw" | "throws" |
+        "transient" | "try" | "void" | "volatile" | "while" |
+        "true" | "false" | "null"
+    )
+}
+
+fn is_lua_keyword(s: &str) -> bool {
+    matches!(s,
+        "and" | "break" | "do" | "else" | "elseif" | "end" | "false" | "for" |
+        "function" | "goto" | "if" | "in" | "local" | "nil" | "not" | "or" |
+        "repeat" | "return" | "then" | "true" | "until" | "while"
+    )
 }
