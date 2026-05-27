@@ -14,6 +14,8 @@ pub struct ProjectConfig {
     pub export: Option<ExportConfig>,
     #[serde(default)]
     pub ui: Option<UiConfig>,
+    #[serde(default)]
+    pub separators: crate::core::types::SeparatorsSection,
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]

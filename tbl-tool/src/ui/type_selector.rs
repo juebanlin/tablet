@@ -1,6 +1,6 @@
 use eframe::egui;
 use crate::app::CellPos;
-use crate::core::types::{BaseType, Paradigm, TblType};
+use crate::core::types::{BaseType, Paradigm, TblType, SeparatorsSection};
 use crate::ui::grid_model::GridSource;
 
 #[derive(Clone, Debug)]
@@ -54,7 +54,7 @@ impl TypeSelectorState {
     }
 }
 
-pub fn render_type_selector(ctx: &egui::Context, state: &mut TypeSelectorState) -> Option<String> {
+pub fn render_type_selector(ctx: &egui::Context, state: &mut TypeSelectorState, sep: &SeparatorsSection) -> Option<String> {
     if !state.open { return None; }
 
     let mut result: Option<String> = None;
@@ -107,7 +107,7 @@ pub fn render_type_selector(ctx: &egui::Context, state: &mut TypeSelectorState) 
                     ui.separator();
                     let tbl_type = state.current_type();
                     ui.label(egui::RichText::new(format!("结果: {}", tbl_type.to_type_string())).size(11.0));
-                    ui.label(egui::RichText::new(format!("示例: {}", tbl_type.example())).size(11.0));
+                    ui.label(egui::RichText::new(format!("示例: {}", tbl_type.example_with_sep(sep))).size(11.0));
                     ui.label(egui::RichText::new(format!("Java: {}", tbl_type.java_decl())).size(11.0).weak());
                     ui.label(egui::RichText::new(format!("Go:   {}", tbl_type.go_decl())).size(11.0).weak());
                     ui.label(egui::RichText::new(format!("Lua:  {}", tbl_type.lua_decl())).size(11.0).weak());

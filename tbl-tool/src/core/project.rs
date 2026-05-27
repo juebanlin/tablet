@@ -34,6 +34,50 @@ auto_commit_on_blur = true
 realtime_validate = false
 # 日志文件级别: debug, info, warn, error
 log_level = "debug"
+
+[separators]
+# 类型分隔符配置（按范式），默认值覆盖绝大多数场景
+Tuple2 = ","
+Tuple3 = ","
+Tuple4 = ","
+List = ";"
+Set = ";"
+
+[separators.Map]
+kv = ":"
+entry = ";"
+
+[separators.List_Tuple2]
+tuple = ","
+list = ";"
+
+[separators.List_Tuple3]
+tuple = ","
+list = ";"
+
+[separators.List_Tuple4]
+tuple = ","
+list = ";"
+
+[separators.Map_Tuple2]
+kv = ":"
+tuple = ","
+entry = ";"
+
+[separators.Map_Tuple3]
+kv = ":"
+tuple = ","
+entry = ";"
+
+[separators.Map_Tuple4]
+kv = ":"
+tuple = ","
+entry = ";"
+
+[separators.Map_List]
+kv = ":"
+item = ","
+entry = ";"
 "#;
 
 pub fn load_project(workdir: &Path) -> Result<Project> {

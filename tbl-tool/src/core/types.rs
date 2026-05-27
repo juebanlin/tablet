@@ -81,61 +81,6 @@ impl BaseType {
         }
     }
 
-    pub fn example(&self) -> &'static str {
-        match self {
-            BaseType::Int => "1",
-            BaseType::Long => "1000",
-            BaseType::Float => "1.5",
-            BaseType::Double => "3.14",
-            BaseType::Str => "abc",
-            BaseType::Bool => "true",
-        }
-    }
-
-    pub fn example2(&self) -> &'static str {
-        match self {
-            BaseType::Int => "2",
-            BaseType::Long => "2000",
-            BaseType::Float => "2.5",
-            BaseType::Double => "6.28",
-            BaseType::Str => "def",
-            BaseType::Bool => "false",
-        }
-    }
-
-    pub fn example3(&self) -> &'static str {
-        match self {
-            BaseType::Int => "3",
-            BaseType::Long => "3000",
-            BaseType::Float => "3.5",
-            BaseType::Double => "9.42",
-            BaseType::Str => "ghi",
-            BaseType::Bool => "true",
-        }
-    }
-
-    pub fn example_key(&self) -> &'static str {
-        match self {
-            BaseType::Int => "1",
-            BaseType::Long => "1000",
-            BaseType::Float => "1.0",
-            BaseType::Double => "1.0",
-            BaseType::Str => "hp",
-            _ => "?",
-        }
-    }
-
-    pub fn example_key2(&self) -> &'static str {
-        match self {
-            BaseType::Int => "2",
-            BaseType::Long => "2000",
-            BaseType::Float => "2.0",
-            BaseType::Double => "2.0",
-            BaseType::Str => "mp",
-            _ => "?",
-        }
-    }
-
     pub fn validate_regex(&self) -> &'static str {
         match self {
             BaseType::Int => r"^-?\d+$",
@@ -143,6 +88,61 @@ impl BaseType {
             BaseType::Float | BaseType::Double => r"^-?\d+(\.\d+)?$",
             BaseType::Str => r"^.*$",
             BaseType::Bool => r"^(true|false)$",
+        }
+    }
+
+    pub fn example_n(&self, idx: usize) -> &'static str {
+        match (self, idx % 3) {
+            (BaseType::Int, 0) => "1", (BaseType::Int, 1) => "2", (BaseType::Int, _) => "3",
+            (BaseType::Long, 0) => "1000", (BaseType::Long, 1) => "2000", (BaseType::Long, _) => "3000",
+            (BaseType::Float, 0) => "1.5", (BaseType::Float, 1) => "2.5", (BaseType::Float, _) => "3.5",
+            (BaseType::Double, 0) => "3.14", (BaseType::Double, 1) => "6.28", (BaseType::Double, _) => "9.42",
+            (BaseType::Str, 0) => "abc", (BaseType::Str, 1) => "def", (BaseType::Str, _) => "ghi",
+            (BaseType::Bool, 0) => "true", (BaseType::Bool, _) => "false",
+            _ => "?",
+        }
+    }
+
+    pub fn example_key_n(&self, idx: usize) -> &'static str {
+        match (self, idx % 2) {
+            (BaseType::Int, 0) => "1", (BaseType::Int, _) => "2",
+            (BaseType::Long, 0) => "1000", (BaseType::Long, _) => "2000",
+            (BaseType::Float, 0) => "1.0", (BaseType::Float, _) => "2.0",
+            (BaseType::Double, 0) => "1.0", (BaseType::Double, _) => "2.0",
+            (BaseType::Str, 0) => "hp", (BaseType::Str, _) => "mp",
+            _ => "?",
+        }
+    }
+
+    pub fn rand_value(&self) -> String {
+        use std::time::SystemTime;
+        let seed = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).unwrap_or_default().subsec_nanos();
+        match self {
+            BaseType::Int => format!("{}", (seed % 100) as i32 + 1),
+            BaseType::Long => format!("{}", (seed % 10000) as i64 + 1000),
+            BaseType::Float => format!("{:.1}", (seed % 100) as f32 / 10.0),
+            BaseType::Double => format!("{:.2}", (seed % 1000) as f64 / 100.0),
+            BaseType::Str => {
+                let words = ["fire", "ice", "wind", "earth", "light", "dark"];
+                words[(seed as usize) % words.len()].to_string()
+            }
+            BaseType::Bool => if seed % 2 == 0 { "true".to_string() } else { "false".to_string() },
+        }
+    }
+
+    pub fn rand_key(&self) -> String {
+        use std::time::SystemTime;
+        let seed = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).unwrap_or_default().subsec_nanos();
+        match self {
+            BaseType::Int => format!("{}", (seed % 50) as i32 + 1),
+            BaseType::Long => format!("{}", (seed % 5000) as i64 + 1000),
+            BaseType::Float => format!("{:.1}", (seed % 20) as f32 + 1.0),
+            BaseType::Double => format!("{:.1}", (seed % 20) as f64 + 1.0),
+            BaseType::Str => {
+                let keys = ["hp", "mp", "atk", "def", "spd", "crit"];
+                keys[(seed as usize) % keys.len()].to_string()
+            }
+            _ => "?".to_string(),
         }
     }
 }
@@ -379,27 +379,271 @@ impl TblType {
     }
 
     pub fn example(&self) -> String {
+        let sep = SeparatorsSection::default();
+        self.example_with_sep(&sep)
+    }
+
+    pub fn example_with_sep(&self, sep: &SeparatorsSection) -> String {
+        self.build_demo(sep, false)
+    }
+
+    pub fn random_demo(&self, sep: &SeparatorsSection) -> String {
+        self.build_demo(sep, true)
+    }
+
+    fn build_demo(&self, sep: &SeparatorsSection, random: bool) -> String {
         let p = &self.params;
+        let v = |bt: BaseType, idx: usize| -> String { if random { bt.rand_value() } else { bt.example_n(idx).to_string() } };
+        let k = |bt: BaseType, idx: usize| -> String { if random { bt.rand_key() } else { bt.example_key_n(idx).to_string() } };
         match &self.paradigm {
-            Paradigm::Base => p[0].example().to_string(),
-            Paradigm::Tuple2 => format!("{},{}", p[0].example(), p[1].example()),
-            Paradigm::Tuple3 => format!("{},{},{}", p[0].example(), p[1].example(), p[2].example()),
-            Paradigm::Tuple4 => format!("{},{},{},{}", p[0].example(), p[1].example(), p[2].example(), p[3].example()),
-            Paradigm::List => format!("{};{};{}", p[0].example(), p[0].example2(), p[0].example3()),
-            Paradigm::Set => format!("{};{};{}", p[0].example(), p[0].example2(), p[0].example3()),
-            Paradigm::Map => format!("{}:{};{}:{}", p[0].example_key(), p[1].example(), p[0].example_key2(), p[1].example2()),
-            Paradigm::ListTuple2 => format!("{},{};{},{}", p[0].example(), p[1].example(), p[0].example2(), p[1].example2()),
-            Paradigm::ListTuple3 => format!("{},{},{};{},{},{}", p[0].example(), p[1].example(), p[2].example(), p[0].example2(), p[1].example2(), p[2].example2()),
-            Paradigm::ListTuple4 => format!("{},{},{},{};{},{},{},{}", p[0].example(), p[1].example(), p[2].example(), p[3].example(), p[0].example2(), p[1].example2(), p[2].example2(), p[3].example2()),
-            Paradigm::MapTuple2 => format!("{}:{},{};{}:{},{}", p[0].example_key(), p[1].example(), p[2].example(), p[0].example_key2(), p[1].example2(), p[2].example2()),
-            Paradigm::MapTuple3 => format!("{}:{},{},{};{}:{},{},{}", p[0].example_key(), p[1].example(), p[2].example(), p[3].example(), p[0].example_key2(), p[1].example2(), p[2].example2(), p[3].example2()),
-            Paradigm::MapTuple4 => format!("{}:{},{},{},{};{}:{},{},{},{}", p[0].example_key(), p[1].example(), p[2].example(), p[3].example(), p[3].example2(), p[0].example_key2(), p[1].example2(), p[2].example2(), p[3].example2(), p[3].example3()),
-            Paradigm::MapList => format!("{}:{},{},{};{}:{},{}", p[0].example_key(), p[1].example(), p[1].example2(), p[1].example3(), p[0].example_key2(), p[1].example(), p[1].example2()),
+            Paradigm::Base => v(p[0], 0),
+            Paradigm::Tuple2 => format!("{}{}{}", v(p[0], 0), sep.tuple2, v(p[1], 0)),
+            Paradigm::Tuple3 => format!("{}{}{}{}{}", v(p[0], 0), sep.tuple3, v(p[1], 0), sep.tuple3, v(p[2], 0)),
+            Paradigm::Tuple4 => format!("{}{}{}{}{}{}{}", v(p[0], 0), sep.tuple4, v(p[1], 0), sep.tuple4, v(p[2], 0), sep.tuple4, v(p[3], 0)),
+            Paradigm::List => format!("{}{}{}{}{}", v(p[0], 0), sep.list, v(p[0], 1), sep.list, v(p[0], 2)),
+            Paradigm::Set => format!("{}{}{}{}{}", v(p[0], 0), sep.set, v(p[0], 1), sep.set, v(p[0], 2)),
+            Paradigm::Map => format!("{}{}{}{}{}{}{}",
+                k(p[0], 0), sep.map.kv, v(p[1], 0), sep.map.entry,
+                k(p[0], 1), sep.map.kv, v(p[1], 1)),
+            Paradigm::ListTuple2 => format!("{}{}{}{}{}{}{}",
+                v(p[0], 0), sep.list_tuple2.tuple, v(p[1], 0), sep.list_tuple2.list,
+                v(p[0], 1), sep.list_tuple2.tuple, v(p[1], 1)),
+            Paradigm::ListTuple3 => format!("{}{}{}{}{}{}{}{}{}{}{}",
+                v(p[0], 0), sep.list_tuple3.tuple, v(p[1], 0), sep.list_tuple3.tuple, v(p[2], 0), sep.list_tuple3.list,
+                v(p[0], 1), sep.list_tuple3.tuple, v(p[1], 1), sep.list_tuple3.tuple, v(p[2], 1)),
+            Paradigm::ListTuple4 => format!("{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}",
+                v(p[0], 0), sep.list_tuple4.tuple, v(p[1], 0), sep.list_tuple4.tuple, v(p[2], 0), sep.list_tuple4.tuple, v(p[3], 0), sep.list_tuple4.list,
+                v(p[0], 1), sep.list_tuple4.tuple, v(p[1], 1), sep.list_tuple4.tuple, v(p[2], 1), sep.list_tuple4.tuple, v(p[3], 1)),
+            Paradigm::MapTuple2 => format!("{}{}{}{}{}{}{}{}{}{}{}",
+                k(p[0], 0), sep.map_tuple2.kv, v(p[1], 0), sep.map_tuple2.tuple, v(p[2], 0), sep.map_tuple2.entry,
+                k(p[0], 1), sep.map_tuple2.kv, v(p[1], 1), sep.map_tuple2.tuple, v(p[2], 1)),
+            Paradigm::MapTuple3 => format!("{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}",
+                k(p[0], 0), sep.map_tuple3.kv, v(p[1], 0), sep.map_tuple3.tuple, v(p[2], 0), sep.map_tuple3.tuple, v(p[3], 0), sep.map_tuple3.entry,
+                k(p[0], 1), sep.map_tuple3.kv, v(p[1], 1), sep.map_tuple3.tuple, v(p[2], 1), sep.map_tuple3.tuple, v(p[3], 1)),
+            Paradigm::MapTuple4 => format!("{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}",
+                k(p[0], 0), sep.map_tuple4.kv, v(p[1], 0), sep.map_tuple4.tuple, v(p[2], 0), sep.map_tuple4.tuple, v(p[3], 0), sep.map_tuple4.tuple, v(p[3], 1), sep.map_tuple4.entry,
+                k(p[0], 1), sep.map_tuple4.kv, v(p[1], 1), sep.map_tuple4.tuple, v(p[2], 1), sep.map_tuple4.tuple, v(p[3], 1), sep.map_tuple4.tuple, v(p[3], 2)),
+            Paradigm::MapList => format!("{}{}{}{}{}{}{}{}{}{}{}",
+                k(p[0], 0), sep.map_list.kv, v(p[1], 0), sep.map_list.item, v(p[1], 1), sep.map_list.item, v(p[1], 2), sep.map_list.entry,
+                k(p[0], 1), sep.map_list.kv, v(p[1], 0)),
         }
+    }
+
+    /// Validate a cell value against this type. Returns None if valid, Some(error_msg) if invalid.
+    pub fn validate_value(&self, value: &str, sep: &SeparatorsSection) -> Option<String> {
+        if value.is_empty() { return None; }
+        if let Some(msg) = check_chinese_punctuation(value) { return Some(msg.to_string()); }
+        let p = &self.params;
+        let err = match &self.paradigm {
+            Paradigm::Base => validate_base(value, p[0]),
+            Paradigm::Tuple2 => validate_tuple(value, &p[0..2], &sep.tuple2),
+            Paradigm::Tuple3 => validate_tuple(value, &p[0..3], &sep.tuple3),
+            Paradigm::Tuple4 => validate_tuple(value, &p[0..4], &sep.tuple4),
+            Paradigm::List => validate_list(value, p[0], &sep.list),
+            Paradigm::Set => validate_list(value, p[0], &sep.set),
+            Paradigm::Map => validate_map(value, p[0], p[1], &sep.map.entry, &sep.map.kv),
+            Paradigm::ListTuple2 => validate_list_tuple(value, &p[0..2], &sep.list_tuple2.list, &sep.list_tuple2.tuple),
+            Paradigm::ListTuple3 => validate_list_tuple(value, &p[0..3], &sep.list_tuple3.list, &sep.list_tuple3.tuple),
+            Paradigm::ListTuple4 => validate_list_tuple(value, &p[0..4], &sep.list_tuple4.list, &sep.list_tuple4.tuple),
+            Paradigm::MapTuple2 => validate_map_tuple(value, p[0], &p[1..3], &sep.map_tuple2.entry, &sep.map_tuple2.kv, &sep.map_tuple2.tuple),
+            Paradigm::MapTuple3 => validate_map_tuple(value, p[0], &p[1..4], &sep.map_tuple3.entry, &sep.map_tuple3.kv, &sep.map_tuple3.tuple),
+            Paradigm::MapTuple4 => validate_map_tuple(value, p[0], &p[1..5], &sep.map_tuple4.entry, &sep.map_tuple4.kv, &sep.map_tuple4.tuple),
+            Paradigm::MapList => validate_map_list(value, p[0], p[1], &sep.map_list.entry, &sep.map_list.kv, &sep.map_list.item),
+        };
+        err.map(|msg| format!("{}, 示例: {}", msg, self.example_with_sep(sep)))
     }
 }
 
-// --- Helpers ---
+fn check_chinese_punctuation(value: &str) -> Option<&'static str> {
+    for c in value.chars() {
+        match c {
+            '，' | '；' | '：' | '、' => return Some("含有中文标点符号"),
+            _ => {}
+        }
+    }
+    None
+}
+
+fn validate_base(value: &str, bt: BaseType) -> Option<&'static str> {
+    match bt {
+        BaseType::Int => { if value.parse::<i32>().is_err() { Some("不是合法int") } else { None } }
+        BaseType::Long => { if value.parse::<i64>().is_err() { Some("不是合法long") } else { None } }
+        BaseType::Float => { if value.parse::<f32>().is_err() { Some("不是合法float") } else { None } }
+        BaseType::Double => { if value.parse::<f64>().is_err() { Some("不是合法double") } else { None } }
+        BaseType::Bool => { if value != "true" && value != "false" { Some("必须是true或false") } else { None } }
+        BaseType::Str => None,
+    }
+}
+
+fn validate_tuple(value: &str, types: &[BaseType], sep: &str) -> Option<&'static str> {
+    let parts: Vec<&str> = value.split(sep).collect();
+    if parts.len() != types.len() { return Some("元素数量不匹配"); }
+    for (part, &bt) in parts.iter().zip(types.iter()) {
+        let p = part.trim();
+        if p.is_empty() { return Some("含有空元素"); }
+        if validate_base(p, bt).is_some() { return Some("元素类型不匹配"); }
+    }
+    None
+}
+
+fn validate_list(value: &str, elem: BaseType, sep: &str) -> Option<&'static str> {
+    for part in value.split(sep) {
+        let p = part.trim();
+        if p.is_empty() { return Some("含有空元素"); }
+        if validate_base(p, elem).is_some() { return Some("列表元素类型不匹配"); }
+    }
+    None
+}
+
+fn validate_map(value: &str, key: BaseType, val: BaseType, entry_sep: &str, kv_sep: &str) -> Option<&'static str> {
+    for entry in value.split(entry_sep) {
+        let entry = entry.trim();
+        if entry.is_empty() { return Some("含有空条目"); }
+        let kv: Vec<&str> = entry.splitn(2, kv_sep).collect();
+        if kv.len() != 2 { return Some("缺少kv分隔符"); }
+        let k = kv[0].trim();
+        let v = kv[1].trim();
+        if k.is_empty() { return Some("key为空"); }
+        if v.is_empty() { return Some("value为空"); }
+        if validate_base(k, key).is_some() { return Some("key类型不匹配"); }
+        if validate_base(v, val).is_some() { return Some("value类型不匹配"); }
+    }
+    None
+}
+
+fn validate_list_tuple(value: &str, types: &[BaseType], list_sep: &str, tuple_sep: &str) -> Option<&'static str> {
+    for item in value.split(list_sep) {
+        let item = item.trim();
+        if item.is_empty() { return Some("含有空元素"); }
+        if validate_tuple(item, types, tuple_sep).is_some() { return Some("列表元素格式错误"); }
+    }
+    None
+}
+
+fn validate_map_tuple(value: &str, key: BaseType, val_types: &[BaseType], entry_sep: &str, kv_sep: &str, tuple_sep: &str) -> Option<&'static str> {
+    for entry in value.split(entry_sep) {
+        let entry = entry.trim();
+        if entry.is_empty() { return Some("含有空条目"); }
+        let kv: Vec<&str> = entry.splitn(2, kv_sep).collect();
+        if kv.len() != 2 { return Some("缺少kv分隔符"); }
+        let k = kv[0].trim();
+        if k.is_empty() { return Some("key为空"); }
+        if validate_base(k, key).is_some() { return Some("key类型不匹配"); }
+        if validate_tuple(kv[1].trim(), val_types, tuple_sep).is_some() { return Some("value格式错误"); }
+    }
+    None
+}
+
+fn validate_map_list(value: &str, key: BaseType, elem: BaseType, entry_sep: &str, kv_sep: &str, item_sep: &str) -> Option<&'static str> {
+    for entry in value.split(entry_sep) {
+        let entry = entry.trim();
+        if entry.is_empty() { return Some("含有空条目"); }
+        let kv: Vec<&str> = entry.splitn(2, kv_sep).collect();
+        if kv.len() != 2 { return Some("缺少kv分隔符"); }
+        let k = kv[0].trim();
+        if k.is_empty() { return Some("key为空"); }
+        if validate_base(k, key).is_some() { return Some("key类型不匹配"); }
+        for item in kv[1].split(item_sep) {
+            let item = item.trim();
+            if item.is_empty() { return Some("含有空元素"); }
+            if validate_base(item, elem).is_some() { return Some("value列表元素类型不匹配"); }
+        }
+    }
+    None
+}
+
+// --- Separator Config ---
+
+use serde::Deserialize;
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct SeparatorsSection {
+    #[serde(default = "default_comma")]
+    pub tuple2: String,
+    #[serde(default = "default_comma")]
+    pub tuple3: String,
+    #[serde(default = "default_comma")]
+    pub tuple4: String,
+    #[serde(default = "default_semicolon")]
+    pub list: String,
+    #[serde(default = "default_semicolon")]
+    pub set: String,
+    #[serde(default)]
+    pub map: MapSep,
+    #[serde(default, rename = "List_Tuple2")]
+    pub list_tuple2: ListTupleSep,
+    #[serde(default, rename = "List_Tuple3")]
+    pub list_tuple3: ListTupleSep,
+    #[serde(default, rename = "List_Tuple4")]
+    pub list_tuple4: ListTupleSep,
+    #[serde(default, rename = "Map_Tuple2")]
+    pub map_tuple2: MapTupleSep,
+    #[serde(default, rename = "Map_Tuple3")]
+    pub map_tuple3: MapTupleSep,
+    #[serde(default, rename = "Map_Tuple4")]
+    pub map_tuple4: MapTupleSep,
+    #[serde(default, rename = "Map_List")]
+    pub map_list: MapListSep,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct MapSep {
+    #[serde(default = "default_colon")]
+    pub kv: String,
+    #[serde(default = "default_semicolon")]
+    pub entry: String,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct ListTupleSep {
+    #[serde(default = "default_comma")]
+    pub tuple: String,
+    #[serde(default = "default_semicolon")]
+    pub list: String,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct MapTupleSep {
+    #[serde(default = "default_colon")]
+    pub kv: String,
+    #[serde(default = "default_comma")]
+    pub tuple: String,
+    #[serde(default = "default_semicolon")]
+    pub entry: String,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct MapListSep {
+    #[serde(default = "default_colon")]
+    pub kv: String,
+    #[serde(default = "default_comma")]
+    pub item: String,
+    #[serde(default = "default_semicolon")]
+    pub entry: String,
+}
+
+fn default_comma() -> String { ",".to_string() }
+fn default_semicolon() -> String { ";".to_string() }
+fn default_colon() -> String { ":".to_string() }
+
+impl Default for MapSep { fn default() -> Self { Self { kv: default_colon(), entry: default_semicolon() } } }
+impl Default for ListTupleSep { fn default() -> Self { Self { tuple: default_comma(), list: default_semicolon() } } }
+impl Default for MapTupleSep { fn default() -> Self { Self { kv: default_colon(), tuple: default_comma(), entry: default_semicolon() } } }
+impl Default for MapListSep { fn default() -> Self { Self { kv: default_colon(), item: default_comma(), entry: default_semicolon() } } }
+
+impl Default for SeparatorsSection {
+    fn default() -> Self {
+        Self {
+            tuple2: default_comma(), tuple3: default_comma(), tuple4: default_comma(),
+            list: default_semicolon(), set: default_semicolon(),
+            map: MapSep::default(),
+            list_tuple2: ListTupleSep::default(), list_tuple3: ListTupleSep::default(), list_tuple4: ListTupleSep::default(),
+            map_tuple2: MapTupleSep::default(), map_tuple3: MapTupleSep::default(), map_tuple4: MapTupleSep::default(),
+            map_list: MapListSep::default(),
+        }
+    }
+}
 
 fn strip_wrapper<'a>(s: &'a str, prefix: &str, suffix: &str) -> Option<&'a str> {
     s.strip_prefix(prefix)?.strip_suffix(suffix)

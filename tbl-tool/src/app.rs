@@ -177,13 +177,14 @@ impl TblApp {
 
     fn validate(&self) -> Vec<String> {
         let mut errors = Vec::new();
+        let sep = &self.project.config.separators;
         for group in &self.project.groups {
             for table in &group.tables {
                 if table.deleted { continue; }
                 let index_col = table.schema.fields.iter().position(|f| f.name == table.schema.index);
                 let mut seen_ids = std::collections::HashSet::new();
                 for row in 0..table.records.len() {
-                    for (col, msg) in validate_table_row(table, row) {
+                    for (col, msg) in validate_table_row(table, row, sep) {
                         let val = table.records[row].get(col).map(|s| s.as_str()).unwrap_or("");
                         let pos = format!("{}{}", crate::ui::grid::col_letter(col), row + 1);
                         errors.push(format!("[验证] {}/{} {}: \"{}\" {}", group.name, table.name, pos, val, msg));
@@ -201,7 +202,7 @@ impl TblApp {
                 if constant.deleted { continue; }
                 let mut seen_names = std::collections::HashSet::new();
                 for row in 0..constant.entries.len() {
-                    for (col, msg) in validate_constant_row(constant, row) {
+                    for (col, msg) in validate_constant_row(constant, row, sep) {
                         let val = match col { 0 => &constant.entries[row].name, 2 => &constant.entries[row].value, _ => "" };
                         let pos = format!("{}{}", crate::ui::grid::col_letter(col), row + 1);
                         errors.push(format!("[验证] {}/{} {}: \"{}\" {}", group.name, constant.name, pos, val, msg));
@@ -219,12 +220,13 @@ impl TblApp {
 
     pub fn revalidate(&mut self, group: &str, name: &str) {
         self.validation_errors.retain(|(g, n, _, _)| g != group || n != name);
+        let sep = self.project.config.separators.clone();
         if let Some(g) = self.project.groups.iter().find(|g| g.name == group) {
             if let Some(table) = g.tables.iter().find(|t| t.name == name) {
                 let mut seen_ids = std::collections::HashSet::new();
                 let index_col = table.schema.fields.iter().position(|f| f.name == table.schema.index);
                 for row in 0..table.records.len() {
-                    for (col, _msg) in validate_table_row(table, row) {
+                    for (col, _msg) in validate_table_row(table, row, &sep) {
                         self.validation_errors.insert((group.to_string(), name.to_string(), row, col));
                     }
                     // Cross-row: ID uniqueness
@@ -239,7 +241,7 @@ impl TblApp {
             if let Some(constant) = g.constants.iter().find(|c| c.name == name) {
                 let mut seen_names = std::collections::HashSet::new();
                 for row in 0..constant.entries.len() {
-                    for (col, _msg) in validate_constant_row(constant, row) {
+                    for (col, _msg) in validate_constant_row(constant, row, &sep) {
                         self.validation_errors.insert((group.to_string(), name.to_string(), row, col));
                     }
                     // Cross-row: name uniqueness
@@ -714,18 +716,28 @@ impl TblApp {
 
     pub fn generate_test_config(&mut self) {
         let config_dir = self.project.workdir.join(&self.project.config.project.config_dir);
+        let sep = &self.project.config.separators;
+
+        let list_int = crate::core::types::TblType { paradigm: crate::core::types::Paradigm::List, params: vec![crate::core::types::BaseType::Int] };
+        let tuple2_int = crate::core::types::TblType { paradigm: crate::core::types::Paradigm::Tuple2, params: vec![crate::core::types::BaseType::Int, crate::core::types::BaseType::Int] };
 
         let hero_dir = config_dir.join("hero");
         let _ = std::fs::create_dir_all(&hero_dir);
-        let _ = std::fs::write(hero_dir.join("HeroBase.tbl"),
-            "#!tbl v2\n#mode table\n#index id\n#desc 英雄ID|名称|血量|技能组\n#type int|str|int|List<int>\n#export 前后端|前后端|服务器|前后端\n#field id|name|hp|skills\n---\n1001|战士|100|1;2;3\n1002|法师|80|4;5\n1003|弓手|90|6;7;8\n");
+        let hero_content = format!(
+            "#!tbl v2\n#mode table\n#index id\n#desc 英雄ID|名称|血量|技能组\n#type int|str|int|List<int>\n#export 前后端|前后端|服务器|前后端\n#field id|name|hp|skills\n---\n1001|战士|100|{}\n1002|法师|80|{}\n1003|弓手|90|{}\n",
+            list_int.random_demo(sep), list_int.random_demo(sep), list_int.random_demo(sep)
+        );
+        let _ = std::fs::write(hero_dir.join("HeroBase.tbl"), &hero_content);
         let _ = std::fs::write(hero_dir.join("HeroConst.tbl"),
             "#!tbl v2\n#mode constant\n---\nmax_level|int|60||英雄最大等级\nunlock_cost|int|100||解锁费用\n");
 
         let global_dir = config_dir.join("global");
         let _ = std::fs::create_dir_all(&global_dir);
-        let _ = std::fs::write(global_dir.join("GlobalConst.tbl"),
-            "#!tbl v2\n#mode constant\n---\nmax_level|int|100||最大等级\nstart_pos|Tuple2<int,int>|5,10||出生坐标\nserver_name|str|test1||服务器名称\n");
+        let global_content = format!(
+            "#!tbl v2\n#mode constant\n---\nmax_level|int|100||最大等级\nstart_pos|Tuple2<int,int>|{}||出生坐标\nserver_name|str|test1||服务器名称\n",
+            tuple2_int.random_demo(sep)
+        );
+        let _ = std::fs::write(global_dir.join("GlobalConst.tbl"), &global_content);
 
         self.log("已生成测试配置文件".to_string());
         self.reload();
@@ -813,7 +825,8 @@ impl eframe::App for TblApp {
 
 impl TblApp {
     fn show_type_selector(&mut self, ctx: &egui::Context) {
-        if let Some(type_str) = ui::type_selector::render_type_selector(ctx, &mut self.type_selector) {
+        let sep = self.project.config.separators.clone();
+        if let Some(type_str) = ui::type_selector::render_type_selector(ctx, &mut self.type_selector, &sep) {
             if let Some(cell) = self.type_selector.editing_cell.take() {
                 let group = self.type_selector.editing_group.clone();
                 let name = self.type_selector.editing_name.clone();
@@ -1122,26 +1135,35 @@ fn is_lua_keyword(s: &str) -> bool {
     )
 }
 
-pub fn validate_table_cell(table: &crate::model::Table, row: usize, col: usize) -> Option<&'static str> {
+pub fn validate_table_cell(table: &crate::model::Table, row: usize, col: usize, sep: &crate::core::types::SeparatorsSection) -> Option<String> {
     let record = table.records.get(row)?;
     let val = record.get(col).map(|s| s.as_str()).unwrap_or("");
     if val.is_empty() { return None; }
 
     let index_col = table.schema.fields.iter().position(|f| f.name == table.schema.index);
     if index_col == Some(col) {
-        if val.parse::<i64>().is_err() { return Some("ID必须是数字"); }
+        if val.parse::<i64>().is_err() { return Some("ID必须是数字".to_string()); }
+    }
+
+    // Type validation for data cells
+    if let Some(field) = table.schema.fields.get(col) {
+        if index_col != Some(col) {
+            if let Some(tbl_type) = crate::core::types::TblType::parse(&field.tbl_type) {
+                return tbl_type.validate_value(val, sep);
+            }
+        }
     }
     None
 }
 
-pub fn validate_table_row(table: &crate::model::Table, row: usize) -> Vec<(usize, &'static str)> {
+pub fn validate_table_row(table: &crate::model::Table, row: usize, sep: &crate::core::types::SeparatorsSection) -> Vec<(usize, String)> {
     let mut errors = Vec::new();
     let record = match table.records.get(row) { Some(r) => r, None => return errors };
     let index_col = table.schema.fields.iter().position(|f| f.name == table.schema.index);
 
     // Cell-level validation
     for col in 0..table.schema.fields.len() {
-        if let Some(msg) = validate_table_cell(table, row, col) {
+        if let Some(msg) = validate_table_cell(table, row, col, sep) {
             errors.push((col, msg));
         }
     }
@@ -1151,37 +1173,43 @@ pub fn validate_table_row(table: &crate::model::Table, row: usize) -> Vec<(usize
         let id = record.get(idx).map(|s| s.as_str()).unwrap_or("");
         let has_data = record.iter().enumerate().any(|(i, v)| i != idx && !v.is_empty());
         if id.is_empty() && has_data {
-            errors.push((idx, "有数据但ID为空"));
+            errors.push((idx, "有数据但ID为空".to_string()));
         }
     }
 
     errors
 }
 
-pub fn validate_constant_cell(entry: &crate::model::ConstEntry, col: usize) -> Option<&'static str> {
+pub fn validate_constant_cell(entry: &crate::model::ConstEntry, col: usize, sep: &crate::core::types::SeparatorsSection) -> Option<String> {
     if col == 0 {
         if entry.name.is_empty() { return None; }
-        if entry.name.contains(' ') { return Some("不能含空格"); }
-        if !is_valid_identifier(&entry.name) { return Some("不是合法标识符"); }
-        if is_java_keyword(&entry.name) || is_lua_keyword(&entry.name) { return Some("是语言关键字"); }
+        if entry.name.contains(' ') { return Some("不能含空格".to_string()); }
+        if !is_valid_identifier(&entry.name) { return Some("不是合法标识符".to_string()); }
+        if is_java_keyword(&entry.name) || is_lua_keyword(&entry.name) { return Some("是语言关键字".to_string()); }
+    }
+    if col == 2 {
+        if entry.value.is_empty() { return None; }
+        if let Some(tbl_type) = crate::core::types::TblType::parse(&entry.tbl_type) {
+            return tbl_type.validate_value(&entry.value, sep);
+        }
     }
     None
 }
 
-pub fn validate_constant_row(constant: &crate::model::Constant, row: usize) -> Vec<(usize, &'static str)> {
+pub fn validate_constant_row(constant: &crate::model::Constant, row: usize, sep: &crate::core::types::SeparatorsSection) -> Vec<(usize, String)> {
     let mut errors = Vec::new();
     let entry = match constant.entries.get(row) { Some(e) => e, None => return errors };
 
     // Cell-level
     for col in 0..5 {
-        if let Some(msg) = validate_constant_cell(entry, col) {
+        if let Some(msg) = validate_constant_cell(entry, col, sep) {
             errors.push((col, msg));
         }
     }
 
     // Row-level: name filled but value empty
     if !entry.name.is_empty() && entry.value.is_empty() {
-        errors.push((2, "name已填但value为空"));
+        errors.push((2, "name已填但value为空".to_string()));
     }
 
     errors
