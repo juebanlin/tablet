@@ -1,0 +1,46 @@
+# 类型分隔符配置（按范式）
+# 每个范式独立配置，互不影响
+# 仅当项目有历史数据使用不同分隔符时修改
+
+[separators]
+Tuple2 = ","
+Tuple3 = ","
+Tuple4 = ","
+List = ";"
+Set = ";"
+
+[separators.Map]
+kv = ":"
+entry = ";"
+
+[separators.List_Tuple2]
+tuple = ","
+list = ";"
+
+[separators.List_Tuple3]
+tuple = ","
+list = ";"
+
+[separators.List_Tuple4]
+tuple = ","
+list = ";"
+
+[separators.Map_Tuple2]
+kv = ":"
+tuple = ","
+entry = ";"
+
+[separators.Map_Tuple3]
+kv = ":"
+tuple = ","
+entry = ";"
+
+[separators.Map_Tuple4]
+kv = ":"
+tuple = ","
+entry = ";"
+
+[separators.Map_List]
+kv = ":"
+item = ","
+entry = ";"

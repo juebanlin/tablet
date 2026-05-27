@@ -1,8 +1,5 @@
 use eframe::egui;
 
-pub const TYPES: &[&str] = &["int", "long", "float", "str", "bool", "IntPair", "StrPair", "IntTriple", "IntArray"];
-pub const EXPORTS: &[&str] = &["前后端", "客户端", "服务器", "不导出"];
-
 #[derive(Clone, Debug, PartialEq)]
 pub enum CellKind {
     ReadOnly,
@@ -39,14 +36,6 @@ impl CellKind {
 
     pub fn deletable(&self) -> bool {
         matches!(self, Self::Text)
-    }
-
-    pub fn enum_options(&self) -> &'static [&'static str] {
-        match self {
-            Self::TypeEnum | Self::TypeEnumCol => TYPES,
-            Self::ExportEnum | Self::ExportEnumCol => EXPORTS,
-            _ => &[],
-        }
     }
 }
 

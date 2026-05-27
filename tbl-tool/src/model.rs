@@ -162,4 +162,8 @@ impl Export {
             Self::None => "不导出",
         }
     }
+
+    pub fn options() -> &'static [Export] {
+        &[Export::ClientServer, Export::ClientOnly, Export::ServerOnly, Export::None]
+    }
 }

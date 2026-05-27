@@ -1,30 +1,41 @@
 use eframe::egui;
-use super::grid_model::CellKind;
+use super::grid_model::{CellKind, GridSource};
 use super::grid::COL_W;
 use crate::app::TblApp;
+use crate::model::Export;
 
-pub fn render_edit(ui: &mut egui::Ui, app: &mut TblApp, kind: &CellKind, pos: egui::Pos2, col_w: f32) {
-    if kind.click_to_edit() {
-        render_dropdown(ui, app, kind, pos);
-    } else if kind.double_click_to_edit() {
-        render_text_input(ui, app, pos, col_w);
+pub fn render_edit(ui: &mut egui::Ui, app: &mut TblApp, kind: &CellKind, pos: egui::Pos2, col_w: f32, group: &str, name: &str, source: &GridSource) {
+    match kind {
+        CellKind::TypeEnum | CellKind::TypeEnumCol => {
+            if !app.type_selector.open {
+                if let Some(cell) = app.edit_state.editing.clone() {
+                    app.type_selector.open_with(&app.edit_state.edit_buffer, cell, group, name, source);
+                    app.edit_state.editing = None;
+                }
+            }
+        }
+        CellKind::ExportEnum | CellKind::ExportEnumCol | CellKind::Reference { .. } => {
+            render_export_dropdown(ui, app, pos);
+        }
+        _ if kind.double_click_to_edit() => {
+            render_text_input(ui, app, pos, col_w);
+        }
+        _ => {}
     }
 }
 
-fn render_dropdown(ui: &mut egui::Ui, app: &mut TblApp, kind: &CellKind, pos: egui::Pos2) {
-    let options = kind.enum_options();
-    if options.is_empty() { return; }
-
+fn render_export_dropdown(ui: &mut egui::Ui, app: &mut TblApp, pos: egui::Pos2) {
     egui::Area::new(egui::Id::new("grid_dropdown"))
         .fixed_pos(pos)
         .order(egui::Order::Foreground)
         .show(ui.ctx(), |ui| {
             ui.set_min_width(COL_W);
             egui::Frame::popup(ui.style()).show(ui, |ui| {
-                for &opt in options {
+                for opt in Export::options() {
+                    let label = opt.display();
                     ui.set_min_width(COL_W - 8.0);
-                    if ui.selectable_label(app.edit_state.edit_buffer == opt, opt).clicked() {
-                        app.edit_state.edit_buffer = opt.to_string();
+                    if ui.selectable_label(app.edit_state.edit_buffer == label, label).clicked() {
+                        app.edit_state.edit_buffer = label.to_string();
                         app.edit_state.commit_pending = true;
                     }
                 }

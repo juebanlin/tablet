@@ -143,7 +143,7 @@ pub fn render_grid(ui: &mut egui::Ui, app: &mut TblApp, group: &str, name: &str,
     if let Some(ref editing) = app.edit_state.editing.clone() {
         if let Some(pos) = app.edit_state.edit_pos {
             let kind = resolve_edit_kind(editing, grid);
-            grid_edit::render_edit(ui, app, &kind, pos, COL_W);
+            grid_edit::render_edit(ui, app, &kind, pos, COL_W, group, name, &grid.source);
         }
     }
 

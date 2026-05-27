@@ -2,6 +2,7 @@ use std::collections::HashSet;
 use eframe::egui;
 use crate::model::*;
 use crate::ui;
+use crate::ui::type_selector::TypeSelectorState;
 
 pub struct TblApp {
     pub project: Project,
@@ -20,6 +21,7 @@ pub struct TblApp {
     pub tree_expanded: HashSet<String>,
     pub tree_context: Option<TreeContext>,
     pub validation_errors: HashSet<(String, String, usize, usize)>,
+    pub type_selector: TypeSelectorState,
     theme_applied: bool,
 }
 
@@ -112,6 +114,7 @@ impl TblApp {
             tree_expanded: expanded,
             tree_context: None,
             validation_errors: HashSet::new(),
+            type_selector: TypeSelectorState::default(),
             theme_applied: false,
         };
         app.log(format!("已加载 {} 个 Group", group_count));
@@ -715,14 +718,14 @@ impl TblApp {
         let hero_dir = config_dir.join("hero");
         let _ = std::fs::create_dir_all(&hero_dir);
         let _ = std::fs::write(hero_dir.join("HeroBase.tbl"),
-            "#!tbl v2\n#mode table\n#index id\n#desc 英雄ID|名称|血量|技能组\n#type int|str|int|IntArray\n#export 前后端|前后端|服务器|前后端\n#field id|name|hp|skills\n---\n1001|战士|100|1;2;3\n1002|法师|80|4;5\n1003|弓手|90|6;7;8\n");
+            "#!tbl v2\n#mode table\n#index id\n#desc 英雄ID|名称|血量|技能组\n#type int|str|int|List<int>\n#export 前后端|前后端|服务器|前后端\n#field id|name|hp|skills\n---\n1001|战士|100|1;2;3\n1002|法师|80|4;5\n1003|弓手|90|6;7;8\n");
         let _ = std::fs::write(hero_dir.join("HeroConst.tbl"),
             "#!tbl v2\n#mode constant\n---\nmax_level|int|60||英雄最大等级\nunlock_cost|int|100||解锁费用\n");
 
         let global_dir = config_dir.join("global");
         let _ = std::fs::create_dir_all(&global_dir);
         let _ = std::fs::write(global_dir.join("GlobalConst.tbl"),
-            "#!tbl v2\n#mode constant\n---\nmax_level|int|100||最大等级\nstart_pos|IntPair|5,10||出生坐标\nserver_name|str|test1||服务器名称\n");
+            "#!tbl v2\n#mode constant\n---\nmax_level|int|100||最大等级\nstart_pos|Tuple2<int,int>|5,10||出生坐标\nserver_name|str|test1||服务器名称\n");
 
         self.log("已生成测试配置文件".to_string());
         self.reload();
@@ -803,11 +806,23 @@ impl eframe::App for TblApp {
             ui::detail::render(ui, self);
         });
 
+        self.show_type_selector(ctx);
         self.show_input_dialog(ctx);
     }
 }
 
 impl TblApp {
+    fn show_type_selector(&mut self, ctx: &egui::Context) {
+        if let Some(type_str) = ui::type_selector::render_type_selector(ctx, &mut self.type_selector) {
+            if let Some(cell) = self.type_selector.editing_cell.take() {
+                let group = self.type_selector.editing_group.clone();
+                let name = self.type_selector.editing_name.clone();
+                let source = self.type_selector.editing_source.clone();
+                self.edit_state.edit_buffer = type_str;
+                self.grid_commit(&group, &name, &cell, &source);
+            }
+        }
+    }
     fn show_input_dialog(&mut self, ctx: &egui::Context) {
         let action = match &self.pending_action {
             Some(a) => a.clone(),
