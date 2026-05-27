@@ -93,5 +93,6 @@ fn load_group(name: &str, dir: &Path) -> Result<Group> {
         dir: dir.to_path_buf(),
         tables,
         constants,
+        is_new: false,
     })
 }

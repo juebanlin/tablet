@@ -95,6 +95,7 @@ fn parse_table(
         },
         records,
         dirty: false,
+        deleted: false,
         original: String::new(),
     };
     table.original = serialize_table(&table);
@@ -125,6 +126,7 @@ fn parse_constant(path: &Path, data_lines: &[&str]) -> Result<TblFile> {
         path: path.to_path_buf(),
         entries,
         dirty: false,
+        deleted: false,
         original: String::new(),
     };
     constant.original = serialize_constant(&constant);

@@ -63,6 +63,7 @@ pub struct Group {
     pub dir: PathBuf,
     pub tables: Vec<Table>,
     pub constants: Vec<Constant>,
+    pub is_new: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -72,6 +73,7 @@ pub struct Table {
     pub schema: TableSchema,
     pub records: Vec<Vec<String>>,
     pub dirty: bool,
+    pub deleted: bool,
     pub original: String,
 }
 
@@ -101,6 +103,7 @@ pub struct Constant {
     pub path: PathBuf,
     pub entries: Vec<ConstEntry>,
     pub dirty: bool,
+    pub deleted: bool,
     pub original: String,
 }
 

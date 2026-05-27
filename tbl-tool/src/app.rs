@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use eframe::egui;
 use crate::model::*;
 use crate::ui;
@@ -13,7 +14,28 @@ pub struct TblApp {
     pub context_row: Option<usize>,
     pub context_pos: egui::Pos2,
     pub auto_commit_on_blur: bool,
+    pub tree_filter: TreeFilter,
+    pub tree_filter_show_full_group: bool,
+    pub tree_expanded: HashSet<String>,
+    pub tree_context: Option<TreeContext>,
     theme_applied: bool,
+}
+
+#[derive(Clone, Debug)]
+pub enum TreeContext {
+    Group(String),
+    Node { group: String, name: String, is_table: bool },
+    Blank,
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub enum TreeFilter {
+    #[default]
+    All,
+    New,
+    Modified,
+    Deleted,
+    Changed,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -69,6 +91,7 @@ impl TblApp {
     pub fn new(project: Project) -> Self {
         let group_count = project.groups.len();
         let auto_commit = project.config.ui.as_ref().map_or(true, |u| u.auto_commit_on_blur);
+        let expanded: HashSet<String> = project.groups.iter().map(|g| g.name.clone()).collect();
         let mut app = Self {
             project,
             selected: None,
@@ -80,6 +103,10 @@ impl TblApp {
             context_row: None,
             context_pos: egui::Pos2::ZERO,
             auto_commit_on_blur: auto_commit,
+            tree_filter: TreeFilter::All,
+            tree_filter_show_full_group: false,
+            tree_expanded: expanded,
+            tree_context: None,
             theme_applied: false,
         };
         app.log(format!("已加载 {} 个 Group", group_count));
@@ -143,9 +170,19 @@ impl TblApp {
     pub fn save_all(&mut self) {
         use crate::core::tbl;
         let mut count = 0;
+        let mut deleted = 0;
         for group in &mut self.project.groups {
+            if group.is_new {
+                let _ = std::fs::create_dir_all(&group.dir);
+                group.is_new = false;
+            }
             for table in &mut group.tables {
-                if table.dirty {
+                if table.deleted {
+                    if !table.original.is_empty() {
+                        let _ = std::fs::remove_file(&table.path);
+                    }
+                    deleted += 1;
+                } else if table.dirty {
                     let content = tbl::serialize_table(table);
                     if std::fs::write(&table.path, &content).is_ok() {
                         table.original = content;
@@ -155,7 +192,12 @@ impl TblApp {
                 }
             }
             for constant in &mut group.constants {
-                if constant.dirty {
+                if constant.deleted {
+                    if !constant.original.is_empty() {
+                        let _ = std::fs::remove_file(&constant.path);
+                    }
+                    deleted += 1;
+                } else if constant.dirty {
                     let content = tbl::serialize_constant(constant);
                     if std::fs::write(&constant.path, &content).is_ok() {
                         constant.original = content;
@@ -164,9 +206,15 @@ impl TblApp {
                     }
                 }
             }
+            group.tables.retain(|t| !t.deleted);
+            group.constants.retain(|c| !c.deleted);
+            if group.tables.is_empty() && group.constants.is_empty() && !group.is_new && group.dir.is_dir() {
+                let _ = std::fs::remove_dir_all(&group.dir);
+            }
         }
-        if count > 0 {
-            self.log(format!("已保存 {} 个文件", count));
+        self.project.groups.retain(|g| !g.tables.is_empty() || !g.constants.is_empty());
+        if count > 0 || deleted > 0 {
+            self.log(format!("已保存 {} 个文件, 删除 {} 个", count, deleted));
         } else {
             self.log("无修改需要保存".to_string());
         }
@@ -597,6 +645,8 @@ impl eframe::App for TblApp {
         }
         egui::SidePanel::left("tree_panel")
             .default_width(200.0)
+            .min_width(80.0)
+            .resizable(true)
             .show(ctx, |ui| {
                 ui::tree::render(ui, self);
             });
@@ -752,49 +802,58 @@ impl TblApp {
     }
 
     fn delete_group(&mut self, group_name: &str) {
-        let config_dir = self.project.workdir.join(&self.project.config.project.config_dir);
-        let dir = config_dir.join(group_name);
-        let _ = std::fs::remove_dir_all(&dir);
-        self.project.groups.retain(|g| g.name != group_name);
+        if let Some(g) = self.project.groups.iter().find(|g| g.name == group_name) {
+            if g.is_new {
+                self.project.groups.retain(|g| g.name != group_name);
+                self.log(format!("已移除新建 Group: {}", group_name));
+            } else {
+                if let Some(g) = self.project.groups.iter_mut().find(|g| g.name == group_name) {
+                    for t in &mut g.tables { t.deleted = true; }
+                    for c in &mut g.constants { c.deleted = true; }
+                }
+                self.log(format!("已标记删除 Group: {}", group_name));
+            }
+        }
         self.selected = None;
-        self.log(format!("已删除 Group: {}", group_name));
     }
 
     fn delete_node(&mut self, group_name: &str, node_name: &str) {
         if let Some(g) = self.project.groups.iter_mut().find(|g| g.name == group_name) {
-            let path = g.dir.join(format!("{}.tbl", node_name));
-            let _ = std::fs::remove_file(&path);
-            g.tables.retain(|t| t.name != node_name);
-            g.constants.retain(|c| c.name != node_name);
+            if let Some(t) = g.tables.iter_mut().find(|t| t.name == node_name) {
+                t.deleted = true;
+            }
+            if let Some(c) = g.constants.iter_mut().find(|c| c.name == node_name) {
+                c.deleted = true;
+            }
         }
         self.selected = None;
-        self.log(format!("已删除: {}/{}", group_name, node_name));
+        self.log(format!("已标记删除: {}/{}", group_name, node_name));
     }
 
     fn copy_node(&mut self, group_name: &str, node_name: &str, is_table: bool) {
         if let Some(g) = self.project.groups.iter_mut().find(|g| g.name == group_name) {
-            let src = g.dir.join(format!("{}.tbl", node_name));
             let new_name = format!("{}_copy", node_name);
             let dst = g.dir.join(format!("{}.tbl", new_name));
-            if let Ok(content) = std::fs::read_to_string(&src) {
-                let _ = std::fs::write(&dst, &content);
-                if is_table {
-                    if let Some(t) = g.tables.iter().find(|t| t.name == node_name).cloned() {
-                        let mut copy = t;
-                        copy.name = new_name.clone();
-                        copy.path = dst;
-                        g.tables.push(copy);
-                    }
-                } else {
-                    if let Some(c) = g.constants.iter().find(|c| c.name == node_name).cloned() {
-                        let mut copy = c;
-                        copy.name = new_name.clone();
-                        copy.path = dst;
-                        g.constants.push(copy);
-                    }
+            if is_table {
+                if let Some(t) = g.tables.iter().find(|t| t.name == node_name).cloned() {
+                    let mut copy = t;
+                    copy.name = new_name.clone();
+                    copy.path = dst;
+                    copy.dirty = true;
+                    copy.original = String::new();
+                    g.tables.push(copy);
                 }
-                self.log(format!("已复制: {}/{} → {}", group_name, node_name, new_name));
+            } else {
+                if let Some(c) = g.constants.iter().find(|c| c.name == node_name).cloned() {
+                    let mut copy = c;
+                    copy.name = new_name.clone();
+                    copy.path = dst;
+                    copy.dirty = true;
+                    copy.original = String::new();
+                    g.constants.push(copy);
+                }
             }
+            self.log(format!("已复制: {}/{} → {}", group_name, node_name, new_name));
         }
     }
 
@@ -804,20 +863,19 @@ impl TblApp {
         match action {
             PendingAction::NewGroup => {
                 let dir = config_dir.join(&self.input_name);
-                let _ = std::fs::create_dir_all(&dir);
+                self.tree_expanded.insert(self.input_name.clone());
                 self.project.groups.push(Group {
                     name: self.input_name.clone(),
                     dir,
                     tables: Vec::new(),
                     constants: Vec::new(),
+                    is_new: true,
                 });
                 self.log(format!("新建 Group: {}", self.input_name));
             }
             PendingAction::NewTable { group } => {
                 if let Some(g) = self.project.groups.iter_mut().find(|g| g.name == *group) {
                     let path = g.dir.join(format!("{}.tbl", &self.input_name));
-                    let content = "#!tbl v2\n#mode table\n#index id\n#desc ID\n#type int\n#export \n#field id\n---\n".to_string();
-                    let _ = std::fs::write(&path, &content);
                     g.tables.push(Table {
                         name: self.input_name.clone(),
                         path: path.clone(),
@@ -831,8 +889,9 @@ impl TblApp {
                             index: "id".to_string(),
                         },
                         records: Vec::new(),
-                        dirty: false,
-                        original: content,
+                        dirty: true,
+                        deleted: false,
+                        original: String::new(),
                     });
                     self.log(format!("新建 Table: {}/{}", group, self.input_name));
                 }
@@ -840,14 +899,13 @@ impl TblApp {
             PendingAction::NewConstant { group } => {
                 if let Some(g) = self.project.groups.iter_mut().find(|g| g.name == *group) {
                     let path = g.dir.join(format!("{}.tbl", &self.input_name));
-                    let content = "#!tbl v2\n#mode constant\n---\n".to_string();
-                    let _ = std::fs::write(&path, &content);
                     g.constants.push(Constant {
                         name: self.input_name.clone(),
                         path: path.clone(),
                         entries: Vec::new(),
-                        dirty: false,
-                        original: content,
+                        dirty: true,
+                        deleted: false,
+                        original: String::new(),
                     });
                     self.log(format!("新建 Constant: {}/{}", group, self.input_name));
                 }
