@@ -14,10 +14,12 @@ pub struct TblApp {
     pub context_row: Option<usize>,
     pub context_pos: egui::Pos2,
     pub auto_commit_on_blur: bool,
+    pub realtime_validate: bool,
     pub tree_filter: TreeFilter,
     pub tree_filter_show_full_group: bool,
     pub tree_expanded: HashSet<String>,
     pub tree_context: Option<TreeContext>,
+    pub validation_errors: HashSet<(String, String, usize, usize)>,
     theme_applied: bool,
 }
 
@@ -91,6 +93,7 @@ impl TblApp {
     pub fn new(project: Project) -> Self {
         let group_count = project.groups.len();
         let auto_commit = project.config.ui.as_ref().map_or(true, |u| u.auto_commit_on_blur);
+        let rt_validate = project.config.ui.as_ref().map_or(false, |u| u.realtime_validate);
         let expanded: HashSet<String> = project.groups.iter().map(|g| g.name.clone()).collect();
         let mut app = Self {
             project,
@@ -103,10 +106,12 @@ impl TblApp {
             context_row: None,
             context_pos: egui::Pos2::ZERO,
             auto_commit_on_blur: auto_commit,
+            realtime_validate: rt_validate,
             tree_filter: TreeFilter::All,
             tree_filter_show_full_group: false,
             tree_expanded: expanded,
             tree_context: None,
+            validation_errors: HashSet::new(),
             theme_applied: false,
         };
         app.log(format!("已加载 {} 个 Group", group_count));
@@ -173,16 +178,16 @@ impl TblApp {
             for table in &group.tables {
                 if table.deleted { continue; }
                 let index_col = table.schema.fields.iter().position(|f| f.name == table.schema.index);
-                if let Some(idx) = index_col {
-                    let mut seen_ids = std::collections::HashSet::new();
-                    for (i, row) in table.records.iter().enumerate() {
-                        let id = row.get(idx).map(|s| s.as_str()).unwrap_or("");
-                        if id.is_empty() { continue; }
-                        if id.parse::<i64>().is_err() {
-                            errors.push(format!("[验证] {}/{} 第{}行: ID \"{}\" 必须是数字", group.name, table.name, i + 1, id));
-                        }
-                        if !seen_ids.insert(id.to_string()) {
-                            errors.push(format!("[验证] {}/{} 第{}行: ID \"{}\" 重复", group.name, table.name, i + 1, id));
+                let mut seen_ids = std::collections::HashSet::new();
+                for row in 0..table.records.len() {
+                    for (col, msg) in validate_table_row(table, row) {
+                        let val = table.records[row].get(col).map(|s| s.as_str()).unwrap_or("");
+                        errors.push(format!("[验证] {}/{} 第{}行第{}列: \"{}\" {}", group.name, table.name, row + 1, col + 1, val, msg));
+                    }
+                    if let Some(idx) = index_col {
+                        let id = table.records[row].get(idx).map(|s| s.as_str()).unwrap_or("");
+                        if !id.is_empty() && !seen_ids.insert(id.to_string()) {
+                            errors.push(format!("[验证] {}/{} 第{}行: ID \"{}\" 重复", group.name, table.name, row + 1, id));
                         }
                     }
                 }
@@ -190,19 +195,14 @@ impl TblApp {
             for constant in &group.constants {
                 if constant.deleted { continue; }
                 let mut seen_names = std::collections::HashSet::new();
-                for (i, entry) in constant.entries.iter().enumerate() {
-                    if entry.name.is_empty() { continue; }
-                    if entry.name.contains(' ') {
-                        errors.push(format!("[验证] {}/{} 第{}行: name \"{}\" 不能含空格", group.name, constant.name, i + 1, entry.name));
+                for row in 0..constant.entries.len() {
+                    for (col, msg) in validate_constant_row(constant, row) {
+                        let val = match col { 0 => &constant.entries[row].name, 2 => &constant.entries[row].value, _ => "" };
+                        errors.push(format!("[验证] {}/{} 第{}行第{}列: \"{}\" {}", group.name, constant.name, row + 1, col + 1, val, msg));
                     }
-                    if !is_valid_identifier(&entry.name) {
-                        errors.push(format!("[验证] {}/{} 第{}行: name \"{}\" 不是合法标识符", group.name, constant.name, i + 1, entry.name));
-                    }
-                    if is_java_keyword(&entry.name) || is_lua_keyword(&entry.name) {
-                        errors.push(format!("[验证] {}/{} 第{}行: name \"{}\" 是语言关键字", group.name, constant.name, i + 1, entry.name));
-                    }
-                    if !seen_names.insert(&entry.name) {
-                        errors.push(format!("[验证] {}/{} 第{}行: name \"{}\" 重复", group.name, constant.name, i + 1, entry.name));
+                    let n = &constant.entries[row].name;
+                    if !n.is_empty() && !seen_names.insert(n.clone()) {
+                        errors.push(format!("[验证] {}/{} 第{}行: name \"{}\" 重复", group.name, constant.name, row + 1, n));
                     }
                 }
             }
@@ -210,11 +210,57 @@ impl TblApp {
         errors
     }
 
+    pub fn revalidate(&mut self, group: &str, name: &str) {
+        self.validation_errors.retain(|(g, n, _, _)| g != group || n != name);
+        if let Some(g) = self.project.groups.iter().find(|g| g.name == group) {
+            if let Some(table) = g.tables.iter().find(|t| t.name == name) {
+                let mut seen_ids = std::collections::HashSet::new();
+                let index_col = table.schema.fields.iter().position(|f| f.name == table.schema.index);
+                for row in 0..table.records.len() {
+                    for (col, _msg) in validate_table_row(table, row) {
+                        self.validation_errors.insert((group.to_string(), name.to_string(), row, col));
+                    }
+                    // Cross-row: ID uniqueness
+                    if let Some(idx) = index_col {
+                        let id = table.records[row].get(idx).map(|s| s.as_str()).unwrap_or("");
+                        if !id.is_empty() && !seen_ids.insert(id.to_string()) {
+                            self.validation_errors.insert((group.to_string(), name.to_string(), row, idx));
+                        }
+                    }
+                }
+            }
+            if let Some(constant) = g.constants.iter().find(|c| c.name == name) {
+                let mut seen_names = std::collections::HashSet::new();
+                for row in 0..constant.entries.len() {
+                    for (col, _msg) in validate_constant_row(constant, row) {
+                        self.validation_errors.insert((group.to_string(), name.to_string(), row, col));
+                    }
+                    // Cross-row: name uniqueness
+                    let n = &constant.entries[row].name;
+                    if !n.is_empty() && !seen_names.insert(n.clone()) {
+                        self.validation_errors.insert((group.to_string(), name.to_string(), row, 0));
+                    }
+                }
+            }
+        }
+    }
+
+    fn revalidate_all(&mut self) {
+        self.validation_errors.clear();
+        let groups: Vec<_> = self.project.groups.iter().map(|g| (g.name.clone(), g.tables.iter().map(|t| t.name.clone()).collect::<Vec<_>>(), g.constants.iter().map(|c| c.name.clone()).collect::<Vec<_>>())).collect();
+        for (gname, tables, constants) in &groups {
+            for tname in tables { self.revalidate(gname, tname); }
+            for cname in constants { self.revalidate(gname, cname); }
+        }
+    }
+
     pub fn save_all(&mut self) {
-        let errors = self.validate();
-        if !errors.is_empty() {
+        // Re-validate all dirty nodes
+        self.revalidate_all();
+        if !self.validation_errors.is_empty() {
+            let errors = self.validate();
             for e in &errors { self.logs.push(e.clone()); }
-            self.logs.push(format!("[保存失败] 共 {} 个验证错误", errors.len()));
+            self.logs.push(format!("[保存失败] 共 {} 个验证错误", self.validation_errors.len()));
             return;
         }
 
@@ -429,6 +475,7 @@ impl TblApp {
                 }
             }
         }
+        if self.realtime_validate { self.revalidate(group, name); }
     }
 
     pub fn paste_data(&mut self, group: &str, name: &str, start_row: usize, start_col: usize, text: &str, source: &crate::ui::grid_model::GridSource) {
@@ -489,6 +536,7 @@ impl TblApp {
             }
         }
         self.log(format!("粘贴 {}行 数据", lines.len()));
+        if self.realtime_validate { self.revalidate(group, name); }
     }
 
     pub fn copy_selection(&self, group: &str, name: &str) -> String {
@@ -1053,4 +1101,69 @@ fn is_lua_keyword(s: &str) -> bool {
         "function" | "goto" | "if" | "in" | "local" | "nil" | "not" | "or" |
         "repeat" | "return" | "then" | "true" | "until" | "while"
     )
+}
+
+pub fn validate_table_cell(table: &crate::model::Table, row: usize, col: usize) -> Option<&'static str> {
+    let record = table.records.get(row)?;
+    let val = record.get(col).map(|s| s.as_str()).unwrap_or("");
+    if val.is_empty() { return None; }
+
+    let index_col = table.schema.fields.iter().position(|f| f.name == table.schema.index);
+    if index_col == Some(col) {
+        if val.parse::<i64>().is_err() { return Some("ID必须是数字"); }
+    }
+    None
+}
+
+pub fn validate_table_row(table: &crate::model::Table, row: usize) -> Vec<(usize, &'static str)> {
+    let mut errors = Vec::new();
+    let record = match table.records.get(row) { Some(r) => r, None => return errors };
+    let index_col = table.schema.fields.iter().position(|f| f.name == table.schema.index);
+
+    // Cell-level validation
+    for col in 0..table.schema.fields.len() {
+        if let Some(msg) = validate_table_cell(table, row, col) {
+            errors.push((col, msg));
+        }
+    }
+
+    // Row-level: if any non-ID cell has data but ID is empty, flag ID
+    if let Some(idx) = index_col {
+        let id = record.get(idx).map(|s| s.as_str()).unwrap_or("");
+        let has_data = record.iter().enumerate().any(|(i, v)| i != idx && !v.is_empty());
+        if id.is_empty() && has_data {
+            errors.push((idx, "有数据但ID为空"));
+        }
+    }
+
+    errors
+}
+
+pub fn validate_constant_cell(entry: &crate::model::ConstEntry, col: usize) -> Option<&'static str> {
+    if col == 0 {
+        if entry.name.is_empty() { return None; }
+        if entry.name.contains(' ') { return Some("不能含空格"); }
+        if !is_valid_identifier(&entry.name) { return Some("不是合法标识符"); }
+        if is_java_keyword(&entry.name) || is_lua_keyword(&entry.name) { return Some("是语言关键字"); }
+    }
+    None
+}
+
+pub fn validate_constant_row(constant: &crate::model::Constant, row: usize) -> Vec<(usize, &'static str)> {
+    let mut errors = Vec::new();
+    let entry = match constant.entries.get(row) { Some(e) => e, None => return errors };
+
+    // Cell-level
+    for col in 0..5 {
+        if let Some(msg) = validate_constant_cell(entry, col) {
+            errors.push((col, msg));
+        }
+    }
+
+    // Row-level: name filled but value empty
+    if !entry.name.is_empty() && entry.value.is_empty() {
+        errors.push((2, "name已填但value为空"));
+    }
+
+    errors
 }

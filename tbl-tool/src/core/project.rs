@@ -30,6 +30,8 @@ output = "gen/client"
 [ui]
 # 点击空白区域时自动保存当前编辑 (false 则只有回车才保存)
 auto_commit_on_blur = true
+# 编辑单元格时实时验证 (true 则每次修改立即检查)
+realtime_validate = false
 # 日志文件级别: debug, info, warn, error
 log_level = "debug"
 "#;

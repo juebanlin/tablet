@@ -10,6 +10,7 @@ const BORDER: egui::Color32 = egui::Color32::from_gray(180);
 const HEADER_BG: egui::Color32 = egui::Color32::from_gray(240);
 const SEL_BG: egui::Color32 = egui::Color32::from_rgba_premultiplied(180, 215, 255, 255);
 const SEL_BORDER: egui::Color32 = egui::Color32::from_rgb(50, 120, 200);
+const ERROR_BORDER: egui::Color32 = egui::Color32::from_rgb(220, 50, 50);
 const EXTRA_ROWS: usize = 5;
 
 pub fn render_grid(ui: &mut egui::Ui, app: &mut TblApp, group: &str, name: &str, grid: &GridData) {
@@ -94,6 +95,10 @@ pub fn render_grid(ui: &mut egui::Ui, app: &mut TblApp, group: &str, name: &str,
                     if app.edit_state.selected == Selection::Cell(row, col) {
                         painter.rect_stroke(r, 0.0, egui::Stroke::new(2.0, SEL_BORDER));
                     }
+                }
+
+                if app.validation_errors.contains(&(group.to_string(), name.to_string(), row, col)) {
+                    painter.rect_stroke(r, 0.0, egui::Stroke::new(1.5, ERROR_BORDER));
                 }
 
                 if row < grid.data.len() {

@@ -40,6 +40,8 @@ pub struct ClientExport {
 pub struct UiConfig {
     #[serde(default = "default_true")]
     pub auto_commit_on_blur: bool,
+    #[serde(default)]
+    pub realtime_validate: bool,
     pub log_level: Option<String>,
 }
 
