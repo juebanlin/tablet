@@ -11,6 +11,12 @@ config_dir = "config"
 # 临时缓存目录（xlsx 缓存等）
 cache_dir = ".tbl-cache"
 
+[export.json]
+# 导出 JSON 时空值表达方式:
+#   "null" - tbl 空值输出为 JSON null（默认）
+#   "omit" - tbl 空值不写入 JSON，省略该字段
+empty_as = "null"
+
 [export.server]
 # 后端语言
 lang = "java"

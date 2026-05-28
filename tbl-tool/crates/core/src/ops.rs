@@ -731,4 +731,10 @@ impl ProjectEngine {
         }
         None
     }
+
+    pub fn export_json(&mut self) -> anyhow::Result<Vec<String>> {
+        let result = crate::export::export_all_json(&self.project)?;
+        self.log(format!("导出 JSON 数据文件 {} 个", result.len()));
+        Ok(result)
+    }
 }

@@ -20,8 +20,14 @@ pub struct ProjectConfig {
 
 #[derive(Debug, Clone, serde::Deserialize)]
 pub struct ExportConfig {
+    pub json: Option<JsonExport>,
     pub server: Option<ServerExport>,
     pub client: Option<ClientExport>,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct JsonExport {
+    pub empty_as: Option<String>,
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]
