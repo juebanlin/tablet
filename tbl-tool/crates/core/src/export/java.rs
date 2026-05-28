@@ -160,7 +160,7 @@ pub fn export_all_java(project: &Project) -> Result<Vec<String>> {
             let content = gen_table_tpl(table, pkg, &group.name);
             let filename = format!("{}Tpl.java", &table.name);
             write_file(&group_dir, &filename, &content, &mut generated)?;
-            writeln!(register_lines, "        loadTable(\"{}/{}.json\", {}.{}.{}Tpl.class);",
+            writeln!(register_lines, "        registry.put(\"{}/{}.json\", {}.{}.{}Tpl.class);",
                 group.name, table.name, pkg, group.name, table.name).unwrap();
         }
 
@@ -169,7 +169,7 @@ pub fn export_all_java(project: &Project) -> Result<Vec<String>> {
             let content = gen_constant_tpl(constant, pkg, &group.name);
             let filename = format!("{}Tpl.java", &constant.name);
             write_file(&group_dir, &filename, &content, &mut generated)?;
-            writeln!(register_lines, "        loadConst(\"{}/{}.json\", {}.{}.{}Tpl.class);",
+            writeln!(register_lines, "        registry.put(\"{}/{}.json\", {}.{}.{}Tpl.class);",
                 group.name, constant.name, pkg, group.name, constant.name).unwrap();
         }
     }

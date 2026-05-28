@@ -8,8 +8,14 @@ import java.util.*;
 public class TplHolder {
     private static final Map<Class<?>, Map<Integer, ? extends ITpl>> tables = new HashMap<>();
     private static final Map<Class<?>, IConstTpl> constants = new HashMap<>();
+    private static final Map<String, Class<?>> registry = new HashMap<>();
     private static IJsonParser parser = new SimpleJsonParser();
+    private static String basePackage = "{{PACKAGE}}";
     private static String dataDir;
+
+    static {
+{{REGISTER_LIST}}
+    }
 
     public static void init(String dir) {
         init(dir, new SimpleJsonParser());
@@ -22,7 +28,21 @@ public class TplHolder {
     }
 
     private static void loadAll() {
-{{REGISTER_LIST}}
+        try {
+            Files.walk(Paths.get(dataDir))
+                .filter(p -> p.toString().endsWith(".json"))
+                .forEach(p -> {
+                    Path rel = Paths.get(dataDir).relativize(p);
+                    String key = rel.toString().replace('\\', '/');
+                    Class<?> clazz = registry.get(key);
+                    if (clazz == null) return;
+                    if (ITpl.class.isAssignableFrom(clazz)) {
+                        loadTable(key, (Class<? extends ITpl>) clazz);
+                    } else if (IConstTpl.class.isAssignableFrom(clazz)) {
+                        loadConst(key, (Class<? extends IConstTpl>) clazz);
+                    }
+                });
+        } catch (Exception e) { throw new RuntimeException("Failed to scan " + dataDir, e); }
     }
 
     public static <T extends ITpl> T get(Class<T> clazz, int id) {
