@@ -11,6 +11,8 @@ const TPL_SIMPLE_JSON_PARSER: &str = include_str!("../../templates/java/SimpleJs
 const TPL_SIMPLE_XML_PARSER: &str = include_str!("../../templates/java/SimpleXmlParser.java");
 const TPL_UTIL: &str = include_str!("../../templates/java/TplUtil.java");
 const TPL_HOLDER: &str = include_str!("../../templates/java/TplHolder.java");
+const TPL_REGISTRY: &str = include_str!("../../templates/java/TplRegistry.java");
+const TPL_TBL_META: &str = include_str!("../../templates/java/TblMeta.java");
 const TPL_TBL_TYPE: &str = include_str!("../../templates/java/TblType.java");
 const TPL_TBL_SOURCE: &str = include_str!("../../templates/java/TblSource.java");
 const TPL_PARADIGM: &str = include_str!("../../templates/java/Paradigm.java");
@@ -162,6 +164,7 @@ pub fn export_all_java(project: &Project) -> Result<Vec<String>> {
     write_file(&output_dir, "TplUtil.java", &render(TPL_UTIL), &mut generated)?;
     write_file(&output_dir, "TblType.java", &render(TPL_TBL_TYPE), &mut generated)?;
     write_file(&output_dir, "TblSource.java", &render(TPL_TBL_SOURCE), &mut generated)?;
+    write_file(&output_dir, "TblMeta.java", &render(TPL_TBL_META), &mut generated)?;
     write_file(&output_dir, "Paradigm.java", &render(TPL_PARADIGM), &mut generated)?;
     write_file(&output_dir, "SepConfig.java", &render(TPL_SEP_CONFIG), &mut generated)?;
     write_file(&types_dir, "Tuple2.java", &render(TPL_TUPLE2), &mut generated)?;
@@ -178,7 +181,7 @@ pub fn export_all_java(project: &Project) -> Result<Vec<String>> {
             let content = gen_table_tpl(table, pkg, &group.name);
             let filename = format!("{}Tpl.java", &table.name);
             write_file(&group_dir, &filename, &content, &mut generated)?;
-            writeln!(register_lines, "        registry.put(\"{}/{}\", {}.{}.{}Tpl.class);",
+            writeln!(register_lines, "        map.put(\"{}/{}\", {}.{}.{}Tpl.class);",
                 group.name, table.name, pkg, group.name, table.name).unwrap();
         }
 
@@ -187,12 +190,15 @@ pub fn export_all_java(project: &Project) -> Result<Vec<String>> {
             let content = gen_constant_tpl(constant, pkg, &group.name);
             let filename = format!("{}Tpl.java", &constant.name);
             write_file(&group_dir, &filename, &content, &mut generated)?;
-            writeln!(register_lines, "        registry.put(\"{}/{}\", {}.{}.{}Tpl.class);",
+            writeln!(register_lines, "        map.put(\"{}/{}\", {}.{}.{}Tpl.class);",
                 group.name, constant.name, pkg, group.name, constant.name).unwrap();
         }
     }
 
-    let holder_content = render(TPL_HOLDER).replace("{{REGISTER_LIST}}", register_lines.trim_end());
+    let registry_content = render(TPL_REGISTRY).replace("{{REGISTER_LIST}}", register_lines.trim_end());
+    write_file(&output_dir, "TplRegistry.java", &registry_content, &mut generated)?;
+
+    let holder_content = render(TPL_HOLDER);
     write_file(&output_dir, "TplHolder.java", &holder_content, &mut generated)?;
 
     Ok(generated)
