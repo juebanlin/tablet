@@ -1,0 +1,10 @@
+#!tbl v2
+#mode table
+#index id
+#desc ID|名称|血量|描述
+#type int|str|int|str
+#export 前后端|前后端|前后端|前后端
+#field id|name|hp|desc
+---
+1001|战士|100|
+1002|法师||测试空血量

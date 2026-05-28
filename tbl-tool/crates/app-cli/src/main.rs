@@ -1,3 +1,174 @@
-fn main() {
-    println!("tbl-cli: TODO");
+use std::path::PathBuf;
+use clap::{Parser, Subcommand};
+use anyhow::Result;
+use tbl_core::project::load_project;
+use tbl_core::ops::ProjectEngine;
+
+#[derive(Parser)]
+#[command(name = "tbl-cli", version, about = "TBL 配置管理工具 - 命令行模式")]
+struct Cli {
+    /// 工作目录（默认当前目录）
+    #[arg(short = 'w', long, default_value = ".")]
+    workdir: PathBuf,
+
+    /// 覆盖配置项（格式: key=value，可多次使用）
+    #[arg(short = 's', long = "set", value_name = "KEY=VALUE")]
+    overrides: Vec<String>,
+
+    #[command(subcommand)]
+    command: Command,
+}
+
+#[derive(Subcommand)]
+enum Command {
+    /// 导出数据文件和代码
+    Export {
+        /// 只导出 JSON 数据文件
+        #[arg(long)]
+        json: bool,
+        /// 只导出 Java 模板类
+        #[arg(long)]
+        java: bool,
+    },
+    /// 验证所有 .tbl 文件
+    Validate,
+    /// 生成测试配置数据
+    GenerateTest,
+}
+
+fn main() -> Result<()> {
+    let cli = Cli::parse();
+
+    let project = load_project(&cli.workdir)?;
+    let mut engine = ProjectEngine::new(project);
+
+    apply_overrides(&mut engine, &cli.overrides);
+
+    match cli.command {
+        Command::Export { json, java } => {
+            let export_all = !json && !java;
+
+            if export_all || json {
+                match engine.export_json() {
+                    Ok(files) => {
+                        println!("[JSON] 导出 {} 个文件", files.len());
+                        for f in &files { println!("  {}", f); }
+                    }
+                    Err(e) => eprintln!("[JSON] 错误: {}", e),
+                }
+            }
+
+            if export_all || java {
+                match engine.export_java() {
+                    Ok(files) => {
+                        println!("[Java] 导出 {} 个文件", files.len());
+                        for f in &files { println!("  {}", f); }
+                    }
+                    Err(e) => eprintln!("[Java] 错误: {}", e),
+                }
+            }
+        }
+        Command::Validate => {
+            engine.revalidate_all();
+            if engine.validation_errors.is_empty() {
+                println!("验证通过，无错误");
+            } else {
+                println!("发现 {} 个验证错误:", engine.validation_errors.len());
+                for (group, name, row, col) in &engine.validation_errors {
+                    println!("  {}/{} [{},{}]", group, name, row, col);
+                }
+                std::process::exit(1);
+            }
+        }
+        Command::GenerateTest => {
+            engine.generate_test_config();
+            println!("已生成测试配置");
+        }
+    }
+
+    Ok(())
+}
+
+// PLACEHOLDER_APPLY_OVERRIDES
+
+fn apply_overrides(engine: &mut ProjectEngine, overrides: &[String]) {
+    for item in overrides {
+        let Some((key, value)) = item.split_once('=') else {
+            eprintln!("警告: 无效的覆盖参数 '{}', 格式应为 key=value", item);
+            continue;
+        };
+        match key.trim() {
+            "project.name" => engine.project.config.project.name = value.to_string(),
+            "project.config_dir" => engine.project.config.project.config_dir = value.to_string(),
+            "project.cache_dir" => engine.project.config.project.cache_dir = value.to_string(),
+            "export.encoding" => {
+                ensure_export(&mut engine.project.config);
+                engine.project.config.export.as_mut().unwrap().encoding = Some(value.to_string());
+            }
+            "export.line_ending" => {
+                ensure_export(&mut engine.project.config);
+                engine.project.config.export.as_mut().unwrap().line_ending = Some(value.to_string());
+            }
+            "export.json.empty_as" => {
+                ensure_export_json(&mut engine.project.config);
+                engine.project.config.export.as_mut().unwrap().json.as_mut().unwrap().empty_as = Some(value.to_string());
+            }
+            "export.server.lang" => {
+                ensure_export_server(&mut engine.project.config);
+                engine.project.config.export.as_mut().unwrap().server.as_mut().unwrap().lang = Some(value.to_string());
+            }
+            "export.server.package" => {
+                ensure_export_server(&mut engine.project.config);
+                engine.project.config.export.as_mut().unwrap().server.as_mut().unwrap().package = Some(value.to_string());
+            }
+            "export.server.data_output" => {
+                ensure_export_server(&mut engine.project.config);
+                engine.project.config.export.as_mut().unwrap().server.as_mut().unwrap().data_output = Some(value.to_string());
+            }
+            "export.server.code_output" => {
+                ensure_export_server(&mut engine.project.config);
+                engine.project.config.export.as_mut().unwrap().server.as_mut().unwrap().code_output = Some(value.to_string());
+            }
+            "export.client.lang" => {
+                ensure_export_client(&mut engine.project.config);
+                engine.project.config.export.as_mut().unwrap().client.as_mut().unwrap().lang = Some(value.to_string());
+            }
+            "export.client.output" => {
+                ensure_export_client(&mut engine.project.config);
+                engine.project.config.export.as_mut().unwrap().client.as_mut().unwrap().output = Some(value.to_string());
+            }
+            _ => eprintln!("警告: 未知配置项 '{}'", key),
+        }
+    }
+}
+
+fn ensure_export(config: &mut tbl_core::model::ProjectConfig) {
+    if config.export.is_none() {
+        config.export = Some(tbl_core::model::ExportConfig {
+            json: None, server: None, client: None, encoding: None, line_ending: None,
+        });
+    }
+}
+
+fn ensure_export_json(config: &mut tbl_core::model::ProjectConfig) {
+    ensure_export(config);
+    if config.export.as_ref().unwrap().json.is_none() {
+        config.export.as_mut().unwrap().json = Some(tbl_core::model::JsonExport { empty_as: None });
+    }
+}
+
+fn ensure_export_server(config: &mut tbl_core::model::ProjectConfig) {
+    ensure_export(config);
+    if config.export.as_ref().unwrap().server.is_none() {
+        config.export.as_mut().unwrap().server = Some(tbl_core::model::ServerExport {
+            lang: None, package: None, data_output: None, code_output: None,
+        });
+    }
+}
+
+fn ensure_export_client(config: &mut tbl_core::model::ProjectConfig) {
+    ensure_export(config);
+    if config.export.as_ref().unwrap().client.is_none() {
+        config.export.as_mut().unwrap().client = Some(tbl_core::model::ClientExport { lang: None, output: None });
+    }
 }

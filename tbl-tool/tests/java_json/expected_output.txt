@@ -1,0 +1,6 @@
+=== HeroBase ===
+id=1001 name=战士 hp=100 skills=[1, 2, 3]
+id=1002 name=法师 hp=80 skills=[4, 5]
+id=1003 name=弓手 hp=90 skills=[6, 7, 8]
+=== GlobalConst ===
+maxLevel=100 serverName=test-server startPos=(5, 10)

@@ -11,6 +11,12 @@ config_dir = "config"
 # 临时缓存目录（xlsx 缓存等）
 cache_dir = ".tbl-cache"
 
+[export]
+# 生成文件编码: utf-8 (默认)
+encoding = "utf-8"
+# 生成文件换行符: lf (默认), crlf
+line_ending = "lf"
+
 [export.json]
 # 导出 JSON 时空值表达方式:
 #   "null" - tbl 空值输出为 JSON null（默认）

@@ -2,7 +2,7 @@ use anyhow::Result;
 use serde_json::{Value, Map};
 use crate::model::*;
 use crate::types::*;
-use super::{EmptyStrategy, to_camel_case, parse_base_value};
+use super::{EmptyStrategy, LineEnding, to_camel_case, parse_base_value};
 
 pub fn value_to_json(raw: &str, tbl_type: &TblType, sep: &SeparatorsSection) -> Value {
     match tbl_type.paradigm {
@@ -165,6 +165,10 @@ pub fn export_all_json(project: &Project) -> Result<Vec<String>> {
         .unwrap_or("null");
     let strategy = EmptyStrategy::from_config(strategy_str);
 
+    let line_ending = LineEnding::from_config(
+        export_cfg.and_then(|e| e.line_ending.as_deref()).unwrap_or("lf")
+    );
+
     let sep = &project.config.separators;
     let output_dir = project.workdir.join(data_output);
     let mut generated = Vec::new();
@@ -178,7 +182,8 @@ pub fn export_all_json(project: &Project) -> Result<Vec<String>> {
             let file_path = group_dir.join(format!("{}.json", &table.name));
             std::fs::create_dir_all(file_path.parent().unwrap())?;
             let content = serde_json::to_string_pretty(&json)?;
-            std::fs::write(&file_path, content)?;
+            let content = line_ending.normalize(&content);
+            std::fs::write(&file_path, content.as_bytes())?;
             generated.push(file_path.display().to_string());
         }
 
@@ -188,7 +193,8 @@ pub fn export_all_json(project: &Project) -> Result<Vec<String>> {
             let file_path = group_dir.join(format!("{}.json", &constant.name));
             std::fs::create_dir_all(file_path.parent().unwrap())?;
             let content = serde_json::to_string_pretty(&json)?;
-            std::fs::write(&file_path, content)?;
+            let content = line_ending.normalize(&content);
+            std::fs::write(&file_path, content.as_bytes())?;
             generated.push(file_path.display().to_string());
         }
     }

@@ -23,6 +23,8 @@ pub struct ExportConfig {
     pub json: Option<JsonExport>,
     pub server: Option<ServerExport>,
     pub client: Option<ClientExport>,
+    pub encoding: Option<String>,
+    pub line_ending: Option<String>,
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]
