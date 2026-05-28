@@ -19,8 +19,10 @@ tbl-tool.log
 # Test generated artifacts
 tbl-tool/tests/*/gen/
 tbl-tool/tests/*/out/
+tbl-tool/tests/*/config/
 tbl-tool/tests/*/tbl-tool.toml
 tbl-tool/tests/*/actual_output.txt
+tbl-tool/tests/*/TestMain.java
 
 # Claude
 .claude/

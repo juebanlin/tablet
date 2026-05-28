@@ -33,7 +33,26 @@ enum Command {
     /// 验证所有 .tbl 文件
     Validate,
     /// 生成测试配置数据
-    GenerateTest,
+    GenerateTest {
+        /// 包含空值字段
+        #[arg(long)]
+        empty: bool,
+        /// 不包含集合类型
+        #[arg(long)]
+        no_collection: bool,
+        /// 不包含 Tuple 类型
+        #[arg(long)]
+        no_tuple: bool,
+        /// 不包含 Constant 配置
+        #[arg(long)]
+        no_constant: bool,
+        /// 数据行数（0 表示使用默认固定数据）
+        #[arg(long, default_value_t = 0)]
+        rows: usize,
+        /// 随机种子（0 表示使用固定数据，非 0 启用随机生成）
+        #[arg(long, default_value_t = 0)]
+        seed: u64,
+    },
 }
 
 fn main() -> Result<()> {
@@ -80,8 +99,24 @@ fn main() -> Result<()> {
                 std::process::exit(1);
             }
         }
-        Command::GenerateTest => {
-            engine.generate_test_config();
+        Command::GenerateTest { empty, no_collection, no_tuple, no_constant, rows, seed } => {
+            let config_dir = engine.project.workdir.join(&engine.project.config.project.config_dir);
+            let opts = tbl_core::test_util::TestGenOptions {
+                include_empty: empty,
+                include_collection: !no_collection,
+                include_tuple: !no_tuple,
+                include_constant: !no_constant,
+                rows,
+                seed,
+            };
+            tbl_core::test_util::generate_test_config(&config_dir, &opts);
+
+            let pkg = engine.project.config.export.as_ref()
+                .and_then(|e| e.server.as_ref())
+                .and_then(|s| s.package.as_deref())
+                .unwrap_or("com.game.config");
+            tbl_core::test_util::generate_test_main(&cli.workdir, &opts, pkg);
+
             println!("已生成测试配置");
         }
     }

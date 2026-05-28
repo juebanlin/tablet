@@ -1,6 +1,0 @@
-#!tbl v2
-#mode constant
----
-max_level|int|100|前后端|最大等级
-start_pos|Tuple2<int,int>|5,10|前后端|出生坐标
-server_name|str|test-server|服务器|服务器名称

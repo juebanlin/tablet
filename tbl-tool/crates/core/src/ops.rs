@@ -1,6 +1,5 @@
 use std::collections::HashSet;
 use crate::model::*;
-use crate::types::{TblType, Paradigm, BaseType};
 use crate::validate::*;
 
 pub struct ProjectEngine {
@@ -645,29 +644,8 @@ impl ProjectEngine {
 
     pub fn generate_test_config(&mut self) {
         let config_dir = self.project.workdir.join(&self.project.config.project.config_dir);
-        let sep = &self.project.config.separators;
-
-        let list_int = TblType { paradigm: Paradigm::List, params: vec![BaseType::Int] };
-        let tuple2_int = TblType { paradigm: Paradigm::Tuple2, params: vec![BaseType::Int, BaseType::Int] };
-
-        let hero_dir = config_dir.join("hero");
-        let _ = std::fs::create_dir_all(&hero_dir);
-        let hero_content = format!(
-            "#!tbl v2\n#mode table\n#index id\n#desc 英雄ID|名称|血量|技能组\n#type int|str|int|List<int>\n#export 前后端|前后端|服务器|前后端\n#field id|name|hp|skills\n---\n1001|战士|100|{}\n1002|法师|80|{}\n1003|弓手|90|{}\n",
-            list_int.random_demo(sep), list_int.random_demo(sep), list_int.random_demo(sep)
-        );
-        let _ = std::fs::write(hero_dir.join("HeroBase.tbl"), &hero_content);
-        let _ = std::fs::write(hero_dir.join("HeroConst.tbl"),
-            "#!tbl v2\n#mode constant\n---\nmax_level|int|60||英雄最大等级\nunlock_cost|int|100||解锁费用\n");
-
-        let global_dir = config_dir.join("global");
-        let _ = std::fs::create_dir_all(&global_dir);
-        let global_content = format!(
-            "#!tbl v2\n#mode constant\n---\nmax_level|int|100||最大等级\nstart_pos|Tuple2<int,int>|{}||出生坐标\nserver_name|str|test1||服务器名称\n",
-            tuple2_int.random_demo(sep)
-        );
-        let _ = std::fs::write(global_dir.join("GlobalConst.tbl"), &global_content);
-
+        let opts = crate::test_util::TestGenOptions::full();
+        crate::test_util::generate_test_config(&config_dir, &opts);
         self.log("已生成测试配置文件".to_string());
         self.reload();
     }
