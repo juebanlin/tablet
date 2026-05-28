@@ -1,4 +1,6 @@
+use std::path::Path;
 use anyhow::{Result, bail};
+use crate::model::*;
 
 #[derive(Debug, Clone)]
 pub struct TblSchema {
@@ -139,4 +141,156 @@ pub fn merge_schemas(schemas: &[TblSchema]) -> Result<TblSchema> {
     }
 
     Ok(TblSchema { sections: all_sections })
+}
+
+pub fn serialize_tblschema(schema: &TblSchema) -> String {
+    use std::fmt::Write;
+    let mut s = String::new();
+    writeln!(s, "#!tblschema v1").unwrap();
+
+    for sec in &schema.sections {
+        writeln!(s).unwrap();
+        let mode = match sec.mode {
+            SchemaMode::Table => "table",
+            SchemaMode::Constant => "constant",
+        };
+        writeln!(s, "[{}/{}] {}", sec.group, sec.name, mode).unwrap();
+        for f in &sec.fields {
+            writeln!(s, "{} | {} | {} | {}", f.name, f.tbl_type, f.export, f.desc).unwrap();
+        }
+    }
+    s
+}
+
+pub fn schema_from_project(groups: &[Group]) -> TblSchema {
+    let mut sections = Vec::new();
+    for group in groups {
+        for table in &group.tables {
+            if table.deleted { continue; }
+            let fields = table.schema.fields.iter().map(|f| SchemaField {
+                name: f.name.clone(),
+                tbl_type: f.tbl_type.clone(),
+                export: export_to_code(&f.export),
+                desc: f.desc.clone(),
+            }).collect();
+            sections.push(SchemaSection {
+                group: group.name.clone(),
+                name: table.name.clone(),
+                mode: SchemaMode::Table,
+                fields,
+            });
+        }
+        for constant in &group.constants {
+            if constant.deleted { continue; }
+            let fields = constant.entries.iter()
+                .filter(|e| !e.name.is_empty())
+                .map(|e| SchemaField {
+                    name: e.name.clone(),
+                    tbl_type: e.tbl_type.clone(),
+                    export: export_to_code(&e.export),
+                    desc: e.desc.clone(),
+                }).collect();
+            sections.push(SchemaSection {
+                group: group.name.clone(),
+                name: constant.name.clone(),
+                mode: SchemaMode::Constant,
+                fields,
+            });
+        }
+    }
+    TblSchema { sections }
+}
+
+fn export_to_code(e: &Export) -> String {
+    match e {
+        Export::ClientServer | Export::Unselected => "cs".to_string(),
+        Export::ClientOnly => "c".to_string(),
+        Export::ServerOnly => "s".to_string(),
+        Export::None => "-".to_string(),
+    }
+}
+
+pub fn apply_schema_to_project(groups: &mut Vec<Group>, sections: &[SchemaSection], config_dir: &Path) -> (usize, usize) {
+    let mut added = 0usize;
+    let mut overwritten = 0usize;
+
+    for sec in sections {
+        let group = match groups.iter_mut().find(|g| g.name == sec.group) {
+            Some(g) => g,
+            None => {
+                let dir = config_dir.join(&sec.group);
+                groups.push(Group {
+                    name: sec.group.clone(),
+                    dir,
+                    tables: Vec::new(),
+                    constants: Vec::new(),
+                    is_new: true,
+                });
+                groups.last_mut().unwrap()
+            }
+        };
+
+        match sec.mode {
+            SchemaMode::Table => {
+                let fields: Vec<FieldDef> = sec.fields.iter().map(|f| FieldDef {
+                    name: f.name.clone(),
+                    desc: f.desc.clone(),
+                    tbl_type: f.tbl_type.clone(),
+                    export: Export::from_str(&f.export),
+                }).collect();
+
+                if let Some(table) = group.tables.iter_mut().find(|t| t.name == sec.name) {
+                    let old_len = table.schema.fields.len();
+                    let new_len = fields.len();
+                    table.schema.fields = fields;
+                    for row in &mut table.records {
+                        row.resize(new_len, String::new());
+                        if new_len < old_len { row.truncate(new_len); }
+                    }
+                    table.dirty = true;
+                    overwritten += 1;
+                } else {
+                    let path = group.dir.join(format!("{}.tbl", sec.name));
+                    group.tables.push(Table {
+                        name: sec.name.clone(),
+                        path,
+                        schema: TableSchema { fields },
+                        records: Vec::new(),
+                        dirty: true,
+                        deleted: false,
+                        original: String::new(),
+                    });
+                    added += 1;
+                }
+            }
+            SchemaMode::Constant => {
+                let entries: Vec<ConstEntry> = sec.fields.iter().map(|f| ConstEntry {
+                    name: f.name.clone(),
+                    tbl_type: f.tbl_type.clone(),
+                    value: String::new(),
+                    export: Export::from_str(&f.export),
+                    desc: f.desc.clone(),
+                }).collect();
+
+                if let Some(constant) = group.constants.iter_mut().find(|c| c.name == sec.name) {
+                    constant.entries = entries;
+                    constant.dirty = true;
+                    overwritten += 1;
+                } else {
+                    let path = group.dir.join(format!("{}.tbl", sec.name));
+                    group.constants.push(Constant {
+                        name: sec.name.clone(),
+                        path,
+                        entries,
+                        dirty: true,
+                        deleted: false,
+                        original: String::new(),
+                    });
+                    added += 1;
+                }
+            }
+        }
+    }
+
+    (added, overwritten)
 }
