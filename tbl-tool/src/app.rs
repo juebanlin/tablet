@@ -912,8 +912,18 @@ impl TblApp {
                     ui.label("名称:");
                     ui.text_edit_singleline(&mut self.input_name);
                 });
+                let err = match &action {
+                    PendingAction::NewGroup => self.validate_group_name(&self.input_name),
+                    PendingAction::RenameGroup { old_name } => self.validate_group_name_rename(&self.input_name, old_name),
+                    PendingAction::RenameNode { old_name, .. } => self.validate_node_name_rename(&self.input_name, old_name),
+                    _ => self.validate_node_name(&self.input_name),
+                };
+                if let Some(ref msg) = err {
+                    ui.label(egui::RichText::new(msg).color(egui::Color32::from_rgb(220, 50, 50)).size(11.0));
+                }
                 ui.horizontal(|ui| {
-                    if ui.button("确定").clicked() && !self.input_name.is_empty() {
+                    let can_confirm = err.is_none() && !self.input_name.is_empty();
+                    if ui.add_enabled(can_confirm, egui::Button::new("确定")).clicked() {
                         self.execute_action(&action);
                         self.pending_action = None;
                         self.input_name.clear();
@@ -1213,4 +1223,71 @@ pub fn validate_constant_row(constant: &crate::model::Constant, row: usize, sep:
     }
 
     errors
+}
+
+fn is_valid_group_name(s: &str) -> bool {
+    if s.is_empty() { return false; }
+    s.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || ('\u{4e00}'..='\u{9fff}').contains(&c))
+}
+
+fn is_valid_node_name(s: &str) -> bool {
+    if s.is_empty() { return false; }
+    let mut chars = s.chars();
+    match chars.next() {
+        Some(c) if c.is_ascii_uppercase() => {}
+        _ => return false,
+    }
+    chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
+
+impl TblApp {
+    fn validate_group_name(&self, name: &str) -> Option<String> {
+        if name.is_empty() { return Some("名称不能为空".to_string()); }
+        if !is_valid_group_name(name) { return Some("组名只能包含中英文数字下划线".to_string()); }
+        let lower = name.to_lowercase();
+        if self.project.groups.iter().any(|g| g.name.to_lowercase() == lower) {
+            return Some("组名重复（忽略大小写）".to_string());
+        }
+        None
+    }
+
+    fn validate_group_name_rename(&self, name: &str, old_name: &str) -> Option<String> {
+        if name.is_empty() { return Some("名称不能为空".to_string()); }
+        if !is_valid_group_name(name) { return Some("组名只能包含中英文数字下划线".to_string()); }
+        let lower = name.to_lowercase();
+        if self.project.groups.iter().any(|g| g.name.to_lowercase() == lower && g.name != old_name) {
+            return Some("组名重复（忽略大小写）".to_string());
+        }
+        None
+    }
+
+    fn validate_node_name(&self, name: &str) -> Option<String> {
+        if name.is_empty() { return Some("名称不能为空".to_string()); }
+        if !is_valid_node_name(name) { return Some("配置项名必须符合Java类名规则(大写开头,英文数字下划线)".to_string()); }
+        let lower = name.to_lowercase();
+        for g in &self.project.groups {
+            for t in &g.tables {
+                if !t.deleted && t.name.to_lowercase() == lower { return Some("配置项名重复（忽略大小写）".to_string()); }
+            }
+            for c in &g.constants {
+                if !c.deleted && c.name.to_lowercase() == lower { return Some("配置项名重复（忽略大小写）".to_string()); }
+            }
+        }
+        None
+    }
+
+    fn validate_node_name_rename(&self, name: &str, old_name: &str) -> Option<String> {
+        if name.is_empty() { return Some("名称不能为空".to_string()); }
+        if !is_valid_node_name(name) { return Some("配置项名必须符合Java类名规则(大写开头,英文数字下划线)".to_string()); }
+        let lower = name.to_lowercase();
+        for g in &self.project.groups {
+            for t in &g.tables {
+                if !t.deleted && t.name.to_lowercase() == lower && t.name != old_name { return Some("配置项名重复（忽略大小写）".to_string()); }
+            }
+            for c in &g.constants {
+                if !c.deleted && c.name.to_lowercase() == lower && c.name != old_name { return Some("配置项名重复（忽略大小写）".to_string()); }
+            }
+        }
+        None
+    }
 }
