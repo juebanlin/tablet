@@ -26,6 +26,9 @@ enum Command {
         /// 只导出 JSON 数据文件
         #[arg(long)]
         json: bool,
+        /// 只导出 XML 数据文件
+        #[arg(long)]
+        xml: bool,
         /// 只导出 Java 模板类
         #[arg(long)]
         java: bool,
@@ -46,6 +49,9 @@ enum Command {
         /// 随机种子（0 表示使用固定数据，非 0 启用随机生成）
         #[arg(long, default_value_t = 0)]
         seed: u64,
+        /// 数据格式（json 或 xml），影响 TestMain.java 的初始化方式
+        #[arg(long, default_value = "json")]
+        format: String,
     },
 }
 
@@ -58,8 +64,8 @@ fn main() -> Result<()> {
     apply_overrides(&mut engine, &cli.overrides);
 
     match cli.command {
-        Command::Export { json, java } => {
-            let export_all = !json && !java;
+        Command::Export { json, xml, java } => {
+            let export_all = !json && !xml && !java;
 
             if export_all || json {
                 match engine.export_json() {
@@ -68,6 +74,16 @@ fn main() -> Result<()> {
                         for f in &files { println!("  {}", f); }
                     }
                     Err(e) => eprintln!("[JSON] 错误: {}", e),
+                }
+            }
+
+            if export_all || xml {
+                match engine.export_xml() {
+                    Ok(files) => {
+                        println!("[XML] 导出 {} 个文件", files.len());
+                        for f in &files { println!("  {}", f); }
+                    }
+                    Err(e) => eprintln!("[XML] 错误: {}", e),
                 }
             }
 
@@ -93,7 +109,7 @@ fn main() -> Result<()> {
                 std::process::exit(1);
             }
         }
-        Command::GenerateTest { empty, schema, rows, seed } => {
+        Command::GenerateTest { empty, schema, rows, seed, format } => {
             let config_dir = engine.project.workdir.join(&engine.project.config.project.config_dir);
             let opts = tbl_core::test_util::TestGenOptions {
                 include_empty: empty,
@@ -112,7 +128,7 @@ fn main() -> Result<()> {
                     .and_then(|e| e.server.as_ref())
                     .and_then(|s| s.package.as_deref())
                     .unwrap_or("com.game.config");
-                tbl_core::test_util::generate_test_main_from_schema(&cli.workdir, &parsed, pkg);
+                tbl_core::test_util::generate_test_main_from_schema(&cli.workdir, &parsed, pkg, &format);
             } else {
                 tbl_core::test_util::generate_test_config(&config_dir, &opts);
 
@@ -120,7 +136,7 @@ fn main() -> Result<()> {
                     .and_then(|e| e.server.as_ref())
                     .and_then(|s| s.package.as_deref())
                     .unwrap_or("com.game.config");
-                tbl_core::test_util::generate_test_main(&cli.workdir, &opts, pkg);
+                tbl_core::test_util::generate_test_main(&cli.workdir, &opts, pkg, &format);
             }
 
             println!("已生成测试配置");
@@ -154,6 +170,10 @@ fn apply_overrides(engine: &mut ProjectEngine, overrides: &[String]) {
                 ensure_export_json(&mut engine.project.config);
                 engine.project.config.export.as_mut().unwrap().json.as_mut().unwrap().empty_as = Some(value.to_string());
             }
+            "export.xml.empty_as" => {
+                ensure_export_xml(&mut engine.project.config);
+                engine.project.config.export.as_mut().unwrap().xml.as_mut().unwrap().empty_as = Some(value.to_string());
+            }
             "export.server.lang" => {
                 ensure_export_server(&mut engine.project.config);
                 engine.project.config.export.as_mut().unwrap().server.as_mut().unwrap().lang = Some(value.to_string());
@@ -186,7 +206,7 @@ fn apply_overrides(engine: &mut ProjectEngine, overrides: &[String]) {
 fn ensure_export(config: &mut tbl_core::model::ProjectConfig) {
     if config.export.is_none() {
         config.export = Some(tbl_core::model::ExportConfig {
-            json: None, server: None, client: None, encoding: None, line_ending: None,
+            json: None, xml: None, server: None, client: None, encoding: None, line_ending: None,
         });
     }
 }
@@ -195,6 +215,13 @@ fn ensure_export_json(config: &mut tbl_core::model::ProjectConfig) {
     ensure_export(config);
     if config.export.as_ref().unwrap().json.is_none() {
         config.export.as_mut().unwrap().json = Some(tbl_core::model::JsonExport { empty_as: None });
+    }
+}
+
+fn ensure_export_xml(config: &mut tbl_core::model::ProjectConfig) {
+    ensure_export(config);
+    if config.export.as_ref().unwrap().xml.is_none() {
+        config.export.as_mut().unwrap().xml = Some(tbl_core::model::XmlExport { empty_as: None });
     }
 }
 

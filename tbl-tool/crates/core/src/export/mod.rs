@@ -1,22 +1,32 @@
 mod json;
 mod java;
+mod xml;
 
 pub use json::export_all_json;
 pub use java::export_all_java;
+pub use xml::export_all_xml;
 
 use serde_json::Value;
 use crate::types::BaseType;
 
 pub enum EmptyStrategy {
     Null,
+    Empty,
     Omit,
 }
 
 impl EmptyStrategy {
-    pub fn from_config(s: &str) -> Self {
+    pub fn from_json_config(s: &str) -> Self {
         match s {
             "omit" => Self::Omit,
             _ => Self::Null,
+        }
+    }
+
+    pub fn from_xml_config(s: &str) -> Self {
+        match s {
+            "omit" => Self::Omit,
+            _ => Self::Empty,
         }
     }
 }

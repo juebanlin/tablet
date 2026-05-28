@@ -716,6 +716,12 @@ impl ProjectEngine {
         Ok(result)
     }
 
+    pub fn export_xml(&mut self) -> anyhow::Result<Vec<String>> {
+        let result = crate::export::export_all_xml(&self.project)?;
+        self.log(format!("导出 XML 数据文件 {} 个", result.len()));
+        Ok(result)
+    }
+
     pub fn export_java(&mut self) -> anyhow::Result<Vec<String>> {
         let result = crate::export::export_all_java(&self.project)?;
         self.log(format!("导出 Java 模板类 {} 个", result.len()));

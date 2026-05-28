@@ -40,10 +40,10 @@ pub fn generate_test_config(config_dir: &Path, opts: &TestGenOptions) {
 }
 
 /// 使用内置 schema 生成 TestMain.java
-pub fn generate_test_main(workdir: &Path, opts: &TestGenOptions, pkg: &str) {
+pub fn generate_test_main(workdir: &Path, opts: &TestGenOptions, pkg: &str, format: &str) {
     let schema_str = if opts.include_empty { SCHEMA_EMPTY } else { SCHEMA_FULL };
     let schema = parse_tblschema(schema_str).expect("内置 schema 解析失败");
-    generate_test_main_from_schema(workdir, &schema, pkg);
+    generate_test_main_from_schema(workdir, &schema, pkg, format);
 }
 
 /// 根据 schema + options 生成 .tbl 文件
@@ -57,8 +57,8 @@ pub fn generate_from_schema(config_dir: &Path, schema: &TblSchema, opts: &TestGe
 }
 
 /// 根据 schema 生成 TestMain.java
-pub fn generate_test_main_from_schema(workdir: &Path, schema: &TblSchema, pkg: &str) {
-    let content = build_test_main(schema, pkg);
+pub fn generate_test_main_from_schema(workdir: &Path, schema: &TblSchema, pkg: &str, format: &str) {
+    let content = build_test_main(schema, pkg, format);
     let _ = std::fs::write(workdir.join("TestMain.java"), &content);
 }
 
@@ -260,7 +260,7 @@ fn java_format_spec(tbl_type: &str) -> &'static str {
     }
 }
 
-fn build_test_main(schema: &TblSchema, pkg: &str) -> String {
+fn build_test_main(schema: &TblSchema, pkg: &str, format: &str) -> String {
     let mut s = String::new();
     writeln!(s, "import {}.*;", pkg).unwrap();
 
@@ -274,7 +274,11 @@ fn build_test_main(schema: &TblSchema, pkg: &str) -> String {
     writeln!(s, "public class TestMain {{").unwrap();
     writeln!(s, "    public static void main(String[] args) {{").unwrap();
     writeln!(s, "        String dataDir = args.length > 0 ? args[0] : \"gen/server/data\";").unwrap();
-    writeln!(s, "        TplHolder.init(dataDir);").unwrap();
+    if format == "xml" {
+        writeln!(s, "        TplHolder.init(dataDir);").unwrap();
+    } else {
+        writeln!(s, "        TplHolder.initJson(dataDir);").unwrap();
+    }
 
     for sec in &schema.sections {
         let cls = format!("{}Tpl", sec.name);

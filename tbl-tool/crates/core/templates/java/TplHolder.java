@@ -9,8 +9,8 @@ public class TplHolder {
     private static final Map<Class<?>, Map<Integer, ? extends ITpl>> tables = new HashMap<>();
     private static final Map<Class<?>, IConstTpl> constants = new HashMap<>();
     private static final Map<String, Class<?>> registry = new HashMap<>();
-    private static IJsonParser parser = new SimpleJsonParser();
-    private static String basePackage = "{{PACKAGE}}";
+    private static IJsonParser jsonParser = new SimpleJsonParser();
+    private static SimpleXmlParser xmlParser = new SimpleXmlParser();
     private static String dataDir;
 
     static {
@@ -18,28 +18,34 @@ public class TplHolder {
     }
 
     public static void init(String dir) {
-        init(dir, new SimpleJsonParser());
-    }
-
-    public static void init(String dir, IJsonParser jsonParser) {
         dataDir = dir;
-        parser = jsonParser;
-        loadAll();
+        loadAll(".xml");
     }
 
-    private static void loadAll() {
+    public static void initJson(String dir) {
+        initJson(dir, new SimpleJsonParser());
+    }
+
+    public static void initJson(String dir, IJsonParser parser) {
+        dataDir = dir;
+        jsonParser = parser;
+        loadAll(".json");
+    }
+
+    private static void loadAll(String ext) {
         try {
             Files.walk(Paths.get(dataDir))
-                .filter(p -> p.toString().endsWith(".json"))
+                .filter(p -> p.toString().endsWith(ext))
                 .forEach(p -> {
                     Path rel = Paths.get(dataDir).relativize(p);
-                    String key = rel.toString().replace('\\', '/');
+                    String full = rel.toString().replace('\\', '/');
+                    String key = full.replaceFirst("\\.(json|xml)$", "");
                     Class<?> clazz = registry.get(key);
                     if (clazz == null) return;
                     if (ITpl.class.isAssignableFrom(clazz)) {
-                        loadTable(key, (Class<? extends ITpl>) clazz);
+                        loadTable(full, (Class<? extends ITpl>) clazz);
                     } else if (IConstTpl.class.isAssignableFrom(clazz)) {
-                        loadConst(key, (Class<? extends IConstTpl>) clazz);
+                        loadConst(full, (Class<? extends IConstTpl>) clazz);
                     }
                 });
         } catch (Exception e) { throw new RuntimeException("Failed to scan " + dataDir, e); }
@@ -60,11 +66,21 @@ public class TplHolder {
 
     private static <T extends ITpl> void loadTable(String path, Class<T> clazz) {
         try {
-            String json = new String(Files.readAllBytes(Paths.get(dataDir, path)));
-            List<Map<String, Object>> list = parser.parseArray(json);
+            String content = new String(Files.readAllBytes(Paths.get(dataDir, path)), "UTF-8");
+            List<Map<String, String>> list;
+            SepConfig sep;
+            if (path.endsWith(".xml")) {
+                list = xmlParser.parseArray(content);
+                sep = SepConfig.fromMap(xmlParser.parseRootAttrs(content));
+            } else {
+                Map<String, Object> wrapper = jsonParser.parseObject(content);
+                List<Map<String, Object>> raw = (List<Map<String, Object>>) wrapper.get("data");
+                sep = SepConfig.fromMap(toStringMap((Map<String, Object>) wrapper.getOrDefault("_sep", Collections.emptyMap())));
+                list = toStringMaps(raw);
+            }
             Map<Integer, T> map = new HashMap<>();
-            for (Map<String, Object> item : list) {
-                T obj = fromMap(clazz, item);
+            for (Map<String, String> item : list) {
+                T obj = fromMap(clazz, item, sep);
                 map.put(obj.getId(), obj);
             }
             tables.put(clazz, map);
@@ -73,26 +89,50 @@ public class TplHolder {
 
     private static <T extends IConstTpl> void loadConst(String path, Class<T> clazz) {
         try {
-            String json = new String(Files.readAllBytes(Paths.get(dataDir, path)));
-            Map<String, Object> map = parser.parseObject(json);
-            T obj = fromMap(clazz, map);
+            String content = new String(Files.readAllBytes(Paths.get(dataDir, path)), "UTF-8");
+            Map<String, String> data;
+            SepConfig sep;
+            if (path.endsWith(".xml")) {
+                data = xmlParser.parseObject(content);
+                sep = SepConfig.fromMap(xmlParser.parseRootAttrs(content));
+            } else {
+                Map<String, Object> wrapper = jsonParser.parseObject(content);
+                Map<String, Object> raw = (Map<String, Object>) wrapper.getOrDefault("data", wrapper);
+                sep = SepConfig.fromMap(toStringMap((Map<String, Object>) wrapper.getOrDefault("_sep", Collections.emptyMap())));
+                data = toStringMap(raw);
+            }
+            T obj = fromMap(clazz, data, sep);
             constants.put(clazz, obj);
         } catch (Exception e) { throw new RuntimeException("Failed to load " + path, e); }
     }
 
-    private static <T> T fromMap(Class<T> clazz, Map<String, Object> map) {
+    private static <T> T fromMap(Class<T> clazz, Map<String, String> map, SepConfig sep) {
         try {
             T obj = clazz.getDeclaredConstructor().newInstance();
             for (var field : clazz.getDeclaredFields()) {
                 field.setAccessible(true);
-                Object val = map.get(field.getName());
-                if (val == null) {
-                    field.set(obj, TplUtil.defaultValue(field.getType()));
-                } else {
-                    field.set(obj, TplUtil.convert(val, field.getType()));
-                }
+                TblType ann = field.getAnnotation(TblType.class);
+                if (ann == null) continue;
+                String raw = map.get(field.getName());
+                field.set(obj, TplUtil.parseField(raw, ann.value(), sep));
             }
             return obj;
         } catch (Exception e) { throw new RuntimeException(e); }
+    }
+
+    private static List<Map<String, String>> toStringMaps(List<Map<String, Object>> raw) {
+        List<Map<String, String>> result = new ArrayList<>();
+        for (Map<String, Object> m : raw) {
+            result.add(toStringMap(m));
+        }
+        return result;
+    }
+
+    private static Map<String, String> toStringMap(Map<String, Object> raw) {
+        Map<String, String> result = new LinkedHashMap<>();
+        for (Map.Entry<String, Object> e : raw.entrySet()) {
+            result.put(e.getKey(), e.getValue() == null ? "" : e.getValue().toString());
+        }
+        return result;
     }
 }
