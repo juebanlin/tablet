@@ -60,10 +60,7 @@ pub fn validate_constant_cell(entry: &ConstEntry, col: usize, sep: &SeparatorsSe
         0 => {
             let name = &entry.name;
             if name.is_empty() { return None; }
-            if name.contains(' ') { return Some("不能含空格".to_string()); }
-            if !is_valid_identifier(name) { return Some("不是合法标识符".to_string()); }
-            if is_java_keyword(name) || is_lua_keyword(name) { return Some("是语言关键字".to_string()); }
-            None
+            validate_const_name(name)
         }
         2 => {
             let value = &entry.value;
@@ -96,8 +93,8 @@ pub fn validate_constant_row(constant: &Constant, row: usize, sep: &SeparatorsSe
 pub fn is_valid_identifier(s: &str) -> bool {
     if s.is_empty() { return false; }
     let first = s.chars().next().unwrap();
-    if !first.is_ascii_alphabetic() && first != '_' { return false; }
-    s.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+    if !first.is_ascii_lowercase() { return false; }
+    s.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
 }
 
 pub fn is_java_keyword(s: &str) -> bool {
@@ -122,8 +119,17 @@ pub fn is_lua_keyword(s: &str) -> bool {
     )
 }
 
+pub fn is_go_keyword(s: &str) -> bool {
+    matches!(s,
+        "break" | "case" | "chan" | "const" | "continue" | "default" | "defer" |
+        "else" | "fallthrough" | "for" | "func" | "go" | "goto" | "if" |
+        "import" | "interface" | "map" | "package" | "range" | "return" |
+        "select" | "struct" | "switch" | "type" | "var"
+    )
+}
+
 pub fn is_reserved_keyword(name: &str) -> bool {
-    is_java_keyword(name) || is_lua_keyword(name)
+    is_java_keyword(name) || is_lua_keyword(name) || is_go_keyword(name)
 }
 
 pub fn is_valid_group_name(s: &str) -> bool {
@@ -135,4 +141,117 @@ pub fn is_valid_node_name(s: &str) -> bool {
     let first = s.chars().next().unwrap();
     if !first.is_ascii_uppercase() { return false; }
     s.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
+
+// --- 字段名验证 ---
+
+pub fn validate_field_name(name: &str) -> Option<String> {
+    if name.is_empty() { return Some("字段名不能为空".to_string()); }
+    if !is_valid_identifier(name) {
+        return Some(format!("\"{}\" 不是合法字段名（需小写字母开头，只含小写字母/数字/下划线）", name));
+    }
+    if is_reserved_keyword(name) {
+        return Some(format!("\"{}\" 是语言关键字", name));
+    }
+    None
+}
+
+pub fn validate_const_name(name: &str) -> Option<String> {
+    if name.is_empty() { return None; }
+    if !is_valid_identifier(name) {
+        return Some(format!("\"{}\" 不是合法常量名（需小写字母开头，只含小写字母/数字/下划线）", name));
+    }
+    if is_reserved_keyword(name) {
+        return Some(format!("\"{}\" 是语言关键字", name));
+    }
+    None
+}
+
+// --- 表头验证 ---
+
+#[derive(Debug, Clone)]
+pub struct SchemaError {
+    pub field: String,
+    pub message: String,
+}
+
+pub fn validate_table_schema(table: &Table, sep: &SeparatorsSection) -> Vec<SchemaError> {
+    let mut errors = Vec::new();
+    let fields = &table.schema.fields;
+
+    if fields.is_empty() {
+        errors.push(SchemaError { field: String::new(), message: "表没有定义任何字段".to_string() });
+        return errors;
+    }
+
+    let index_exists = fields.iter().any(|f| f.name == table.schema.index);
+    if !index_exists {
+        errors.push(SchemaError {
+            field: table.schema.index.clone(),
+            message: format!("主键 \"{}\" 在字段列表中不存在", table.schema.index),
+        });
+    }
+
+    let mut seen_names = std::collections::HashSet::new();
+    for field in fields {
+        if let Some(msg) = validate_field_name(&field.name) {
+            errors.push(SchemaError { field: field.name.clone(), message: msg });
+        }
+        if !field.name.is_empty() && !seen_names.insert(&field.name) {
+            errors.push(SchemaError {
+                field: field.name.clone(),
+                message: format!("字段名 \"{}\" 重复", field.name),
+            });
+        }
+        if TblType::parse(&field.tbl_type).is_none() {
+            errors.push(SchemaError {
+                field: field.name.clone(),
+                message: format!("类型 \"{}\" 不合法", field.tbl_type),
+            });
+        }
+    }
+
+    // 主键值重复检测
+    if let Some(idx_col) = fields.iter().position(|f| f.name == table.schema.index) {
+        let mut seen_ids = std::collections::HashSet::new();
+        for (row, record) in table.records.iter().enumerate() {
+            let id = record.get(idx_col).map(|s| s.as_str()).unwrap_or("");
+            if id.is_empty() { continue; }
+            if !seen_ids.insert(id.to_string()) {
+                errors.push(SchemaError {
+                    field: table.schema.index.clone(),
+                    message: format!("第{}行主键值 \"{}\" 重复", row + 1, id),
+                });
+            }
+        }
+    }
+
+    errors
+}
+
+pub fn validate_constant_schema(constant: &Constant, sep: &SeparatorsSection) -> Vec<SchemaError> {
+    let mut errors = Vec::new();
+
+    let mut seen_names = std::collections::HashSet::new();
+    for entry in &constant.entries {
+        if entry.name.is_empty() { continue; }
+
+        if let Some(msg) = validate_const_name(&entry.name) {
+            errors.push(SchemaError { field: entry.name.clone(), message: msg });
+        }
+        if !seen_names.insert(&entry.name) {
+            errors.push(SchemaError {
+                field: entry.name.clone(),
+                message: format!("常量名 \"{}\" 重复", entry.name),
+            });
+        }
+        if TblType::parse(&entry.tbl_type).is_none() {
+            errors.push(SchemaError {
+                field: entry.name.clone(),
+                message: format!("类型 \"{}\" 不合法", entry.tbl_type),
+            });
+        }
+    }
+
+    errors
 }
