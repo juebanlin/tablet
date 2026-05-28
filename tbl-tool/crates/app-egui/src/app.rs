@@ -4,7 +4,7 @@ use tbl_core::model::*;
 use tbl_core::ops::{ProjectEngine, ProjectAction};
 use crate::ui;
 use crate::ui::type_selector::TypeSelectorState;
-use crate::ui::schema_dialog::{SchemaExportState, SchemaImportState};
+use crate::ui::schema_dialog::{SchemaExportState, SchemaImportState, DataExportState};
 
 pub struct TblApp {
     pub engine: ProjectEngine,
@@ -24,6 +24,7 @@ pub struct TblApp {
     pub type_selector: TypeSelectorState,
     pub schema_export: SchemaExportState,
     pub schema_import: SchemaImportState,
+    pub data_export: DataExportState,
     theme_applied: bool,
 }
 
@@ -119,6 +120,7 @@ impl TblApp {
             type_selector: TypeSelectorState::default(),
             schema_export: SchemaExportState::default(),
             schema_import: SchemaImportState::default(),
+            data_export: DataExportState::default(),
             theme_applied: false,
         }
     }
@@ -356,6 +358,9 @@ impl eframe::App for TblApp {
                     self.reload();
                 }
                 ui.separator();
+                if ui.button("导出").clicked() {
+                    self.data_export.open = true;
+                }
                 if ui.button("导出Schema").clicked() {
                     self.schema_export.open = true;
                     self.schema_export.checked.clear();
@@ -403,6 +408,7 @@ impl eframe::App for TblApp {
         self.show_input_dialog(ctx);
         ui::schema_dialog::render_export_dialog(ctx, self);
         ui::schema_dialog::render_import_dialog(ctx, self);
+        ui::schema_dialog::render_data_export_dialog(ctx, self);
     }
 }
 

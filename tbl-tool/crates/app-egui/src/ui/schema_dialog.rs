@@ -331,3 +331,121 @@ fn group_schema_sections(schema: &TblSchema) -> Vec<(String, Vec<(String, Schema
     }
     result
 }
+
+// --- 导出数据对话框 ---
+
+#[derive(Clone)]
+pub struct DataExportState {
+    pub open: bool,
+    pub json: bool,
+    pub xml: bool,
+    pub java: bool,
+    pub go: bool,
+    pub lua: bool,
+}
+
+impl Default for DataExportState {
+    fn default() -> Self {
+        Self { open: false, json: true, xml: true, java: true, go: false, lua: true }
+    }
+}
+
+impl DataExportState {
+    fn set_all(&mut self) { self.json = true; self.xml = true; self.java = true; self.go = true; self.lua = true; }
+    fn set_data(&mut self) { self.json = true; self.xml = true; self.java = false; self.go = false; self.lua = false; }
+    fn set_server(&mut self) { self.json = true; self.xml = true; self.java = true; self.go = true; self.lua = false; }
+    fn set_client(&mut self) { self.json = false; self.xml = false; self.java = false; self.go = false; self.lua = true; }
+
+    fn any_selected(&self) -> bool {
+        self.json || self.xml || self.java || self.go || self.lua
+    }
+}
+
+pub fn render_data_export_dialog(ctx: &egui::Context, app: &mut TblApp) {
+    if !app.data_export.open { return; }
+
+    let mut open = true;
+    egui::Window::new("导出")
+        .collapsible(false)
+        .resizable(false)
+        .default_width(280.0)
+        .open(&mut open)
+        .show(ctx, |ui| {
+            ui.horizontal(|ui| {
+                if ui.button("全部").clicked() { app.data_export.set_all(); }
+                if ui.button("数据").clicked() { app.data_export.set_data(); }
+                if ui.button("后端").clicked() { app.data_export.set_server(); }
+                if ui.button("前端").clicked() { app.data_export.set_client(); }
+            });
+            ui.separator();
+            ui.horizontal(|ui| {
+                ui.checkbox(&mut app.data_export.json, "JSON");
+                ui.checkbox(&mut app.data_export.xml, "XML");
+            });
+            ui.horizontal(|ui| {
+                ui.checkbox(&mut app.data_export.java, "Java");
+                ui.checkbox(&mut app.data_export.go, "Go");
+            });
+            ui.horizontal(|ui| {
+                ui.checkbox(&mut app.data_export.lua, "Lua");
+            });
+            ui.separator();
+            ui.horizontal(|ui| {
+                if ui.button("取消").clicked() {
+                    app.data_export.open = false;
+                }
+                let enabled = app.data_export.any_selected();
+                if ui.add_enabled(enabled, egui::Button::new("导出")).clicked() {
+                    do_data_export(app);
+                }
+            });
+        });
+    if !open { app.data_export.open = false; }
+}
+
+fn do_data_export(app: &mut TblApp) {
+    let state = app.data_export.clone();
+    app.data_export.open = false;
+
+    if state.json {
+        match app.engine.export_json() {
+            Ok(r) => log_export_result(app, "JSON", &r),
+            Err(e) => app.log(format!("[JSON] 错误: {}", e)),
+        }
+    }
+    if state.xml {
+        match app.engine.export_xml() {
+            Ok(r) => log_export_result(app, "XML", &r),
+            Err(e) => app.log(format!("[XML] 错误: {}", e)),
+        }
+    }
+    if state.java {
+        match app.engine.export_java() {
+            Ok(r) => log_export_result(app, "Java", &r),
+            Err(e) => app.log(format!("[Java] 错误: {}", e)),
+        }
+    }
+    if state.go {
+        app.log("[Go] 导出功能待实现".to_string());
+    }
+    if state.lua {
+        match app.engine.export_lua() {
+            Ok(r) => log_export_result(app, "Lua", &r),
+            Err(e) => app.log(format!("[Lua] 错误: {}", e)),
+        }
+    }
+}
+
+fn log_export_result(app: &mut TblApp, label: &str, result: &tbl_core::export::ExportResult) {
+    use tbl_core::export::FileStatus;
+    app.log(format!("[{}] {} 新增, {} 修改, {} 删除, {} 不变",
+        label, result.added(), result.modified(), result.deleted(), result.unchanged()));
+    for f in &result.files {
+        match f.status {
+            FileStatus::Added => app.log(format!("  [新增] {}", f.path)),
+            FileStatus::Modified => app.log(format!("  [修改] {}", f.path)),
+            FileStatus::Deleted => app.log(format!("  [删除] {}", f.path)),
+            FileStatus::Unchanged => {}
+        }
+    }
+}
