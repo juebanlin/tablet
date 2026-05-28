@@ -9,11 +9,6 @@ public class SimpleJsonParser implements IJsonParser {
         return (Map<String, Object>) parse(json.trim(), new int[]{0});
     }
 
-    @Override
-    public List<Map<String, Object>> parseArray(String json) {
-        return (List<Map<String, Object>>) parse(json.trim(), new int[]{0});
-    }
-
     private Object parse(String s, int[] pos) {
         skipWhitespace(s, pos);
         char c = s.charAt(pos[0]);
