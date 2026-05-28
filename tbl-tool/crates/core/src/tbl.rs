@@ -12,7 +12,6 @@ pub fn parse_tbl(path: &Path) -> Result<TblFile> {
     }
 
     let mut mode = String::new();
-    let mut index = String::new();
     let mut desc_line = String::new();
     let mut type_line = String::new();
     let mut export_line = String::new();
@@ -33,8 +32,8 @@ pub fn parse_tbl(path: &Path) -> Result<TblFile> {
         }
         if let Some(val) = line.strip_prefix("#mode ") {
             mode = val.trim().to_string();
-        } else if let Some(val) = line.strip_prefix("#index ") {
-            index = val.trim().to_string();
+        } else if line.starts_with("#index ") {
+            // ignored: index is always "id"
         } else if let Some(val) = line.strip_prefix("#desc ") {
             desc_line = val.to_string();
         } else if let Some(val) = line.strip_prefix("#type ") {
@@ -47,7 +46,7 @@ pub fn parse_tbl(path: &Path) -> Result<TblFile> {
     }
 
     match mode.as_str() {
-        "table" => parse_table(path, &index, &desc_line, &type_line, &export_line, &field_line, &data_lines),
+        "table" => parse_table(path, &desc_line, &type_line, &export_line, &field_line, &data_lines),
         "constant" => parse_constant(path, &data_lines),
         _ => bail!("unknown mode: {}", mode),
     }
@@ -55,7 +54,6 @@ pub fn parse_tbl(path: &Path) -> Result<TblFile> {
 
 fn parse_table(
     path: &Path,
-    index: &str,
     desc_line: &str,
     type_line: &str,
     export_line: &str,
@@ -91,7 +89,6 @@ fn parse_table(
         path: path.to_path_buf(),
         schema: TableSchema {
             fields: field_defs,
-            index: index.to_string(),
         },
         records,
         dirty: false,
@@ -143,7 +140,6 @@ pub fn serialize_table(table: &Table) -> String {
     let mut s = String::new();
     s.push_str("#!tbl v2\n");
     s.push_str("#mode table\n");
-    s.push_str(&format!("#index {}\n", table.schema.index));
     s.push_str(&format!("#desc {}\n", fields.iter().map(|f| f.desc.as_str()).collect::<Vec<_>>().join("|")));
     s.push_str(&format!("#type {}\n", fields.iter().map(|f| f.tbl_type.as_str()).collect::<Vec<_>>().join("|")));
     s.push_str(&format!("#export {}\n", fields.iter().map(|f| f.export.to_tbl()).collect::<Vec<_>>().join("|")));

@@ -10,7 +10,6 @@ pub struct SchemaSection {
     pub group: String,
     pub name: String,
     pub mode: SchemaMode,
-    pub index: Option<String>,
     pub fields: Vec<SchemaField>,
 }
 
@@ -92,18 +91,11 @@ fn parse_section_header(line: &str, line_num: usize) -> Result<SchemaSection> {
         _ => bail!("line {}: mode must be 'table' or 'constant'", line_num + 1),
     };
 
-    let mut index = None;
-    for part in &parts[1..] {
-        if let Some(val) = part.strip_prefix("index=") {
-            index = Some(val.to_string());
-        }
-    }
-
+    // ignore index= option (backward compat, index is always "id")
     Ok(SchemaSection {
         group: group.trim().to_string(),
         name: name.trim().to_string(),
         mode,
-        index,
         fields: Vec::new(),
     })
 }
@@ -123,9 +115,6 @@ fn parse_field_line(line: &str, line_num: usize) -> Result<SchemaField> {
 }
 
 fn validate_section(sec: &SchemaSection, _line_num: usize) -> Result<()> {
-    if sec.mode == SchemaMode::Table && sec.index.is_none() {
-        bail!("[{}/{}]: table must have index=field", sec.group, sec.name);
-    }
     let mut names = std::collections::HashSet::new();
     for f in &sec.fields {
         if !names.insert(&f.name) {

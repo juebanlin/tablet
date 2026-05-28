@@ -75,7 +75,6 @@ fn generate_table_tbl(sec: &SchemaSection, opts: &TestGenOptions) -> String {
     let mut s = String::new();
     writeln!(s, "#!tbl v2").unwrap();
     writeln!(s, "#mode table").unwrap();
-    writeln!(s, "#index {}", sec.index.as_deref().unwrap_or("id")).unwrap();
     writeln!(s, "#desc {}", sec.fields.iter().map(|f| f.desc.as_str()).collect::<Vec<_>>().join("|")).unwrap();
     writeln!(s, "#type {}", sec.fields.iter().map(|f| f.tbl_type.as_str()).collect::<Vec<_>>().join("|")).unwrap();
     writeln!(s, "#export {}", sec.fields.iter().map(|f| f.export_display()).collect::<Vec<_>>().join("|")).unwrap();
@@ -132,7 +131,7 @@ fn generate_fixed_rows(sec: &SchemaSection, opts: &TestGenOptions) -> Vec<Vec<St
     for i in 0..row_count {
         let mut row = Vec::new();
         for f in &sec.fields {
-            let val = if opts.include_empty && f.name != sec.index.as_deref().unwrap_or("id") && f.name != "name" && i % 2 != 0 {
+            let val = if opts.include_empty && f.name != "id" && f.name != "name" && i % 2 != 0 {
                 // 第偶数行的非关键字段留空（测试空值）
                 match f.name.as_str() {
                     "desc" => "测试空血量".to_string(),
@@ -186,13 +185,12 @@ fn generate_random_rows(sec: &SchemaSection, opts: &TestGenOptions) -> Vec<Vec<S
     let mut rng = SimpleRng::new(if opts.seed > 0 { opts.seed } else { 42 });
     let row_count = if opts.rows > 0 { opts.rows } else { 10 };
     let names = ["战士", "法师", "弓手", "刺客", "牧师", "骑士", "猎人", "术士", "武僧", "德鲁伊"];
-    let index_field = sec.index.as_deref().unwrap_or("id");
 
     let mut rows = Vec::new();
     for i in 0..row_count {
         let mut row = Vec::new();
         for f in &sec.fields {
-            let val = if f.name == index_field {
+            let val = if f.name == "id" {
                 format!("{}", 1001 + i as i64)
             } else if f.name == "name" {
                 names[i % names.len()].to_string()
@@ -288,7 +286,7 @@ fn build_test_main(schema: &TblSchema, pkg: &str, format: &str) -> String {
         match sec.mode {
             SchemaMode::Table => {
                 let server_fields: Vec<&SchemaField> = sec.fields.iter()
-                    .filter(|f| f.is_server_export() && Some(f.name.as_str()) != sec.index.as_deref())
+                    .filter(|f| f.is_server_export() && f.name != "id")
                     .collect();
 
                 writeln!(s, "        Map<Integer, {}> map{} = TplHolder.getAll({}.class);", cls, sec.name, cls).unwrap();

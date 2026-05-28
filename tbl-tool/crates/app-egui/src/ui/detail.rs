@@ -109,8 +109,9 @@ fn build_table_grid(app: &TblApp, group: &str, name: &str) -> Option<GridData> {
     let type_row: Vec<HeaderCell> = fields.iter().map(|f| HeaderCell {
         text: f.tbl_type.clone(), kind: CellKind::TypeEnum, color: egui::Color32::from_rgb(80, 130, 210),
     }).collect();
-    let field_row: Vec<HeaderCell> = fields.iter().map(|f| HeaderCell {
-        text: f.name.clone(), kind: CellKind::Text, color: egui::Color32::BLACK,
+    let field_row: Vec<HeaderCell> = fields.iter().map(|f| {
+        let kind = if f.name == "id" { CellKind::ReadOnly } else { CellKind::Text };
+        HeaderCell { text: f.name.clone(), kind, color: egui::Color32::BLACK }
     }).collect();
 
     let col_defs: Vec<ColDef> = fields.iter().map(|f| {
@@ -176,6 +177,11 @@ fn render_col_context(ui: &mut egui::Ui, app: &mut TblApp) {
         Some(SelectedNode::Table { group, name }) | Some(SelectedNode::Constant { group, name }) => (group.clone(), name.clone()),
         _ => return,
     };
+    let is_index_col = matches!(&app.selected, Some(SelectedNode::Table { .. }) if {
+        app.find_table(&group, &name).map_or(false, |t| {
+            t.schema.fields.get(col).map_or(false, |f| f.name == "id")
+        })
+    });
     egui::Area::new(egui::Id::new("col_ctx"))
         .fixed_pos(app.context_pos)
         .order(egui::Order::Foreground)
@@ -184,7 +190,11 @@ fn render_col_context(ui: &mut egui::Ui, app: &mut TblApp) {
                 if ui.button("左侧插入列").clicked() { app.insert_column(&group, &name, col); app.context_col = None; }
                 if ui.button("右侧插入列").clicked() { app.insert_column(&group, &name, col + 1); app.context_col = None; }
                 ui.separator();
-                if ui.button("删除该列").clicked() { app.delete_column(&group, &name, col); app.context_col = None; }
+                if is_index_col {
+                    ui.add_enabled(false, egui::Button::new("删除该列（主键）"));
+                } else if ui.button("删除该列").clicked() {
+                    app.delete_column(&group, &name, col); app.context_col = None;
+                }
             });
         });
     if ui.input(|i| i.pointer.primary_clicked() || i.key_pressed(egui::Key::Escape)) { app.context_col = None; }

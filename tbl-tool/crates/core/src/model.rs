@@ -112,7 +112,12 @@ impl Table {
 #[derive(Debug, Clone)]
 pub struct TableSchema {
     pub fields: Vec<FieldDef>,
-    pub index: String,
+}
+
+impl TableSchema {
+    pub fn index_col(&self) -> Option<usize> {
+        self.fields.iter().position(|f| f.name == "id")
+    }
 }
 
 #[derive(Debug, Clone)]

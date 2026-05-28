@@ -24,7 +24,6 @@
 ```
 #!tbl v2
 #mode table
-#index id
 #desc 英雄ID|名称|血量|技能组
 #type int|str|int|Array<int>
 #export 前后端|前后端|服务器|前后端
@@ -34,6 +33,8 @@
 1002|法师|80|4;5
 1003|弓手|90|6;7;8
 ```
+
+主键固定为第一列 `id`（int 类型），不可更改。
 
 表头行顺序（从上到下）：
 1. `#desc` — 中文描述（策划可读）
@@ -75,8 +76,7 @@ gm_password|str|xxx|服务器|GM密码
 | `#desc` | 字段中文描述（仅 table） |
 | `#type` | 字段类型定义（仅 table） |
 | `#export` | 导出标记（仅 table） |
-| `#field` | 字段名（仅 table） |
-| `#index` | 主键字段名（仅 table） |
+| `#field` | 字段名（仅 table），第一列固定为 `id` |
 | `---` | 头部与数据分隔符 |
 
 ## 数据行规则
@@ -138,7 +138,7 @@ gm_password|str|xxx|服务器|GM密码
 ```
 #!tblschema v1
 
-[hero/HeroBase] table index=id
+[hero/HeroBase] table
 # name | type | export | desc
 id     | int       | cs | 英雄ID
 name   | str       | cs | 名称
@@ -175,8 +175,8 @@ server_name | str | s  | 服务器名称
 - `group` — 组名（对应 config/ 下的子目录）
 - `Name` — 配置项名（对应 .tbl 文件名，大写驼峰）
 - `mode` — `table` 或 `constant`
-- `options` — 可选参数，空格分隔的 key=value 对
-  - `index=field_name` — 主键字段名（仅 table 模式必填）
+
+Table 模式的第一个字段必须是 `id`（主键，int 类型）。
 
 ### 字段行
 

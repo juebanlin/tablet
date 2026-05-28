@@ -68,13 +68,13 @@ fn gen_table_tpl(table: &Table, pkg: &str, group: &str) -> String {
     }
     writeln!(s).unwrap();
 
-    let index_field = to_camel_case(&table.schema.index);
+    let index_field = to_camel_case("id");
     writeln!(s, "    @Override").unwrap();
     writeln!(s, "    public int getId() {{ return {}; }}", index_field).unwrap();
     writeln!(s).unwrap();
 
     for f in &fields {
-        if f.name == table.schema.index { continue; }
+        if f.name == "id" { continue; }
         let jtype = java_field_type(&f.tbl_type);
         let camel = to_camel_case(&f.name);
         let pascal = to_pascal_case(&f.name);

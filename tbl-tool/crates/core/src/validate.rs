@@ -18,7 +18,7 @@ pub fn validate_table_cell(table: &Table, row: usize, col: usize, sep: &Separato
     let value = table.records.get(row).and_then(|r| r.get(col)).map(|s| s.as_str()).unwrap_or("");
     if value.is_empty() { return None; }
 
-    if fields[col].name == table.schema.index {
+    if fields[col].name == "id" {
         if value.parse::<i64>().is_err() {
             return Some("ID必须是数字".to_string());
         }
@@ -42,7 +42,7 @@ pub fn validate_table_row(table: &Table, row: usize, sep: &SeparatorsSection) ->
         }
     }
 
-    let index_col = fields.iter().position(|f| f.name == table.schema.index);
+    let index_col = fields.iter().position(|f| f.name == "id");
     if let Some(idx_col) = index_col {
         let id_val = record.get(idx_col).map(|s| s.as_str()).unwrap_or("");
         if id_val.is_empty() {
@@ -184,11 +184,10 @@ pub fn validate_table_schema(table: &Table, sep: &SeparatorsSection) -> Vec<Sche
         return errors;
     }
 
-    let index_exists = fields.iter().any(|f| f.name == table.schema.index);
-    if !index_exists {
+    if fields[0].name != "id" {
         errors.push(SchemaError {
-            field: table.schema.index.clone(),
-            message: format!("主键 \"{}\" 在字段列表中不存在", table.schema.index),
+            field: fields[0].name.clone(),
+            message: "第一列必须是主键 id".to_string(),
         });
     }
 
@@ -212,14 +211,14 @@ pub fn validate_table_schema(table: &Table, sep: &SeparatorsSection) -> Vec<Sche
     }
 
     // 主键值重复检测
-    if let Some(idx_col) = fields.iter().position(|f| f.name == table.schema.index) {
+    if let Some(idx_col) = fields.iter().position(|f| f.name == "id") {
         let mut seen_ids = std::collections::HashSet::new();
         for (row, record) in table.records.iter().enumerate() {
             let id = record.get(idx_col).map(|s| s.as_str()).unwrap_or("");
             if id.is_empty() { continue; }
             if !seen_ids.insert(id.to_string()) {
                 errors.push(SchemaError {
-                    field: table.schema.index.clone(),
+                    field: "id".to_string(),
                     message: format!("第{}行主键值 \"{}\" 重复", row + 1, id),
                 });
             }

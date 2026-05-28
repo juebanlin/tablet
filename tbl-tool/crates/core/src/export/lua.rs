@@ -207,7 +207,7 @@ pub fn export_table_lua(table: &Table, sep: &SeparatorsSection) -> String {
         .filter(|(_, f)| is_client_export(&f.export))
         .collect();
 
-    let index_col = fields.iter().position(|f| f.name == table.schema.index).unwrap_or(0);
+    let index_col = fields.iter().position(|f| f.name == "id").unwrap_or(0);
 
     let mut s = String::new();
     writeln!(s, "local {} = {{", table.name).unwrap();

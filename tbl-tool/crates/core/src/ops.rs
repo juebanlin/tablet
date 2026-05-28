@@ -352,7 +352,7 @@ impl ProjectEngine {
         for group in &self.project.groups {
             for table in &group.tables {
                 if table.deleted { continue; }
-                let index_col = table.schema.fields.iter().position(|f| f.name == table.schema.index);
+                let index_col = table.schema.fields.iter().position(|f| f.name == "id");
                 let mut seen_ids = std::collections::HashSet::new();
                 for row in 0..table.records.len() {
                     for (col, msg) in validate_table_row(table, row, sep) {
@@ -395,7 +395,7 @@ impl ProjectEngine {
         if let Some(g) = self.project.groups.iter().find(|g| g.name == group) {
             if let Some(table) = g.tables.iter().find(|t| t.name == name) {
                 let mut seen_ids = std::collections::HashSet::new();
-                let index_col = table.schema.fields.iter().position(|f| f.name == table.schema.index);
+                let index_col = table.schema.fields.iter().position(|f| f.name == "id");
                 for row in 0..table.records.len() {
                     for (col, _msg) in validate_table_row(table, row, &sep) {
                         self.validation_errors.insert((group.to_string(), name.to_string(), row, col));
@@ -589,7 +589,6 @@ impl ProjectEngine {
                                 tbl_type: "int".to_string(),
                                 export: Export::ClientServer,
                             }],
-                            index: "id".to_string(),
                         },
                         records: Vec::new(),
                         dirty: true,
