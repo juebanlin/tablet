@@ -130,29 +130,34 @@ pub fn sync_export_dir(
     for (path, content) in &generated {
         std::fs::create_dir_all(path.parent().unwrap())?;
         existing.remove(path);
+        let display = normalize_path(path);
 
         if path.exists() {
             let old = std::fs::read(path)?;
             if old == *content {
-                files.push(ExportFile { path: path.display().to_string(), status: FileStatus::Unchanged });
+                files.push(ExportFile { path: display, status: FileStatus::Unchanged });
             } else {
                 std::fs::write(path, content)?;
-                files.push(ExportFile { path: path.display().to_string(), status: FileStatus::Modified });
+                files.push(ExportFile { path: display, status: FileStatus::Modified });
             }
         } else {
             std::fs::write(path, content)?;
-            files.push(ExportFile { path: path.display().to_string(), status: FileStatus::Added });
+            files.push(ExportFile { path: display, status: FileStatus::Added });
         }
     }
 
     for old_path in &existing {
         std::fs::remove_file(old_path)?;
-        files.push(ExportFile { path: old_path.display().to_string(), status: FileStatus::Deleted });
+        files.push(ExportFile { path: normalize_path(old_path), status: FileStatus::Deleted });
     }
 
     remove_empty_dirs(output_dir);
 
     Ok(ExportResult { files })
+}
+
+fn normalize_path(path: &std::path::Path) -> String {
+    path.to_string_lossy().replace('\\', "/")
 }
 
 fn collect_files_recursive(dir: &std::path::Path, ext: &str, out: &mut std::collections::HashSet<std::path::PathBuf>) {
