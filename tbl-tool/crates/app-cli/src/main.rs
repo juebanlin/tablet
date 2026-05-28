@@ -32,6 +32,9 @@ enum Command {
         /// 只导出 Java 模板类
         #[arg(long)]
         java: bool,
+        /// 只导出 Lua 前端文件
+        #[arg(long)]
+        lua: bool,
     },
     /// 验证所有 .tbl 文件
     Validate,
@@ -64,8 +67,8 @@ fn main() -> Result<()> {
     apply_overrides(&mut engine, &cli.overrides);
 
     match cli.command {
-        Command::Export { json, xml, java } => {
-            let export_all = !json && !xml && !java;
+        Command::Export { json, xml, java, lua } => {
+            let export_all = !json && !xml && !java && !lua;
 
             if export_all || json {
                 match engine.export_json() {
@@ -94,6 +97,16 @@ fn main() -> Result<()> {
                         for f in &files { println!("  {}", f); }
                     }
                     Err(e) => eprintln!("[Java] 错误: {}", e),
+                }
+            }
+
+            if export_all || lua {
+                match engine.export_lua() {
+                    Ok(files) => {
+                        println!("[Lua] 导出 {} 个文件", files.len());
+                        for f in &files { println!("  {}", f); }
+                    }
+                    Err(e) => eprintln!("[Lua] 错误: {}", e),
                 }
             }
         }

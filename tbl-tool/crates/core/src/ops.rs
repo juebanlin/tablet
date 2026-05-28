@@ -727,4 +727,10 @@ impl ProjectEngine {
         self.log(format!("导出 Java 模板类 {} 个", result.len()));
         Ok(result)
     }
+
+    pub fn export_lua(&mut self) -> anyhow::Result<Vec<String>> {
+        let result = crate::export::export_all_lua(&self.project)?;
+        self.log(format!("导出 Lua 文件 {} 个", result.len()));
+        Ok(result)
+    }
 }

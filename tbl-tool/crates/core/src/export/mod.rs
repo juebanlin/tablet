@@ -1,10 +1,12 @@
 mod json;
 mod java;
 mod xml;
+mod lua;
 
 pub use json::export_all_json;
 pub use java::export_all_java;
 pub use xml::export_all_xml;
+pub use lua::export_all_lua;
 
 use serde_json::Value;
 use crate::types::BaseType;
