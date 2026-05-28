@@ -31,11 +31,15 @@ pub struct ExportConfig {
 #[derive(Debug, Clone, serde::Deserialize)]
 pub struct JsonExport {
     pub empty_as: Option<String>,
+    pub line_ending: Option<String>,
+    pub encoding: Option<String>,
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]
 pub struct XmlExport {
     pub empty_as: Option<String>,
+    pub line_ending: Option<String>,
+    pub encoding: Option<String>,
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -44,12 +48,16 @@ pub struct ServerExport {
     pub package: Option<String>,
     pub data_output: Option<String>,
     pub code_output: Option<String>,
+    pub line_ending: Option<String>,
+    pub encoding: Option<String>,
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]
 pub struct ClientExport {
     pub lang: Option<String>,
     pub output: Option<String>,
+    pub line_ending: Option<String>,
+    pub encoding: Option<String>,
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]

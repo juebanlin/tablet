@@ -116,8 +116,14 @@ pub fn export_all_json(project: &Project) -> Result<Vec<String>> {
     let strategy = EmptyStrategy::from_json_config(strategy_str);
 
     let line_ending = LineEnding::from_config(
-        export_cfg.and_then(|e| e.line_ending.as_deref()).unwrap_or("lf")
+        export_cfg.and_then(|e| e.json.as_ref()).and_then(|j| j.line_ending.as_deref())
+            .or_else(|| export_cfg.and_then(|e| e.line_ending.as_deref()))
+            .unwrap_or("lf")
     );
+    let encoding = export_cfg.and_then(|e| e.json.as_ref()).and_then(|j| j.encoding.as_deref())
+        .or_else(|| export_cfg.and_then(|e| e.encoding.as_deref()))
+        .unwrap_or("utf-8").to_string();
+    let opts = super::ExportOptions { line_ending, encoding };
 
     let sep_meta = build_sep_meta(&project.config.separators);
     let output_dir = project.workdir.join(data_output).join("json");
@@ -133,10 +139,8 @@ pub fn export_all_json(project: &Project) -> Result<Vec<String>> {
             wrapper.insert("_sep".to_string(), sep_meta.clone());
             wrapper.insert("data".to_string(), data);
             let file_path = group_dir.join(format!("{}.json", &table.name));
-            std::fs::create_dir_all(file_path.parent().unwrap())?;
             let content = serde_json::to_string_pretty(&Value::Object(wrapper))?;
-            let content = line_ending.normalize(&content);
-            std::fs::write(&file_path, content.as_bytes())?;
+            opts.write_file(&file_path, &content)?;
             generated.push(file_path.display().to_string());
         }
 
@@ -147,10 +151,8 @@ pub fn export_all_json(project: &Project) -> Result<Vec<String>> {
             wrapper.insert("_sep".to_string(), sep_meta.clone());
             wrapper.insert("data".to_string(), data);
             let file_path = group_dir.join(format!("{}.json", &constant.name));
-            std::fs::create_dir_all(file_path.parent().unwrap())?;
             let content = serde_json::to_string_pretty(&Value::Object(wrapper))?;
-            let content = line_ending.normalize(&content);
-            std::fs::write(&file_path, content.as_bytes())?;
+            opts.write_file(&file_path, &content)?;
             generated.push(file_path.display().to_string());
         }
     }

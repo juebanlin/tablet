@@ -260,8 +260,14 @@ pub fn export_all_lua(project: &Project) -> Result<Vec<String>> {
         .unwrap_or("gen/client");
 
     let line_ending = LineEnding::from_config(
-        export_cfg.and_then(|e| e.line_ending.as_deref()).unwrap_or("lf")
+        export_cfg.and_then(|e| e.client.as_ref()).and_then(|c| c.line_ending.as_deref())
+            .or_else(|| export_cfg.and_then(|e| e.line_ending.as_deref()))
+            .unwrap_or("lf")
     );
+    let encoding = export_cfg.and_then(|e| e.client.as_ref()).and_then(|c| c.encoding.as_deref())
+        .or_else(|| export_cfg.and_then(|e| e.encoding.as_deref()))
+        .unwrap_or("utf-8").to_string();
+    let opts = super::ExportOptions { line_ending, encoding };
 
     let sep = &project.config.separators;
     let output_dir = project.workdir.join(output);
@@ -274,9 +280,7 @@ pub fn export_all_lua(project: &Project) -> Result<Vec<String>> {
             if table.deleted { continue; }
             let lua = export_table_lua(table, sep);
             let file_path = group_dir.join(format!("{}.lua", &table.name));
-            std::fs::create_dir_all(file_path.parent().unwrap())?;
-            let content = line_ending.normalize(&lua);
-            std::fs::write(&file_path, content.as_bytes())?;
+            opts.write_file(&file_path, &lua)?;
             generated.push(file_path.display().to_string());
         }
 
@@ -284,9 +288,7 @@ pub fn export_all_lua(project: &Project) -> Result<Vec<String>> {
             if constant.deleted { continue; }
             let lua = export_constant_lua(constant, sep);
             let file_path = group_dir.join(format!("{}.lua", &constant.name));
-            std::fs::create_dir_all(file_path.parent().unwrap())?;
-            let content = line_ending.normalize(&lua);
-            std::fs::write(&file_path, content.as_bytes())?;
+            opts.write_file(&file_path, &lua)?;
             generated.push(file_path.display().to_string());
         }
     }

@@ -136,8 +136,14 @@ pub fn export_all_java(project: &Project) -> Result<Vec<String>> {
         .unwrap_or("com.game.config");
 
     let line_ending = LineEnding::from_config(
-        export_cfg.and_then(|e| e.line_ending.as_deref()).unwrap_or("lf")
+        server.and_then(|s| s.line_ending.as_deref())
+            .or_else(|| export_cfg.and_then(|e| e.line_ending.as_deref()))
+            .unwrap_or("lf")
     );
+    let encoding = server.and_then(|s| s.encoding.as_deref())
+        .or_else(|| export_cfg.and_then(|e| e.encoding.as_deref()))
+        .unwrap_or("utf-8").to_string();
+    let opts = super::ExportOptions { line_ending, encoding };
 
     let pkg_path = pkg.replace('.', "/");
     let output_dir = project.workdir.join(code_output).join(&pkg_path);
@@ -148,8 +154,7 @@ pub fn export_all_java(project: &Project) -> Result<Vec<String>> {
 
     let write_file = |dir: &std::path::Path, name: &str, content: &str, gen: &mut Vec<String>| -> Result<()> {
         let path = dir.join(name);
-        let normalized = line_ending.normalize(content);
-        std::fs::write(&path, normalized.as_bytes())?;
+        opts.write_file(&path, content)?;
         gen.push(path.display().to_string());
         Ok(())
     };

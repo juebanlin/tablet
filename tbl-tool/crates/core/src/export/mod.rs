@@ -55,6 +55,33 @@ impl LineEnding {
     }
 }
 
+pub fn encode_content(content: &str, encoding: &str) -> Vec<u8> {
+    match encoding {
+        "utf-8" | "utf8" => content.as_bytes().to_vec(),
+        _ => {
+            let enc = encoding_rs::Encoding::for_label(encoding.as_bytes())
+                .unwrap_or(encoding_rs::UTF_8);
+            let (bytes, _, _) = enc.encode(content);
+            bytes.into_owned()
+        }
+    }
+}
+
+pub struct ExportOptions {
+    pub line_ending: LineEnding,
+    pub encoding: String,
+}
+
+impl ExportOptions {
+    pub fn write_file(&self, path: &std::path::Path, content: &str) -> anyhow::Result<()> {
+        std::fs::create_dir_all(path.parent().unwrap())?;
+        let normalized = self.line_ending.normalize(content);
+        let bytes = encode_content(&normalized, &self.encoding);
+        std::fs::write(path, bytes)?;
+        Ok(())
+    }
+}
+
 pub fn to_camel_case(s: &str) -> String {
     let mut result = String::new();
     let mut upper_next = false;

@@ -227,14 +227,14 @@ fn ensure_export(config: &mut tbl_core::model::ProjectConfig) {
 fn ensure_export_json(config: &mut tbl_core::model::ProjectConfig) {
     ensure_export(config);
     if config.export.as_ref().unwrap().json.is_none() {
-        config.export.as_mut().unwrap().json = Some(tbl_core::model::JsonExport { empty_as: None });
+        config.export.as_mut().unwrap().json = Some(tbl_core::model::JsonExport { empty_as: None, line_ending: None, encoding: None });
     }
 }
 
 fn ensure_export_xml(config: &mut tbl_core::model::ProjectConfig) {
     ensure_export(config);
     if config.export.as_ref().unwrap().xml.is_none() {
-        config.export.as_mut().unwrap().xml = Some(tbl_core::model::XmlExport { empty_as: None });
+        config.export.as_mut().unwrap().xml = Some(tbl_core::model::XmlExport { empty_as: None, line_ending: None, encoding: None });
     }
 }
 
@@ -242,7 +242,7 @@ fn ensure_export_server(config: &mut tbl_core::model::ProjectConfig) {
     ensure_export(config);
     if config.export.as_ref().unwrap().server.is_none() {
         config.export.as_mut().unwrap().server = Some(tbl_core::model::ServerExport {
-            lang: None, package: None, data_output: None, code_output: None,
+            lang: None, package: None, data_output: None, code_output: None, line_ending: None, encoding: None,
         });
     }
 }
@@ -250,6 +250,6 @@ fn ensure_export_server(config: &mut tbl_core::model::ProjectConfig) {
 fn ensure_export_client(config: &mut tbl_core::model::ProjectConfig) {
     ensure_export(config);
     if config.export.as_ref().unwrap().client.is_none() {
-        config.export.as_mut().unwrap().client = Some(tbl_core::model::ClientExport { lang: None, output: None });
+        config.export.as_mut().unwrap().client = Some(tbl_core::model::ClientExport { lang: None, output: None, line_ending: None, encoding: None });
     }
 }

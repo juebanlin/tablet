@@ -104,8 +104,14 @@ pub fn export_all_xml(project: &Project) -> Result<Vec<String>> {
     let strategy = EmptyStrategy::from_xml_config(strategy_str);
 
     let line_ending = LineEnding::from_config(
-        export_cfg.and_then(|e| e.line_ending.as_deref()).unwrap_or("lf")
+        export_cfg.and_then(|e| e.xml.as_ref()).and_then(|x| x.line_ending.as_deref())
+            .or_else(|| export_cfg.and_then(|e| e.line_ending.as_deref()))
+            .unwrap_or("lf")
     );
+    let encoding = export_cfg.and_then(|e| e.xml.as_ref()).and_then(|x| x.encoding.as_deref())
+        .or_else(|| export_cfg.and_then(|e| e.encoding.as_deref()))
+        .unwrap_or("utf-8").to_string();
+    let opts = super::ExportOptions { line_ending, encoding };
 
     let sep = &project.config.separators;
     let output_dir = project.workdir.join(data_output).join("xml");
@@ -118,9 +124,7 @@ pub fn export_all_xml(project: &Project) -> Result<Vec<String>> {
             if table.deleted { continue; }
             let xml = export_table_xml(table, &strategy, sep);
             let file_path = group_dir.join(format!("{}.xml", &table.name));
-            std::fs::create_dir_all(file_path.parent().unwrap())?;
-            let content = line_ending.normalize(&xml);
-            std::fs::write(&file_path, content.as_bytes())?;
+            opts.write_file(&file_path, &xml)?;
             generated.push(file_path.display().to_string());
         }
 
@@ -128,9 +132,7 @@ pub fn export_all_xml(project: &Project) -> Result<Vec<String>> {
             if constant.deleted { continue; }
             let xml = export_constant_xml(constant, &strategy, sep);
             let file_path = group_dir.join(format!("{}.xml", &constant.name));
-            std::fs::create_dir_all(file_path.parent().unwrap())?;
-            let content = line_ending.normalize(&xml);
-            std::fs::write(&file_path, content.as_bytes())?;
+            opts.write_file(&file_path, &xml)?;
             generated.push(file_path.display().to_string());
         }
     }
