@@ -1,7 +1,7 @@
 #!/bin/bash
 set -e
 
-$CLI -w . generate-test --empty --no-collection --no-tuple --no-constant > /dev/null 2>&1
+$CLI -w . generate-test --empty > /dev/null 2>&1
 $CLI -w . -s export.json.empty_as=omit export > /dev/null 2>&1
 
 mkdir -p out

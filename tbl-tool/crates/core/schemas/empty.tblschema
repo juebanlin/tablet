@@ -1,0 +1,7 @@
+#!tblschema v1
+
+[hero/HeroBase] table index=id
+id   | int | cs | 英雄ID
+name | str | cs | 名称
+hp   | int | s  | 血量
+desc | str | cs | 描述

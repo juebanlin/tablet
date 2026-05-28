@@ -20,7 +20,7 @@ for DIR in "$SCRIPT_DIR"/*/; do
     echo ""
     echo "--- 测试: $SCENE ---"
 
-    cd "$DIR"
+    pushd "$DIR" > /dev/null
     rm -rf gen tbl-tool.toml out actual_output.txt config TestMain.java
 
     if bash run.sh > actual_output.txt 2>&1; then
@@ -37,6 +37,7 @@ for DIR in "$SCRIPT_DIR"/*/; do
         cat actual_output.txt 2>/dev/null || true
         FAIL=$((FAIL + 1))
     fi
+    popd > /dev/null
 done
 
 echo ""

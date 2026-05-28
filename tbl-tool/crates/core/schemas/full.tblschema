@@ -1,0 +1,12 @@
+#!tblschema v1
+
+[hero/HeroBase] table index=id
+id     | int       | cs | 英雄ID
+name   | str       | cs | 名称
+hp     | int       | s  | 血量
+skills | List<int> | cs | 技能组
+
+[global/GlobalConst] constant
+max_level   | int             | cs | 最大等级
+start_pos   | Tuple2<int,int> | cs | 出生坐标
+server_name | str             | s  | 服务器名称

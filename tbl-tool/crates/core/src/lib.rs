@@ -1,6 +1,7 @@
 pub mod model;
 pub mod types;
 pub mod tbl;
+pub mod tblschema;
 pub mod project;
 pub mod validate;
 pub mod ops;
