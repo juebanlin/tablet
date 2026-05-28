@@ -72,40 +72,28 @@ fn main() -> Result<()> {
 
             if export_all || json {
                 match engine.export_json() {
-                    Ok(files) => {
-                        println!("[JSON] 导出 {} 个文件", files.len());
-                        for f in &files { println!("  {}", f); }
-                    }
+                    Ok(r) => print_export_result("JSON", &r),
                     Err(e) => eprintln!("[JSON] 错误: {}", e),
                 }
             }
 
             if export_all || xml {
                 match engine.export_xml() {
-                    Ok(files) => {
-                        println!("[XML] 导出 {} 个文件", files.len());
-                        for f in &files { println!("  {}", f); }
-                    }
+                    Ok(r) => print_export_result("XML", &r),
                     Err(e) => eprintln!("[XML] 错误: {}", e),
                 }
             }
 
             if export_all || java {
                 match engine.export_java() {
-                    Ok(files) => {
-                        println!("[Java] 导出 {} 个文件", files.len());
-                        for f in &files { println!("  {}", f); }
-                    }
+                    Ok(r) => print_export_result("Java", &r),
                     Err(e) => eprintln!("[Java] 错误: {}", e),
                 }
             }
 
             if export_all || lua {
                 match engine.export_lua() {
-                    Ok(files) => {
-                        println!("[Lua] 导出 {} 个文件", files.len());
-                        for f in &files { println!("  {}", f); }
-                    }
+                    Ok(r) => print_export_result("Lua", &r),
                     Err(e) => eprintln!("[Lua] 错误: {}", e),
                 }
             }
@@ -251,5 +239,19 @@ fn ensure_export_client(config: &mut tbl_core::model::ProjectConfig) {
     ensure_export(config);
     if config.export.as_ref().unwrap().client.is_none() {
         config.export.as_mut().unwrap().client = Some(tbl_core::model::ClientExport { lang: None, output: None, line_ending: None, encoding: None });
+    }
+}
+
+fn print_export_result(label: &str, result: &tbl_core::export::ExportResult) {
+    use tbl_core::export::FileStatus;
+    println!("[{}] {} 新增, {} 修改, {} 删除, {} 不变",
+        label, result.added(), result.modified(), result.deleted(), result.unchanged());
+    for f in &result.files {
+        match f.status {
+            FileStatus::Added => println!("  [新增] {}", f.path),
+            FileStatus::Modified => println!("  [修改] {}", f.path),
+            FileStatus::Deleted => println!("  [删除] {}", f.path),
+            FileStatus::Unchanged => {}
+        }
     }
 }

@@ -251,7 +251,7 @@ pub fn export_constant_lua(constant: &Constant, sep: &SeparatorsSection) -> Stri
     s
 }
 
-pub fn export_all_lua(project: &Project) -> Result<Vec<String>> {
+pub fn export_all_lua(project: &Project) -> Result<super::ExportResult> {
     let export_cfg = project.config.export.as_ref();
 
     let output = export_cfg
@@ -271,7 +271,7 @@ pub fn export_all_lua(project: &Project) -> Result<Vec<String>> {
 
     let sep = &project.config.separators;
     let output_dir = project.workdir.join(output);
-    let mut generated = Vec::new();
+    let mut collected = Vec::new();
 
     for group in &project.groups {
         let group_dir = output_dir.join(&group.name);
@@ -280,18 +280,16 @@ pub fn export_all_lua(project: &Project) -> Result<Vec<String>> {
             if table.deleted { continue; }
             let lua = export_table_lua(table, sep);
             let file_path = group_dir.join(format!("{}.lua", &table.name));
-            opts.write_file(&file_path, &lua)?;
-            generated.push(file_path.display().to_string());
+            collected.push((file_path, opts.encode(&lua)));
         }
 
         for constant in &group.constants {
             if constant.deleted { continue; }
             let lua = export_constant_lua(constant, sep);
             let file_path = group_dir.join(format!("{}.lua", &constant.name));
-            opts.write_file(&file_path, &lua)?;
-            generated.push(file_path.display().to_string());
+            collected.push((file_path, opts.encode(&lua)));
         }
     }
 
-    Ok(generated)
+    super::sync_export_dir(&output_dir, "lua", collected)
 }

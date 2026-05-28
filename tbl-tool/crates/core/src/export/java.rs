@@ -124,7 +124,7 @@ fn gen_constant_tpl(constant: &Constant, pkg: &str, group: &str) -> String {
 
 // PLACEHOLDER_JAVA_RS_PART3
 
-pub fn export_all_java(project: &Project) -> Result<Vec<String>> {
+pub fn export_all_java(project: &Project) -> Result<super::ExportResult> {
     let export_cfg = project.config.export.as_ref();
     let server = export_cfg.and_then(|e| e.server.as_ref());
 
@@ -148,44 +148,40 @@ pub fn export_all_java(project: &Project) -> Result<Vec<String>> {
     let pkg_path = pkg.replace('.', "/");
     let output_dir = project.workdir.join(code_output).join(&pkg_path);
     let types_dir = output_dir.join("types");
-    std::fs::create_dir_all(&types_dir)?;
 
-    let mut generated = Vec::new();
+    let mut collected: Vec<(std::path::PathBuf, Vec<u8>)> = Vec::new();
 
-    let write_file = |dir: &std::path::Path, name: &str, content: &str, gen: &mut Vec<String>| -> Result<()> {
+    let mut collect = |dir: &std::path::Path, name: &str, content: &str| {
         let path = dir.join(name);
-        opts.write_file(&path, content)?;
-        gen.push(path.display().to_string());
-        Ok(())
+        collected.push((path, opts.encode(content)));
     };
 
     let render = |tpl: &str| tpl.replace("{{PACKAGE}}", pkg);
 
-    write_file(&output_dir, "ITpl.java", &render(TPL_ITPL), &mut generated)?;
-    write_file(&output_dir, "IConstTpl.java", &render(TPL_ICONST), &mut generated)?;
-    write_file(&output_dir, "IJsonParser.java", &render(TPL_IJSON_PARSER), &mut generated)?;
-    write_file(&output_dir, "SimpleJsonParser.java", &render(TPL_SIMPLE_JSON_PARSER), &mut generated)?;
-    write_file(&output_dir, "SimpleXmlParser.java", &render(TPL_SIMPLE_XML_PARSER), &mut generated)?;
-    write_file(&output_dir, "TplUtil.java", &render(TPL_UTIL), &mut generated)?;
-    write_file(&output_dir, "TblType.java", &render(TPL_TBL_TYPE), &mut generated)?;
-    write_file(&output_dir, "TblSource.java", &render(TPL_TBL_SOURCE), &mut generated)?;
-    write_file(&output_dir, "TblMeta.java", &render(TPL_TBL_META), &mut generated)?;
-    write_file(&output_dir, "Paradigm.java", &render(TPL_PARADIGM), &mut generated)?;
-    write_file(&output_dir, "SepConfig.java", &render(TPL_SEP_CONFIG), &mut generated)?;
-    write_file(&types_dir, "Tuple2.java", &render(TPL_TUPLE2), &mut generated)?;
-    write_file(&types_dir, "Tuple3.java", &render(TPL_TUPLE3), &mut generated)?;
-    write_file(&types_dir, "Tuple4.java", &render(TPL_TUPLE4), &mut generated)?;
+    collect(&output_dir, "ITpl.java", &render(TPL_ITPL));
+    collect(&output_dir, "IConstTpl.java", &render(TPL_ICONST));
+    collect(&output_dir, "IJsonParser.java", &render(TPL_IJSON_PARSER));
+    collect(&output_dir, "SimpleJsonParser.java", &render(TPL_SIMPLE_JSON_PARSER));
+    collect(&output_dir, "SimpleXmlParser.java", &render(TPL_SIMPLE_XML_PARSER));
+    collect(&output_dir, "TplUtil.java", &render(TPL_UTIL));
+    collect(&output_dir, "TblType.java", &render(TPL_TBL_TYPE));
+    collect(&output_dir, "TblSource.java", &render(TPL_TBL_SOURCE));
+    collect(&output_dir, "TblMeta.java", &render(TPL_TBL_META));
+    collect(&output_dir, "Paradigm.java", &render(TPL_PARADIGM));
+    collect(&output_dir, "SepConfig.java", &render(TPL_SEP_CONFIG));
+    collect(&types_dir, "Tuple2.java", &render(TPL_TUPLE2));
+    collect(&types_dir, "Tuple3.java", &render(TPL_TUPLE3));
+    collect(&types_dir, "Tuple4.java", &render(TPL_TUPLE4));
 
     let mut register_lines = String::new();
     for group in &project.groups {
         let group_dir = output_dir.join(&group.name);
-        std::fs::create_dir_all(&group_dir)?;
 
         for table in &group.tables {
             if table.deleted { continue; }
             let content = gen_table_tpl(table, pkg, &group.name);
             let filename = format!("{}Tpl.java", &table.name);
-            write_file(&group_dir, &filename, &content, &mut generated)?;
+            collect(&group_dir, &filename, &content);
             writeln!(register_lines, "        map.put(\"{}/{}\", {}.{}.{}Tpl.class);",
                 group.name, table.name, pkg, group.name, table.name).unwrap();
         }
@@ -194,17 +190,17 @@ pub fn export_all_java(project: &Project) -> Result<Vec<String>> {
             if constant.deleted { continue; }
             let content = gen_constant_tpl(constant, pkg, &group.name);
             let filename = format!("{}Tpl.java", &constant.name);
-            write_file(&group_dir, &filename, &content, &mut generated)?;
+            collect(&group_dir, &filename, &content);
             writeln!(register_lines, "        map.put(\"{}/{}\", {}.{}.{}Tpl.class);",
                 group.name, constant.name, pkg, group.name, constant.name).unwrap();
         }
     }
 
     let registry_content = render(TPL_REGISTRY).replace("{{REGISTER_LIST}}", register_lines.trim_end());
-    write_file(&output_dir, "TplRegistry.java", &registry_content, &mut generated)?;
+    collect(&output_dir, "TplRegistry.java", &registry_content);
 
     let holder_content = render(TPL_HOLDER);
-    write_file(&output_dir, "TplHolder.java", &holder_content, &mut generated)?;
+    collect(&output_dir, "TplHolder.java", &holder_content);
 
-    Ok(generated)
+    super::sync_export_dir(&output_dir, "java", collected)
 }

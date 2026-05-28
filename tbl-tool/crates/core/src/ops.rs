@@ -710,27 +710,41 @@ impl ProjectEngine {
         None
     }
 
-    pub fn export_json(&mut self) -> anyhow::Result<Vec<String>> {
+    pub fn export_json(&mut self) -> anyhow::Result<crate::export::ExportResult> {
         let result = crate::export::export_all_json(&self.project)?;
-        self.log(format!("导出 JSON 数据文件 {} 个", result.len()));
+        self.log_export("JSON", &result);
         Ok(result)
     }
 
-    pub fn export_xml(&mut self) -> anyhow::Result<Vec<String>> {
+    pub fn export_xml(&mut self) -> anyhow::Result<crate::export::ExportResult> {
         let result = crate::export::export_all_xml(&self.project)?;
-        self.log(format!("导出 XML 数据文件 {} 个", result.len()));
+        self.log_export("XML", &result);
         Ok(result)
     }
 
-    pub fn export_java(&mut self) -> anyhow::Result<Vec<String>> {
+    pub fn export_java(&mut self) -> anyhow::Result<crate::export::ExportResult> {
         let result = crate::export::export_all_java(&self.project)?;
-        self.log(format!("导出 Java 模板类 {} 个", result.len()));
+        self.log_export("Java", &result);
         Ok(result)
     }
 
-    pub fn export_lua(&mut self) -> anyhow::Result<Vec<String>> {
+    pub fn export_lua(&mut self) -> anyhow::Result<crate::export::ExportResult> {
         let result = crate::export::export_all_lua(&self.project)?;
-        self.log(format!("导出 Lua 文件 {} 个", result.len()));
+        self.log_export("Lua", &result);
         Ok(result)
+    }
+
+    fn log_export(&mut self, label: &str, result: &crate::export::ExportResult) {
+        use crate::export::FileStatus;
+        self.log(format!("[{}] {} 新增, {} 修改, {} 删除, {} 不变",
+            label, result.added(), result.modified(), result.deleted(), result.unchanged()));
+        for f in &result.files {
+            match f.status {
+                FileStatus::Added => self.log(format!("  [新增] {}", f.path)),
+                FileStatus::Modified => self.log(format!("  [修改] {}", f.path)),
+                FileStatus::Deleted => self.log(format!("  [删除] {}", f.path)),
+                FileStatus::Unchanged => {}
+            }
+        }
     }
 }

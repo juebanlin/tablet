@@ -101,7 +101,7 @@ pub fn export_constant(constant: &Constant, strategy: &EmptyStrategy) -> Value {
 }
 
 
-pub fn export_all_json(project: &Project) -> Result<Vec<String>> {
+pub fn export_all_json(project: &Project) -> Result<super::ExportResult> {
     let export_cfg = project.config.export.as_ref();
 
     let data_output = export_cfg
@@ -127,7 +127,7 @@ pub fn export_all_json(project: &Project) -> Result<Vec<String>> {
 
     let sep_meta = build_sep_meta(&project.config.separators);
     let output_dir = project.workdir.join(data_output).join("json");
-    let mut generated = Vec::new();
+    let mut collected = Vec::new();
 
     for group in &project.groups {
         let group_dir = output_dir.join(&group.name);
@@ -140,8 +140,7 @@ pub fn export_all_json(project: &Project) -> Result<Vec<String>> {
             wrapper.insert("data".to_string(), data);
             let file_path = group_dir.join(format!("{}.json", &table.name));
             let content = serde_json::to_string_pretty(&Value::Object(wrapper))?;
-            opts.write_file(&file_path, &content)?;
-            generated.push(file_path.display().to_string());
+            collected.push((file_path, opts.encode(&content)));
         }
 
         for constant in &group.constants {
@@ -152,10 +151,9 @@ pub fn export_all_json(project: &Project) -> Result<Vec<String>> {
             wrapper.insert("data".to_string(), data);
             let file_path = group_dir.join(format!("{}.json", &constant.name));
             let content = serde_json::to_string_pretty(&Value::Object(wrapper))?;
-            opts.write_file(&file_path, &content)?;
-            generated.push(file_path.display().to_string());
+            collected.push((file_path, opts.encode(&content)));
         }
     }
 
-    Ok(generated)
+    super::sync_export_dir(&output_dir, "json", collected)
 }

@@ -73,12 +73,110 @@ pub struct ExportOptions {
 }
 
 impl ExportOptions {
+    pub fn encode(&self, content: &str) -> Vec<u8> {
+        let normalized = self.line_ending.normalize(content);
+        encode_content(&normalized, &self.encoding)
+    }
+
     pub fn write_file(&self, path: &std::path::Path, content: &str) -> anyhow::Result<()> {
         std::fs::create_dir_all(path.parent().unwrap())?;
-        let normalized = self.line_ending.normalize(content);
-        let bytes = encode_content(&normalized, &self.encoding);
+        let bytes = self.encode(content);
         std::fs::write(path, bytes)?;
         Ok(())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum FileStatus {
+    Added,
+    Modified,
+    Unchanged,
+    Deleted,
+}
+
+#[derive(Debug, Clone)]
+pub struct ExportFile {
+    pub path: String,
+    pub status: FileStatus,
+}
+
+#[derive(Debug, Clone)]
+pub struct ExportResult {
+    pub files: Vec<ExportFile>,
+}
+
+impl ExportResult {
+    pub fn added(&self) -> usize { self.files.iter().filter(|f| f.status == FileStatus::Added).count() }
+    pub fn modified(&self) -> usize { self.files.iter().filter(|f| f.status == FileStatus::Modified).count() }
+    pub fn unchanged(&self) -> usize { self.files.iter().filter(|f| f.status == FileStatus::Unchanged).count() }
+    pub fn deleted(&self) -> usize { self.files.iter().filter(|f| f.status == FileStatus::Deleted).count() }
+}
+
+pub fn sync_export_dir(
+    output_dir: &std::path::Path,
+    extension: &str,
+    generated: Vec<(std::path::PathBuf, Vec<u8>)>,
+) -> anyhow::Result<ExportResult> {
+    use std::collections::HashSet;
+    use std::path::PathBuf;
+
+    let mut existing: HashSet<PathBuf> = HashSet::new();
+    if output_dir.exists() {
+        collect_files_recursive(output_dir, extension, &mut existing);
+    }
+
+    let mut files = Vec::new();
+
+    for (path, content) in &generated {
+        std::fs::create_dir_all(path.parent().unwrap())?;
+        existing.remove(path);
+
+        if path.exists() {
+            let old = std::fs::read(path)?;
+            if old == *content {
+                files.push(ExportFile { path: path.display().to_string(), status: FileStatus::Unchanged });
+            } else {
+                std::fs::write(path, content)?;
+                files.push(ExportFile { path: path.display().to_string(), status: FileStatus::Modified });
+            }
+        } else {
+            std::fs::write(path, content)?;
+            files.push(ExportFile { path: path.display().to_string(), status: FileStatus::Added });
+        }
+    }
+
+    for old_path in &existing {
+        std::fs::remove_file(old_path)?;
+        files.push(ExportFile { path: old_path.display().to_string(), status: FileStatus::Deleted });
+    }
+
+    remove_empty_dirs(output_dir);
+
+    Ok(ExportResult { files })
+}
+
+fn collect_files_recursive(dir: &std::path::Path, ext: &str, out: &mut std::collections::HashSet<std::path::PathBuf>) {
+    if let Ok(entries) = std::fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                collect_files_recursive(&path, ext, out);
+            } else if path.extension().and_then(|e| e.to_str()) == Some(ext) {
+                out.insert(path);
+            }
+        }
+    }
+}
+
+fn remove_empty_dirs(dir: &std::path::Path) {
+    if let Ok(entries) = std::fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                remove_empty_dirs(&path);
+                let _ = std::fs::remove_dir(&path);
+            }
+        }
     }
 }
 

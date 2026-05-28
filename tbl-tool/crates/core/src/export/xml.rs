@@ -89,7 +89,7 @@ pub fn export_constant_xml(constant: &Constant, strategy: &EmptyStrategy, sep: &
     s
 }
 
-pub fn export_all_xml(project: &Project) -> Result<Vec<String>> {
+pub fn export_all_xml(project: &Project) -> Result<super::ExportResult> {
     let export_cfg = project.config.export.as_ref();
 
     let data_output = export_cfg
@@ -115,7 +115,7 @@ pub fn export_all_xml(project: &Project) -> Result<Vec<String>> {
 
     let sep = &project.config.separators;
     let output_dir = project.workdir.join(data_output).join("xml");
-    let mut generated = Vec::new();
+    let mut collected = Vec::new();
 
     for group in &project.groups {
         let group_dir = output_dir.join(&group.name);
@@ -124,18 +124,16 @@ pub fn export_all_xml(project: &Project) -> Result<Vec<String>> {
             if table.deleted { continue; }
             let xml = export_table_xml(table, &strategy, sep);
             let file_path = group_dir.join(format!("{}.xml", &table.name));
-            opts.write_file(&file_path, &xml)?;
-            generated.push(file_path.display().to_string());
+            collected.push((file_path, opts.encode(&xml)));
         }
 
         for constant in &group.constants {
             if constant.deleted { continue; }
             let xml = export_constant_xml(constant, &strategy, sep);
             let file_path = group_dir.join(format!("{}.xml", &constant.name));
-            opts.write_file(&file_path, &xml)?;
-            generated.push(file_path.display().to_string());
+            collected.push((file_path, opts.encode(&xml)));
         }
     }
 
-    Ok(generated)
+    super::sync_export_dir(&output_dir, "xml", collected)
 }
