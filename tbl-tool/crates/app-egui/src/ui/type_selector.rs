@@ -1,6 +1,6 @@
 use eframe::egui;
 use crate::app::CellPos;
-use crate::core::types::{BaseType, Paradigm, TblType, SeparatorsSection};
+use tbl_core::types::{BaseType, Paradigm, TblType, SeparatorsSection};
 use crate::ui::grid_model::GridSource;
 
 #[derive(Clone, Debug)]

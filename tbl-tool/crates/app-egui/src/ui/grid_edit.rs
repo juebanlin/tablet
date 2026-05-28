@@ -2,7 +2,7 @@ use eframe::egui;
 use super::grid_model::{CellKind, GridSource};
 use super::grid::COL_W;
 use crate::app::TblApp;
-use crate::model::Export;
+use tbl_core::model::Export;
 
 pub fn render_edit(ui: &mut egui::Ui, app: &mut TblApp, kind: &CellKind, pos: egui::Pos2, col_w: f32, group: &str, name: &str, source: &GridSource) {
     match kind {

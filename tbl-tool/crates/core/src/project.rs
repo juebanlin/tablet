@@ -1,7 +1,7 @@
 use std::path::Path;
 use anyhow::Result;
 use crate::model::*;
-use crate::core::tbl::{self, TblFile};
+use crate::tbl::{self, TblFile};
 
 const DEFAULT_CONFIG: &str = r#"[project]
 # 项目名称

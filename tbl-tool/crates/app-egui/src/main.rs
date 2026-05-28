@@ -1,8 +1,6 @@
 #![windows_subsystem = "windows"]
 
 mod app;
-mod model;
-mod core;
 mod ui;
 
 use std::path::PathBuf;
@@ -10,14 +8,9 @@ use clap::Parser;
 use log::info;
 use simplelog::*;
 
-pub const CONFIG_FILE: &str = "tbl-tool.toml";
-pub const LOCK_FILE: &str = ".tbl-tool.lock";
-pub const LOG_FILE: &str = "tbl-tool.log";
-
 #[derive(Parser)]
 #[command(name = "tbl-tool", version = "0.1.0")]
 struct Cli {
-    /// 工作目录（包含 tbl-tool.toml 的目录），默认为 exe 所在目录
     #[arg(long)]
     workdir: Option<PathBuf>,
 }
@@ -33,7 +26,7 @@ fn main() -> anyhow::Result<()> {
         }
     };
 
-    let lock_path = workdir.join(LOCK_FILE);
+    let lock_path = workdir.join(tbl_core::LOCK_FILE);
     if let Ok(content) = std::fs::read_to_string(&lock_path) {
         if let Ok(pid) = content.trim().parse::<u32>() {
             if is_process_alive(pid) {
@@ -44,7 +37,7 @@ fn main() -> anyhow::Result<()> {
     }
     std::fs::write(&lock_path, std::process::id().to_string())?;
 
-    let project = core::project::load_project(&workdir)?;
+    let project = tbl_core::project::load_project(&workdir)?;
 
     let log_level = project.config.ui.as_ref()
         .and_then(|u| u.log_level.as_deref())
@@ -56,7 +49,7 @@ fn main() -> anyhow::Result<()> {
         _ => LevelFilter::Debug,
     };
 
-    let log_path = workdir.join(LOG_FILE);
+    let log_path = workdir.join(tbl_core::LOG_FILE);
     let log_file = std::fs::File::create(&log_path)?;
     CombinedLogger::init(vec![
         WriteLogger::new(file_level, Config::default(), log_file),

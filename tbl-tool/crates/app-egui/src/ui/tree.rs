@@ -28,7 +28,7 @@ pub fn render(ui: &mut egui::Ui, app: &mut TblApp) {
     ui.separator();
 
     egui::ScrollArea::both().auto_shrink([false, false]).show(ui, |ui| {
-        let groups = app.project.groups.clone();
+        let groups = app.engine.project.groups.clone();
         let filter = app.tree_filter.clone();
         let show_full = app.tree_filter_show_full_group;
 
@@ -60,7 +60,7 @@ pub fn render(ui: &mut egui::Ui, app: &mut TblApp) {
                 let group_label = format!("📁 {}", group.name);
                 let r = ui.selectable_label(false, &group_label);
                 render_marker(ui, group_deleted, group_is_new, group_dirty);
-                let has_errors = app.validation_errors.iter().any(|(g, _, _, _)| g == &group.name);
+                let has_errors = app.engine.validation_errors.iter().any(|(g, _, _, _)| g == &group.name);
                 if has_errors { ui.label(egui::RichText::new("!").color(egui::Color32::from_rgb(220, 50, 50)).strong()); }
                 r
             });
@@ -83,7 +83,7 @@ pub fn render(ui: &mut egui::Ui, app: &mut TblApp) {
                         ui.add_space(18.0);
                         let r = ui.selectable_label(selected, format!("📊 {}", table.name));
                         render_marker(ui, table.deleted, table.original.is_empty(), table.dirty);
-                        if app.validation_errors.iter().any(|(g, n, _, _)| g == &group.name && n == &table.name) {
+                        if app.engine.validation_errors.iter().any(|(g, n, _, _)| g == &group.name && n == &table.name) {
                             ui.label(egui::RichText::new("!").color(egui::Color32::from_rgb(220, 50, 50)).strong());
                         }
                         r
@@ -103,7 +103,7 @@ pub fn render(ui: &mut egui::Ui, app: &mut TblApp) {
                         ui.add_space(18.0);
                         let r = ui.selectable_label(selected, format!("📋 {}", constant.name));
                         render_marker(ui, constant.deleted, constant.original.is_empty(), constant.dirty);
-                        if app.validation_errors.iter().any(|(g, n, _, _)| g == &group.name && n == &constant.name) {
+                        if app.engine.validation_errors.iter().any(|(g, n, _, _)| g == &group.name && n == &constant.name) {
                             ui.label(egui::RichText::new("!").color(egui::Color32::from_rgb(220, 50, 50)).strong());
                         }
                         r

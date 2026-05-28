@@ -2591,7 +2591,27 @@ dependencies = [
 ]
 
 [[package]]
-name = "tbl-tool"
+name = "tbl-cli"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "tbl-core",
+]
+
+[[package]]
+name = "tbl-core"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "log",
+ "serde",
+ "toml",
+]
+
+[[package]]
+name = "tbl-egui"
 version = "0.1.0"
 dependencies = [
  "anyhow",
@@ -2602,9 +2622,22 @@ dependencies = [
  "egui_extras",
  "font-kit",
  "log",
- "serde",
  "simplelog",
- "toml",
+ "tbl-core",
+]
+
+[[package]]
+name = "tbl-fltk"
+version = "0.1.0"
+dependencies = [
+ "tbl-core",
+]
+
+[[package]]
+name = "tbl-slint"
+version = "0.1.0"
+dependencies = [
+ "tbl-core",
 ]
 
 [[package]]

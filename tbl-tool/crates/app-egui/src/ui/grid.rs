@@ -97,7 +97,7 @@ pub fn render_grid(ui: &mut egui::Ui, app: &mut TblApp, group: &str, name: &str,
                     }
                 }
 
-                if app.validation_errors.contains(&(group.to_string(), name.to_string(), row, col)) {
+                if app.engine.validation_errors.contains(&(group.to_string(), name.to_string(), row, col)) {
                     painter.rect_stroke(r, 0.0, egui::Stroke::new(1.5, ERROR_BORDER));
                 }
 

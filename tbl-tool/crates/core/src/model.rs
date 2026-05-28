@@ -15,7 +15,7 @@ pub struct ProjectConfig {
     #[serde(default)]
     pub ui: Option<UiConfig>,
     #[serde(default)]
-    pub separators: crate::core::types::SeparatorsSection,
+    pub separators: crate::types::SeparatorsSection,
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -83,7 +83,7 @@ pub struct Table {
 
 impl Table {
     pub fn update_dirty(&mut self) {
-        self.dirty = crate::core::tbl::serialize_table(self) != self.original;
+        self.dirty = crate::tbl::serialize_table(self) != self.original;
     }
 }
 
@@ -113,7 +113,7 @@ pub struct Constant {
 
 impl Constant {
     pub fn update_dirty(&mut self) {
-        self.dirty = crate::core::tbl::serialize_constant(self) != self.original;
+        self.dirty = crate::tbl::serialize_constant(self) != self.original;
     }
 }
 
