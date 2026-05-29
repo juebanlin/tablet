@@ -254,6 +254,34 @@ pub fn export_constant_lua(constant: &Constant, sep: &SeparatorsSection) -> Stri
     s
 }
 
+pub fn export_enum_lua(enum_def: &EnumDef) -> String {
+    let mut s = String::new();
+    let valid: Vec<&EnumEntry> = enum_def.entries.iter()
+        .filter(|e| !e.id.is_empty() && !e.name.is_empty())
+        .collect();
+
+    let max_name_len = valid.iter().map(|e| e.name.len()).max().unwrap_or(0);
+
+    writeln!(s, "local {} = {{", enum_def.name).unwrap();
+
+    for e in &valid {
+        let pad = " ".repeat(max_name_len - e.name.len());
+        let id = e.id.parse::<i64>().unwrap_or(0);
+        writeln!(s, "    {}{} = {},  -- {}", e.name, pad, id, e.desc).unwrap();
+    }
+    writeln!(s).unwrap();
+
+    writeln!(s, "    desc = {{").unwrap();
+    for e in &valid {
+        let id = e.id.parse::<i64>().unwrap_or(0);
+        writeln!(s, "        [{}] = \"{}\",", id, lua_escape(&e.desc)).unwrap();
+    }
+    writeln!(s, "    }},").unwrap();
+    writeln!(s, "}}").unwrap();
+    writeln!(s, "return {}", enum_def.name).unwrap();
+    s
+}
+
 pub fn export_all_lua(project: &Project) -> Result<super::ExportResult> {
     let export_cfg = project.config.export.as_ref();
     let client = export_cfg.and_then(|e| e.client.as_ref());
@@ -291,6 +319,13 @@ pub fn export_all_lua(project: &Project) -> Result<super::ExportResult> {
             if constant.deleted { continue; }
             let lua = export_constant_lua(constant, sep);
             let file_path = output_dir.join(format!("{}.lua", &constant.name));
+            collected.push((file_path, opts.encode(&lua)));
+        }
+
+        for enum_def in &group.enums {
+            if enum_def.deleted { continue; }
+            let lua = export_enum_lua(enum_def);
+            let file_path = output_dir.join(format!("{}.lua", &enum_def.name));
             collected.push((file_path, opts.encode(&lua)));
         }
     }

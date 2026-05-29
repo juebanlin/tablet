@@ -122,7 +122,42 @@ fn gen_constant_tpl(constant: &Constant, pkg: &str, group: &str) -> String {
     s
 }
 
-// PLACEHOLDER_JAVA_RS_PART3
+fn gen_enum_class(enum_def: &EnumDef, pkg: &str, group: &str) -> String {
+    let mut s = String::new();
+    writeln!(s, "package {}.tpl;", pkg).unwrap();
+    writeln!(s).unwrap();
+    writeln!(s, "import {}.TblSource;", pkg).unwrap();
+    writeln!(s).unwrap();
+
+    let valid: Vec<&EnumEntry> = enum_def.entries.iter()
+        .filter(|e| !e.id.is_empty() && !e.name.is_empty())
+        .collect();
+
+    writeln!(s, "@TblSource(group = \"{}\", name = \"{}\", mode = \"enum\")", group, enum_def.name).unwrap();
+    writeln!(s, "public enum {}Enum {{", enum_def.name).unwrap();
+
+    for (i, e) in valid.iter().enumerate() {
+        writeln!(s, "    /** {} */", e.desc).unwrap();
+        let sep = if i + 1 == valid.len() { ";" } else { "," };
+        writeln!(s, "    {}({}, \"{}\"){}", e.name, e.id, e.desc, sep).unwrap();
+    }
+    writeln!(s).unwrap();
+
+    writeln!(s, "    public final int id;").unwrap();
+    writeln!(s, "    public final String desc;").unwrap();
+    writeln!(s).unwrap();
+    writeln!(s, "    {}Enum(int id, String desc) {{", enum_def.name).unwrap();
+    writeln!(s, "        this.id = id;").unwrap();
+    writeln!(s, "        this.desc = desc;").unwrap();
+    writeln!(s, "    }}").unwrap();
+    writeln!(s).unwrap();
+    writeln!(s, "    public static {}Enum fromId(int id) {{", enum_def.name).unwrap();
+    writeln!(s, "        for ({}Enum e : values()) if (e.id == id) return e;", enum_def.name).unwrap();
+    writeln!(s, "        return null;").unwrap();
+    writeln!(s, "    }}").unwrap();
+    writeln!(s, "}}").unwrap();
+    s
+}
 
 pub fn export_all_java(project: &Project) -> Result<super::ExportResult> {
     let export_cfg = project.config.export.as_ref();
@@ -195,6 +230,13 @@ pub fn export_all_java(project: &Project) -> Result<super::ExportResult> {
             collect(&tpl_dir, &filename, &content);
             writeln!(register_lines, "        map.put(\"{}\", {}.tpl.{}Tpl.class);",
                 constant.name, pkg, constant.name).unwrap();
+        }
+
+        for enum_def in &group.enums {
+            if enum_def.deleted { continue; }
+            let content = gen_enum_class(enum_def, pkg, &group.name);
+            let filename = format!("{}Enum.java", &enum_def.name);
+            collect(&tpl_dir, &filename, &content);
         }
     }
 

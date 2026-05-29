@@ -247,6 +247,13 @@ pub fn export_all_go(project: &Project) -> Result<super::ExportResult> {
             let filename = format!("{}_tpl.go", to_snake_case(&constant.name));
             collect(&output_dir, &filename, &content);
         }
+
+        for enum_def in &group.enums {
+            if enum_def.deleted { continue; }
+            let content = gen_enum_file(enum_def, pkg);
+            let filename = format!("{}_enum.go", to_snake_case(&enum_def.name));
+            collect(&output_dir, &filename, &content);
+        }
     }
 
     super::sync_export_dir(&output_dir, "go", collected)
@@ -381,4 +388,83 @@ fn gen_constant_tpl(constant: &Constant, pkg: &str, _group: &str) -> String {
     writeln!(s, "func Get{}() *{} {{ return {}_data }}", constant.name, cls, constant.name).unwrap();
 
     s
+}
+
+fn gen_enum_file(enum_def: &EnumDef, pkg: &str) -> String {
+    let mut s = String::new();
+    let type_name = format!("{}Enum", enum_def.name);
+
+    let valid: Vec<&EnumEntry> = enum_def.entries.iter()
+        .filter(|e| !e.id.is_empty() && !e.name.is_empty())
+        .collect();
+
+    writeln!(s, "package {}", pkg).unwrap();
+    writeln!(s).unwrap();
+    writeln!(s, "type {} int32", type_name).unwrap();
+    writeln!(s).unwrap();
+
+    let max_name_len = valid.iter()
+        .map(|e| e.name.len())
+        .max()
+        .unwrap_or(0);
+
+    writeln!(s, "const (").unwrap();
+    for e in &valid {
+        let pad = " ".repeat(max_name_len - e.name.len());
+        writeln!(s, "\t{}_{}{} {} = {} // {}",
+            type_name, e.name, pad, type_name, e.id, e.desc).unwrap();
+    }
+    writeln!(s, ")").unwrap();
+    writeln!(s).unwrap();
+
+    let desc_var = format!("{}{}Desc", lowercase_first(&enum_def.name), "Enum");
+    let by_name_var = format!("{}{}ByName", lowercase_first(&enum_def.name), "Enum");
+
+    writeln!(s, "var {} = map[{}]string{{", desc_var, type_name).unwrap();
+    for e in &valid {
+        let pad = " ".repeat(max_name_len - e.name.len());
+        writeln!(s, "\t{}_{}:{} \"{}\",", type_name, e.name, pad, escape_go_str(&e.desc)).unwrap();
+    }
+    writeln!(s, "}}").unwrap();
+    writeln!(s).unwrap();
+
+    writeln!(s, "var {} = map[string]{}{{", by_name_var, type_name).unwrap();
+    for e in &valid {
+        let pad = " ".repeat(max_name_len - e.name.len());
+        writeln!(s, "\t\"{}\":{} {}_{},", e.name, pad, type_name, e.name).unwrap();
+    }
+    writeln!(s, "}}").unwrap();
+    writeln!(s).unwrap();
+
+    writeln!(s, "func (h {}) Desc() string {{ return {}[h] }}", type_name, desc_var).unwrap();
+    writeln!(s).unwrap();
+
+    writeln!(s, "func (h {}) String() string {{", type_name).unwrap();
+    writeln!(s, "\tfor name, val := range {} {{", by_name_var).unwrap();
+    writeln!(s, "\t\tif val == h {{").unwrap();
+    writeln!(s, "\t\t\treturn name").unwrap();
+    writeln!(s, "\t\t}}").unwrap();
+    writeln!(s, "\t}}").unwrap();
+    writeln!(s, "\treturn \"\"").unwrap();
+    writeln!(s, "}}").unwrap();
+    writeln!(s).unwrap();
+
+    writeln!(s, "func Parse{}(name string) ({}, bool) {{", type_name, type_name).unwrap();
+    writeln!(s, "\tv, ok := {}[name]", by_name_var).unwrap();
+    writeln!(s, "\treturn v, ok").unwrap();
+    writeln!(s, "}}").unwrap();
+
+    s
+}
+
+fn lowercase_first(s: &str) -> String {
+    let mut chars = s.chars();
+    match chars.next() {
+        Some(c) => c.to_ascii_lowercase().to_string() + chars.as_str(),
+        None => String::new(),
+    }
+}
+
+fn escape_go_str(s: &str) -> String {
+    s.replace('\\', "\\\\").replace('"', "\\\"")
 }

@@ -469,7 +469,7 @@ fn build_test_main_go(schema: &TblSchema, pkg: &str, import_path: &str, format: 
                 // sec.fields: tbl_type 借位存 id, name 存条目名
                 writeln!(s, "\t{{").unwrap();
                 for f in &sec.fields {
-                    writeln!(s, "\t\tfmt.Printf(\"id=%d name=%s desc=%s\\n\", int32(cfg.{}_{}), \"{}\", cfg.{}_{}.Desc())",
+                    writeln!(s, "\t\tfmt.Printf(\"id=%d name=%s desc=%s\\n\", int32(cfg.{}Enum_{}), \"{}\", cfg.{}Enum_{}.Desc())",
                         sec.name, f.name, f.name, sec.name, f.name).unwrap();
                 }
                 writeln!(s, "\t}}").unwrap();
