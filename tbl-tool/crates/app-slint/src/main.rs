@@ -74,6 +74,7 @@ fn main() -> anyhow::Result<()> {
     let ui = AppWindow::new()?;
     push_tree(&ui, &app_state);
     push_grid(&ui, &app_state);
+    push_logs(&ui, &app_state);
     wire_tree(&ui, &app_state);
     wire_grid(&ui, &app_state);
     wire_toolbar(&ui, &app_state);
@@ -82,6 +83,27 @@ fn main() -> anyhow::Result<()> {
     let result = ui.run().map_err(|e| anyhow::anyhow!("{}", e));
     let _ = std::fs::remove_file(&lock_path);
     result
+}
+
+/// 把 engine.logs（"HH:MM:SS msg" 格式的字符串）转成 slint LogEntry 列表。
+/// level 推断：消息含 "失败" / "错误" / "[验证]" → error；含 "警告" → warn；其它 info。
+fn push_logs(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
+    let st = state.borrow();
+    let entries: Vec<LogEntry> = st.engine.logs.iter().map(|line| {
+        let (time, msg) = match line.split_once(' ') {
+            Some((t, m)) => (t.to_string(), m.to_string()),
+            None => (String::new(), line.clone()),
+        };
+        let level = if msg.contains("失败") || msg.contains("错误") || msg.contains("[验证]") {
+            2
+        } else if msg.contains("警告") {
+            1
+        } else {
+            0
+        };
+        LogEntry { time: time.into(), msg: msg.into(), level }
+    }).collect();
+    ui.set_logs(slint::ModelRc::new(slint::VecModel::from(entries)));
 }
 
 /// 构建树并推送到 slint。
@@ -268,6 +290,7 @@ fn wire_grid(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
         });
     }
     // 单元格点击 → 选中（如果当前在编辑别的 cell，先 commit）
+    // ExportEnumCol（Constant 第 3 列）特殊：点击直接 cycle export 四态，不进选中
     {
         let s = state.clone();
         let weak = ui.as_weak();
@@ -289,10 +312,33 @@ fn wire_grid(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
                     st.editing_in_formula = false;
                 }
             }
+            // ExportEnumCol cycle：cs → c → s → - → cs
+            let is_export_col = matches!(
+                s.borrow().grid_column_kinds.get(c as usize),
+                Some(state::ColumnKind::ExportEnumCol)
+            );
+            if is_export_col {
+                cycle_export_for_cell(&s, r as usize, c as usize);
+                if let Some(ui) = weak.upgrade() { push_grid(&ui, &s); }
+                return;
+            }
             s.borrow_mut().grid_selection = GridSelection::Cell(r as usize, c as usize);
             if let Some(ui) = weak.upgrade() {
                 if was_editing { push_grid(&ui, &s); } else { push_selection_only(&ui, &s); }
             }
+        });
+    }
+    // Table 表头点击 → export 行（hi=1）支持 cycle；其它表头行暂不处理
+    {
+        let s = state.clone();
+        let weak = ui.as_weak();
+        ui.on_grid_header_clicked(move |hi, ci| {
+            let is_table = matches!(s.borrow().selected, Some(SelectedNode::Table { .. }));
+            if !is_table || hi != 1 || ci == 0 {
+                return; // 仅 Table 的 export 行（id 列除外）支持单击 cycle
+            }
+            cycle_table_field_export(&s, ci as usize);
+            if let Some(ui) = weak.upgrade() { push_grid(&ui, &s); }
         });
     }
     // 单元格双击 → 进入 inline 编辑
@@ -469,6 +515,8 @@ fn wire_toolbar(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
                 push_tree(&ui, &s);
                 push_grid(&ui, &s);
             }
+            // 任何 toolbar 操作都可能产生日志（save/reload/generate/clear 全会 log）
+            push_logs(&ui, &s);
         }
     });
 }
@@ -496,6 +544,58 @@ fn wire_focus(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
         commit_editing(&ui_for_buf, &s);
         if let Some(ui) = weak.upgrade() { push_grid(&ui, &s); }
     });
+}
+
+/// Constant ExportEnumCol cycle：cs → c → s → - → cs，写回当前选中 Constant 的 row.export。
+fn cycle_export_for_cell(state: &Rc<RefCell<AppState>>, r: usize, _c: usize) {
+    use tbl_core::model::Export;
+    let mut st = state.borrow_mut();
+    let (group, name) = match &st.selected {
+        Some(SelectedNode::Constant { group, name }) => (group.clone(), name.clone()),
+        _ => return,
+    };
+    let current = st.engine.find_constant(&group, &name)
+        .and_then(|c| c.entries.get(r))
+        .map(|e| e.export.clone())
+        .unwrap_or(Export::ClientServer);
+    let next = next_export(&current);
+    let val = next.code().to_string();
+    st.engine.commit_constant_cell(&group, &name, r, 3, val);
+    if st.realtime_validate {
+        st.engine.revalidate(&group, &name);
+    }
+}
+
+/// Table 表头 export 行点击 cycle：写回 schema.fields[col].export。
+fn cycle_table_field_export(state: &Rc<RefCell<AppState>>, col: usize) {
+    use tbl_core::model::Export;
+    let mut st = state.borrow_mut();
+    let (group, name) = match &st.selected {
+        Some(SelectedNode::Table { group, name }) => (group.clone(), name.clone()),
+        _ => return,
+    };
+    let current = st.engine.find_table(&group, &name)
+        .and_then(|t| t.schema.fields.get(col))
+        .map(|f| f.export.clone())
+        .unwrap_or(Export::ClientServer);
+    let next = next_export(&current);
+    let val = next.code().to_string();
+    st.engine.commit_header_edit(&group, &name, 1, col, val);
+    if st.realtime_validate {
+        st.engine.revalidate(&group, &name);
+    }
+}
+
+/// Export 四态轮转：cs → c → s → - → cs（不包含 Unselected，UI 中不暴露空状态）
+fn next_export(cur: &tbl_core::model::Export) -> tbl_core::model::Export {
+    use tbl_core::model::Export::*;
+    match cur {
+        ClientServer => ClientOnly,
+        ClientOnly => ServerOnly,
+        ServerOnly => None,
+        None => ClientServer,
+        Unselected => ClientServer,
+    }
 }
 
 fn is_process_alive(pid: u32) -> bool {
