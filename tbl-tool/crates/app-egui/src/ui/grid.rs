@@ -103,8 +103,9 @@ pub fn render_grid(ui: &mut egui::Ui, app: &mut TblApp, group: &str, name: &str,
 
                 if row < grid.data.len() {
                     let val = grid.data[row].get(col).cloned().unwrap_or_default();
+                    let display = display_for_cell(app, grid, col, &val);
                     painter.text(egui::pos2(x + 3.0, y + ROW_H / 2.0), egui::Align2::LEFT_CENTER,
-                        &val, egui::FontId::proportional(12.0), egui::Color32::BLACK);
+                        &display, egui::FontId::proportional(12.0), egui::Color32::BLACK);
                 }
 
                 let is_valid_row = row < grid.data_count;
@@ -444,6 +445,27 @@ fn copy_form(grid: &GridData, col: usize, raw: &str) -> String {
         }
         _ => raw.to_string(),
     }
+}
+
+/// 单元格的展示值：
+/// - 功能区「枚举显示名字」开启 + 列为 @EnumName 引用 + 值能在 enum 中找到 → 显示该 entry 的 name
+/// - 否则原样显示（含表引用、未匹配 id 等）
+fn display_for_cell(app: &TblApp, grid: &GridData, col: usize, raw: &str) -> String {
+    use crate::ui::grid_model::CellKind;
+    if raw.is_empty() || !app.view_show_enum_name { return raw.to_string(); }
+    let Some(CellKind::Ref { name }) = grid.col_defs.get(col).map(|c| &c.kind) else {
+        return raw.to_string();
+    };
+    for g in &app.engine.project.groups {
+        for e in &g.enums {
+            if e.deleted || e.name != *name { continue; }
+            if let Some(entry) = e.entries.iter().find(|en| en.id == raw && !en.name.is_empty()) {
+                return entry.name.clone();
+            }
+            return raw.to_string();
+        }
+    }
+    raw.to_string()
 }
 
 fn is_selected(sel: &Selection, row: usize, col: usize) -> bool {

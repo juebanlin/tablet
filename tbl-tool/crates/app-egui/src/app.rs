@@ -24,6 +24,7 @@ pub struct TblApp {
     pub tree_context: Option<TreeContext>,
     pub type_selector: TypeSelectorState,
     pub ref_picker: RefPickerState,
+    pub view_show_enum_name: bool,
     pub schema_export: SchemaExportState,
     pub schema_import: SchemaImportState,
     pub data_export: DataExportState,
@@ -123,6 +124,7 @@ impl TblApp {
             tree_context: None,
             type_selector: TypeSelectorState::default(),
             ref_picker: RefPickerState::default(),
+            view_show_enum_name: false,
             schema_export: SchemaExportState::default(),
             schema_import: SchemaImportState::default(),
             data_export: DataExportState::default(),
@@ -401,6 +403,13 @@ impl eframe::App for TblApp {
                     self.schema_import.checked.clear();
                     self.schema_import.conflicts.clear();
                 }
+            });
+        });
+
+        egui::TopBottomPanel::top("view_bar_panel").show(ctx, |ui| {
+            ui.horizontal(|ui| {
+                ui.checkbox(&mut self.view_show_enum_name, "枚举显示名字")
+                    .on_hover_text("引用枚举（@EnumName）的单元格只读渲染时显示 name 而非 id\n（编辑时仍是 id，表引用不受此开关影响）");
             });
         });
 
