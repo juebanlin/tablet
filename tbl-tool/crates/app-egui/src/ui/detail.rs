@@ -57,7 +57,7 @@ pub fn render(ui: &mut egui::Ui, app: &mut TblApp) {
 }
 
 fn render_formula_bar(ui: &mut egui::Ui, app: &mut TblApp, group: &str, name: &str, grid: &GridData) {
-    let (label, editable, cell_val) = match &app.edit_state.selected {
+    let (label, editable, cell_val, display_val) = match &app.edit_state.selected {
         Selection::Cell(r, c) => {
             let coord = format!("{}{}", grid::col_letter(*c), r + 1);
             let kind = if *c < grid.col_defs.len() && *r < grid.data_count {
@@ -65,10 +65,11 @@ fn render_formula_bar(ui: &mut egui::Ui, app: &mut TblApp, group: &str, name: &s
             } else {
                 &CellKind::Text
             };
-            let val = grid.data.get(*r).and_then(|row| row.get(*c)).cloned().unwrap_or_default();
-            (coord, kind.double_click_to_edit(), val)
+            let raw = grid.data.get(*r).and_then(|row| row.get(*c)).cloned().unwrap_or_default();
+            let display = grid::display_for_cell(app, grid, *c, &raw);
+            (coord, kind.double_click_to_edit(), raw, display)
         }
-        _ => (String::new(), false, String::new()),
+        _ => (String::new(), false, String::new(), String::new()),
     };
 
     let formula_id = egui::Id::new("formula_bar_input");
@@ -92,7 +93,7 @@ fn render_formula_bar(ui: &mut egui::Ui, app: &mut TblApp, group: &str, name: &s
                 }
             }
         } else {
-            ui.label(egui::RichText::new(&cell_val).size(11.0));
+            ui.label(egui::RichText::new(&display_val).size(11.0).weak());
         }
     });
 

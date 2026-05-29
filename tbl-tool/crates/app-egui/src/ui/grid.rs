@@ -435,7 +435,7 @@ pub fn copy_selected_text(app: &TblApp, grid: &GridData) -> String {
 /// - Export 列：cs/c/s/- → 前后端/客户端/服务器/不导出
 /// - @EnumName 引用列 + 功能区开关：id → entry.name（未匹配/表引用/空值原样）
 /// - 其它：原样
-fn display_for_cell(app: &TblApp, grid: &GridData, col: usize, raw: &str) -> String {
+pub(crate) fn display_for_cell(app: &TblApp, grid: &GridData, col: usize, raw: &str) -> String {
     use crate::ui::grid_model::CellKind;
     if raw.is_empty() { return String::new(); }
     let kind = grid.col_defs.get(col).map(|c| &c.kind);
