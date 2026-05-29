@@ -50,7 +50,11 @@ impl TypeSelectorState {
     }
 
     fn current_type(&self) -> TblType {
-        TblType { paradigm: self.paradigm.clone(), params: self.params.clone() }
+        TblType {
+            paradigm: self.paradigm.clone(),
+            params: self.params.clone(),
+            ref_name: None,
+        }
     }
 }
 

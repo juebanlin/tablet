@@ -7,6 +7,8 @@ use super::{EmptyStrategy, LineEnding, to_camel_case, parse_base_value};
 fn value_to_json(raw: &str, tbl_type: &TblType) -> Value {
     match tbl_type.paradigm {
         Paradigm::Base => parse_base_value(raw, &tbl_type.params[0]),
+        // 引用类型：数据层永远是 int(id)
+        Paradigm::Ref => parse_base_value(raw, &BaseType::Int),
         _ => Value::from(raw),
     }
 }

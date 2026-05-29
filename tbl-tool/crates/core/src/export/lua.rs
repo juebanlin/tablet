@@ -198,6 +198,9 @@ fn value_to_lua(raw: &str, tbl_type_str: &str, sep: &SeparatorsSection) -> Strin
             }).collect();
             format!("{{{}}}", entries.join(", "))
         }
+
+        // 引用类型：lua 始终输出 id（数字字面量）
+        Paradigm::Ref => base_to_lua(raw, BaseType::Int),
     }
 }
 

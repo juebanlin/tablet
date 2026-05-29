@@ -62,6 +62,8 @@ fn t_go_decl(t: &TblType) -> String {
         Paradigm::MapTuple3 => format!("map[{}]Tuple3[{},{},{}]", p[0].go_type(), p[1].go_type(), p[2].go_type(), p[3].go_type()),
         Paradigm::MapTuple4 => format!("map[{}]Tuple4[{},{},{},{}]", p[0].go_type(), p[1].go_type(), p[2].go_type(), p[3].go_type(), p[4].go_type()),
         Paradigm::MapList => format!("map[{}][]{}", p[0].go_type(), p[1].go_type()),
+        // 引用类型默认按 table ref 处理，存储 id；enum ref 由调用方根据被引用项 mode 改写
+        Paradigm::Ref => "int32".to_string(),
     }
 }
 
@@ -184,6 +186,9 @@ fn parse_expr(raw_var: &str, t: &TblType, sep_var: &str) -> String {
                 raw=raw_var, sep=sep_var, fk=base_parse_fn(p[0])
             ),
         },
+
+        // 引用类型默认按 table ref 处理 → int32(id)；enum ref 由调用方在生成时改写
+        Paradigm::Ref => format!("parseInt32({})", raw_var),
     }
 }
 

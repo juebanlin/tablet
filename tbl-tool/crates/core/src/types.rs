@@ -165,6 +165,8 @@ pub enum Paradigm {
     MapTuple3,
     MapTuple4,
     MapList,
+    /// 引用类型 @TableName / @EnumName，独立一档不进嵌套，存储为 int(id)
+    Ref,
 }
 
 impl Paradigm {
@@ -172,7 +174,8 @@ impl Paradigm {
         use Paradigm::*;
         &[Base, Tuple2, Tuple3, Tuple4, List, Set, Map,
           ListTuple2, ListTuple3, ListTuple4,
-          MapTuple2, MapTuple3, MapTuple4, MapList]
+          MapTuple2, MapTuple3, MapTuple4, MapList,
+          Ref]
     }
 
     pub fn label(&self) -> &'static str {
@@ -191,6 +194,7 @@ impl Paradigm {
             Paradigm::MapTuple3 => "Map<_,Tuple3<_,_,_>>",
             Paradigm::MapTuple4 => "Map<_,Tuple4<_,_,_,_>>",
             Paradigm::MapList => "Map<_,List<_>>",
+            Paradigm::Ref => "引用 @Xxx",
         }
     }
 
@@ -209,6 +213,7 @@ impl Paradigm {
             Paradigm::MapTuple3 => vec![ParamSlot::new("K", true), ParamSlot::new("P1", false), ParamSlot::new("P2", false), ParamSlot::new("P3", false)],
             Paradigm::MapTuple4 => vec![ParamSlot::new("K", true), ParamSlot::new("P1", false), ParamSlot::new("P2", false), ParamSlot::new("P3", false), ParamSlot::new("P4", false)],
             Paradigm::MapList => vec![ParamSlot::new("K", true), ParamSlot::new("元素", false)],
+            Paradigm::Ref => vec![],
         }
     }
 }
@@ -231,45 +236,63 @@ impl ParamSlot {
 pub struct TblType {
     pub paradigm: Paradigm,
     pub params: Vec<BaseType>,
+    /// 仅 Paradigm::Ref 使用，存储被引用的配置项名称（@HeroBase / @HeroType 中的 HeroBase / HeroType）
+    pub ref_name: Option<String>,
 }
 
 impl TblType {
+    /// 构造引用类型
+    pub fn new_ref(name: impl Into<String>) -> Self {
+        TblType { paradigm: Paradigm::Ref, params: Vec::new(), ref_name: Some(name.into()) }
+    }
+
     pub fn parse(s: &str) -> Option<Self> {
         let s = s.trim();
+        // 引用类型：@Xxx
+        if let Some(name) = s.strip_prefix('@') {
+            let name = name.trim();
+            if name.is_empty() { return None; }
+            // 限定为 Java 类名风格（大写字母开头 + 字母数字下划线）
+            let mut chars = name.chars();
+            let first = chars.next().unwrap();
+            if !first.is_ascii_uppercase() { return None; }
+            if !chars.all(|c| c.is_ascii_alphanumeric() || c == '_') { return None; }
+            return Some(TblType::new_ref(name));
+        }
         if let Some(bt) = BaseType::from_str(s) {
-            return Some(TblType { paradigm: Paradigm::Base, params: vec![bt] });
+            return Some(TblType { paradigm: Paradigm::Base, params: vec![bt], ref_name: None });
         }
         if let Some(inner) = strip_wrapper(s, "Tuple2<", ">") {
             let params = parse_base_params(inner)?;
-            if params.len() == 2 { return Some(TblType { paradigm: Paradigm::Tuple2, params }); }
+            if params.len() == 2 { return Some(TblType { paradigm: Paradigm::Tuple2, params, ref_name: None }); }
         }
         if let Some(inner) = strip_wrapper(s, "Tuple3<", ">") {
             let params = parse_base_params(inner)?;
-            if params.len() == 3 { return Some(TblType { paradigm: Paradigm::Tuple3, params }); }
+            if params.len() == 3 { return Some(TblType { paradigm: Paradigm::Tuple3, params, ref_name: None }); }
         }
         if let Some(inner) = strip_wrapper(s, "Tuple4<", ">") {
             let params = parse_base_params(inner)?;
-            if params.len() == 4 { return Some(TblType { paradigm: Paradigm::Tuple4, params }); }
+            if params.len() == 4 { return Some(TblType { paradigm: Paradigm::Tuple4, params, ref_name: None }); }
         }
         if let Some(inner) = strip_wrapper(s, "Set<", ">") {
             let bt = BaseType::from_str(inner)?;
-            return Some(TblType { paradigm: Paradigm::Set, params: vec![bt] });
+            return Some(TblType { paradigm: Paradigm::Set, params: vec![bt], ref_name: None });
         }
         if let Some(inner) = strip_wrapper(s, "List<Tuple2<", ">>") {
             let params = parse_base_params(inner)?;
-            if params.len() == 2 { return Some(TblType { paradigm: Paradigm::ListTuple2, params }); }
+            if params.len() == 2 { return Some(TblType { paradigm: Paradigm::ListTuple2, params, ref_name: None }); }
         }
         if let Some(inner) = strip_wrapper(s, "List<Tuple3<", ">>") {
             let params = parse_base_params(inner)?;
-            if params.len() == 3 { return Some(TblType { paradigm: Paradigm::ListTuple3, params }); }
+            if params.len() == 3 { return Some(TblType { paradigm: Paradigm::ListTuple3, params, ref_name: None }); }
         }
         if let Some(inner) = strip_wrapper(s, "List<Tuple4<", ">>") {
             let params = parse_base_params(inner)?;
-            if params.len() == 4 { return Some(TblType { paradigm: Paradigm::ListTuple4, params }); }
+            if params.len() == 4 { return Some(TblType { paradigm: Paradigm::ListTuple4, params, ref_name: None }); }
         }
         if let Some(inner) = strip_wrapper(s, "List<", ">") {
             let bt = BaseType::from_str(inner)?;
-            return Some(TblType { paradigm: Paradigm::List, params: vec![bt] });
+            return Some(TblType { paradigm: Paradigm::List, params: vec![bt], ref_name: None });
         }
         if let Some(inner) = strip_wrapper(s, "Map<", ">") {
             let raw_parts = split_params(inner);
@@ -279,25 +302,25 @@ impl TblType {
                 if let Some(t_inner) = strip_wrapper(&val_str, "Tuple2<", ">") {
                     let mut params = vec![key];
                     params.extend(parse_base_params(t_inner)?);
-                    if params.len() == 3 { return Some(TblType { paradigm: Paradigm::MapTuple2, params }); }
+                    if params.len() == 3 { return Some(TblType { paradigm: Paradigm::MapTuple2, params, ref_name: None }); }
                 }
                 if let Some(t_inner) = strip_wrapper(&val_str, "Tuple3<", ">") {
                     let mut params = vec![key];
                     params.extend(parse_base_params(t_inner)?);
-                    if params.len() == 4 { return Some(TblType { paradigm: Paradigm::MapTuple3, params }); }
+                    if params.len() == 4 { return Some(TblType { paradigm: Paradigm::MapTuple3, params, ref_name: None }); }
                 }
                 if let Some(t_inner) = strip_wrapper(&val_str, "Tuple4<", ">") {
                     let mut params = vec![key];
                     params.extend(parse_base_params(t_inner)?);
-                    if params.len() == 5 { return Some(TblType { paradigm: Paradigm::MapTuple4, params }); }
+                    if params.len() == 5 { return Some(TblType { paradigm: Paradigm::MapTuple4, params, ref_name: None }); }
                 }
                 if let Some(l_inner) = strip_wrapper(&val_str, "List<", ">") {
                     let elem = BaseType::from_str(l_inner)?;
-                    return Some(TblType { paradigm: Paradigm::MapList, params: vec![key, elem] });
+                    return Some(TblType { paradigm: Paradigm::MapList, params: vec![key, elem], ref_name: None });
                 }
                 if raw_parts.len() == 2 {
                     let val = BaseType::from_str(&raw_parts[1])?;
-                    return Some(TblType { paradigm: Paradigm::Map, params: vec![key, val] });
+                    return Some(TblType { paradigm: Paradigm::Map, params: vec![key, val], ref_name: None });
                 }
             }
         }
@@ -321,6 +344,7 @@ impl TblType {
             Paradigm::MapTuple3 => format!("Map<{},Tuple3<{},{},{}>>", p[0], p[1], p[2], p[3]),
             Paradigm::MapTuple4 => format!("Map<{},Tuple4<{},{},{},{}>>", p[0], p[1], p[2], p[3], p[4]),
             Paradigm::MapList => format!("Map<{},List<{}>>", p[0], p[1]),
+            Paradigm::Ref => format!("@{}", self.ref_name.as_deref().unwrap_or("")),
         }
     }
 
@@ -341,6 +365,8 @@ impl TblType {
             Paradigm::MapTuple3 => format!("Map<{},Tuple3<{},{},{}>>", p[0].java_boxed(), p[1].java_boxed(), p[2].java_boxed(), p[3].java_boxed()),
             Paradigm::MapTuple4 => format!("Map<{},Tuple4<{},{},{},{}>>", p[0].java_boxed(), p[1].java_boxed(), p[2].java_boxed(), p[3].java_boxed(), p[4].java_boxed()),
             Paradigm::MapList => format!("Map<{},List<{}>>", p[0].java_boxed(), p[1].java_boxed()),
+            // 默认按 table ref 处理 → int；enum ref 由导出层根据被引用项 mode 改为 XxxEnum
+            Paradigm::Ref => "int".to_string(),
         }
     }
 
@@ -361,6 +387,7 @@ impl TblType {
             Paradigm::MapTuple3 => format!("map[{}][3]{}", p[0].go_type(), p[1].go_type()),
             Paradigm::MapTuple4 => format!("map[{}][4]{}", p[0].go_type(), p[1].go_type()),
             Paradigm::MapList => format!("map[{}][]{}", p[0].go_type(), p[1].go_type()),
+            Paradigm::Ref => "int32".to_string(),
         }
     }
 
@@ -375,6 +402,7 @@ impl TblType {
             Paradigm::ListTuple2 | Paradigm::ListTuple3 | Paradigm::ListTuple4 => "{{...}, {...}}".to_string(),
             Paradigm::MapTuple2 | Paradigm::MapTuple3 | Paradigm::MapTuple4 => "{k={...}, ...}".to_string(),
             Paradigm::MapList => format!("{{k={{{}, ...}}}}", p[1].lua_type()),
+            Paradigm::Ref => "number".to_string(),
         }
     }
 
@@ -426,6 +454,8 @@ impl TblType {
             Paradigm::MapList => format!("{}{}{}{}{}{}{}{}{}{}{}",
                 k(p[0], 0), sep.map_list.kv, v(p[1], 0), sep.map_list.item, v(p[1], 1), sep.map_list.item, v(p[1], 2), sep.map_list.entry,
                 k(p[0], 1), sep.map_list.kv, v(p[1], 0)),
+            // 引用类型示例值用 id 占位
+            Paradigm::Ref => "1001".to_string(),
         }
     }
 
@@ -449,6 +479,8 @@ impl TblType {
             Paradigm::MapTuple3 => validate_map_tuple(value, p[0], &p[1..4], &sep.map_tuple3.entry, &sep.map_tuple3.kv, &sep.map_tuple3.tuple),
             Paradigm::MapTuple4 => validate_map_tuple(value, p[0], &p[1..5], &sep.map_tuple4.entry, &sep.map_tuple4.kv, &sep.map_tuple4.tuple),
             Paradigm::MapList => validate_map_list(value, p[0], p[1], &sep.map_list.entry, &sep.map_list.kv, &sep.map_list.item),
+            // 引用值在数据层面永远是 int(id)；被引用对象是否存在/id 是否合法由 validate.rs 项目级别检查
+            Paradigm::Ref => validate_base(value, BaseType::Int),
         };
         err.map(|msg| format!("{}, 示例: {}", msg, self.example_with_sep(sep)))
     }
@@ -670,4 +702,47 @@ fn split_params(s: &str) -> Vec<String> {
 
 fn parse_base_params(s: &str) -> Option<Vec<BaseType>> {
     split_params(s).iter().map(|p| BaseType::from_str(p.trim())).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_ref_table_or_enum() {
+        let t = TblType::parse("@HeroBase").unwrap();
+        assert_eq!(t.paradigm, Paradigm::Ref);
+        assert_eq!(t.ref_name.as_deref(), Some("HeroBase"));
+        assert_eq!(t.to_type_string(), "@HeroBase");
+
+        let t = TblType::parse("@HeroType").unwrap();
+        assert_eq!(t.paradigm, Paradigm::Ref);
+        assert_eq!(t.ref_name.as_deref(), Some("HeroType"));
+    }
+
+    #[test]
+    fn ref_must_be_pascal_case() {
+        assert!(TblType::parse("@hero").is_none());          // 小写开头
+        assert!(TblType::parse("@_Hero").is_none());         // 下划线开头
+        assert!(TblType::parse("@1Hero").is_none());         // 数字开头
+        assert!(TblType::parse("@Hero-Base").is_none());     // 含非法字符
+        assert!(TblType::parse("@").is_none());              // 空名称
+    }
+
+    #[test]
+    fn ref_does_not_nest_in_collections() {
+        // 引用类型只能独立出现，不能进入泛型参数
+        assert!(TblType::parse("List<@HeroType>").is_none());
+        assert!(TblType::parse("Map<int,@Skill>").is_none());
+        assert!(TblType::parse("Tuple2<@Skill,int>").is_none());
+    }
+
+    #[test]
+    fn ref_value_validates_as_int() {
+        let sep = SeparatorsSection::default();
+        let t = TblType::parse("@HeroBase").unwrap();
+        assert!(t.validate_value("1001", &sep).is_none());
+        assert!(t.validate_value("", &sep).is_none()); // 空值合法（视为未引用）
+        assert!(t.validate_value("abc", &sep).is_some()); // 非整数非法
+    }
 }
