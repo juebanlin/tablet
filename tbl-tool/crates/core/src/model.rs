@@ -23,7 +23,7 @@ pub struct ExportConfig {
     pub json: Option<JsonExport>,
     pub xml: Option<XmlExport>,
     pub server: Option<ServerExport>,
-    pub client: Option<ClientExport>,
+    pub client: Option<ClientConfig>,
     pub encoding: Option<String>,
     pub line_ending: Option<String>,
 }
@@ -44,17 +44,38 @@ pub struct XmlExport {
 
 #[derive(Debug, Clone, serde::Deserialize)]
 pub struct ServerExport {
-    pub lang: Option<String>,
-    pub package: Option<String>,
     pub data_output: Option<String>,
+    pub java: Option<JavaExport>,
+    pub go: Option<GoExport>,
+    pub line_ending: Option<String>,
+    pub encoding: Option<String>,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct JavaExport {
+    pub package: Option<String>,
     pub code_output: Option<String>,
     pub line_ending: Option<String>,
     pub encoding: Option<String>,
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]
-pub struct ClientExport {
-    pub lang: Option<String>,
+pub struct GoExport {
+    pub package: Option<String>,
+    pub code_output: Option<String>,
+    pub line_ending: Option<String>,
+    pub encoding: Option<String>,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct ClientConfig {
+    pub lua: Option<LuaExport>,
+    pub line_ending: Option<String>,
+    pub encoding: Option<String>,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct LuaExport {
     pub output: Option<String>,
     pub line_ending: Option<String>,
     pub encoding: Option<String>,

@@ -127,7 +127,8 @@ fn main() -> Result<()> {
 
                 let pkg = engine.project.config.export.as_ref()
                     .and_then(|e| e.server.as_ref())
-                    .and_then(|s| s.package.as_deref())
+                    .and_then(|s| s.java.as_ref())
+                    .and_then(|j| j.package.as_deref())
                     .unwrap_or("com.game.config");
                 tbl_core::test_util::generate_test_main_from_schema(&cli.workdir, &parsed, pkg, &format);
             } else {
@@ -135,7 +136,8 @@ fn main() -> Result<()> {
 
                 let pkg = engine.project.config.export.as_ref()
                     .and_then(|e| e.server.as_ref())
-                    .and_then(|s| s.package.as_deref())
+                    .and_then(|s| s.java.as_ref())
+                    .and_then(|j| j.package.as_deref())
                     .unwrap_or("com.game.config");
                 tbl_core::test_util::generate_test_main(&cli.workdir, &opts, pkg, &format);
             }
@@ -176,28 +178,43 @@ fn apply_overrides(engine: &mut ProjectEngine, overrides: &[String]) {
                 engine.project.config.export.as_mut().unwrap().xml.as_mut().unwrap().empty_as = Some(value.to_string());
             }
             "export.server.lang" => {
-                ensure_export_server(&mut engine.project.config);
-                engine.project.config.export.as_mut().unwrap().server.as_mut().unwrap().lang = Some(value.to_string());
+                eprintln!("警告: 'export.server.lang' 已废弃，使用 export.server.java / export.server.go 子节点");
             }
             "export.server.package" => {
-                ensure_export_server(&mut engine.project.config);
-                engine.project.config.export.as_mut().unwrap().server.as_mut().unwrap().package = Some(value.to_string());
+                ensure_export_server_java(&mut engine.project.config);
+                engine.project.config.export.as_mut().unwrap().server.as_mut().unwrap().java.as_mut().unwrap().package = Some(value.to_string());
             }
             "export.server.data_output" => {
                 ensure_export_server(&mut engine.project.config);
                 engine.project.config.export.as_mut().unwrap().server.as_mut().unwrap().data_output = Some(value.to_string());
             }
-            "export.server.code_output" => {
-                ensure_export_server(&mut engine.project.config);
-                engine.project.config.export.as_mut().unwrap().server.as_mut().unwrap().code_output = Some(value.to_string());
+            "export.server.java.package" => {
+                ensure_export_server_java(&mut engine.project.config);
+                engine.project.config.export.as_mut().unwrap().server.as_mut().unwrap().java.as_mut().unwrap().package = Some(value.to_string());
             }
-            "export.client.lang" => {
-                ensure_export_client(&mut engine.project.config);
-                engine.project.config.export.as_mut().unwrap().client.as_mut().unwrap().lang = Some(value.to_string());
+            "export.server.java.code_output" => {
+                ensure_export_server_java(&mut engine.project.config);
+                engine.project.config.export.as_mut().unwrap().server.as_mut().unwrap().java.as_mut().unwrap().code_output = Some(value.to_string());
+            }
+            "export.server.go.package" => {
+                ensure_export_server_go(&mut engine.project.config);
+                engine.project.config.export.as_mut().unwrap().server.as_mut().unwrap().go.as_mut().unwrap().package = Some(value.to_string());
+            }
+            "export.server.go.code_output" => {
+                ensure_export_server_go(&mut engine.project.config);
+                engine.project.config.export.as_mut().unwrap().server.as_mut().unwrap().go.as_mut().unwrap().code_output = Some(value.to_string());
+            }
+            "export.server.code_output" => {
+                ensure_export_server_java(&mut engine.project.config);
+                engine.project.config.export.as_mut().unwrap().server.as_mut().unwrap().java.as_mut().unwrap().code_output = Some(value.to_string());
+            }
+            "export.client.lua.output" => {
+                ensure_export_client_lua(&mut engine.project.config);
+                engine.project.config.export.as_mut().unwrap().client.as_mut().unwrap().lua.as_mut().unwrap().output = Some(value.to_string());
             }
             "export.client.output" => {
-                ensure_export_client(&mut engine.project.config);
-                engine.project.config.export.as_mut().unwrap().client.as_mut().unwrap().output = Some(value.to_string());
+                ensure_export_client_lua(&mut engine.project.config);
+                engine.project.config.export.as_mut().unwrap().client.as_mut().unwrap().lua.as_mut().unwrap().output = Some(value.to_string());
             }
             _ => eprintln!("警告: 未知配置项 '{}'", key),
         }
@@ -230,7 +247,25 @@ fn ensure_export_server(config: &mut tbl_core::model::ProjectConfig) {
     ensure_export(config);
     if config.export.as_ref().unwrap().server.is_none() {
         config.export.as_mut().unwrap().server = Some(tbl_core::model::ServerExport {
-            lang: None, package: None, data_output: None, code_output: None, line_ending: None, encoding: None,
+            data_output: None, java: None, go: None, line_ending: None, encoding: None,
+        });
+    }
+}
+
+fn ensure_export_server_java(config: &mut tbl_core::model::ProjectConfig) {
+    ensure_export_server(config);
+    if config.export.as_ref().unwrap().server.as_ref().unwrap().java.is_none() {
+        config.export.as_mut().unwrap().server.as_mut().unwrap().java = Some(tbl_core::model::JavaExport {
+            package: None, code_output: None, line_ending: None, encoding: None,
+        });
+    }
+}
+
+fn ensure_export_server_go(config: &mut tbl_core::model::ProjectConfig) {
+    ensure_export_server(config);
+    if config.export.as_ref().unwrap().server.as_ref().unwrap().go.is_none() {
+        config.export.as_mut().unwrap().server.as_mut().unwrap().go = Some(tbl_core::model::GoExport {
+            package: None, code_output: None, line_ending: None, encoding: None,
         });
     }
 }
@@ -238,7 +273,18 @@ fn ensure_export_server(config: &mut tbl_core::model::ProjectConfig) {
 fn ensure_export_client(config: &mut tbl_core::model::ProjectConfig) {
     ensure_export(config);
     if config.export.as_ref().unwrap().client.is_none() {
-        config.export.as_mut().unwrap().client = Some(tbl_core::model::ClientExport { lang: None, output: None, line_ending: None, encoding: None });
+        config.export.as_mut().unwrap().client = Some(tbl_core::model::ClientConfig {
+            lua: None, line_ending: None, encoding: None,
+        });
+    }
+}
+
+fn ensure_export_client_lua(config: &mut tbl_core::model::ProjectConfig) {
+    ensure_export_client(config);
+    if config.export.as_ref().unwrap().client.as_ref().unwrap().lua.is_none() {
+        config.export.as_mut().unwrap().client.as_mut().unwrap().lua = Some(tbl_core::model::LuaExport {
+            output: None, line_ending: None, encoding: None,
+        });
     }
 }
 

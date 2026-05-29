@@ -253,18 +253,21 @@ pub fn export_constant_lua(constant: &Constant, sep: &SeparatorsSection) -> Stri
 
 pub fn export_all_lua(project: &Project) -> Result<super::ExportResult> {
     let export_cfg = project.config.export.as_ref();
+    let client = export_cfg.and_then(|e| e.client.as_ref());
+    let lua = client.and_then(|c| c.lua.as_ref());
 
-    let output = export_cfg
-        .and_then(|e| e.client.as_ref())
-        .and_then(|c| c.output.as_deref())
+    let output = lua
+        .and_then(|l| l.output.as_deref())
         .unwrap_or("gen/client");
 
     let line_ending = LineEnding::from_config(
-        export_cfg.and_then(|e| e.client.as_ref()).and_then(|c| c.line_ending.as_deref())
+        lua.and_then(|l| l.line_ending.as_deref())
+            .or_else(|| client.and_then(|c| c.line_ending.as_deref()))
             .or_else(|| export_cfg.and_then(|e| e.line_ending.as_deref()))
             .unwrap_or("lf")
     );
-    let encoding = export_cfg.and_then(|e| e.client.as_ref()).and_then(|c| c.encoding.as_deref())
+    let encoding = lua.and_then(|l| l.encoding.as_deref())
+        .or_else(|| client.and_then(|c| c.encoding.as_deref()))
         .or_else(|| export_cfg.and_then(|e| e.encoding.as_deref()))
         .unwrap_or("utf-8").to_string();
     let opts = super::ExportOptions { line_ending, encoding };

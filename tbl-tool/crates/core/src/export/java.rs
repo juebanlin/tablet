@@ -127,20 +127,23 @@ fn gen_constant_tpl(constant: &Constant, pkg: &str, group: &str) -> String {
 pub fn export_all_java(project: &Project) -> Result<super::ExportResult> {
     let export_cfg = project.config.export.as_ref();
     let server = export_cfg.and_then(|e| e.server.as_ref());
+    let java = server.and_then(|s| s.java.as_ref());
 
-    let code_output = server
-        .and_then(|s| s.code_output.as_deref())
-        .unwrap_or("gen/server/code");
-    let pkg = server
-        .and_then(|s| s.package.as_deref())
+    let code_output = java
+        .and_then(|j| j.code_output.as_deref())
+        .unwrap_or("gen/server/java");
+    let pkg = java
+        .and_then(|j| j.package.as_deref())
         .unwrap_or("com.game.config");
 
     let line_ending = LineEnding::from_config(
-        server.and_then(|s| s.line_ending.as_deref())
+        java.and_then(|j| j.line_ending.as_deref())
+            .or_else(|| server.and_then(|s| s.line_ending.as_deref()))
             .or_else(|| export_cfg.and_then(|e| e.line_ending.as_deref()))
             .unwrap_or("lf")
     );
-    let encoding = server.and_then(|s| s.encoding.as_deref())
+    let encoding = java.and_then(|j| j.encoding.as_deref())
+        .or_else(|| server.and_then(|s| s.encoding.as_deref()))
         .or_else(|| export_cfg.and_then(|e| e.encoding.as_deref()))
         .unwrap_or("utf-8").to_string();
     let opts = super::ExportOptions { line_ending, encoding };

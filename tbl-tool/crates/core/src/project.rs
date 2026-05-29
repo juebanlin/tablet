@@ -24,18 +24,16 @@ line_ending = "lf"
 empty_as = "null"
 
 [export.server]
-# 后端语言
-lang = "java"
-# Java 包名
-package = "com.game.config"
 # 后端数据文件输出目录
 data_output = "gen/server/data"
-# 后端模板类输出目录
-code_output = "gen/server/code"
 
-[export.client]
-# 前端语言
-lang = "lua"
+[export.server.java]
+# Java 包名
+package = "com.game.config"
+# Java 模板类输出目录
+code_output = "gen/server/java"
+
+[export.client.lua]
 # 前端文件输出目录
 output = "gen/client"
 
