@@ -47,7 +47,7 @@ pub fn render_grid(ui: &mut egui::Ui, app: &mut TblApp, group: &str, name: &str,
             if matches!(app.edit_state.selected, Selection::Col(c) if c == col) {
                 h_painter.rect_filled(egui::Rect::from_min_size(egui::pos2(x, y), egui::vec2(COL_W, ROW_H)), 0.0, SEL_BG);
             }
-            draw_center(&h_painter, x, y, COL_W, &cell.text, 11.0, cell.color);
+            draw_center(&h_painter, x, y, COL_W, &display_for_header(&cell.kind, &cell.text), 11.0, cell.color);
             if cell.kind.show_dropdown_arrow() {
                 draw_dropdown_arrow(&h_painter, x + COL_W - 14.0, y + ROW_H / 2.0);
             }
@@ -411,8 +411,7 @@ fn commit_current_edit(app: &mut TblApp, group: &str, name: &str, grid: &GridDat
 
 pub fn copy_selected_text(app: &TblApp, grid: &GridData) -> String {
     let cell = |r: usize, c: usize| -> String {
-        let raw = grid.data.get(r).and_then(|row| row.get(c)).cloned().unwrap_or_default();
-        copy_form(grid, c, &raw)
+        grid.data.get(r).and_then(|row| row.get(c)).cloned().unwrap_or_default()
     };
     match &app.edit_state.selected {
         Selection::Cell(r, c) => cell(*r, *c),
@@ -432,40 +431,46 @@ pub fn copy_selected_text(app: &TblApp, grid: &GridData) -> String {
     }
 }
 
-/// 把单元格展示值转换为剪贴板/数据形式：
-/// - Export 列：展示「前后端/客户端/服务器/不导出」→ 短码 cs/c/s/-
-/// - 其它列：原样
-fn copy_form(grid: &GridData, col: usize, raw: &str) -> String {
+/// 把存储值转换为单元格展示值。规则参见 grid_model.rs 顶部说明：
+/// - Export 列：cs/c/s/- → 前后端/客户端/服务器/不导出
+/// - @EnumName 引用列 + 功能区开关：id → entry.name（未匹配/表引用/空值原样）
+/// - 其它：原样
+fn display_for_cell(app: &TblApp, grid: &GridData, col: usize, raw: &str) -> String {
     use crate::ui::grid_model::CellKind;
     if raw.is_empty() { return String::new(); }
     let kind = grid.col_defs.get(col).map(|c| &c.kind);
     match kind {
         Some(CellKind::ExportEnum) | Some(CellKind::ExportEnumCol) => {
-            tbl_core::model::Export::from_str(raw).code().to_string()
+            tbl_core::model::Export::from_str(raw).display().to_string()
+        }
+        Some(CellKind::Ref { name }) if app.view_show_enum_name => {
+            for g in &app.engine.project.groups {
+                for e in &g.enums {
+                    if e.deleted || e.name != *name { continue; }
+                    if let Some(entry) = e.entries.iter().find(|en| en.id == raw && !en.name.is_empty()) {
+                        return entry.name.clone();
+                    }
+                    return raw.to_string();
+                }
+            }
+            raw.to_string()
         }
         _ => raw.to_string(),
     }
 }
 
-/// 单元格的展示值：
-/// - 功能区「枚举显示名字」开启 + 列为 @EnumName 引用 + 值能在 enum 中找到 → 显示该 entry 的 name
-/// - 否则原样显示（含表引用、未匹配 id 等）
-fn display_for_cell(app: &TblApp, grid: &GridData, col: usize, raw: &str) -> String {
+/// 把存储值转换为表头单元格展示值（不依赖 app/groups）：
+/// - ExportEnum 列：cs/c/s/- → 前后端/客户端/服务器/不导出
+/// - 其它：原样
+fn display_for_header(kind: &crate::ui::grid_model::CellKind, raw: &str) -> String {
     use crate::ui::grid_model::CellKind;
-    if raw.is_empty() || !app.view_show_enum_name { return raw.to_string(); }
-    let Some(CellKind::Ref { name }) = grid.col_defs.get(col).map(|c| &c.kind) else {
-        return raw.to_string();
-    };
-    for g in &app.engine.project.groups {
-        for e in &g.enums {
-            if e.deleted || e.name != *name { continue; }
-            if let Some(entry) = e.entries.iter().find(|en| en.id == raw && !en.name.is_empty()) {
-                return entry.name.clone();
-            }
-            return raw.to_string();
+    if raw.is_empty() { return String::new(); }
+    match kind {
+        CellKind::ExportEnum | CellKind::ExportEnumCol => {
+            tbl_core::model::Export::from_str(raw).display().to_string()
         }
+        _ => raw.to_string(),
     }
-    raw.to_string()
 }
 
 fn is_selected(sel: &Selection, row: usize, col: usize) -> bool {

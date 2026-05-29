@@ -40,10 +40,11 @@ fn render_export_dropdown(ui: &mut egui::Ui, app: &mut TblApp, pos: egui::Pos2) 
             ui.set_min_width(COL_W);
             egui::Frame::popup(ui.style()).show(ui, |ui| {
                 for opt in Export::options() {
+                    let code = opt.code();
                     let label = opt.display();
                     ui.set_min_width(COL_W - 8.0);
-                    if ui.selectable_label(app.edit_state.edit_buffer == label, label).clicked() {
-                        app.edit_state.edit_buffer = label.to_string();
+                    if ui.selectable_label(app.edit_state.edit_buffer == code, label).clicked() {
+                        app.edit_state.edit_buffer = code.to_string();
                         app.edit_state.commit_pending = true;
                     }
                 }

@@ -1,5 +1,12 @@
 use eframe::egui;
 
+/// 单元格存储/展示的统一约定：
+/// - `grid.data[r][c]` 与 `header_rows[hrow][col].text` **始终存「真实存储值」**
+///   （即写入 .tbl 的形式：cs/c/s/- 短码、@Xxx id、原始字符串等）
+/// - 渲染层通过 [`display_for`] 把存储值转换为 UI 展示值
+/// - 复制/编辑缓冲/公式栏一律读写存储值，剪贴板里的内容可直接粘贴回去 round-trip
+///
+/// 这条规则避免「看到 '前后端'，复制到的也是 '前后端'」这种割裂。
 #[derive(Clone, Debug, PartialEq)]
 pub enum CellKind {
     ReadOnly,

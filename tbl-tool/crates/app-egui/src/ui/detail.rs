@@ -113,7 +113,7 @@ fn build_table_grid(app: &TblApp, group: &str, name: &str) -> Option<GridData> {
         text: f.desc.clone(), kind: CellKind::Text, color: egui::Color32::BLACK,
     }).collect();
     let export_row: Vec<HeaderCell> = fields.iter().map(|f| HeaderCell {
-        text: f.export.display().to_string(), kind: CellKind::ExportEnum, color: egui::Color32::from_rgb(80, 160, 80),
+        text: f.export.code().to_string(), kind: CellKind::ExportEnum, color: egui::Color32::from_rgb(80, 160, 80),
     }).collect();
     let type_row: Vec<HeaderCell> = fields.iter().map(|f| HeaderCell {
         text: f.tbl_type.clone(), kind: CellKind::TypeEnum, color: egui::Color32::from_rgb(80, 130, 210),
@@ -165,7 +165,7 @@ fn build_constant_grid(app: &TblApp, group: &str, name: &str) -> Option<GridData
     ];
 
     let data: Vec<Vec<String>> = constant.entries.iter().map(|e| {
-        vec![e.name.clone(), e.tbl_type.clone(), e.value.clone(), e.export.display().to_string(), e.desc.clone()]
+        vec![e.name.clone(), e.tbl_type.clone(), e.value.clone(), e.export.code().to_string(), e.desc.clone()]
     }).collect();
 
     let valid_count = data.iter().filter(|r| !r[0].is_empty()).count();
