@@ -2,6 +2,15 @@
 name = "tbl-slint"
 version = "0.1.0"
 edition = "2021"
+build = "build.rs"
 
 [dependencies]
 tbl-core = { path = "../core" }
+slint = "1.16.1"
+log = "0.4"
+simplelog = "0.12"
+chrono = "0.4"
+anyhow = "1"
+
+[build-dependencies]
+slint-build = "1.16.1"
