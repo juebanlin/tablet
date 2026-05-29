@@ -240,6 +240,16 @@ impl Export {
         }
     }
 
+    /// 短码形式（schema/剪贴板用）：cs / c / s / -
+    pub fn code(&self) -> &str {
+        match self {
+            Self::ClientServer | Self::Unselected => "cs",
+            Self::ClientOnly => "c",
+            Self::ServerOnly => "s",
+            Self::None => "-",
+        }
+    }
+
     pub fn options() -> &'static [Export] {
         &[Export::ClientServer, Export::ClientOnly, Export::ServerOnly, Export::None]
     }

@@ -409,20 +409,40 @@ fn commit_current_edit(app: &mut TblApp, group: &str, name: &str, grid: &GridDat
 }
 
 pub fn copy_selected_text(app: &TblApp, grid: &GridData) -> String {
+    let cell = |r: usize, c: usize| -> String {
+        let raw = grid.data.get(r).and_then(|row| row.get(c)).cloned().unwrap_or_default();
+        copy_form(grid, c, &raw)
+    };
     match &app.edit_state.selected {
-        Selection::Cell(r, c) => grid.data.get(*r).and_then(|row| row.get(*c)).cloned().unwrap_or_default(),
+        Selection::Cell(r, c) => cell(*r, *c),
         Selection::CellRange { start, end } => {
             let (r0, r1) = (start.0.min(end.0), start.0.max(end.0));
             let (c0, c1) = (start.1.min(end.1), start.1.max(end.1));
             (r0..=r1).map(|r| {
-                (c0..=c1).map(|c| grid.data.get(r).and_then(|row| row.get(c)).cloned().unwrap_or_default())
-                    .collect::<Vec<_>>().join("\t")
+                (c0..=c1).map(|c| cell(r, c)).collect::<Vec<_>>().join("\t")
             }).collect::<Vec<_>>().join("\n")
         }
-        Selection::Row(r) => grid.data.get(*r).map(|row| row.join("\t")).unwrap_or_default(),
-        Selection::Rows(s, e) => (*s..=*e).map(|r| grid.data.get(r).map(|row| row.join("\t")).unwrap_or_default()).collect::<Vec<_>>().join("\n"),
-        Selection::Col(c) => grid.data.iter().map(|row| row.get(*c).cloned().unwrap_or_default()).collect::<Vec<_>>().join("\n"),
+        Selection::Row(r) => (0..grid.col_defs.len()).map(|c| cell(*r, c)).collect::<Vec<_>>().join("\t"),
+        Selection::Rows(s, e) => (*s..=*e).map(|r|
+            (0..grid.col_defs.len()).map(|c| cell(r, c)).collect::<Vec<_>>().join("\t")
+        ).collect::<Vec<_>>().join("\n"),
+        Selection::Col(c) => (0..grid.data.len()).map(|r| cell(r, *c)).collect::<Vec<_>>().join("\n"),
         Selection::None => String::new(),
+    }
+}
+
+/// 把单元格展示值转换为剪贴板/数据形式：
+/// - Export 列：展示「前后端/客户端/服务器/不导出」→ 短码 cs/c/s/-
+/// - 其它列：原样
+fn copy_form(grid: &GridData, col: usize, raw: &str) -> String {
+    use crate::ui::grid_model::CellKind;
+    if raw.is_empty() { return String::new(); }
+    let kind = grid.col_defs.get(col).map(|c| &c.kind);
+    match kind {
+        Some(CellKind::ExportEnum) | Some(CellKind::ExportEnumCol) => {
+            tbl_core::model::Export::from_str(raw).code().to_string()
+        }
+        _ => raw.to_string(),
     }
 }
 
