@@ -55,7 +55,7 @@ pub fn render_grid(ui: &mut egui::Ui, app: &mut TblApp, group: &str, name: &str,
                 h_painter.rect_filled(cell_rect, 0.0, SEL_BG);
             }
             let text_color = if is_readonly { READONLY_TEXT } else { cell.color };
-            draw_center(&h_painter, x, y, COL_W, &display_for_header(&cell.kind, &cell.text), 11.0, text_color);
+            draw_center(&h_painter, x, y, COL_W, &display_for_header(grid, hrow, &cell.kind, &cell.text), 11.0, text_color);
             if cell.kind.show_dropdown_arrow() {
                 draw_dropdown_arrow(&h_painter, x + COL_W - 14.0, y + ROW_H / 2.0);
             }
@@ -468,17 +468,17 @@ pub(crate) fn display_for_cell(app: &TblApp, grid: &GridData, col: usize, raw: &
 }
 
 /// 把存储值转换为表头单元格展示值（不依赖 app/groups）：
-/// - ExportEnum 列：cs/c/s/- → 前后端/客户端/服务器/不导出
+/// - Table 的 export 行（hrow=1）一律 cs/c/s/- → 前后端/客户端/服务器/不导出，
+///   即使 id 列 kind=ReadOnly 也走转换。展示与可编辑性是独立维度。
 /// - 其它：原样
-fn display_for_header(kind: &crate::ui::grid_model::CellKind, raw: &str) -> String {
+fn display_for_header(grid: &GridData, hrow: usize, kind: &crate::ui::grid_model::CellKind, raw: &str) -> String {
     use crate::ui::grid_model::CellKind;
     if raw.is_empty() { return String::new(); }
-    match kind {
-        CellKind::ExportEnum | CellKind::ExportEnumCol => {
-            tbl_core::model::Export::from_str(raw).display().to_string()
-        }
-        _ => raw.to_string(),
+    let is_export_row = matches!(grid.source, GridSource::Table) && hrow == 1;
+    if is_export_row || matches!(kind, CellKind::ExportEnum | CellKind::ExportEnumCol) {
+        return tbl_core::model::Export::from_str(raw).display().to_string();
     }
+    raw.to_string()
 }
 
 fn is_selected(sel: &Selection, row: usize, col: usize) -> bool {
