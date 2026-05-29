@@ -378,7 +378,7 @@ impl ProjectEngine {
                 t.schema.fields.insert(at, FieldDef {
                     name: format!("field{}", t.schema.fields.len()),
                     desc: "新字段".to_string(),
-                    tbl_type: "str".to_string(),
+                    tbl_type: "int".to_string(),
                     export: Export::ClientServer,
                 });
                 for record in &mut t.records {
