@@ -1,5 +1,90 @@
 use crate::model::*;
-use crate::types::{TblType, SeparatorsSection};
+use crate::types::{TblType, Paradigm, SeparatorsSection};
+
+/// 引用目标类型
+#[derive(Debug, Clone, PartialEq)]
+pub enum RefKind {
+    Table,
+    Enum,
+    Constant,
+}
+
+/// 项目级引用索引：name → (kind, 有效 id 集)
+#[derive(Debug, Default)]
+pub struct RefIndex {
+    /// name → (kind, set<id 字符串>)
+    map: std::collections::HashMap<String, (RefKind, std::collections::HashSet<String>)>,
+}
+
+impl RefIndex {
+    pub fn build(groups: &[Group]) -> Self {
+        let mut map: std::collections::HashMap<String, (RefKind, std::collections::HashSet<String>)>
+            = std::collections::HashMap::new();
+        for g in groups {
+            for t in &g.tables {
+                if t.deleted { continue; }
+                let idx = t.schema.fields.iter().position(|f| f.name == "id");
+                let mut ids = std::collections::HashSet::new();
+                if let Some(idx) = idx {
+                    for row in &t.records {
+                        let v = row.get(idx).map(|s| s.as_str()).unwrap_or("");
+                        if !v.is_empty() { ids.insert(v.to_string()); }
+                    }
+                }
+                map.insert(t.name.clone(), (RefKind::Table, ids));
+            }
+            for e in &g.enums {
+                if e.deleted { continue; }
+                let ids: std::collections::HashSet<String> = e.entries.iter()
+                    .filter(|en| !en.id.is_empty())
+                    .map(|en| en.id.clone())
+                    .collect();
+                map.insert(e.name.clone(), (RefKind::Enum, ids));
+            }
+            for c in &g.constants {
+                if c.deleted { continue; }
+                map.insert(c.name.clone(), (RefKind::Constant, std::collections::HashSet::new()));
+            }
+        }
+        Self { map }
+    }
+
+    pub fn lookup(&self, name: &str) -> Option<&RefKind> {
+        self.map.get(name).map(|(k, _)| k)
+    }
+
+    pub fn id_exists(&self, name: &str, id: &str) -> bool {
+        self.map.get(name).map(|(_, set)| set.contains(id)).unwrap_or(false)
+    }
+}
+
+/// 校验 @Xxx 字段类型本身（schema 层，不看具体值）
+pub fn validate_ref_type(type_str: &str, refs: &RefIndex) -> Option<String> {
+    let t = TblType::parse(type_str)?;
+    if t.paradigm != Paradigm::Ref { return None; }
+    let name = t.ref_name.as_deref()?;
+    match refs.lookup(name) {
+        None => Some(format!("引用的配置项 {} 不存在", name)),
+        Some(RefKind::Constant) => Some("不能引用 constant（无 id 概念）".to_string()),
+        _ => None,
+    }
+}
+
+/// 校验 @Xxx 字段的具体值是否能在被引用项中找到
+fn validate_ref_value(type_str: &str, value: &str, refs: &RefIndex) -> Option<String> {
+    if value.is_empty() { return None; }
+    let t = TblType::parse(type_str)?;
+    if t.paradigm != Paradigm::Ref { return None; }
+    let name = t.ref_name.as_deref()?;
+    match refs.lookup(name) {
+        None => Some(format!("引用的配置项 {} 不存在", name)),
+        Some(RefKind::Constant) => Some("不能引用 constant".to_string()),
+        Some(_) => {
+            if refs.id_exists(name, value) { None }
+            else { Some(format!("引用值 {} 不存在于 {}", value, name)) }
+        }
+    }
+}
 
 pub fn col_letter(idx: usize) -> String {
     let mut result = String::new();
@@ -13,6 +98,16 @@ pub fn col_letter(idx: usize) -> String {
 }
 
 pub fn validate_table_cell(table: &Table, row: usize, col: usize, sep: &SeparatorsSection) -> Option<String> {
+    validate_table_cell_with_refs(table, row, col, sep, None)
+}
+
+pub fn validate_table_cell_with_refs(
+    table: &Table,
+    row: usize,
+    col: usize,
+    sep: &SeparatorsSection,
+    refs: Option<&RefIndex>,
+) -> Option<String> {
     let fields = &table.schema.fields;
     if col >= fields.len() { return None; }
     let value = table.records.get(row).and_then(|r| r.get(col)).map(|s| s.as_str()).unwrap_or("");
@@ -26,18 +121,34 @@ pub fn validate_table_cell(table: &Table, row: usize, col: usize, sep: &Separato
 
     let type_str = &fields[col].tbl_type;
     if let Some(tbl_type) = TblType::parse(type_str) {
-        return tbl_type.validate_value(value, sep);
+        if let Some(msg) = tbl_type.validate_value(value, sep) {
+            return Some(msg);
+        }
+        if let Some(refs) = refs {
+            if let Some(msg) = validate_ref_value(type_str, value, refs) {
+                return Some(msg);
+            }
+        }
     }
     None
 }
 
 pub fn validate_table_row(table: &Table, row: usize, sep: &SeparatorsSection) -> Vec<(usize, String)> {
+    validate_table_row_with_refs(table, row, sep, None)
+}
+
+pub fn validate_table_row_with_refs(
+    table: &Table,
+    row: usize,
+    sep: &SeparatorsSection,
+    refs: Option<&RefIndex>,
+) -> Vec<(usize, String)> {
     let mut errors = Vec::new();
     let fields = &table.schema.fields;
     let record = match table.records.get(row) { Some(r) => r, None => return errors };
 
     for col in 0..fields.len() {
-        if let Some(msg) = validate_table_cell(table, row, col, sep) {
+        if let Some(msg) = validate_table_cell_with_refs(table, row, col, sep, refs) {
             errors.push((col, msg));
         }
     }
@@ -232,6 +343,14 @@ pub struct SchemaError {
 }
 
 pub fn validate_table_schema(table: &Table, sep: &SeparatorsSection) -> Vec<SchemaError> {
+    validate_table_schema_with_refs(table, sep, None)
+}
+
+pub fn validate_table_schema_with_refs(
+    table: &Table,
+    _sep: &SeparatorsSection,
+    refs: Option<&RefIndex>,
+) -> Vec<SchemaError> {
     let mut errors = Vec::new();
     let fields = &table.schema.fields;
 
@@ -263,6 +382,10 @@ pub fn validate_table_schema(table: &Table, sep: &SeparatorsSection) -> Vec<Sche
                 field: field.name.clone(),
                 message: format!("类型 \"{}\" 不合法", field.tbl_type),
             });
+        } else if let Some(refs) = refs {
+            if let Some(msg) = validate_ref_type(&field.tbl_type, refs) {
+                errors.push(SchemaError { field: field.name.clone(), message: msg });
+            }
         }
     }
 
@@ -284,7 +407,7 @@ pub fn validate_table_schema(table: &Table, sep: &SeparatorsSection) -> Vec<Sche
     errors
 }
 
-pub fn validate_constant_schema(constant: &Constant, sep: &SeparatorsSection) -> Vec<SchemaError> {
+pub fn validate_constant_schema(constant: &Constant, _sep: &SeparatorsSection) -> Vec<SchemaError> {
     let mut errors = Vec::new();
 
     let mut seen_names = std::collections::HashSet::new();
@@ -300,11 +423,16 @@ pub fn validate_constant_schema(constant: &Constant, sep: &SeparatorsSection) ->
                 message: format!("常量名 \"{}\" 重复", entry.name),
             });
         }
-        if TblType::parse(&entry.tbl_type).is_none() {
-            errors.push(SchemaError {
+        match TblType::parse(&entry.tbl_type) {
+            None => errors.push(SchemaError {
                 field: entry.name.clone(),
                 message: format!("类型 \"{}\" 不合法", entry.tbl_type),
-            });
+            }),
+            Some(t) if t.paradigm == Paradigm::Ref => errors.push(SchemaError {
+                field: entry.name.clone(),
+                message: "constant 不允许使用 @Xxx 引用类型".to_string(),
+            }),
+            _ => {}
         }
     }
 

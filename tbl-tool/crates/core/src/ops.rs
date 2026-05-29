@@ -499,13 +499,18 @@ impl ProjectEngine {
     pub fn validate(&self) -> Vec<String> {
         let mut errors = Vec::new();
         let sep = &self.project.config.separators;
+        let refs = RefIndex::build(&self.project.groups);
         for group in &self.project.groups {
             for table in &group.tables {
                 if table.deleted { continue; }
+                for sch_err in validate_table_schema_with_refs(table, sep, Some(&refs)) {
+                    errors.push(format!("[验证] {}/{} 表头: {} {}",
+                        group.name, table.name, sch_err.field, sch_err.message));
+                }
                 let index_col = table.schema.fields.iter().position(|f| f.name == "id");
                 let mut seen_ids = std::collections::HashSet::new();
                 for row in 0..table.records.len() {
-                    for (col, msg) in validate_table_row(table, row, sep) {
+                    for (col, msg) in validate_table_row_with_refs(table, row, sep, Some(&refs)) {
                         let val = table.records[row].get(col).map(|s| s.as_str()).unwrap_or("");
                         let pos = format!("{}{}", col_letter(col), row + 1);
                         errors.push(format!("[验证] {}/{} {}: \"{}\" {}", group.name, table.name, pos, val, msg));
@@ -521,6 +526,10 @@ impl ProjectEngine {
             }
             for constant in &group.constants {
                 if constant.deleted { continue; }
+                for sch_err in validate_constant_schema(constant, sep) {
+                    errors.push(format!("[验证] {}/{} 表头: {} {}",
+                        group.name, constant.name, sch_err.field, sch_err.message));
+                }
                 let mut seen_names = std::collections::HashSet::new();
                 for row in 0..constant.entries.len() {
                     for (col, msg) in validate_constant_row(constant, row, sep) {
@@ -564,12 +573,13 @@ impl ProjectEngine {
     pub fn revalidate(&mut self, group: &str, name: &str) {
         self.validation_errors.retain(|(g, n, _, _)| g != group || n != name);
         let sep = self.project.config.separators.clone();
+        let refs = RefIndex::build(&self.project.groups);
         if let Some(g) = self.project.groups.iter().find(|g| g.name == group) {
             if let Some(table) = g.tables.iter().find(|t| t.name == name) {
                 let mut seen_ids = std::collections::HashSet::new();
                 let index_col = table.schema.fields.iter().position(|f| f.name == "id");
                 for row in 0..table.records.len() {
-                    for (col, _msg) in validate_table_row(table, row, &sep) {
+                    for (col, _msg) in validate_table_row_with_refs(table, row, &sep, Some(&refs)) {
                         self.validation_errors.insert((group.to_string(), name.to_string(), row, col));
                     }
                     if let Some(idx) = index_col {
