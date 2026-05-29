@@ -4,6 +4,7 @@
 id     | int       | cs | 英雄ID
 name   | str       | cs | 名称
 hp     | int       | s  | 血量
+type   | @HeroType | cs | 类型
 skills | List<int> | cs | 技能组
 
 [hero/HeroType] enum

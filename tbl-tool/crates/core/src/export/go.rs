@@ -1,4 +1,5 @@
 use std::fmt::Write;
+use std::collections::HashSet;
 use anyhow::Result;
 use crate::model::*;
 use crate::types::*;
@@ -37,9 +38,19 @@ fn data_key(name: &str) -> String {
     to_camel_case(name)
 }
 
-fn go_type_for(tbl_type_str: &str) -> String {
+fn go_type_for(tbl_type_str: &str, enum_names: &HashSet<String>) -> String {
     match TblType::parse(tbl_type_str) {
-        Some(t) => t_go_decl(&t),
+        Some(t) => {
+            if t.paradigm == Paradigm::Ref {
+                if let Some(name) = &t.ref_name {
+                    if enum_names.contains(name) {
+                        return format!("{}Enum", name);
+                    }
+                }
+                return "int32".to_string();
+            }
+            t_go_decl(&t)
+        }
         None => "string".to_string(),
     }
 }
@@ -192,6 +203,18 @@ fn parse_expr(raw_var: &str, t: &TblType, sep_var: &str) -> String {
     }
 }
 
+fn parse_expr_for(raw_var: &str, t: &TblType, sep_var: &str, enum_names: &HashSet<String>) -> String {
+    if t.paradigm == Paradigm::Ref {
+        if let Some(name) = &t.ref_name {
+            if enum_names.contains(name) {
+                return format!("{}Enum(parseInt32({}))", name, raw_var);
+            }
+        }
+        return format!("parseInt32({})", raw_var);
+    }
+    parse_expr(raw_var, t, sep_var)
+}
+
 // PLACEHOLDER_GO_GEN_TPL
 
 pub fn export_all_go(project: &Project) -> Result<super::ExportResult> {
@@ -233,17 +256,23 @@ pub fn export_all_go(project: &Project) -> Result<super::ExportResult> {
     collect(&output_dir, "sep.go", &render(TPL_SEP));
     collect(&output_dir, "tuples.go", &render(TPL_TUPLES));
 
+    let enum_names: HashSet<String> = project.groups.iter()
+        .flat_map(|g| g.enums.iter())
+        .filter(|e| !e.deleted)
+        .map(|e| e.name.clone())
+        .collect();
+
     for group in &project.groups {
         for table in &group.tables {
             if table.deleted { continue; }
-            let content = gen_table_tpl(table, pkg, &group.name);
+            let content = gen_table_tpl(table, pkg, &group.name, &enum_names);
             let filename = format!("{}_tpl.go", to_snake_case(&table.name));
             collect(&output_dir, &filename, &content);
         }
 
         for constant in &group.constants {
             if constant.deleted { continue; }
-            let content = gen_constant_tpl(constant, pkg, &group.name);
+            let content = gen_constant_tpl(constant, pkg, &group.name, &enum_names);
             let filename = format!("{}_tpl.go", to_snake_case(&constant.name));
             collect(&output_dir, &filename, &content);
         }
@@ -265,7 +294,7 @@ const GEN_PARSE_STR: &str = r#"package {{PACKAGE}}
 func parseStr(raw string) string { return raw }
 "#;
 
-fn gen_table_tpl(table: &Table, pkg: &str, _group: &str) -> String {
+fn gen_table_tpl(table: &Table, pkg: &str, _group: &str, enum_names: &HashSet<String>) -> String {
     let mut s = String::new();
     let cls = format!("{}Tpl", table.name);
     let key = table.name.clone();
@@ -280,7 +309,7 @@ fn gen_table_tpl(table: &Table, pkg: &str, _group: &str) -> String {
     // struct
     writeln!(s, "type {} struct {{", cls).unwrap();
     for f in &fields {
-        writeln!(s, "\t{} {} // {}", go_field_name(&f.name), go_type_for(&f.tbl_type), f.tbl_type).unwrap();
+        writeln!(s, "\t{} {} // {}", go_field_name(&f.name), go_type_for(&f.tbl_type, enum_names), f.tbl_type).unwrap();
     }
     writeln!(s, "}}").unwrap();
     writeln!(s).unwrap();
@@ -298,7 +327,7 @@ fn gen_table_tpl(table: &Table, pkg: &str, _group: &str) -> String {
         match TblType::parse(&f.tbl_type) {
             Some(t) => {
                 writeln!(s, "\tif raw, ok := row[\"{}\"]; ok && raw != \"\" {{", key_name).unwrap();
-                writeln!(s, "\t\tobj.{} = {}", go_field, parse_expr("raw", &t, "sep")).unwrap();
+                writeln!(s, "\t\tobj.{} = {}", go_field, parse_expr_for("raw", &t, "sep", enum_names)).unwrap();
                 writeln!(s, "\t}}").unwrap();
             }
             None => {
@@ -331,7 +360,7 @@ fn gen_table_tpl(table: &Table, pkg: &str, _group: &str) -> String {
     s
 }
 
-fn gen_constant_tpl(constant: &Constant, pkg: &str, _group: &str) -> String {
+fn gen_constant_tpl(constant: &Constant, pkg: &str, _group: &str, enum_names: &HashSet<String>) -> String {
     let mut s = String::new();
     let cls = format!("{}Tpl", constant.name);
     let key = constant.name.clone();
@@ -346,7 +375,7 @@ fn gen_constant_tpl(constant: &Constant, pkg: &str, _group: &str) -> String {
     // struct
     writeln!(s, "type {} struct {{", cls).unwrap();
     for e in &entries {
-        writeln!(s, "\t{} {} // {}", go_field_name(&e.name), go_type_for(&e.tbl_type), e.tbl_type).unwrap();
+        writeln!(s, "\t{} {} // {}", go_field_name(&e.name), go_type_for(&e.tbl_type, enum_names), e.tbl_type).unwrap();
     }
     writeln!(s, "}}").unwrap();
     writeln!(s).unwrap();
@@ -364,7 +393,7 @@ fn gen_constant_tpl(constant: &Constant, pkg: &str, _group: &str) -> String {
         match TblType::parse(&e.tbl_type) {
             Some(t) => {
                 writeln!(s, "\tif raw, ok := row[\"{}\"]; ok && raw != \"\" {{", key_name).unwrap();
-                writeln!(s, "\t\tobj.{} = {}", go_field, parse_expr("raw", &t, "sep")).unwrap();
+                writeln!(s, "\t\tobj.{} = {}", go_field, parse_expr_for("raw", &t, "sep", enum_names)).unwrap();
                 writeln!(s, "\t}}").unwrap();
             }
             None => {

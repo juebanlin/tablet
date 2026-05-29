@@ -200,6 +200,10 @@ fn fixed_value_for_field(f: &SchemaField, row_idx: usize) -> String {
             t if t.starts_with("List<") => {
                 match row_idx { 0 => "1;2;3", 1 => "4;5", _ => "6;7;8" }.to_string()
             }
+            t if t.starts_with('@') => {
+                // 引用类型固定数据：取 1..=3 循环（与内置 HeroType 三个条目对齐）
+                ((row_idx % 3) + 1).to_string()
+            }
             _ => "0".to_string(),
         }
     }

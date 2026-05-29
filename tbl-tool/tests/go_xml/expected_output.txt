@@ -1,7 +1,7 @@
 === HeroBase ===
-id=1001 name=战士 hp=100 skills=[1 2 3]
-id=1002 name=法师 hp=80 skills=[4 5]
-id=1003 name=弓手 hp=90 skills=[6 7 8]
+id=1001 name=战士 hp=100 type=WARRIOR skills=[1 2 3]
+id=1002 name=法师 hp=80 type=MAGE skills=[4 5]
+id=1003 name=弓手 hp=90 type=ARCHER skills=[6 7 8]
 === HeroType ===
 id=1 name=WARRIOR desc=战士
 id=2 name=MAGE desc=法师

@@ -1,4 +1,5 @@
 use std::fmt::Write;
+use std::collections::HashSet;
 use anyhow::Result;
 use crate::model::*;
 use crate::types::*;
@@ -25,10 +26,19 @@ fn is_server_export(export: &Export) -> bool {
     matches!(export, Export::ClientServer | Export::ServerOnly)
 }
 
-fn java_field_type(tbl_type_str: &str) -> String {
-    TblType::parse(tbl_type_str)
-        .map(|t| t.java_decl())
-        .unwrap_or_else(|| "String".to_string())
+fn java_field_type(tbl_type_str: &str, enum_names: &HashSet<String>) -> String {
+    if let Some(t) = TblType::parse(tbl_type_str) {
+        if t.paradigm == Paradigm::Ref {
+            if let Some(name) = &t.ref_name {
+                if enum_names.contains(name) {
+                    return format!("{}Enum", name);
+                }
+            }
+            return "int".to_string();
+        }
+        return t.java_decl();
+    }
+    "String".to_string()
 }
 
 fn needs_tuple_import(tbl_type_str: &str) -> bool {
@@ -40,7 +50,7 @@ fn needs_tuple_import(tbl_type_str: &str) -> bool {
 
 // PLACEHOLDER_JAVA_RS_PART2
 
-fn gen_table_tpl(table: &Table, pkg: &str, group: &str) -> String {
+fn gen_table_tpl(table: &Table, pkg: &str, group: &str, enum_names: &HashSet<String>) -> String {
     let mut s = String::new();
     writeln!(s, "package {}.tpl;", pkg).unwrap();
     writeln!(s).unwrap();
@@ -61,7 +71,7 @@ fn gen_table_tpl(table: &Table, pkg: &str, group: &str) -> String {
     writeln!(s, "public class {}Tpl implements ITpl {{", table.name).unwrap();
 
     for f in &fields {
-        let jtype = java_field_type(&f.tbl_type);
+        let jtype = java_field_type(&f.tbl_type, enum_names);
         let name = to_camel_case(&f.name);
         writeln!(s, "    @TblType(\"{}\")", f.tbl_type).unwrap();
         writeln!(s, "    private {} {};", jtype, name).unwrap();
@@ -75,7 +85,7 @@ fn gen_table_tpl(table: &Table, pkg: &str, group: &str) -> String {
 
     for f in &fields {
         if f.name == "id" { continue; }
-        let jtype = java_field_type(&f.tbl_type);
+        let jtype = java_field_type(&f.tbl_type, enum_names);
         let camel = to_camel_case(&f.name);
         let pascal = to_pascal_case(&f.name);
         writeln!(s, "    public {} get{}() {{ return {}; }}", jtype, pascal, camel).unwrap();
@@ -84,7 +94,7 @@ fn gen_table_tpl(table: &Table, pkg: &str, group: &str) -> String {
     s
 }
 
-fn gen_constant_tpl(constant: &Constant, pkg: &str, group: &str) -> String {
+fn gen_constant_tpl(constant: &Constant, pkg: &str, group: &str, enum_names: &HashSet<String>) -> String {
     let mut s = String::new();
     writeln!(s, "package {}.tpl;", pkg).unwrap();
     writeln!(s).unwrap();
@@ -105,7 +115,7 @@ fn gen_constant_tpl(constant: &Constant, pkg: &str, group: &str) -> String {
     writeln!(s, "public class {}Tpl implements IConstTpl {{", constant.name).unwrap();
 
     for e in &entries {
-        let jtype = java_field_type(&e.tbl_type);
+        let jtype = java_field_type(&e.tbl_type, enum_names);
         let name = to_camel_case(&e.name);
         writeln!(s, "    @TblType(\"{}\")", e.tbl_type).unwrap();
         writeln!(s, "    private {} {};", jtype, name).unwrap();
@@ -113,7 +123,7 @@ fn gen_constant_tpl(constant: &Constant, pkg: &str, group: &str) -> String {
     writeln!(s).unwrap();
 
     for e in &entries {
-        let jtype = java_field_type(&e.tbl_type);
+        let jtype = java_field_type(&e.tbl_type, enum_names);
         let camel = to_camel_case(&e.name);
         let pascal = to_pascal_case(&e.name);
         writeln!(s, "    public {} get{}() {{ return {}; }}", jtype, pascal, camel).unwrap();
@@ -213,10 +223,16 @@ pub fn export_all_java(project: &Project) -> Result<super::ExportResult> {
     collect(&types_dir, "Tuple4.java", &render(TPL_TUPLE4));
 
     let mut register_lines = String::new();
+    let enum_names: HashSet<String> = project.groups.iter()
+        .flat_map(|g| g.enums.iter())
+        .filter(|e| !e.deleted)
+        .map(|e| e.name.clone())
+        .collect();
+
     for group in &project.groups {
         for table in &group.tables {
             if table.deleted { continue; }
-            let content = gen_table_tpl(table, pkg, &group.name);
+            let content = gen_table_tpl(table, pkg, &group.name, &enum_names);
             let filename = format!("{}Tpl.java", &table.name);
             collect(&tpl_dir, &filename, &content);
             writeln!(register_lines, "        map.put(\"{}\", {}.tpl.{}Tpl.class);",
@@ -225,7 +241,7 @@ pub fn export_all_java(project: &Project) -> Result<super::ExportResult> {
 
         for constant in &group.constants {
             if constant.deleted { continue; }
-            let content = gen_constant_tpl(constant, pkg, &group.name);
+            let content = gen_constant_tpl(constant, pkg, &group.name, &enum_names);
             let filename = format!("{}Tpl.java", &constant.name);
             collect(&tpl_dir, &filename, &content);
             writeln!(register_lines, "        map.put(\"{}\", {}.tpl.{}Tpl.class);",

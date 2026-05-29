@@ -132,7 +132,13 @@ public class TplHolder {
                 TblType ann = field.getAnnotation(TblType.class);
                 if (ann == null) continue;
                 String raw = map.get(field.getName());
-                field.set(obj, TplUtil.parseField(raw, ann.value(), sep));
+                if (field.getType().isEnum() && ann.value().startsWith("@")) {
+                    Object val = (raw == null || raw.isEmpty()) ? null
+                        : field.getType().getMethod("fromId", int.class).invoke(null, Integer.parseInt(raw));
+                    field.set(obj, val);
+                } else {
+                    field.set(obj, TplUtil.parseField(raw, ann.value(), sep));
+                }
             }
             return obj;
         } catch (Exception e) { throw new RuntimeException(e); }
