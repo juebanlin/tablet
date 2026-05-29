@@ -14,7 +14,7 @@ const TPL_UTIL: &str = include_str!("../../templates/java/TplUtil.java");
 const TPL_HOLDER: &str = include_str!("../../templates/java/TplHolder.java");
 const TPL_REGISTRY: &str = include_str!("../../templates/java/TplRegistry.java");
 const TPL_TBL_META: &str = include_str!("../../templates/java/TblMeta.java");
-const TPL_TBL_TYPE: &str = include_str!("../../templates/java/TblType.java");
+const TPL_TBL_TYPE: &str = include_str!("../../templates/java/TblFieldType.java");
 const TPL_TBL_SOURCE: &str = include_str!("../../templates/java/TblSource.java");
 const TPL_PARADIGM: &str = include_str!("../../templates/java/Paradigm.java");
 const TPL_SEP_CONFIG: &str = include_str!("../../templates/java/SepConfig.java");
@@ -55,7 +55,7 @@ fn gen_table_tpl(table: &Table, pkg: &str, group: &str, enum_names: &HashSet<Str
     writeln!(s, "package {}.tpl;", pkg).unwrap();
     writeln!(s).unwrap();
     writeln!(s, "import {}.ITpl;", pkg).unwrap();
-    writeln!(s, "import {}.TblType;", pkg).unwrap();
+    writeln!(s, "import {}.TblFieldType;", pkg).unwrap();
     writeln!(s, "import {}.TblSource;", pkg).unwrap();
     writeln!(s, "import java.util.*;").unwrap();
 
@@ -73,7 +73,7 @@ fn gen_table_tpl(table: &Table, pkg: &str, group: &str, enum_names: &HashSet<Str
     for f in &fields {
         let jtype = java_field_type(&f.tbl_type, enum_names);
         let name = to_camel_case(&f.name);
-        writeln!(s, "    @TblType(\"{}\")", f.tbl_type).unwrap();
+        writeln!(s, "    @TblFieldType(\"{}\")", f.tbl_type).unwrap();
         writeln!(s, "    private {} {};", jtype, name).unwrap();
     }
     writeln!(s).unwrap();
@@ -99,7 +99,7 @@ fn gen_constant_tpl(constant: &Constant, pkg: &str, group: &str, enum_names: &Ha
     writeln!(s, "package {}.tpl;", pkg).unwrap();
     writeln!(s).unwrap();
     writeln!(s, "import {}.IConstTpl;", pkg).unwrap();
-    writeln!(s, "import {}.TblType;", pkg).unwrap();
+    writeln!(s, "import {}.TblFieldType;", pkg).unwrap();
     writeln!(s, "import {}.TblSource;", pkg).unwrap();
     writeln!(s, "import java.util.*;").unwrap();
 
@@ -117,7 +117,7 @@ fn gen_constant_tpl(constant: &Constant, pkg: &str, group: &str, enum_names: &Ha
     for e in &entries {
         let jtype = java_field_type(&e.tbl_type, enum_names);
         let name = to_camel_case(&e.name);
-        writeln!(s, "    @TblType(\"{}\")", e.tbl_type).unwrap();
+        writeln!(s, "    @TblFieldType(\"{}\")", e.tbl_type).unwrap();
         writeln!(s, "    private {} {};", jtype, name).unwrap();
     }
     writeln!(s).unwrap();
@@ -213,7 +213,7 @@ pub fn export_all_java(project: &Project) -> Result<super::ExportResult> {
     collect(&output_dir, "SimpleJsonParser.java", &render(TPL_SIMPLE_JSON_PARSER));
     collect(&output_dir, "SimpleXmlParser.java", &render(TPL_SIMPLE_XML_PARSER));
     collect(&output_dir, "TplUtil.java", &render(TPL_UTIL));
-    collect(&output_dir, "TblType.java", &render(TPL_TBL_TYPE));
+    collect(&output_dir, "TblFieldType.java", &render(TPL_TBL_TYPE));
     collect(&output_dir, "TblSource.java", &render(TPL_TBL_SOURCE));
     collect(&output_dir, "TblMeta.java", &render(TPL_TBL_META));
     collect(&output_dir, "Paradigm.java", &render(TPL_PARADIGM));

@@ -129,7 +129,7 @@ public class TplHolder {
             T obj = clazz.getDeclaredConstructor().newInstance();
             for (var field : clazz.getDeclaredFields()) {
                 field.setAccessible(true);
-                TblType ann = field.getAnnotation(TblType.class);
+                TblFieldType ann = field.getAnnotation(TblFieldType.class);
                 if (ann == null) continue;
                 String raw = map.get(field.getName());
                 if (field.getType().isEnum() && ann.value().startsWith("@")) {
