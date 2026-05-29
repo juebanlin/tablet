@@ -733,6 +733,12 @@ impl ProjectEngine {
         Ok(result)
     }
 
+    pub fn export_go(&mut self) -> anyhow::Result<crate::export::ExportResult> {
+        let result = crate::export::export_all_go(&self.project)?;
+        self.log_export("Go", &result);
+        Ok(result)
+    }
+
     fn log_export(&mut self, label: &str, result: &crate::export::ExportResult) {
         use crate::export::FileStatus;
         self.log(format!("[{}] {} 新增, {} 修改, {} 删除, {} 不变",

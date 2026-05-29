@@ -32,6 +32,9 @@ enum Command {
         /// 只导出 Java 模板类
         #[arg(long)]
         java: bool,
+        /// 只导出 Go 模板代码
+        #[arg(long)]
+        go: bool,
         /// 只导出 Lua 前端文件
         #[arg(long)]
         lua: bool,
@@ -70,8 +73,8 @@ fn main() -> Result<()> {
     apply_overrides(&mut engine, &cli.overrides);
 
     match cli.command {
-        Command::Export { json, xml, java, lua } => {
-            let export_all = !json && !xml && !java && !lua;
+        Command::Export { json, xml, java, go, lua } => {
+            let export_all = !json && !xml && !java && !go && !lua;
 
             if export_all || json {
                 match engine.export_json() {
@@ -91,6 +94,13 @@ fn main() -> Result<()> {
                 match engine.export_java() {
                     Ok(r) => print_export_result("Java", &r),
                     Err(e) => eprintln!("[Java] 错误: {}", e),
+                }
+            }
+
+            if export_all || go {
+                match engine.export_go() {
+                    Ok(r) => print_export_result("Go", &r),
+                    Err(e) => eprintln!("[Go] 错误: {}", e),
                 }
             }
 
@@ -121,6 +131,20 @@ fn main() -> Result<()> {
                 seed,
             };
 
+            let server = engine.project.config.export.as_ref().and_then(|e| e.server.as_ref());
+            let java_pkg = server.and_then(|s| s.java.as_ref())
+                .and_then(|j| j.package.as_deref())
+                .unwrap_or("com.game.config")
+                .to_string();
+            let go_pkg = server.and_then(|s| s.go.as_ref())
+                .and_then(|g| g.package.as_deref())
+                .unwrap_or("config")
+                .to_string();
+            let go_code_output = server.and_then(|s| s.go.as_ref())
+                .and_then(|g| g.code_output.as_deref())
+                .unwrap_or("gen/server/go")
+                .to_string();
+
             if let Some(schema_path) = schema {
                 let content = std::fs::read_to_string(&schema_path)
                     .unwrap_or_else(|e| { eprintln!("读取 schema 失败: {}", e); std::process::exit(1); });
@@ -128,24 +152,20 @@ fn main() -> Result<()> {
                     .unwrap_or_else(|e| { eprintln!("解析 schema 失败: {}", e); std::process::exit(1); });
                 tbl_core::test_util::generate_from_schema(&config_dir, &parsed, &opts);
 
-                if lang == "java" {
-                    let pkg = engine.project.config.export.as_ref()
-                        .and_then(|e| e.server.as_ref())
-                        .and_then(|s| s.java.as_ref())
-                        .and_then(|j| j.package.as_deref())
-                        .unwrap_or("com.game.config");
-                    tbl_core::test_util::generate_test_main_from_schema(&cli.workdir, &parsed, pkg, &format);
+                match lang.as_str() {
+                    "java" => tbl_core::test_util::generate_test_main_from_schema(&cli.workdir, &parsed, &java_pkg, &format),
+                    "go" => tbl_core::test_util::generate_test_main_go_from_schema(&cli.workdir, &parsed, &go_pkg, &go_code_output, &format),
+                    "none" => {}
+                    other => eprintln!("未知 --lang: {}", other),
                 }
             } else {
                 tbl_core::test_util::generate_test_config(&config_dir, &opts);
 
-                if lang == "java" {
-                    let pkg = engine.project.config.export.as_ref()
-                        .and_then(|e| e.server.as_ref())
-                        .and_then(|s| s.java.as_ref())
-                        .and_then(|j| j.package.as_deref())
-                        .unwrap_or("com.game.config");
-                    tbl_core::test_util::generate_test_main(&cli.workdir, &opts, pkg, &format);
+                match lang.as_str() {
+                    "java" => tbl_core::test_util::generate_test_main(&cli.workdir, &opts, &java_pkg, &format),
+                    "go" => tbl_core::test_util::generate_test_main_go(&cli.workdir, &opts, &go_pkg, &go_code_output, &format),
+                    "none" => {}
+                    other => eprintln!("未知 --lang: {}", other),
                 }
             }
 

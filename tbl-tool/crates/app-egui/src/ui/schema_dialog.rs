@@ -426,7 +426,10 @@ fn do_data_export(app: &mut TblApp) {
         }
     }
     if state.go {
-        app.log("[Go] 导出功能待实现".to_string());
+        match app.engine.export_go() {
+            Ok(r) => log_export_result(app, "Go", &r),
+            Err(e) => app.log(format!("[Go] 错误: {}", e)),
+        }
     }
     if state.lua {
         match app.engine.export_lua() {

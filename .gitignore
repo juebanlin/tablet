@@ -23,6 +23,9 @@ tbl-tool/tests/*/config/
 tbl-tool/tests/*/tbl-tool.toml
 tbl-tool/tests/*/actual_output.txt
 tbl-tool/tests/*/TestMain.java
+tbl-tool/tests/*/test_main_go/
+tbl-tool/tests/*/go.mod
+tbl-tool/tests/*/go.sum
 
 # Claude
 .claude/

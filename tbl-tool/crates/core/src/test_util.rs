@@ -46,6 +46,13 @@ pub fn generate_test_main(workdir: &Path, opts: &TestGenOptions, pkg: &str, form
     generate_test_main_from_schema(workdir, &schema, pkg, format);
 }
 
+/// 使用内置 schema 生成 Go 测试 main.go + go.mod
+pub fn generate_test_main_go(workdir: &Path, opts: &TestGenOptions, pkg: &str, code_output: &str, format: &str) {
+    let schema_str = if opts.include_empty { SCHEMA_EMPTY } else { SCHEMA_FULL };
+    let schema = parse_tblschema(schema_str).expect("内置 schema 解析失败");
+    generate_test_main_go_from_schema(workdir, &schema, pkg, code_output, format);
+}
+
 /// 根据 schema + options 生成 .tbl 文件
 pub fn generate_from_schema(config_dir: &Path, schema: &TblSchema, opts: &TestGenOptions) {
     for sec in &schema.sections {
@@ -60,6 +67,28 @@ pub fn generate_from_schema(config_dir: &Path, schema: &TblSchema, opts: &TestGe
 pub fn generate_test_main_from_schema(workdir: &Path, schema: &TblSchema, pkg: &str, format: &str) {
     let content = build_test_main(schema, pkg, format);
     let _ = std::fs::write(workdir.join("TestMain.java"), &content);
+}
+
+/// 根据 schema 生成 Go 测试 main.go + go.mod
+///
+/// 在 workdir 写入一份顶层 go.mod，并把 main.go 放在 workdir/test_main_go/。
+/// 生成的 config 包通过 module path "tblmain/<code_output>/<pkg>" 被 main.go 引用。
+pub fn generate_test_main_go_from_schema(workdir: &Path, schema: &TblSchema, pkg: &str, code_output: &str, format: &str) {
+    let module = "tblmain";
+    let go_mod = format!("module {}\n\ngo 1.21\n", module);
+    let _ = std::fs::write(workdir.join("go.mod"), go_mod);
+
+    let main_dir = workdir.join("test_main_go");
+    let _ = std::fs::create_dir_all(&main_dir);
+
+    let import_path = format!(
+        "{}/{}/{}",
+        module,
+        code_output.trim_end_matches('/').replace('\\', "/"),
+        pkg
+    );
+    let main_go = build_test_main_go(schema, pkg, &import_path, format);
+    let _ = std::fs::write(main_dir.join("main.go"), &main_go);
 }
 
 // === .tbl 内容生成 ===
@@ -325,6 +354,111 @@ fn build_test_main(schema: &TblSchema, pkg: &str, format: &str) -> String {
     }
 
     writeln!(s, "    }}").unwrap();
+    writeln!(s, "}}").unwrap();
+    s
+}
+
+// === Go main.go 生成 ===
+
+fn go_format_spec(tbl_type: &str) -> &'static str {
+    match tbl_type {
+        "int" | "long" => "%d",
+        "float" | "double" => "%g",
+        "bool" => "%t",
+        "str" => "%s",
+        _ => "%v",
+    }
+}
+
+fn build_test_main_go(schema: &TblSchema, pkg: &str, import_path: &str, format: &str) -> String {
+    let mut s = String::new();
+    writeln!(s, "package main").unwrap();
+    writeln!(s).unwrap();
+    writeln!(s, "import (").unwrap();
+    writeln!(s, "\t\"fmt\"").unwrap();
+    writeln!(s, "\t\"os\"").unwrap();
+    writeln!(s).unwrap();
+    writeln!(s, "\tcfg \"{}\"", import_path).unwrap();
+    writeln!(s, ")").unwrap();
+    writeln!(s).unwrap();
+    let _ = pkg;
+
+    writeln!(s, "func main() {{").unwrap();
+    writeln!(s, "\tdataDir := \"gen/server/data\"").unwrap();
+    writeln!(s, "\tif len(os.Args) > 1 {{").unwrap();
+    writeln!(s, "\t\tdataDir = os.Args[1]").unwrap();
+    writeln!(s, "\t}}").unwrap();
+    if format == "xml" {
+        writeln!(s, "\tif err := cfg.Init(dataDir); err != nil {{ panic(err) }}").unwrap();
+    } else {
+        writeln!(s, "\tif err := cfg.InitJSON(dataDir); err != nil {{ panic(err) }}").unwrap();
+    }
+
+    for sec in &schema.sections {
+        writeln!(s).unwrap();
+        writeln!(s, "\tfmt.Println(\"=== {} ===\")", sec.name).unwrap();
+
+        match sec.mode {
+            SchemaMode::Table => {
+                let server_fields: Vec<&SchemaField> = sec.fields.iter()
+                    .filter(|f| f.is_server_export() && f.name != "id")
+                    .collect();
+
+                // ID 排序输出，保证稳定
+                writeln!(s, "\t{{").unwrap();
+                writeln!(s, "\t\tall := cfg.GetAll{}()", sec.name).unwrap();
+                writeln!(s, "\t\tids := make([]int32, 0, len(all))").unwrap();
+                writeln!(s, "\t\tfor id := range all {{ ids = append(ids, id) }}").unwrap();
+                writeln!(s, "\t\tsortInt32(ids)").unwrap();
+                writeln!(s, "\t\tfor _, id := range ids {{").unwrap();
+                writeln!(s, "\t\t\th := all[id]").unwrap();
+
+                let mut fmt_parts = vec![format!("id={}", go_format_spec("int"))];
+                let mut arg_parts = vec!["h.Id".to_string()];
+                for f in &server_fields {
+                    fmt_parts.push(format!("{}={}", to_camel(&f.name), go_format_spec(&f.tbl_type)));
+                    arg_parts.push(format!("h.{}", to_pascal(&f.name)));
+                }
+
+                writeln!(s, "\t\t\tfmt.Printf(\"{}\\n\", {})",
+                    fmt_parts.join(" "),
+                    arg_parts.join(", ")
+                ).unwrap();
+                writeln!(s, "\t\t}}").unwrap();
+                writeln!(s, "\t}}").unwrap();
+            }
+            SchemaMode::Constant => {
+                let server_entries: Vec<&SchemaField> = sec.fields.iter()
+                    .filter(|f| f.is_server_export())
+                    .collect();
+
+                writeln!(s, "\t{{").unwrap();
+                writeln!(s, "\t\tc := cfg.Get{}()", sec.name).unwrap();
+
+                let mut fmt_parts = Vec::new();
+                let mut arg_parts = Vec::new();
+                for f in &server_entries {
+                    fmt_parts.push(format!("{}={}", to_camel(&f.name), go_format_spec(&f.tbl_type)));
+                    arg_parts.push(format!("c.{}", to_pascal(&f.name)));
+                }
+
+                writeln!(s, "\t\tfmt.Printf(\"{}\\n\", {})",
+                    fmt_parts.join(" "),
+                    arg_parts.join(", ")
+                ).unwrap();
+                writeln!(s, "\t}}").unwrap();
+            }
+        }
+    }
+
+    writeln!(s, "}}").unwrap();
+    writeln!(s).unwrap();
+    writeln!(s, "func sortInt32(a []int32) {{").unwrap();
+    writeln!(s, "\tfor i := 1; i < len(a); i++ {{").unwrap();
+    writeln!(s, "\t\tfor j := i; j > 0 && a[j-1] > a[j]; j-- {{").unwrap();
+    writeln!(s, "\t\t\ta[j-1], a[j] = a[j], a[j-1]").unwrap();
+    writeln!(s, "\t\t}}").unwrap();
+    writeln!(s, "\t}}").unwrap();
     writeln!(s, "}}").unwrap();
     s
 }

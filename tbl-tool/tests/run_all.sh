@@ -21,7 +21,7 @@ for DIR in "$SCRIPT_DIR"/*/; do
     echo "--- 测试: $SCENE ---"
 
     pushd "$DIR" > /dev/null
-    rm -rf gen tbl-tool.toml out actual_output.txt config TestMain.java
+    rm -rf gen tbl-tool.toml out actual_output.txt config TestMain.java test_main_go go.mod go.sum
 
     if bash run.sh > actual_output.txt 2>&1; then
         if diff --strip-trailing-cr -u expected_output.txt actual_output.txt > /dev/null 2>&1; then
