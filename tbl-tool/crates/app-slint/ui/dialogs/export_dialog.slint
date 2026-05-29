@@ -1,0 +1,112 @@
+// 数据导出对话框：选择 JSON/XML/Java/Go/Lua 子集，再导出。
+// 对应 docs/04-导出功能.md。
+
+import { Theme } from "../theme.slint";
+import { DialogChrome } from "dialog_chrome.slint";
+import { Button, CheckBox } from "std-widgets.slint";
+
+export component ExportDialog inherits Rectangle {
+    in property <bool> open: false;
+
+    in-out property <bool> json-checked: true;
+    in-out property <bool> xml-checked: true;
+    in-out property <bool> java-checked: true;
+    in-out property <bool> go-checked: false;
+    in-out property <bool> lua-checked: true;
+
+    callback preset-all();
+    callback preset-data();
+    callback preset-server();
+    callback preset-client();
+    callback confirm();
+    callback cancel();
+
+    visible: root.open;
+    width: 100%;
+    height: 100%;
+
+    DialogChrome {
+        title: "导出";
+        dialog-w: 320px;
+        dialog-h: 280px;
+        primary-text: "导出";
+        primary-enabled: root.json-checked || root.xml-checked || root.java-checked || root.go-checked || root.lua-checked;
+        primary-clicked => { root.confirm(); }
+        cancel-clicked => { root.cancel(); }
+        scrim-clicked => { root.cancel(); }
+
+        VerticalLayout {
+            padding: Theme.sp-4;
+            spacing: Theme.sp-3;
+
+            Text {
+                text: "快捷预设";
+                font-size: Theme.fs-tiny;
+                color: Theme.text-secondary;
+            }
+
+            HorizontalLayout {
+                spacing: Theme.sp-2;
+                Button { text: "全部"; clicked => { root.preset-all(); } }
+                Button { text: "数据"; clicked => { root.preset-data(); } }
+                Button { text: "后端"; clicked => { root.preset-server(); } }
+                Button { text: "前端"; clicked => { root.preset-client(); } }
+            }
+
+            Rectangle { height: 1px; background: Theme.border-light; }
+
+            Text {
+                text: "选择导出格式";
+                font-size: Theme.fs-tiny;
+                color: Theme.text-secondary;
+            }
+
+            // 数据格式
+            HorizontalLayout {
+                spacing: Theme.sp-4;
+                CheckBox {
+                    text: "JSON";
+                    checked <=> root.json-checked;
+                }
+                CheckBox {
+                    text: "XML";
+                    checked <=> root.xml-checked;
+                }
+            }
+
+            // 服务端
+            HorizontalLayout {
+                spacing: Theme.sp-4;
+                CheckBox {
+                    text: "Java";
+                    checked <=> root.java-checked;
+                }
+                CheckBox {
+                    text: "Go";
+                    checked <=> root.go-checked;
+                }
+            }
+
+            // 客户端
+            HorizontalLayout {
+                spacing: Theme.sp-4;
+                CheckBox {
+                    text: "Lua";
+                    checked <=> root.lua-checked;
+                }
+            }
+
+            Rectangle { vertical-stretch: 1; }
+        }
+    }
+}
+
+export component ExportDialogPreview inherits Window {
+    title: "ExportDialog Preview";
+    width: 540px;
+    height: 420px;
+
+    ExportDialog {
+        open: true;
+    }
+}

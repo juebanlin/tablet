@@ -1,0 +1,400 @@
+// 主窗口：聚合三大顶层区域 + 弹窗 overlay。
+// 对应 docs/02-UI设计.md §1.1。
+//
+// 顶层区域（z-order 自下而上）：
+//   1. Toolbar       ─ 顶部全局工具栏
+//   2. TreeSection   ─ 左侧配置树大区（标题 / 功能区 / 节点展示）
+//      GridSection   ─ 右侧表格大区（标题 / 功能bar / 公式栏 / 表格 / 状态栏）
+//   3. LogPanel      ─ 底部日志面板
+//   4. Dialogs       ─ 模态弹窗 overlay（自带 scrim）
+//
+// 命名约定：
+//   - 大区组件以 *Section 命名
+//   - 子区域条以 *Bar / *Panel 命名
+//   - 弹窗状态以 dlg-<name>-open 暴露给上层 Rust
+
+import { Theme } from "theme.slint";
+import { Toolbar } from "components/toolbar.slint";
+import { TreeSection, TreeNode } from "components/tree_section.slint";
+import { GridSection } from "components/grid_section.slint";
+import { GridArea, HeaderCell, DataCell, DataRow, CellKind } from "components/grid_area.slint";
+import { LogPanel, LogEntry } from "components/log_panel.slint";
+import { TypeSelector, RefItem } from "dialogs/type_selector.slint";
+import { RefPicker, RefRow } from "dialogs/ref_picker.slint";
+import { ExportDialog } from "dialogs/export_dialog.slint";
+import { SchemaExportDialog, SchemaImportDialog, SchemaItem } from "dialogs/schema_dialog.slint";
+
+export { TreeNode, HeaderCell, DataCell, DataRow, CellKind, LogEntry, RefItem, RefRow, SchemaItem }
+
+export component AppWindow inherits Window {
+    title: "tbl-tool";
+    width: 1280px;
+    height: 800px;
+    background: Theme.bg-window;
+
+    // ── Toolbar ─────────────────────────────────────────────
+    callback toolbar-btn-clicked(string);
+
+    // ── TreeSection ─────────────────────────────────────────
+    in property <[TreeNode]> tree-nodes;
+    in property <[string]> tree-filters: ["全部", "改动", "新增", "修改", "删除"];
+    in-out property <int> tree-filter-index: 0;
+    in-out property <bool> tree-full-group: false;
+    in-out property <string> tree-search: "";
+    callback tree-node-clicked(int);
+    callback tree-node-toggle-expand(int);
+    callback tree-node-context-menu(int, length, length);
+    callback tree-blank-context-menu(length, length);
+    callback tree-search-edited(string);
+
+    // ── GridSection ─────────────────────────────────────────
+    in property <string> grid-title: "未选中";
+    in property <string> grid-subtitle: "";
+    in-out property <bool> show-enum-name: false;
+
+    in property <string> coord;
+    in-out property <string> formula;
+    in property <bool> formula-readonly: false;
+    callback formula-edited(string);
+
+    in property <[[HeaderCell]]> grid-header-rows;
+    in property <[DataRow]> grid-data-rows;
+    in property <int> grid-col-count;
+    in property <int> grid-selected-col: -1;
+    in property <int> grid-selected-row: -1;
+    in property <int> grid-selected-cell-row: -1;
+    in property <int> grid-selected-cell-col: -1;
+    callback grid-header-clicked(int, int);
+    callback grid-cell-clicked(int, int);
+    callback grid-cell-double-clicked(int, int);
+    callback grid-row-num-clicked(int);
+    callback grid-col-letter-clicked(int);
+    callback grid-col-context-menu(int, length, length);
+    callback grid-row-context-menu(int, length, length);
+    callback grid-cell-context-menu(int, int, length, length);
+
+    in property <string> selection-info;
+    in property <string> hover-info;
+
+    // ── LogPanel ────────────────────────────────────────────
+    in property <[LogEntry]> logs;
+
+    // ── Dialog: TypeSelector ────────────────────────────────
+    in-out property <bool> dlg-type-open: false;
+    in-out property <int> ts-tab: 0;
+    in property <bool> ts-ref-disabled: false;
+    in-out property <int> ts-paradigm-index: 0;
+    in-out property <int> ts-p1-index: 0;
+    in-out property <int> ts-p2-index: 0;
+    in property <bool> ts-show-p2: false;
+    in property <string> ts-result-preview;
+    in property <string> ts-example-value;
+    in property <string> ts-java-decl;
+    in property <string> ts-go-decl;
+    in property <string> ts-lua-decl;
+    in-out property <string> ts-ref-search;
+    in property <[RefItem]> ts-ref-items;
+    in-out property <int> ts-ref-filter: 0;
+    callback ts-confirm();
+    callback ts-cancel();
+
+    // ── Dialog: RefPicker ───────────────────────────────────
+    in-out property <bool> dlg-ref-open: false;
+    in property <string> rp-ref-name;
+    in property <string> rp-kind-label: "📊 表引用";
+    in property <bool> rp-target-missing: false;
+    in property <bool> rp-show-desc: true;
+    in-out property <string> rp-search;
+    in property <[RefRow]> rp-rows;
+    in property <string> rp-selection-preview: "（未选择）";
+    callback rp-select-row(int);
+    callback rp-row-double-clicked(int);
+    callback rp-confirm();
+    callback rp-clear();
+    callback rp-cancel();
+
+    // ── Dialog: 数据导出 ────────────────────────────────────
+    in-out property <bool> dlg-export-open: false;
+    in-out property <bool> ex-json: true;
+    in-out property <bool> ex-xml: true;
+    in-out property <bool> ex-java: true;
+    in-out property <bool> ex-go: false;
+    in-out property <bool> ex-lua: true;
+    callback ex-confirm();
+
+    // ── Dialog: Schema 导出 ─────────────────────────────────
+    in-out property <bool> dlg-schema-export-open: false;
+    in property <[SchemaItem]> sx-items;
+    in-out property <bool> sx-all-checked: false;
+    in property <int> sx-selected-count: 0;
+    in property <int> sx-total-count: 0;
+    callback sx-toggle-all(bool);
+    callback sx-toggle-item(int);
+    callback sx-confirm();
+
+    // ── Dialog: Schema 导入 ─────────────────────────────────
+    in-out property <bool> dlg-schema-import-open: false;
+    in-out property <string> si-file-path;
+    in property <bool> si-file-loaded: false;
+    in property <[SchemaItem]> si-items;
+    in-out property <bool> si-all-checked: false;
+    in property <int> si-selected-count: 0;
+    in property <int> si-total-count: 0;
+    in property <int> si-conflict-count: 0;
+    callback si-browse-file();
+    callback si-toggle-all(bool);
+    callback si-toggle-item(int);
+    callback si-confirm();
+
+    // ── 主布局 ──────────────────────────────────────────────
+    VerticalLayout {
+        spacing: 0;
+
+        Toolbar {
+            btn-clicked(id) => {
+                if (id == "export") { root.dlg-export-open = true; }
+                if (id == "export-schema") { root.dlg-schema-export-open = true; }
+                if (id == "import-schema") { root.dlg-schema-import-open = true; }
+                root.toolbar-btn-clicked(id);
+            }
+        }
+
+        HorizontalLayout {
+            spacing: 0;
+            vertical-stretch: 1;
+
+            Rectangle {
+                width: 240px;
+                TreeSection {
+                    nodes: root.tree-nodes;
+                    filters: root.tree-filters;
+                    filter-index: root.tree-filter-index;
+                    full-group <=> root.tree-full-group;
+                    search <=> root.tree-search;
+                    node-clicked(id) => { root.tree-node-clicked(id); }
+                    node-toggle-expand(id) => { root.tree-node-toggle-expand(id); }
+                    node-context-menu(id, x, y) => { root.tree-node-context-menu(id, x, y); }
+                    blank-context-menu(x, y) => { root.tree-blank-context-menu(x, y); }
+                    filter-changed(i) => { root.tree-filter-index = i; }
+                    search-edited(s) => { root.tree-search-edited(s); }
+                }
+            }
+
+            GridSection {
+                horizontal-stretch: 1;
+                title: root.grid-title;
+                subtitle: root.grid-subtitle;
+                show-enum-name <=> root.show-enum-name;
+                coord: root.coord;
+                formula <=> root.formula;
+                formula-readonly: root.formula-readonly;
+                formula-edited(s) => { root.formula-edited(s); }
+                header-rows: root.grid-header-rows;
+                data-rows: root.grid-data-rows;
+                col-count: root.grid-col-count;
+                selected-col: root.grid-selected-col;
+                selected-row: root.grid-selected-row;
+                selected-cell-row: root.grid-selected-cell-row;
+                selected-cell-col: root.grid-selected-cell-col;
+                header-clicked(hi, ci) => { root.grid-header-clicked(hi, ci); }
+                cell-clicked(r, c) => { root.grid-cell-clicked(r, c); }
+                cell-double-clicked(r, c) => { root.grid-cell-double-clicked(r, c); }
+                row-num-clicked(r) => { root.grid-row-num-clicked(r); }
+                col-letter-clicked(c) => { root.grid-col-letter-clicked(c); }
+                col-context-menu(c, x, y) => { root.grid-col-context-menu(c, x, y); }
+                row-context-menu(r, x, y) => { root.grid-row-context-menu(r, x, y); }
+                cell-context-menu(r, c, x, y) => { root.grid-cell-context-menu(r, c, x, y); }
+                selection-info: root.selection-info;
+                hover-info: root.hover-info;
+            }
+        }
+
+        LogPanel {
+            logs: root.logs;
+        }
+    }
+
+    // ── Dialog overlay 层 ───────────────────────────────────
+    TypeSelector {
+        open: root.dlg-type-open;
+        tab: root.ts-tab;
+        ref-disabled: root.ts-ref-disabled;
+        paradigm-index: root.ts-paradigm-index;
+        p1-index: root.ts-p1-index;
+        p2-index: root.ts-p2-index;
+        show-p2: root.ts-show-p2;
+        result-preview: root.ts-result-preview;
+        example-value: root.ts-example-value;
+        java-decl: root.ts-java-decl;
+        go-decl: root.ts-go-decl;
+        lua-decl: root.ts-lua-decl;
+        ref-search: root.ts-ref-search;
+        ref-items: root.ts-ref-items;
+        ref-filter: root.ts-ref-filter;
+        set-tab(i) => { root.ts-tab = i; }
+        set-paradigm(i) => { root.ts-paradigm-index = i; }
+        set-p1(i) => { root.ts-p1-index = i; }
+        set-p2(i) => { root.ts-p2-index = i; }
+        set-ref-search(s) => { root.ts-ref-search = s; }
+        set-ref-filter(i) => { root.ts-ref-filter = i; }
+        select-ref(i) => { /* 由 Rust 端处理 */ }
+        confirm => { root.ts-confirm(); root.dlg-type-open = false; }
+        cancel => { root.ts-cancel(); root.dlg-type-open = false; }
+    }
+
+    RefPicker {
+        open: root.dlg-ref-open;
+        ref-name: root.rp-ref-name;
+        kind-label: root.rp-kind-label;
+        target-missing: root.rp-target-missing;
+        show-desc: root.rp-show-desc;
+        search: root.rp-search;
+        rows: root.rp-rows;
+        selection-preview: root.rp-selection-preview;
+        set-search(s) => { root.rp-search = s; }
+        select-row(i) => { root.rp-select-row(i); }
+        row-double-clicked(i) => { root.rp-row-double-clicked(i); }
+        confirm => { root.rp-confirm(); root.dlg-ref-open = false; }
+        clear => { root.rp-clear(); root.dlg-ref-open = false; }
+        cancel => { root.rp-cancel(); root.dlg-ref-open = false; }
+    }
+
+    ExportDialog {
+        open: root.dlg-export-open;
+        json-checked <=> root.ex-json;
+        xml-checked <=> root.ex-xml;
+        java-checked <=> root.ex-java;
+        go-checked <=> root.ex-go;
+        lua-checked <=> root.ex-lua;
+        preset-all => { root.ex-json = true; root.ex-xml = true; root.ex-java = true; root.ex-go = true; root.ex-lua = true; }
+        preset-data => { root.ex-json = true; root.ex-xml = true; root.ex-java = false; root.ex-go = false; root.ex-lua = false; }
+        preset-server => { root.ex-json = true; root.ex-xml = true; root.ex-java = true; root.ex-go = true; root.ex-lua = false; }
+        preset-client => { root.ex-json = false; root.ex-xml = false; root.ex-java = false; root.ex-go = false; root.ex-lua = true; }
+        confirm => { root.ex-confirm(); root.dlg-export-open = false; }
+        cancel => { root.dlg-export-open = false; }
+    }
+
+    SchemaExportDialog {
+        open: root.dlg-schema-export-open;
+        items: root.sx-items;
+        all-checked <=> root.sx-all-checked;
+        selected-count: root.sx-selected-count;
+        total-count: root.sx-total-count;
+        toggle-all(c) => { root.sx-toggle-all(c); }
+        toggle-item(i) => { root.sx-toggle-item(i); }
+        confirm => { root.sx-confirm(); root.dlg-schema-export-open = false; }
+        cancel => { root.dlg-schema-export-open = false; }
+    }
+
+    SchemaImportDialog {
+        open: root.dlg-schema-import-open;
+        file-path <=> root.si-file-path;
+        file-loaded: root.si-file-loaded;
+        items: root.si-items;
+        all-checked <=> root.si-all-checked;
+        selected-count: root.si-selected-count;
+        total-count: root.si-total-count;
+        conflict-count: root.si-conflict-count;
+        browse-file => { root.si-browse-file(); }
+        toggle-all(c) => { root.si-toggle-all(c); }
+        toggle-item(i) => { root.si-toggle-item(i); }
+        confirm => { root.si-confirm(); root.dlg-schema-import-open = false; }
+        cancel => { root.dlg-schema-import-open = false; }
+    }
+}
+
+// ── 单文件预览：填充示例数据 ─────────────────────────────────
+export component AppWindowPreview inherits AppWindow {
+    coord: "B3";
+    formula: "战士";
+    show-enum-name: true;
+
+    grid-title: "📊 hero / HeroBase";
+    grid-subtitle: "Table · 3 行 · 5 列";
+
+    selection-info: "B2:D5 (4行×3列，共12格)";
+    hover-info: "光标: C4";
+
+    tree-nodes: [
+        { id: 1, indent: 0, expanded: true, icon: "📁", name: "hero", mark: "*", mark-color: Theme.mark-modified, is-group: true, selected: false },
+        { id: 2, indent: 1, expanded: false, icon: "📊", name: "HeroBase", mark: "*", mark-color: Theme.mark-modified, is-group: false, selected: true },
+        { id: 3, indent: 1, expanded: false, icon: "📊", name: "HeroSkill", mark: "+", mark-color: Theme.mark-new, is-group: false, selected: false },
+        { id: 4, indent: 1, expanded: false, icon: "📋", name: "HeroConst", mark: "", mark-color: Theme.text-primary, is-group: false, selected: false },
+        { id: 5, indent: 1, expanded: false, icon: "🔢", name: "HeroType", mark: "!", mark-color: Theme.text-error, is-group: false, selected: false },
+        { id: 6, indent: 0, expanded: true, icon: "📁", name: "global", mark: "", mark-color: Theme.text-primary, is-group: true, selected: false },
+        { id: 7, indent: 1, expanded: false, icon: "📋", name: "GameConst", mark: "", mark-color: Theme.text-primary, is-group: false, selected: false },
+    ];
+
+    grid-col-count: 5;
+    grid-selected-cell-row: 1;
+    grid-selected-cell-col: 1;
+    grid-header-rows: [
+        [
+            { text: "英雄ID", kind: CellKind.read-only, color: Theme.text-readonly },
+            { text: "名称", kind: CellKind.text, color: Theme.text-primary },
+            { text: "血量", kind: CellKind.text, color: Theme.text-primary },
+            { text: "类型", kind: CellKind.text, color: Theme.text-primary },
+            { text: "技能组", kind: CellKind.text, color: Theme.text-primary },
+        ],
+        [
+            { text: "cs", kind: CellKind.read-only, color: Theme.text-readonly },
+            { text: "前后端", kind: CellKind.export-enum, color: Theme.text-success },
+            { text: "服务器", kind: CellKind.export-enum, color: Theme.text-success },
+            { text: "前后端", kind: CellKind.export-enum, color: Theme.text-success },
+            { text: "前后端", kind: CellKind.export-enum, color: Theme.text-success },
+        ],
+        [
+            { text: "int", kind: CellKind.read-only, color: Theme.text-readonly },
+            { text: "str", kind: CellKind.type-enum, color: Theme.text-info },
+            { text: "int", kind: CellKind.type-enum, color: Theme.text-info },
+            { text: "@HeroType", kind: CellKind.type-enum, color: Theme.text-info },
+            { text: "List<int>", kind: CellKind.type-enum, color: Theme.text-info },
+        ],
+        [
+            { text: "id", kind: CellKind.read-only, color: Theme.text-readonly },
+            { text: "name", kind: CellKind.text, color: Theme.text-primary },
+            { text: "hp", kind: CellKind.text, color: Theme.text-primary },
+            { text: "type", kind: CellKind.text, color: Theme.text-primary },
+            { text: "skills", kind: CellKind.text, color: Theme.text-primary },
+        ],
+    ];
+    grid-data-rows: [
+        { cells: [
+            { text: "1001", has-error: false, is-empty-ref: false },
+            { text: "战士", has-error: false, is-empty-ref: false },
+            { text: "100", has-error: false, is-empty-ref: false },
+            { text: "WARRIOR", has-error: false, is-empty-ref: false },
+            { text: "1;2;3", has-error: false, is-empty-ref: false },
+        ], row-color: #00000000, selected: false },
+        { cells: [
+            { text: "1002", has-error: false, is-empty-ref: false },
+            { text: "法师", has-error: false, is-empty-ref: false },
+            { text: "80", has-error: false, is-empty-ref: false },
+            { text: "MAGE", has-error: false, is-empty-ref: false },
+            { text: "4;5", has-error: false, is-empty-ref: false },
+        ], row-color: #00000000, selected: true },
+        { cells: [
+            { text: "1003", has-error: false, is-empty-ref: false },
+            { text: "弓手", has-error: false, is-empty-ref: false },
+            { text: "abc", has-error: true, is-empty-ref: false },
+            { text: "", has-error: false, is-empty-ref: true },
+            { text: "6;7;8", has-error: false, is-empty-ref: false },
+        ], row-color: #ffe0e0, selected: false },
+    ];
+
+    logs: [
+        { time: "14:32:01", msg: "已加载 hero/HeroBase.tbl (3条)", level: 0 },
+        { time: "14:33:15", msg: "新建 Table: hero/HeroSkill", level: 0 },
+        { time: "14:34:02", msg: "[验证] hero/HeroBase D2: \"4,5\" 列表元素类型不匹配, 示例: 1;2;3", level: 2 },
+    ];
+
+    sx-items: [
+        { indent: 0, icon: "📁", name: "hero", group-name: "hero", checked: true, tristate: false, is-conflict: false },
+        { indent: 1, icon: "📊", name: "HeroBase", group-name: "hero", checked: true, tristate: false, is-conflict: false },
+        { indent: 1, icon: "📊", name: "HeroSkill", group-name: "hero", checked: true, tristate: false, is-conflict: false },
+        { indent: 1, icon: "📋", name: "HeroConst", group-name: "hero", checked: true, tristate: false, is-conflict: false },
+    ];
+    sx-all-checked: true;
+    sx-selected-count: 3;
+    sx-total-count: 3;
+}

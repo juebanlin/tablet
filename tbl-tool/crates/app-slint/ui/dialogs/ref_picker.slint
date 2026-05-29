@@ -1,0 +1,238 @@
+// 引用值选择器：单元格类型为 @Xxx 时弹出，列出被引用项的条目供选择。
+// 对应 docs/02-UI设计.md §6.3。
+// 整行可点击、双击确认；底部按钮 [清空] [确定] [取消]。
+
+import { Theme } from "../theme.slint";
+import { DialogChrome } from "dialog_chrome.slint";
+import { LineEdit, ScrollView } from "std-widgets.slint";
+
+export struct RefRow {
+    id: string,
+    name: string,
+    desc: string,
+    selected: bool,
+}
+
+export component RefPicker inherits Rectangle {
+    in property <bool> open: false;
+    in property <string> ref-name;                  // 例：HeroBase / HeroType
+    in property <string> kind-label: "📊 表引用";    // 或 "🔢 枚举引用"
+    in property <bool> target-missing: false;       // 引用项不存在 → 显示警告并禁用确定
+    in property <bool> show-desc: true;             // 表引用时通常隐藏 desc 列
+    in property <string> search;
+    in property <[RefRow]> rows;
+    in property <string> selection-preview: "（未选择）";
+
+    callback set-search(string);
+    callback select-row(int);
+    callback row-double-clicked(int);
+    callback confirm();
+    callback clear();
+    callback cancel();
+
+    visible: root.open;
+    width: 100%;
+    height: 100%;
+
+    DialogChrome {
+        title: "选择引用：@" + root.ref-name;
+        dialog-w: 540px;
+        dialog-h: 460px;
+        primary-text: "确定";
+        primary-enabled: !root.target-missing;
+        show-secondary: true;
+        secondary-text: "清空";
+        primary-clicked => { root.confirm(); }
+        secondary-clicked => { root.clear(); }
+        cancel-clicked => { root.cancel(); }
+        scrim-clicked => { root.cancel(); }
+
+        VerticalLayout {
+            padding: Theme.sp-4;
+            spacing: Theme.sp-3;
+
+            // 标头：引用类型徽章
+            Text {
+                text: root.kind-label;
+                font-size: Theme.fs-tiny;
+                color: Theme.text-secondary;
+            }
+
+            if root.target-missing: Rectangle {
+                height: 28px;
+                background: #fff0f0;
+                border-color: Theme.border-error;
+                border-width: 1px;
+                Text {
+                    text: "⚠️ 引用的配置项 \"" + root.ref-name + "\" 不存在";
+                    font-size: Theme.fs-small;
+                    color: Theme.text-error;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+            }
+
+            // 搜索框
+            HorizontalLayout {
+                spacing: Theme.sp-2;
+                Text {
+                    text: "搜索:";
+                    font-size: Theme.fs-small;
+                    vertical-alignment: center;
+                    width: 40px;
+                }
+                LineEdit {
+                    text: root.search;
+                    edited(s) => { root.set-search(s); }
+                }
+            }
+
+            // 表头
+            Rectangle {
+                height: Theme.row-h;
+                background: Theme.bg-header;
+                border-color: Theme.border;
+                border-width: 0.5px;
+                HorizontalLayout {
+                    spacing: 0;
+                    Rectangle {
+                        width: 80px;
+                        border-color: Theme.border;
+                        border-width: 0.5px;
+                        Text {
+                            x: Theme.sp-2;
+                            text: "id";
+                            font-size: Theme.fs-tiny;
+                            color: Theme.text-secondary;
+                            vertical-alignment: center;
+                        }
+                    }
+                    Rectangle {
+                        width: 140px;
+                        border-color: Theme.border;
+                        border-width: 0.5px;
+                        Text {
+                            x: Theme.sp-2;
+                            text: "name";
+                            font-size: Theme.fs-tiny;
+                            color: Theme.text-secondary;
+                            vertical-alignment: center;
+                        }
+                    }
+                    Rectangle {
+                        horizontal-stretch: 1;
+                        border-color: Theme.border;
+                        border-width: 0.5px;
+                        Text {
+                            x: Theme.sp-2;
+                            text: root.show-desc ? "desc" : "";
+                            font-size: Theme.fs-tiny;
+                            color: Theme.text-secondary;
+                            vertical-alignment: center;
+                        }
+                    }
+                }
+            }
+
+            // 数据列表
+            Rectangle {
+                vertical-stretch: 1;
+                background: Theme.bg-panel;
+                border-color: Theme.border-light;
+                border-width: 1px;
+                ScrollView {
+                    VerticalLayout {
+                        spacing: 0;
+                        if root.rows.length == 0: Rectangle {
+                            height: Theme.row-h;
+                            Text {
+                                x: Theme.sp-3;
+                                text: "（无匹配条目）";
+                                font-size: Theme.fs-small;
+                                color: Theme.text-disabled;
+                                vertical-alignment: center;
+                            }
+                        }
+                        for row[i] in root.rows: Rectangle {
+                            height: Theme.row-h;
+                            background: row.selected ? Theme.bg-row-selected : transparent;
+                            border-color: Theme.border-light;
+                            border-width: 0.5px;
+                            HorizontalLayout {
+                                spacing: 0;
+                                Rectangle {
+                                    width: 80px;
+                                    border-color: Theme.border-light;
+                                    border-width: 0.5px;
+                                    Text {
+                                        x: Theme.sp-2;
+                                        text: row.id;
+                                        font-size: Theme.fs-small;
+                                        color: Theme.text-primary;
+                                        vertical-alignment: center;
+                                    }
+                                }
+                                Rectangle {
+                                    width: 140px;
+                                    border-color: Theme.border-light;
+                                    border-width: 0.5px;
+                                    Text {
+                                        x: Theme.sp-2;
+                                        text: row.name;
+                                        font-size: Theme.fs-small;
+                                        color: Theme.text-primary;
+                                        vertical-alignment: center;
+                                    }
+                                }
+                                Rectangle {
+                                    horizontal-stretch: 1;
+                                    border-color: Theme.border-light;
+                                    border-width: 0.5px;
+                                    Text {
+                                        x: Theme.sp-2;
+                                        text: row.desc;
+                                        font-size: Theme.fs-small;
+                                        color: Theme.text-secondary;
+                                        vertical-alignment: center;
+                                    }
+                                }
+                            }
+                            TouchArea {
+                                clicked => { root.select-row(i); }
+                                double-clicked => { root.row-double-clicked(i); }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // 当前选择预览
+            Rectangle { height: 1px; background: Theme.border-light; }
+            Text {
+                text: "当前选择: " + root.selection-preview;
+                font-size: Theme.fs-tiny;
+                color: Theme.text-secondary;
+            }
+        }
+    }
+}
+
+export component RefPickerPreview inherits Window {
+    title: "RefPicker Preview";
+    width: 720px;
+    height: 560px;
+
+    RefPicker {
+        open: true;
+        ref-name: "HeroType";
+        kind-label: "🔢 枚举引用";
+        show-desc: true;
+        selection-preview: "2 (MAGE)";
+        rows: [
+            { id: "1", name: "WARRIOR", desc: "近战战士", selected: false },
+            { id: "2", name: "MAGE", desc: "远程法师", selected: true },
+            { id: "3", name: "ARCHER", desc: "弓箭手", selected: false },
+            { id: "4", name: "ROGUE", desc: "盗贼", selected: false },
+        ];
+    }
+}

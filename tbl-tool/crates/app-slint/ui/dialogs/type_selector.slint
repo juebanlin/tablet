@@ -1,0 +1,297 @@
+// 类型选择器：[数据类型] / [引用类型] 双 tab。
+// 对应 docs/02-UI设计.md §6.2。
+
+import { Theme } from "../theme.slint";
+import { DialogChrome } from "dialog_chrome.slint";
+import { ComboBox, LineEdit, ScrollView } from "std-widgets.slint";
+
+export struct RefItem {
+    icon: string,                    // 📊 / 🔢
+    name: string,
+    kind-label: string,              // "table" / "enum"
+    selected: bool,
+}
+
+export component TypeSelector inherits Rectangle {
+    in property <bool> open: false;
+    in property <int> tab: 0;                       // 0=数据类型 1=引用类型
+    in property <bool> ref-disabled: false;         // constant 表禁用引用 tab
+
+    // ─ 数据类型 tab ─
+    in property <[string]> paradigms: [
+        "基础类型", "Tuple2<_,_>", "Tuple3<_,_,_>", "Tuple4<_,_,_,_>",
+        "List<_>", "Set<_>", "Map<_,_>",
+        "List<Tuple2<_,_>>", "Map<_,Tuple2<_,_>>", "Map<_,List<_>>",
+    ];
+    in property <int> paradigm-index: 0;
+    in property <[string]> base-types: ["int", "long", "float", "double", "str", "bool"];
+    in property <int> p1-index: 0;
+    in property <int> p2-index: 0;
+    in property <bool> show-p2: false;
+    in property <string> result-preview: "int";
+    in property <string> example-value: "100";
+    in property <string> java-decl: "int";
+    in property <string> go-decl: "int32";
+    in property <string> lua-decl: "number";
+
+    // ─ 引用类型 tab ─
+    in property <string> ref-search: "";
+    in property <[RefItem]> ref-items;
+    in property <int> ref-filter: 0;                // 0=全部 1=表 2=枚举
+
+    callback set-tab(int);
+    callback set-paradigm(int);
+    callback set-p1(int);
+    callback set-p2(int);
+    callback set-ref-search(string);
+    callback set-ref-filter(int);
+    callback select-ref(int);
+    callback confirm();
+    callback cancel();
+
+    visible: root.open;
+    width: 100%;
+    height: 100%;
+
+    DialogChrome {
+        title: "选择类型";
+        dialog-w: 560px;
+        dialog-h: 420px;
+        primary-enabled: root.tab == 0 || (root.tab == 1 && root.ref-items.length > 0);
+        primary-clicked => { root.confirm(); }
+        cancel-clicked => { root.cancel(); }
+        scrim-clicked => { root.cancel(); }
+
+        VerticalLayout {
+            padding: Theme.sp-4;
+            spacing: Theme.sp-3;
+
+            // ─── Tab 切换 ───
+            HorizontalLayout {
+                spacing: 0;
+                alignment: start;
+                Rectangle {
+                    width: 100px;
+                    height: 28px;
+                    background: root.tab == 0 ? Theme.bg-cell-selected : Theme.bg-toolbar;
+                    border-color: Theme.border-light;
+                    border-width: 1px;
+                    Text {
+                        text: "数据类型";
+                        font-size: Theme.fs-small;
+                        color: Theme.text-primary;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+                    TouchArea { clicked => { root.set-tab(0); } }
+                }
+                Rectangle {
+                    width: 100px;
+                    height: 28px;
+                    background: root.tab == 1 ? Theme.bg-cell-selected : Theme.bg-toolbar;
+                    border-color: Theme.border-light;
+                    border-width: 1px;
+                    opacity: root.ref-disabled ? 0.5 : 1.0;
+                    Text {
+                        text: "引用类型";
+                        font-size: Theme.fs-small;
+                        color: root.ref-disabled ? Theme.text-disabled : Theme.text-primary;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+                    if !root.ref-disabled: TouchArea { clicked => { root.set-tab(1); } }
+                }
+                if root.ref-disabled: Text {
+                    text: "（constant 不允许引用）";
+                    font-size: Theme.fs-tiny;
+                    color: Theme.text-disabled;
+                    vertical-alignment: center;
+                }
+            }
+
+            Rectangle { height: 1px; background: Theme.border-light; }
+
+            // ─── 内容区 ───
+            Rectangle {
+                vertical-stretch: 1;
+
+                // ── 数据类型 Tab ──
+                if root.tab == 0: HorizontalLayout {
+                    spacing: Theme.sp-4;
+                    alignment: stretch;
+
+                    // 左：范式列表
+                    Rectangle {
+                        width: 200px;
+                        background: Theme.bg-toolbar;
+                        border-color: Theme.border-light;
+                        border-width: 1px;
+                        ScrollView {
+                            VerticalLayout {
+                                padding: Theme.sp-2;
+                                spacing: 1px;
+                                for p[i] in root.paradigms: Rectangle {
+                                    height: 24px;
+                                    background: i == root.paradigm-index ? Theme.bg-row-selected : transparent;
+                                    Text {
+                                        x: Theme.sp-3;
+                                        text: p;
+                                        font-size: Theme.fs-small;
+                                        color: Theme.text-primary;
+                                        vertical-alignment: center;
+                                    }
+                                    TouchArea {
+                                        clicked => { root.set-paradigm(i); }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // 右：参数 + 预览
+                    VerticalLayout {
+                        spacing: Theme.sp-3;
+
+                        HorizontalLayout {
+                            spacing: Theme.sp-2;
+                            alignment: start;
+                            Text {
+                                text: "P1:";
+                                font-size: Theme.fs-small;
+                                color: Theme.text-secondary;
+                                vertical-alignment: center;
+                                width: 28px;
+                            }
+                            ComboBox {
+                                model: root.base-types;
+                                current-index: root.p1-index;
+                                selected(s) => { root.set-p1(self.current-index); }
+                            }
+                        }
+                        if root.show-p2: HorizontalLayout {
+                            spacing: Theme.sp-2;
+                            alignment: start;
+                            Text {
+                                text: "P2:";
+                                font-size: Theme.fs-small;
+                                color: Theme.text-secondary;
+                                vertical-alignment: center;
+                                width: 28px;
+                            }
+                            ComboBox {
+                                model: root.base-types;
+                                current-index: root.p2-index;
+                                selected(s) => { root.set-p2(self.current-index); }
+                            }
+                        }
+
+                        Rectangle { height: 1px; background: Theme.border-light; }
+
+                        VerticalLayout {
+                            spacing: Theme.sp-2;
+                            Text { text: "结果: " + root.result-preview; font-size: Theme.fs-small; color: Theme.text-primary; }
+                            Text { text: "示例: " + root.example-value; font-size: Theme.fs-tiny; color: Theme.text-secondary; }
+                            Rectangle { height: Theme.sp-2; }
+                            Text { text: "Java: " + root.java-decl; font-size: Theme.fs-tiny; color: Theme.text-secondary; }
+                            Text { text: "Go:   " + root.go-decl; font-size: Theme.fs-tiny; color: Theme.text-secondary; }
+                            Text { text: "Lua:  " + root.lua-decl; font-size: Theme.fs-tiny; color: Theme.text-secondary; }
+                        }
+
+                        Rectangle { vertical-stretch: 1; }
+                    }
+                }
+
+                // ── 引用类型 Tab ──
+                if root.tab == 1: VerticalLayout {
+                    spacing: Theme.sp-3;
+
+                    HorizontalLayout {
+                        spacing: Theme.sp-2;
+                        alignment: start;
+                        Text { text: "过滤:"; font-size: Theme.fs-small; vertical-alignment: center; }
+                        Rectangle {
+                            width: 60px; height: 24px;
+                            background: root.ref-filter == 0 ? Theme.bg-row-selected : Theme.bg-toolbar;
+                            border-color: Theme.border-light; border-width: 1px;
+                            Text { text: "全部"; font-size: Theme.fs-tiny; horizontal-alignment: center; vertical-alignment: center; }
+                            TouchArea { clicked => { root.set-ref-filter(0); } }
+                        }
+                        Rectangle {
+                            width: 60px; height: 24px;
+                            background: root.ref-filter == 1 ? Theme.bg-row-selected : Theme.bg-toolbar;
+                            border-color: Theme.border-light; border-width: 1px;
+                            Text { text: "📊 表"; font-size: Theme.fs-tiny; horizontal-alignment: center; vertical-alignment: center; }
+                            TouchArea { clicked => { root.set-ref-filter(1); } }
+                        }
+                        Rectangle {
+                            width: 70px; height: 24px;
+                            background: root.ref-filter == 2 ? Theme.bg-row-selected : Theme.bg-toolbar;
+                            border-color: Theme.border-light; border-width: 1px;
+                            Text { text: "🔢 枚举"; font-size: Theme.fs-tiny; horizontal-alignment: center; vertical-alignment: center; }
+                            TouchArea { clicked => { root.set-ref-filter(2); } }
+                        }
+                    }
+
+                    HorizontalLayout {
+                        spacing: Theme.sp-2;
+                        Text { text: "搜索:"; font-size: Theme.fs-small; vertical-alignment: center; width: 40px; }
+                        LineEdit {
+                            text: root.ref-search;
+                            edited(s) => { root.set-ref-search(s); }
+                        }
+                    }
+
+                    Rectangle {
+                        vertical-stretch: 1;
+                        background: Theme.bg-toolbar;
+                        border-color: Theme.border-light;
+                        border-width: 1px;
+                        ScrollView {
+                            VerticalLayout {
+                                padding: Theme.sp-2;
+                                spacing: 1px;
+                                for item[i] in root.ref-items: Rectangle {
+                                    height: 24px;
+                                    background: item.selected ? Theme.bg-row-selected : transparent;
+                                    HorizontalLayout {
+                                        padding-left: Theme.sp-3;
+                                        spacing: Theme.sp-2;
+                                        alignment: start;
+                                        Text { text: item.icon; font-size: Theme.fs-small; vertical-alignment: center; }
+                                        Text { text: item.name; font-size: Theme.fs-small; color: Theme.text-primary; vertical-alignment: center; }
+                                        Text { text: "(" + item.kind-label + ")"; font-size: Theme.fs-tiny; color: Theme.text-secondary; vertical-alignment: center; }
+                                    }
+                                    TouchArea { clicked => { root.select-ref(i); } }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+export component TypeSelectorPreview inherits Window {
+    title: "TypeSelector Preview";
+    width: 760px;
+    height: 540px;
+
+    TypeSelector {
+        open: true;
+        tab: 0;
+        paradigm-index: 1;
+        show-p2: true;
+        result-preview: "Tuple2<int,int>";
+        example-value: "5,10";
+        java-decl: "int[]";
+        go-decl: "[2]int32";
+        lua-decl: "{p1,p2}";
+        ref-items: [
+            { icon: "📊", name: "HeroBase", kind-label: "table", selected: false },
+            { icon: "🔢", name: "HeroType", kind-label: "enum", selected: true },
+            { icon: "📊", name: "SkillBase", kind-label: "table", selected: false },
+            { icon: "🔢", name: "ItemQuality", kind-label: "enum", selected: false },
+        ];
+    }
+}

@@ -1,0 +1,78 @@
+// 日志面板：全窗口底部独立区域，带「日志」标题。
+// 对应 docs/02-UI设计.md §1.1。
+
+import { Theme } from "../theme.slint";
+import { ScrollView } from "std-widgets.slint";
+
+export struct LogEntry {
+    time: string,           // "14:32:01"
+    msg: string,
+    level: int,             // 0=info, 1=warn, 2=error
+}
+
+export component LogPanel inherits Rectangle {
+    in property <[LogEntry]> logs;
+    in property <length> log-height: 120px;
+
+    height: root.log-height;
+    background: Theme.bg-panel;
+    border-color: Theme.border-light;
+    border-width: 1px;
+
+    pure function level-color(level: int) -> color {
+        level == 2 ? Theme.text-error : (level == 1 ? Theme.mark-modified : Theme.text-secondary)
+    }
+
+    VerticalLayout {
+        spacing: 0;
+        Rectangle {
+            height: 22px;
+            background: Theme.bg-toolbar;
+            border-color: Theme.border-light;
+            border-width: 1px;
+            Text {
+                x: Theme.sp-3;
+                text: "日志";
+                font-size: Theme.fs-small;
+                color: Theme.text-primary;
+                vertical-alignment: center;
+            }
+        }
+        ScrollView {
+            VerticalLayout {
+                padding: Theme.sp-2;
+                spacing: 1px;
+                for log in root.logs: HorizontalLayout {
+                    spacing: Theme.sp-3;
+                    alignment: start;
+                    Text {
+                        text: log.time;
+                        font-size: Theme.fs-tiny;
+                        color: Theme.text-secondary;
+                        vertical-alignment: center;
+                    }
+                    Text {
+                        text: log.msg;
+                        font-size: Theme.fs-tiny;
+                        color: root.level-color(log.level);
+                        vertical-alignment: center;
+                    }
+                }
+            }
+        }
+    }
+}
+
+export component LogPanelPreview inherits Window {
+    title: "LogPanel Preview";
+    width: 720px;
+    height: 200px;
+
+    LogPanel {
+        logs: [
+            { time: "14:32:01", msg: "已加载 hero/HeroBase.tbl (3条)", level: 0 },
+            { time: "14:33:15", msg: "新建 Table: hero/HeroSkill", level: 0 },
+            { time: "14:34:02", msg: "[验证] hero/HeroBase D2: \"4,5\" 列表元素类型不匹配, 示例: 1;2;3", level: 2 },
+        ];
+    }
+}

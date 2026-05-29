@@ -1,0 +1,44 @@
+// 状态栏：表格区底部，显示当前选区 / 光标位置。
+// 归属于 GridSection 内部子区域。对应 docs/02-UI设计.md §5.5。
+
+import { Theme } from "../theme.slint";
+
+export component StatusBar inherits Rectangle {
+    in property <string> selection-info: "";
+    in property <string> hover-info: "";
+
+    height: Theme.status-h;
+    background: Theme.bg-toolbar;
+    border-color: Theme.border-light;
+    border-width: 1px;
+
+    HorizontalLayout {
+        padding-left: Theme.sp-3;
+        padding-right: Theme.sp-3;
+        spacing: Theme.sp-5;
+        alignment: start;
+        Text {
+            text: root.selection-info;
+            font-size: Theme.fs-tiny;
+            color: Theme.text-secondary;
+            vertical-alignment: center;
+        }
+        Text {
+            text: root.hover-info;
+            font-size: Theme.fs-tiny;
+            color: Theme.text-secondary;
+            vertical-alignment: center;
+        }
+    }
+}
+
+export component StatusBarPreview inherits Window {
+    title: "StatusBar Preview";
+    width: 720px;
+    height: 40px;
+
+    StatusBar {
+        selection-info: "B2:D5 (4行×3列，共12格)";
+        hover-info: "光标: C4";
+    }
+}

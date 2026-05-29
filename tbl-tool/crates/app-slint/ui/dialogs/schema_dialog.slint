@@ -1,0 +1,291 @@
+// Schema 导入/导出对话框：分组勾选 + 冲突提示。
+// 对应 docs/02-UI设计.md §6.4。
+//
+// 共享一个 SchemaItem 数据模型 + 两个独立组件：
+//   - SchemaExportDialog：从当前项目挑选要导出的 section
+//   - SchemaImportDialog：解析 .tblschema 文件后挑选要导入的 section（含「冲突=已存在将覆盖」标记）
+//
+// 数据流约定：上层 Rust 把分组扁平化成 [SchemaItem]，每条带 group-name + indent。
+// indent=0 表示组节点（用于头部聚合勾选行），indent=1 表示组下的 Table/Constant/Enum。
+
+import { Theme } from "../theme.slint";
+import { DialogChrome } from "dialog_chrome.slint";
+import { LineEdit, ScrollView, CheckBox, Button } from "std-widgets.slint";
+
+export struct SchemaItem {
+    indent: int,                // 0=组 1=条目
+    icon: string,               // 📁 / 📊 / 📋 / 🔢
+    name: string,               // 组名 或 条目名
+    group-name: string,         // 条目归属（组节点重复填自身名）
+    checked: bool,
+    tristate: bool,             // 仅组节点：true=部分选中 → 显示 ▣
+    is-conflict: bool,          // 仅条目：true=已存在将覆盖
+}
+
+// ── 共享内容区（表头 + 列表 + 底部计数） ─────────────────────────
+// 单独抽出来是为了 Export/Import 两个 dialog 共用同一布局逻辑。
+component SchemaItemList inherits Rectangle {
+    in property <[SchemaItem]> items;
+    in property <bool> show-conflict-col: false;
+
+    callback toggle-item(int);
+
+    background: Theme.bg-panel;
+    border-color: Theme.border-light;
+    border-width: 1px;
+
+    ScrollView {
+        VerticalLayout {
+            spacing: 0;
+            for it[i] in root.items: Rectangle {
+                height: Theme.row-h;
+                background: it.indent == 0 ? Theme.bg-row-alt : transparent;
+                HorizontalLayout {
+                    padding-left: 4px + it.indent * 16px;
+                    spacing: Theme.sp-2;
+                    alignment: start;
+
+                    Rectangle {
+                        width: 16px; height: 16px;
+                        Text {
+                            text: it.tristate ? "▣" : (it.checked ? "☑" : "☐");
+                            font-size: Theme.fs-small;
+                            color: Theme.text-primary;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                        }
+                    }
+                    Text {
+                        text: it.icon;
+                        font-size: Theme.fs-small;
+                        vertical-alignment: center;
+                    }
+                    Text {
+                        text: it.name;
+                        font-size: Theme.fs-small;
+                        color: Theme.text-primary;
+                        vertical-alignment: center;
+                    }
+                    if root.show-conflict-col && it.indent == 1: Text {
+                        text: it.is-conflict ? "⚠️ 已存在(将覆盖)" : "✅ 新增";
+                        font-size: Theme.fs-tiny;
+                        color: it.is-conflict ? Theme.mark-modified : Theme.mark-new;
+                        vertical-alignment: center;
+                    }
+                }
+                TouchArea {
+                    clicked => { root.toggle-item(i); }
+                }
+            }
+        }
+    }
+}
+
+// ── 导出 Schema ─────────────────────────────────────
+export component SchemaExportDialog inherits Rectangle {
+    in property <bool> open: false;
+    in property <[SchemaItem]> items;
+    in-out property <bool> all-checked: false;
+    in property <bool> all-tristate: false;
+    in property <int> selected-count: 0;
+    in property <int> total-count: 0;
+
+    callback toggle-all(bool);
+    callback toggle-item(int);
+    callback confirm();
+    callback cancel();
+
+    visible: root.open;
+    width: 100%;
+    height: 100%;
+
+    DialogChrome {
+        title: "导出 Schema";
+        dialog-w: 480px;
+        dialog-h: 460px;
+        primary-text: "导出...";
+        primary-enabled: root.selected-count > 0;
+        primary-clicked => { root.confirm(); }
+        cancel-clicked => { root.cancel(); }
+        scrim-clicked => { root.cancel(); }
+
+        VerticalLayout {
+            padding: Theme.sp-4;
+            spacing: Theme.sp-3;
+
+            // 全选
+            HorizontalLayout {
+                spacing: Theme.sp-2;
+                CheckBox {
+                    text: "全选";
+                    checked <=> root.all-checked;
+                    toggled => { root.toggle-all(self.checked); }
+                }
+                Rectangle { horizontal-stretch: 1; }
+            }
+            Rectangle { height: 1px; background: Theme.border-light; }
+
+            // 列表
+            Rectangle {
+                vertical-stretch: 1;
+                SchemaItemList {
+                    items: root.items;
+                    show-conflict-col: false;
+                    toggle-item(i) => { root.toggle-item(i); }
+                }
+            }
+
+            Rectangle { height: 1px; background: Theme.border-light; }
+            Text {
+                text: "已选: " + root.selected-count + "/" + root.total-count + " 项";
+                font-size: Theme.fs-tiny;
+                color: Theme.text-secondary;
+            }
+        }
+    }
+}
+
+// ── 导入 Schema ─────────────────────────────────────
+export component SchemaImportDialog inherits Rectangle {
+    in property <bool> open: false;
+    in-out property <string> file-path;
+    in property <bool> file-loaded: false;
+    in property <[SchemaItem]> items;
+    in-out property <bool> all-checked: false;
+    in property <int> selected-count: 0;
+    in property <int> total-count: 0;
+    in property <int> conflict-count: 0;
+
+    callback browse-file();
+    callback toggle-all(bool);
+    callback toggle-item(int);
+    callback confirm();
+    callback cancel();
+
+    visible: root.open;
+    width: 100%;
+    height: 100%;
+
+    DialogChrome {
+        title: "导入 Schema";
+        dialog-w: 540px;
+        dialog-h: 480px;
+        primary-text: "导入";
+        primary-enabled: root.file-loaded && root.selected-count > 0;
+        primary-clicked => { root.confirm(); }
+        cancel-clicked => { root.cancel(); }
+        scrim-clicked => { root.cancel(); }
+
+        VerticalLayout {
+            padding: Theme.sp-4;
+            spacing: Theme.sp-3;
+
+            // 文件选择
+            HorizontalLayout {
+                spacing: Theme.sp-2;
+                Text {
+                    text: "文件:";
+                    font-size: Theme.fs-small;
+                    width: 40px;
+                    vertical-alignment: center;
+                }
+                LineEdit {
+                    text <=> root.file-path;
+                }
+                Button {
+                    text: "浏览...";
+                    clicked => { root.browse-file(); }
+                }
+            }
+
+            Rectangle { height: 1px; background: Theme.border-light; }
+
+            if !root.file-loaded: Rectangle {
+                vertical-stretch: 1;
+                Text {
+                    text: "请选择 .tblschema 文件";
+                    font-size: Theme.fs-small;
+                    color: Theme.text-secondary;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+            }
+            if root.file-loaded: VerticalLayout {
+                spacing: Theme.sp-3;
+                vertical-stretch: 1;
+
+                CheckBox {
+                    text: "全选";
+                    checked <=> root.all-checked;
+                    toggled => { root.toggle-all(self.checked); }
+                }
+
+                Rectangle {
+                    vertical-stretch: 1;
+                    SchemaItemList {
+                        items: root.items;
+                        show-conflict-col: true;
+                        toggle-item(i) => { root.toggle-item(i); }
+                    }
+                }
+
+                Rectangle { height: 1px; background: Theme.border-light; }
+                Text {
+                    text: root.conflict-count > 0
+                        ? ("已选: " + root.selected-count + "/" + root.total-count
+                            + " 项 | 冲突: " + root.conflict-count + " 项将覆盖")
+                        : ("已选: " + root.selected-count + "/" + root.total-count + " 项");
+                    font-size: Theme.fs-tiny;
+                    color: root.conflict-count > 0 ? Theme.mark-modified : Theme.text-secondary;
+                }
+            }
+        }
+    }
+}
+
+// ── 预览 ─────────────────────────────────────────────
+export component SchemaExportDialogPreview inherits Window {
+    title: "SchemaExport Preview";
+    width: 720px;
+    height: 600px;
+
+    SchemaExportDialog {
+        open: true;
+        items: [
+            { indent: 0, icon: "📁", name: "hero", group-name: "hero", checked: true, tristate: false, is-conflict: false },
+            { indent: 1, icon: "📊", name: "HeroBase", group-name: "hero", checked: true, tristate: false, is-conflict: false },
+            { indent: 1, icon: "📊", name: "HeroSkill", group-name: "hero", checked: true, tristate: false, is-conflict: false },
+            { indent: 1, icon: "📋", name: "HeroConst", group-name: "hero", checked: true, tristate: false, is-conflict: false },
+            { indent: 0, icon: "📁", name: "global", group-name: "global", checked: false, tristate: true, is-conflict: false },
+            { indent: 1, icon: "📋", name: "GameConst", group-name: "global", checked: false, tristate: false, is-conflict: false },
+            { indent: 1, icon: "🔢", name: "GameMode", group-name: "global", checked: true, tristate: false, is-conflict: false },
+        ];
+        all-checked: false;
+        all-tristate: true;
+        selected-count: 4;
+        total-count: 5;
+    }
+}
+
+export component SchemaImportDialogPreview inherits Window {
+    title: "SchemaImport Preview";
+    width: 760px;
+    height: 620px;
+
+    SchemaImportDialog {
+        open: true;
+        file-path: "D:\\game\\share.tblschema";
+        file-loaded: true;
+        items: [
+            { indent: 0, icon: "📁", name: "hero", group-name: "hero", checked: true, tristate: false, is-conflict: false },
+            { indent: 1, icon: "📊", name: "HeroBase", group-name: "hero", checked: true, tristate: false, is-conflict: true },
+            { indent: 1, icon: "📊", name: "HeroEquip", group-name: "hero", checked: true, tristate: false, is-conflict: false },
+            { indent: 0, icon: "📁", name: "monster", group-name: "monster", checked: false, tristate: false, is-conflict: false },
+            { indent: 1, icon: "📊", name: "MonsterBase", group-name: "monster", checked: false, tristate: false, is-conflict: false },
+        ];
+        all-checked: false;
+        selected-count: 2;
+        total-count: 4;
+        conflict-count: 1;
+    }
+}

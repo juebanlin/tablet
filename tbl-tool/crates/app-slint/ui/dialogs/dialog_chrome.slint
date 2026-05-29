@@ -1,0 +1,100 @@
+// 弹窗外壳：半透明遮罩 + 居中容器 + 标题栏 + 底部按钮行。
+// 对应 docs/02-UI设计.md §6.1 模态规则。
+
+import { Theme } from "../theme.slint";
+import { Button } from "std-widgets.slint";
+
+// 主操作 / 取消 两按钮版本（Windows 习惯：[主操作] [取消]，取消在最右）
+export component DialogChrome inherits Rectangle {
+    in property <string> title;
+    in property <length> dialog-w: 480px;
+    in property <length> dialog-h: 320px;
+    in property <string> primary-text: "确定";
+    in property <bool> primary-enabled: true;
+    in property <string> cancel-text: "取消";
+    in property <bool> show-secondary: false;
+    in property <string> secondary-text: "";
+
+    callback primary-clicked();
+    callback cancel-clicked();
+    callback secondary-clicked();
+    callback scrim-clicked();           // 点击遮罩 = 取消
+
+    background: Theme.scrim;
+
+    // 整层吸收点击 → 触发 scrim-clicked
+    TouchArea {
+        clicked => { root.scrim-clicked(); }
+    }
+
+    // 居中弹窗
+    Rectangle {
+        width: root.dialog-w;
+        height: root.dialog-h;
+        background: Theme.bg-panel;
+        border-color: Theme.border;
+        border-width: 1px;
+        border-radius: 4px;
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+
+        // 阻止点击穿透到 scrim
+        TouchArea {}
+
+        VerticalLayout {
+            spacing: 0;
+            padding: 0;
+
+            // 标题栏
+            Rectangle {
+                height: 32px;
+                background: Theme.bg-toolbar;
+                border-color: Theme.border-light;
+                border-width: 1px;
+                HorizontalLayout {
+                    padding-left: Theme.sp-4;
+                    padding-right: Theme.sp-4;
+                    alignment: stretch;
+                    Text {
+                        text: root.title;
+                        font-size: Theme.fs-normal;
+                        color: Theme.text-primary;
+                        vertical-alignment: center;
+                    }
+                }
+            }
+
+            // 内容槽（外部 @children 注入）
+            Rectangle {
+                vertical-stretch: 1;
+                @children
+            }
+
+            Rectangle { height: 1px; background: Theme.border-light; }
+
+            // 按钮行：右对齐，[secondary] [primary] [cancel]
+            Rectangle {
+                height: 44px;
+                HorizontalLayout {
+                    padding: Theme.sp-3;
+                    spacing: Theme.sp-3;
+                    alignment: end;
+                    if root.show-secondary: Button {
+                        text: root.secondary-text;
+                        clicked => { root.secondary-clicked(); }
+                    }
+                    Button {
+                        text: root.primary-text;
+                        primary: true;
+                        enabled: root.primary-enabled;
+                        clicked => { root.primary-clicked(); }
+                    }
+                    Button {
+                        text: root.cancel-text;
+                        clicked => { root.cancel-clicked(); }
+                    }
+                }
+            }
+        }
+    }
+}

@@ -1,0 +1,138 @@
+// 表格大区（GridSection）：右侧主区域，聚合所有表格相关子区域。
+// 子区域顺序（从上到下）：
+//   1. GridHeaderBar  ─ 详情标题（表名 / 行列数）
+//   2. GridRibbon     ─ 表级功能 bar（枚举显示名字…）
+//   3. FormulaBar     ─ 公式栏（仅在选中单元格时显示）
+//   4. GridArea       ─ 表格本体（vertical-stretch）
+//   5. StatusBar      ─ 状态栏（选区 / 光标位置）
+//
+// 对应 docs/02-UI设计.md §5（详情区）。
+
+import { Theme } from "../theme.slint";
+import { GridHeaderBar } from "grid_header_bar.slint";
+import { GridRibbon } from "grid_ribbon.slint";
+import { FormulaBar } from "formula_bar.slint";
+import { GridArea, HeaderCell, DataRow, CellKind } from "grid_area.slint";
+import { StatusBar } from "status_bar.slint";
+
+export component GridSection inherits Rectangle {
+    // ── 标题 ──
+    in property <string> title: "未选中";
+    in property <string> subtitle: "";
+
+    // ── 功能 bar ──
+    in-out property <bool> show-enum-name: false;
+
+    // ── 公式栏 ──
+    in property <string> coord;
+    in-out property <string> formula;
+    in property <bool> formula-readonly: false;
+    callback formula-edited(string);
+
+    // ── 表格 ──
+    in property <[[HeaderCell]]> header-rows;
+    in property <[DataRow]> data-rows;
+    in property <int> col-count;
+    in property <int> selected-col: -1;
+    in property <int> selected-row: -1;
+    in property <int> selected-cell-row: -1;
+    in property <int> selected-cell-col: -1;
+    callback header-clicked(int, int);
+    callback cell-clicked(int, int);
+    callback cell-double-clicked(int, int);
+    callback row-num-clicked(int);
+    callback col-letter-clicked(int);
+    callback col-context-menu(int, length, length);
+    callback row-context-menu(int, length, length);
+    callback cell-context-menu(int, int, length, length);
+
+    // ── 状态栏 ──
+    in property <string> selection-info;
+    in property <string> hover-info;
+
+    background: Theme.bg-panel;
+
+    VerticalLayout {
+        spacing: 0;
+
+        GridHeaderBar {
+            title: root.title;
+            subtitle: root.subtitle;
+        }
+        GridRibbon {
+            show-enum-name <=> root.show-enum-name;
+        }
+        FormulaBar {
+            coord: root.coord;
+            formula <=> root.formula;
+            readonly: root.formula-readonly;
+            formula-edited(s) => { root.formula-edited(s); }
+        }
+        GridArea {
+            vertical-stretch: 1;
+            header-rows: root.header-rows;
+            data-rows: root.data-rows;
+            col-count: root.col-count;
+            selected-col: root.selected-col;
+            selected-row: root.selected-row;
+            selected-cell-row: root.selected-cell-row;
+            selected-cell-col: root.selected-cell-col;
+            header-clicked(hi, ci) => { root.header-clicked(hi, ci); }
+            cell-clicked(r, c) => { root.cell-clicked(r, c); }
+            cell-double-clicked(r, c) => { root.cell-double-clicked(r, c); }
+            row-num-clicked(r) => { root.row-num-clicked(r); }
+            col-letter-clicked(c) => { root.col-letter-clicked(c); }
+            col-context-menu(c, x, y) => { root.col-context-menu(c, x, y); }
+            row-context-menu(r, x, y) => { root.row-context-menu(r, x, y); }
+            cell-context-menu(r, c, x, y) => { root.cell-context-menu(r, c, x, y); }
+        }
+        StatusBar {
+            selection-info: root.selection-info;
+            hover-info: root.hover-info;
+        }
+    }
+}
+
+export component GridSectionPreview inherits Window {
+    title: "GridSection Preview";
+    width: 900px;
+    height: 600px;
+
+    GridSection {
+        title: "📊 hero / HeroBase";
+        subtitle: "Table · 3 行 · 5 列";
+        show-enum-name: true;
+        coord: "B3";
+        formula: "战士";
+        selection-info: "B2:D5 (4行×3列，共12格)";
+        hover-info: "光标: C4";
+        col-count: 5;
+        selected-cell-row: 1;
+        selected-cell-col: 1;
+        header-rows: [
+            [
+                { text: "英雄ID", kind: CellKind.read-only, color: Theme.text-readonly },
+                { text: "名称", kind: CellKind.text, color: Theme.text-primary },
+                { text: "血量", kind: CellKind.text, color: Theme.text-primary },
+                { text: "类型", kind: CellKind.text, color: Theme.text-primary },
+                { text: "技能组", kind: CellKind.text, color: Theme.text-primary },
+            ],
+            [
+                { text: "id", kind: CellKind.read-only, color: Theme.text-readonly },
+                { text: "name", kind: CellKind.text, color: Theme.text-primary },
+                { text: "hp", kind: CellKind.text, color: Theme.text-primary },
+                { text: "type", kind: CellKind.text, color: Theme.text-primary },
+                { text: "skills", kind: CellKind.text, color: Theme.text-primary },
+            ],
+        ];
+        data-rows: [
+            { cells: [
+                { text: "1001", has-error: false, is-empty-ref: false },
+                { text: "战士", has-error: false, is-empty-ref: false },
+                { text: "100", has-error: false, is-empty-ref: false },
+                { text: "WARRIOR", has-error: false, is-empty-ref: false },
+                { text: "1;2;3", has-error: false, is-empty-ref: false },
+            ], row-color: #00000000, selected: false },
+        ];
+    }
+}

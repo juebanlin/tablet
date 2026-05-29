@@ -1,0 +1,299 @@
+// 表格区：固定表头 + 数据行 + 行号列。
+// 对应 docs/02-UI设计.md §3 / @01.5.5。
+//
+// 注意：本组件只做布局/渲染骨架，真实编辑逻辑由 Rust 端通过回调接管。
+
+import { Theme } from "../theme.slint";
+import { ScrollView } from "std-widgets.slint";
+
+// ── 单元格类型，对应 grid_model::CellKind ──
+export enum CellKind {
+    read-only,
+    text,
+    type-enum,
+    export-enum,
+    type-enum-col,
+    export-enum-col,
+    ref,
+}
+
+export struct HeaderCell {
+    text: string,
+    kind: CellKind,
+    color: color,
+}
+
+export struct DataCell {
+    text: string,           // 展示值（已经过 display_for_cell 转换）
+    has-error: bool,
+    is-empty-ref: bool,     // 引用为空 → 淡灰渲染
+}
+
+export struct DataRow {
+    cells: [DataCell],
+    row-color: color,       // 行背景色（用于 #@c: 标记）；transparent 表示默认
+    selected: bool,
+}
+
+export component GridArea inherits Rectangle {
+    in property <[[HeaderCell]]> header-rows;     // 多行表头（Table 4 行 / Constant 1 行 / Enum 1 行）
+    in property <[DataRow]> data-rows;
+    in property <int> col-count: 0;
+    in property <int> selected-col: -1;           // 整列选中（-1 = 无）
+    in property <int> selected-row: -1;           // 整行选中
+    in property <int> selected-cell-row: -1;
+    in property <int> selected-cell-col: -1;
+    in property <string> empty-hint: "选择左侧节点查看详情";
+
+    callback header-clicked(int /* hrow */, int /* col */);
+    callback cell-clicked(int /* row */, int /* col */);
+    callback cell-double-clicked(int /* row */, int /* col */);
+    callback row-num-clicked(int);
+    callback col-letter-clicked(int);
+    callback col-context-menu(int, length, length);
+    callback row-context-menu(int, length, length);
+    callback cell-context-menu(int, int, length, length);
+
+    background: Theme.bg-panel;
+
+    // 字母列函数：A..Z（>26 暂不支持，显示 "?"）。
+    // Slint 1.x 不支持 string 下标，因此用一长串三元展开。
+    pure function col-letter(c: int) -> string {
+        c == 0 ? "A" : c == 1 ? "B" : c == 2 ? "C" : c == 3 ? "D"
+      : c == 4 ? "E" : c == 5 ? "F" : c == 6 ? "G" : c == 7 ? "H"
+      : c == 8 ? "I" : c == 9 ? "J" : c == 10 ? "K" : c == 11 ? "L"
+      : c == 12 ? "M" : c == 13 ? "N" : c == 14 ? "O" : c == 15 ? "P"
+      : c == 16 ? "Q" : c == 17 ? "R" : c == 18 ? "S" : c == 19 ? "T"
+      : c == 20 ? "U" : c == 21 ? "V" : c == 22 ? "W" : c == 23 ? "X"
+      : c == 24 ? "Y" : c == 25 ? "Z" : "?"
+    }
+
+    // 空态：未选中任何节点 / 节点无字段
+    if root.col-count == 0 || root.header-rows.length == 0: Rectangle {
+        Text {
+            text: root.empty-hint;
+            font-size: Theme.fs-normal;
+            color: Theme.text-disabled;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+        }
+    }
+
+    if root.col-count > 0 && root.header-rows.length > 0: VerticalLayout {
+        spacing: 0;
+
+        // ───── 固定表头 ─────
+        Rectangle {
+            height: Theme.row-h * (1 + root.header-rows.length);
+            background: Theme.bg-header;
+
+            VerticalLayout {
+                spacing: 0;
+
+                // 列字母行
+                HorizontalLayout {
+                    spacing: 0;
+                    Rectangle {
+                        width: Theme.row-num-w;
+                        background: Theme.bg-header;
+                        border-color: Theme.border;
+                        border-width: 0.5px;
+                    }
+                    for c in root.col-count: Rectangle {
+                        width: Theme.col-w;
+                        height: Theme.row-h;
+                        background: c == root.selected-col ? Theme.bg-cell-selected : Theme.bg-header;
+                        border-color: Theme.border;
+                        border-width: 0.5px;
+                        Text {
+                            text: root.col-letter(c);
+                            font-size: Theme.fs-tiny;
+                            color: Theme.text-secondary;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                        }
+                        TouchArea {
+                            clicked => { root.col-letter-clicked(c); }
+                            pointer-event(e) => {
+                                if e.button == PointerEventButton.right && e.kind == PointerEventKind.up {
+                                    root.col-context-menu(c, self.mouse-x, self.mouse-y);
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // 表头各行（desc/type/export/field）
+                for hrow[hi] in root.header-rows: HorizontalLayout {
+                    spacing: 0;
+                    Rectangle {
+                        width: Theme.row-num-w;
+                        background: Theme.bg-header;
+                        border-color: Theme.border;
+                        border-width: 0.5px;
+                    }
+                    for cell[ci] in hrow: Rectangle {
+                        width: Theme.col-w;
+                        height: Theme.row-h;
+                        background: cell.kind == CellKind.read-only
+                            ? Theme.bg-header-readonly
+                            : (ci == root.selected-col ? Theme.bg-cell-selected : Theme.bg-header);
+                        border-color: Theme.border;
+                        border-width: 0.5px;
+                        Text {
+                            text: cell.text;
+                            font-size: Theme.fs-tiny;
+                            color: cell.kind == CellKind.read-only ? Theme.text-readonly : cell.color;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                        }
+                        // 下拉箭头（type/export 类）
+                        if cell.kind == CellKind.type-enum
+                          || cell.kind == CellKind.export-enum
+                          || cell.kind == CellKind.type-enum-col
+                          || cell.kind == CellKind.export-enum-col: Text {
+                            x: parent.width - 12px;
+                            text: "▼";
+                            font-size: 8px;
+                            color: Theme.text-secondary;
+                            vertical-alignment: center;
+                        }
+                        if cell.kind != CellKind.read-only: TouchArea {
+                            clicked => { root.header-clicked(hi, ci); }
+                        }
+                    }
+                }
+            }
+        }
+
+        // ───── 数据区（可滚动）─────
+        ScrollView {
+            VerticalLayout {
+                spacing: 0;
+                for row[ri] in root.data-rows: HorizontalLayout {
+                    spacing: 0;
+                    // 行号
+                    Rectangle {
+                        width: Theme.row-num-w;
+                        height: Theme.row-h;
+                        background: ri == root.selected-row ? Theme.bg-row-selected : Theme.bg-header;
+                        border-color: Theme.border;
+                        border-width: 0.5px;
+                        Text {
+                            text: ri + 1;
+                            font-size: Theme.fs-tiny;
+                            color: Theme.text-secondary;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                        }
+                        TouchArea {
+                            clicked => { root.row-num-clicked(ri); }
+                            pointer-event(e) => {
+                                if e.button == PointerEventButton.right && e.kind == PointerEventKind.up {
+                                    root.row-context-menu(ri, self.mouse-x, self.mouse-y);
+                                }
+                            }
+                        }
+                    }
+                    for cell[ci] in row.cells: Rectangle {
+                        width: Theme.col-w;
+                        height: Theme.row-h;
+                        background:
+                            (ri == root.selected-cell-row && ci == root.selected-cell-col) ? Theme.bg-cell-selected
+                            : (ri == root.selected-row || ci == root.selected-col) ? Theme.bg-row-selected
+                            : (row.row-color.alpha > 0 ? row.row-color : (mod(ri, 2) == 0 ? Theme.bg-panel : Theme.bg-row-alt));
+                        border-color: cell.has-error ? Theme.border-error : Theme.border-light;
+                        border-width: cell.has-error ? 1.5px : 0.5px;
+                        Text {
+                            text: cell.text;
+                            font-size: Theme.fs-small;
+                            color: cell.is-empty-ref ? Theme.text-disabled : Theme.text-primary;
+                            horizontal-alignment: left;
+                            vertical-alignment: center;
+                            x: 4px;
+                        }
+                        TouchArea {
+                            clicked => { root.cell-clicked(ri, ci); }
+                            double-clicked => { root.cell-double-clicked(ri, ci); }
+                            pointer-event(e) => {
+                                if e.button == PointerEventButton.right && e.kind == PointerEventKind.up {
+                                    root.cell-context-menu(ri, ci, self.mouse-x, self.mouse-y);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// 单文件预览：一个示例 Table（含 ReadOnly id 列 + 中文 desc + 类型 + 数据）
+export component GridAreaPreview inherits Window {
+    title: "GridArea Preview";
+    width: 720px;
+    height: 360px;
+
+    GridArea {
+        col-count: 5;
+        selected-cell-row: 1;
+        selected-cell-col: 1;
+        header-rows: [
+            // desc
+            [
+                { text: "英雄ID", kind: CellKind.read-only, color: Theme.text-readonly },
+                { text: "名称", kind: CellKind.text, color: Theme.text-primary },
+                { text: "血量", kind: CellKind.text, color: Theme.text-primary },
+                { text: "类型", kind: CellKind.text, color: Theme.text-primary },
+                { text: "技能组", kind: CellKind.text, color: Theme.text-primary },
+            ],
+            // export
+            [
+                { text: "cs", kind: CellKind.read-only, color: Theme.text-readonly },
+                { text: "前后端", kind: CellKind.export-enum, color: Theme.text-success },
+                { text: "服务器", kind: CellKind.export-enum, color: Theme.text-success },
+                { text: "前后端", kind: CellKind.export-enum, color: Theme.text-success },
+                { text: "前后端", kind: CellKind.export-enum, color: Theme.text-success },
+            ],
+            // type
+            [
+                { text: "int", kind: CellKind.read-only, color: Theme.text-readonly },
+                { text: "str", kind: CellKind.type-enum, color: Theme.text-info },
+                { text: "int", kind: CellKind.type-enum, color: Theme.text-info },
+                { text: "@HeroType", kind: CellKind.type-enum, color: Theme.text-info },
+                { text: "List<int>", kind: CellKind.type-enum, color: Theme.text-info },
+            ],
+            // field
+            [
+                { text: "id", kind: CellKind.read-only, color: Theme.text-readonly },
+                { text: "name", kind: CellKind.text, color: Theme.text-primary },
+                { text: "hp", kind: CellKind.text, color: Theme.text-primary },
+                { text: "type", kind: CellKind.text, color: Theme.text-primary },
+                { text: "skills", kind: CellKind.text, color: Theme.text-primary },
+            ],
+        ];
+        data-rows: [
+            { cells: [
+                { text: "1001", has-error: false, is-empty-ref: false },
+                { text: "战士", has-error: false, is-empty-ref: false },
+                { text: "100", has-error: false, is-empty-ref: false },
+                { text: "WARRIOR", has-error: false, is-empty-ref: false },
+                { text: "1;2;3", has-error: false, is-empty-ref: false },
+            ], row-color: #00000000, selected: false },
+            { cells: [
+                { text: "1002", has-error: false, is-empty-ref: false },
+                { text: "法师", has-error: false, is-empty-ref: false },
+                { text: "80", has-error: false, is-empty-ref: false },
+                { text: "MAGE", has-error: false, is-empty-ref: false },
+                { text: "4;5", has-error: false, is-empty-ref: false },
+            ], row-color: #00000000, selected: true },
+            { cells: [
+                { text: "1003", has-error: false, is-empty-ref: false },
+                { text: "弓手", has-error: false, is-empty-ref: false },
+                { text: "abc", has-error: true, is-empty-ref: false },
+                { text: "", has-error: false, is-empty-ref: true },
+                { text: "6;7;8", has-error: false, is-empty-ref: false },
+            ], row-color: #ffe0e0, selected: false },
+        ];
+    }
+}

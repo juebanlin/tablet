@@ -1,0 +1,44 @@
+// 表格区标题条：显示当前节点表名 + 行列数副标题。
+// 归属于 GridSection 内部子区域。对应 docs/02-UI设计.md §5.0。
+
+import { Theme } from "../theme.slint";
+
+export component GridHeaderBar inherits Rectangle {
+    in property <string> title: "未选中";
+    in property <string> subtitle: "";
+
+    height: 24px;
+    background: Theme.bg-toolbar;
+    border-color: Theme.border-light;
+    border-width: 1px;
+
+    HorizontalLayout {
+        padding-left: Theme.sp-3;
+        padding-right: Theme.sp-3;
+        spacing: Theme.sp-3;
+        alignment: start;
+        Text {
+            text: root.title;
+            font-size: Theme.fs-small;
+            color: Theme.text-primary;
+            vertical-alignment: center;
+        }
+        Text {
+            text: root.subtitle;
+            font-size: Theme.fs-tiny;
+            color: Theme.text-secondary;
+            vertical-alignment: center;
+        }
+    }
+}
+
+export component GridHeaderBarPreview inherits Window {
+    title: "GridHeaderBar Preview";
+    width: 720px;
+    height: 40px;
+
+    GridHeaderBar {
+        title: "📊 hero / HeroBase";
+        subtitle: "Table · 3 行 · 5 列";
+    }
+}

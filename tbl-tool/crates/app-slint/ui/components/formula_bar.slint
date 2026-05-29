@@ -1,0 +1,61 @@
+// 公式栏：左侧坐标 + 右侧编辑区。归属于右侧表格面板上方，与 GridArea 等宽。
+// 对应 docs/02-UI设计.md §5.3。
+
+import { Theme } from "../theme.slint";
+import { LineEdit } from "std-widgets.slint";
+
+export component FormulaBar inherits Rectangle {
+    in property <string> coord: "";          // 选中坐标，例 "B3"。空 → 整条隐藏
+    in-out property <string> formula;
+    in property <bool> readonly: false;
+
+    callback formula-edited(string);
+
+    height: root.coord != "" ? Theme.formula-h + 2px : 0px;
+    background: Theme.bg-toolbar;
+    border-color: Theme.border-light;
+    border-width: 1px;
+    visible: root.coord != "";
+
+    HorizontalLayout {
+        padding-left: Theme.sp-3;
+        padding-right: Theme.sp-3;
+        spacing: Theme.sp-3;
+        alignment: stretch;
+
+        Rectangle {
+            width: 48px;
+            Text {
+                text: root.coord;
+                font-size: Theme.fs-tiny;
+                color: Theme.text-secondary;
+                vertical-alignment: center;
+            }
+        }
+        Rectangle { width: 1px; background: Theme.border-light; }
+        if !root.readonly: LineEdit {
+            text <=> root.formula;
+            edited(s) => { root.formula-edited(s); }
+        }
+        if root.readonly: Rectangle {
+            Text {
+                x: Theme.sp-2;
+                text: root.formula;
+                font-size: Theme.fs-tiny;
+                color: Theme.text-secondary;
+                vertical-alignment: center;
+            }
+        }
+    }
+}
+
+export component FormulaBarPreview inherits Window {
+    title: "FormulaBar Preview";
+    width: 720px;
+    height: 60px;
+
+    FormulaBar {
+        coord: "B3";
+        formula: "战士";
+    }
+}

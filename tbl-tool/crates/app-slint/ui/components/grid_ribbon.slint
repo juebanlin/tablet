@@ -1,0 +1,36 @@
+// 表格区功能 bar：归属于当前选中表，显示表级开关（枚举显示名字、…）。
+// 与 GridArea 等宽。对应 docs/02-UI设计.md §5.2。
+
+import { Theme } from "../theme.slint";
+import { CheckBox } from "std-widgets.slint";
+
+export component GridRibbon inherits Rectangle {
+    in-out property <bool> show-enum-name: false;
+
+    height: Theme.ribbon-h;
+    background: Theme.bg-toolbar;
+    border-color: Theme.border-light;
+    border-width: 1px;
+
+    HorizontalLayout {
+        padding-left: Theme.sp-4;
+        padding-right: Theme.sp-4;
+        spacing: Theme.sp-5;
+        alignment: start;
+
+        CheckBox {
+            text: "枚举显示名字";
+            checked <=> root.show-enum-name;
+        }
+    }
+}
+
+export component GridRibbonPreview inherits Window {
+    title: "GridRibbon Preview";
+    width: 720px;
+    height: 50px;
+
+    GridRibbon {
+        show-enum-name: true;
+    }
+}

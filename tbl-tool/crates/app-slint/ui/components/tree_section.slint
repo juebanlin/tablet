@@ -1,0 +1,202 @@
+// 配置树大区（TreeSection）：左侧主区域，聚合标题 + 功能区 + 节点列表。
+// 子区域顺序（从上到下）：
+//   1. 标题栏        ─ "配置树"
+//   2. 功能区        ─ 搜索 / 过滤 / 完整组
+//   3. 节点展示区    ─ 树列表（vertical-stretch）
+//
+// 对应 docs/02-UI设计.md §2。
+
+import { Theme } from "../theme.slint";
+import { ComboBox, CheckBox, LineEdit, ScrollView } from "std-widgets.slint";
+
+export struct TreeNode {
+    id: int,                // 唯一 id（行号）
+    indent: int,            // 缩进层级（0=组、1=配置项）
+    expanded: bool,         // 仅组节点有意义
+    icon: string,           // 📁/📊/📋/🔢
+    name: string,
+    mark: string,           // ""/"+"/"*"/"-"/"!"
+    mark-color: color,
+    is-group: bool,
+    selected: bool,
+}
+
+export component TreeSection inherits Rectangle {
+    in property <[TreeNode]> nodes;
+    in property <[string]> filters: ["全部", "改动", "新增", "修改", "删除"];
+    in property <int> filter-index: 0;
+    in-out property <bool> full-group: false;
+    in-out property <string> search: "";
+
+    callback node-clicked(int);
+    callback node-toggle-expand(int);
+    callback node-context-menu(int, length, length);
+    callback blank-context-menu(length, length);
+    callback filter-changed(int);
+    callback search-edited(string);
+
+    background: Theme.bg-panel;
+    border-color: Theme.border-light;
+    border-width: 1px;
+
+    VerticalLayout {
+        spacing: 0;
+        padding: 0;
+
+        // ─── 1. 标题栏 ───
+        Rectangle {
+            height: 24px;
+            background: Theme.bg-toolbar;
+            border-color: Theme.border-light;
+            border-width: 1px;
+            Text {
+                x: Theme.sp-3;
+                text: "配置树";
+                font-size: Theme.fs-small;
+                color: Theme.text-primary;
+                vertical-alignment: center;
+            }
+        }
+
+        // ─── 2. 功能区（过滤 + 勾选 + 搜索）───
+        Rectangle {
+            height: filter-stack.preferred-height;
+            background: Theme.bg-toolbar;
+            border-color: Theme.border-light;
+            border-width: 1px;
+            filter-stack := VerticalLayout {
+                padding: Theme.sp-3;
+                spacing: Theme.sp-2;
+
+                // 搜索框
+                HorizontalLayout {
+                    spacing: Theme.sp-2;
+                    alignment: stretch;
+                    Text {
+                        text: "搜索:";
+                        font-size: Theme.fs-tiny;
+                        color: Theme.text-secondary;
+                        vertical-alignment: center;
+                        width: 32px;
+                    }
+                    LineEdit {
+                        text <=> root.search;
+                        placeholder-text: "名称关键字";
+                        edited(s) => { root.search-edited(s); }
+                    }
+                }
+                // 过滤下拉
+                HorizontalLayout {
+                    spacing: Theme.sp-2;
+                    alignment: stretch;
+                    Text {
+                        text: "过滤:";
+                        font-size: Theme.fs-tiny;
+                        color: Theme.text-secondary;
+                        vertical-alignment: center;
+                        width: 32px;
+                    }
+                    ComboBox {
+                        model: root.filters;
+                        current-index: root.filter-index;
+                        selected(s) => { root.filter-changed(self.current-index); }
+                    }
+                }
+                // 完整组勾选
+                CheckBox {
+                    text: "完整组";
+                    checked <=> root.full-group;
+                }
+            }
+        }
+
+        // ─── 3. 节点展示区 ───
+        ScrollView {
+            VerticalLayout {
+                padding: 0;
+                spacing: 0;
+                for node in root.nodes: Rectangle {
+                    height: Theme.row-h;
+                    background: node.selected ? Theme.bg-row-selected : transparent;
+
+                    HorizontalLayout {
+                        padding-left: 4px + node.indent * 14px;
+                        padding-right: Theme.sp-2;
+                        spacing: Theme.sp-2;
+                        alignment: start;
+
+                        // 展开三角（仅组节点）
+                        if node.is-group: Rectangle {
+                            width: 12px;
+                            ta := TouchArea {
+                                clicked => { root.node-toggle-expand(node.id); }
+                                Text {
+                                    text: node.expanded ? "▼" : "▶";
+                                    font-size: 9px;
+                                    color: Theme.text-secondary;
+                                    vertical-alignment: center;
+                                }
+                            }
+                        }
+                        if !node.is-group: Rectangle { width: 12px; }
+
+                        Text {
+                            text: node.icon;
+                            font-size: Theme.fs-small;
+                            vertical-alignment: center;
+                        }
+                        Text {
+                            text: node.name;
+                            font-size: Theme.fs-small;
+                            color: Theme.text-primary;
+                            vertical-alignment: center;
+                        }
+                        if node.mark != "": Text {
+                            text: node.mark;
+                            font-size: Theme.fs-small;
+                            color: node.mark-color;
+                            vertical-alignment: center;
+                        }
+                    }
+
+                    TouchArea {
+                        clicked => { root.node-clicked(node.id); }
+                        pointer-event(e) => {
+                            if e.button == PointerEventButton.right && e.kind == PointerEventKind.up {
+                                root.node-context-menu(node.id, self.mouse-x, self.mouse-y);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // 空白区右键
+        TouchArea {
+            pointer-event(e) => {
+                if e.button == PointerEventButton.right && e.kind == PointerEventKind.up {
+                    root.blank-context-menu(self.mouse-x, self.mouse-y);
+                }
+            }
+        }
+    }
+}
+
+export component TreeSectionPreview inherits Window {
+    title: "TreeSection Preview";
+    width: 240px;
+    height: 480px;
+
+    TreeSection {
+        nodes: [
+            { id: 1, indent: 0, expanded: true, icon: "📁", name: "hero", mark: "*", mark-color: Theme.mark-modified, is-group: true, selected: false },
+            { id: 2, indent: 1, expanded: false, icon: "📊", name: "HeroBase", mark: "*", mark-color: Theme.mark-modified, is-group: false, selected: true },
+            { id: 3, indent: 1, expanded: false, icon: "📊", name: "HeroSkill", mark: "+", mark-color: Theme.mark-new, is-group: false, selected: false },
+            { id: 4, indent: 1, expanded: false, icon: "📋", name: "HeroConst", mark: "", mark-color: Theme.text-primary, is-group: false, selected: false },
+            { id: 5, indent: 1, expanded: false, icon: "🔢", name: "HeroType", mark: "!", mark-color: Theme.text-error, is-group: false, selected: false },
+            { id: 6, indent: 0, expanded: true, icon: "📁", name: "global", mark: "", mark-color: Theme.text-primary, is-group: true, selected: false },
+            { id: 7, indent: 1, expanded: false, icon: "📋", name: "GameConst", mark: "", mark-color: Theme.text-primary, is-group: false, selected: false },
+            { id: 8, indent: 0, expanded: false, icon: "📁", name: "monster", mark: "-", mark-color: Theme.mark-deleted, is-group: true, selected: false },
+        ];
+    }
+}
