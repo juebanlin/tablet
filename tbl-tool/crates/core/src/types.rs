@@ -178,6 +178,14 @@ impl Paradigm {
           Ref]
     }
 
+    /// 仅数据范式（不含 Ref），UI 类型选择器「数据类型」tab 用
+    pub fn all_data() -> &'static [Paradigm] {
+        use Paradigm::*;
+        &[Base, Tuple2, Tuple3, Tuple4, List, Set, Map,
+          ListTuple2, ListTuple3, ListTuple4,
+          MapTuple2, MapTuple3, MapTuple4, MapList]
+    }
+
     pub fn label(&self) -> &'static str {
         match self {
             Paradigm::Base => "基础类型",

@@ -441,7 +441,8 @@ impl eframe::App for TblApp {
 impl TblApp {
     fn show_type_selector(&mut self, ctx: &egui::Context) {
         let sep = self.engine.project.config.separators.clone();
-        if let Some(type_str) = ui::type_selector::render_type_selector(ctx, &mut self.type_selector, &sep) {
+        let groups = self.engine.project.groups.clone();
+        if let Some(type_str) = ui::type_selector::render_type_selector(ctx, &mut self.type_selector, &sep, &groups) {
             if let Some(cell) = self.type_selector.editing_cell.take() {
                 let group = self.type_selector.editing_group.clone();
                 let name = self.type_selector.editing_name.clone();
