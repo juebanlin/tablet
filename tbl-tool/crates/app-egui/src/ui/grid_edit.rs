@@ -14,7 +14,15 @@ pub fn render_edit(ui: &mut egui::Ui, app: &mut TblApp, kind: &CellKind, pos: eg
                 }
             }
         }
-        CellKind::ExportEnum | CellKind::ExportEnumCol | CellKind::Reference { .. } => {
+        CellKind::Ref { name: ref_name } => {
+            if !app.ref_picker.open {
+                if let Some(cell) = app.edit_state.editing.clone() {
+                    app.ref_picker.open_with(ref_name, &app.edit_state.edit_buffer, cell, group, name, source);
+                    app.edit_state.editing = None;
+                }
+            }
+        }
+        CellKind::ExportEnum | CellKind::ExportEnumCol => {
             render_export_dropdown(ui, app, pos);
         }
         _ if kind.double_click_to_edit() => {

@@ -8,7 +8,7 @@ pub enum CellKind {
     ExportEnum,
     TypeEnumCol,
     ExportEnumCol,
-    Reference { table: String },
+    Ref { name: String },
 }
 
 impl CellKind {
@@ -19,7 +19,7 @@ impl CellKind {
     pub fn click_to_edit(&self) -> bool {
         matches!(self, Self::TypeEnum | Self::ExportEnum
             | Self::TypeEnumCol | Self::ExportEnumCol
-            | Self::Reference { .. })
+            | Self::Ref { .. })
     }
 
     pub fn double_click_to_edit(&self) -> bool {

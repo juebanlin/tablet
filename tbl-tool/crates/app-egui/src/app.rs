@@ -4,6 +4,7 @@ use tbl_core::model::*;
 use tbl_core::ops::{ProjectEngine, ProjectAction};
 use crate::ui;
 use crate::ui::type_selector::TypeSelectorState;
+use crate::ui::ref_picker::RefPickerState;
 use crate::ui::schema_dialog::{SchemaExportState, SchemaImportState, DataExportState};
 
 pub struct TblApp {
@@ -22,6 +23,7 @@ pub struct TblApp {
     pub tree_expanded: HashSet<String>,
     pub tree_context: Option<TreeContext>,
     pub type_selector: TypeSelectorState,
+    pub ref_picker: RefPickerState,
     pub schema_export: SchemaExportState,
     pub schema_import: SchemaImportState,
     pub data_export: DataExportState,
@@ -120,6 +122,7 @@ impl TblApp {
             tree_expanded: expanded,
             tree_context: None,
             type_selector: TypeSelectorState::default(),
+            ref_picker: RefPickerState::default(),
             schema_export: SchemaExportState::default(),
             schema_import: SchemaImportState::default(),
             data_export: DataExportState::default(),
@@ -431,6 +434,7 @@ impl eframe::App for TblApp {
         });
 
         self.show_type_selector(ctx);
+        self.show_ref_picker(ctx);
         self.show_input_dialog(ctx);
         ui::schema_dialog::render_export_dialog(ctx, self);
         ui::schema_dialog::render_import_dialog(ctx, self);
@@ -448,6 +452,19 @@ impl TblApp {
                 let name = self.type_selector.editing_name.clone();
                 let source = self.type_selector.editing_source.clone();
                 self.edit_state.edit_buffer = type_str;
+                self.grid_commit(&group, &name, &cell, &source);
+            }
+        }
+    }
+
+    fn show_ref_picker(&mut self, ctx: &egui::Context) {
+        let groups = self.engine.project.groups.clone();
+        if let Some(value) = ui::ref_picker::render_ref_picker(ctx, &mut self.ref_picker, &groups) {
+            if let Some(cell) = self.ref_picker.editing_cell.take() {
+                let group = self.ref_picker.editing_group.clone();
+                let name = self.ref_picker.editing_name.clone();
+                let source = self.ref_picker.editing_source.clone();
+                self.edit_state.edit_buffer = value;
                 self.grid_commit(&group, &name, &cell, &source);
             }
         }

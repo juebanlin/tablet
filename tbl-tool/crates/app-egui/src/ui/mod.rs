@@ -4,4 +4,5 @@ pub mod grid_model;
 pub mod grid;
 pub mod grid_edit;
 pub mod type_selector;
+pub mod ref_picker;
 pub mod schema_dialog;

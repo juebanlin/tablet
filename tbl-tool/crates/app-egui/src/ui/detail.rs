@@ -124,9 +124,8 @@ fn build_table_grid(app: &TblApp, group: &str, name: &str) -> Option<GridData> {
     }).collect();
 
     let col_defs: Vec<ColDef> = fields.iter().map(|f| {
-        let kind = if f.tbl_type.starts_with("Ref<") {
-            let t = f.tbl_type.trim_start_matches("Ref<").trim_end_matches('>').to_string();
-            CellKind::Reference { table: t }
+        let kind = if let Some(name) = f.tbl_type.strip_prefix('@') {
+            CellKind::Ref { name: name.trim().to_string() }
         } else {
             CellKind::Text
         };
