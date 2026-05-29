@@ -130,6 +130,11 @@ pub fn render_type_selector(
 ) -> Option<String> {
     if !state.open { return None; }
 
+    if super::modal::modal_scrim(ctx, "type_selector") {
+        state.open = false;
+        return None;
+    }
+
     let mut result: Option<String> = None;
     let mut close = false;
 
@@ -142,6 +147,7 @@ pub fn render_type_selector(
     egui::Window::new("选择类型")
         .collapsible(false)
         .resizable(false)
+        .order(egui::Order::Foreground)
         .show(ctx, |ui| {
             // Tabs
             ui.horizontal(|ui| {
@@ -161,11 +167,14 @@ pub fn render_type_selector(
             }
 
             ui.add_space(8.0);
-            ui.horizontal(|ui| {
+            super::modal::dialog_buttons(ui, |ui| {
                 let confirm_enabled = match state.tab {
                     SelectorTab::Data => true,
                     SelectorTab::Reference => !state.ref_name.is_empty(),
                 };
+                if ui.button("取消").clicked() {
+                    close = true;
+                }
                 if ui.add_enabled(confirm_enabled, egui::Button::new("确定")).clicked() {
                     let s = match state.tab {
                         SelectorTab::Data => state.data_type().to_type_string(),
@@ -177,9 +186,6 @@ pub fn render_type_selector(
                         result = Some(s);
                         close = true;
                     }
-                }
-                if ui.button("取消").clicked() {
-                    close = true;
                 }
             });
         });

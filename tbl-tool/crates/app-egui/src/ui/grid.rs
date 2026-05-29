@@ -8,6 +8,8 @@ pub const COL_W: f32 = 100.0;
 const ROW_NUM_W: f32 = 32.0;
 const BORDER: egui::Color32 = egui::Color32::from_gray(180);
 const HEADER_BG: egui::Color32 = egui::Color32::from_gray(240);
+const READONLY_HEADER_BG: egui::Color32 = egui::Color32::from_gray(200);
+const READONLY_TEXT: egui::Color32 = egui::Color32::from_gray(110);
 const SEL_BG: egui::Color32 = egui::Color32::from_rgba_premultiplied(180, 215, 255, 255);
 const SEL_BORDER: egui::Color32 = egui::Color32::from_rgb(50, 120, 200);
 const ERROR_BORDER: egui::Color32 = egui::Color32::from_rgb(220, 50, 50);
@@ -44,10 +46,16 @@ pub fn render_grid(ui: &mut egui::Ui, app: &mut TblApp, group: &str, name: &str,
         let y = ho.y + (1 + hrow) as f32 * ROW_H;
         for (col, cell) in cells.iter().enumerate() {
             let x = ho.x + ROW_NUM_W + col as f32 * COL_W;
-            if matches!(app.edit_state.selected, Selection::Col(c) if c == col) {
-                h_painter.rect_filled(egui::Rect::from_min_size(egui::pos2(x, y), egui::vec2(COL_W, ROW_H)), 0.0, SEL_BG);
+            let cell_rect = egui::Rect::from_min_size(egui::pos2(x, y), egui::vec2(COL_W, ROW_H));
+            let is_readonly = matches!(cell.kind, CellKind::ReadOnly);
+            if is_readonly {
+                h_painter.rect_filled(cell_rect, 0.0, READONLY_HEADER_BG);
             }
-            draw_center(&h_painter, x, y, COL_W, &display_for_header(&cell.kind, &cell.text), 11.0, cell.color);
+            if matches!(app.edit_state.selected, Selection::Col(c) if c == col) {
+                h_painter.rect_filled(cell_rect, 0.0, SEL_BG);
+            }
+            let text_color = if is_readonly { READONLY_TEXT } else { cell.color };
+            draw_center(&h_painter, x, y, COL_W, &display_for_header(&cell.kind, &cell.text), 11.0, text_color);
             if cell.kind.show_dropdown_arrow() {
                 draw_dropdown_arrow(&h_painter, x + COL_W - 14.0, y + ROW_H / 2.0);
             }

@@ -9,6 +9,7 @@ pub fn render_edit(ui: &mut egui::Ui, app: &mut TblApp, kind: &CellKind, pos: eg
         CellKind::TypeEnum | CellKind::TypeEnumCol => {
             if !app.type_selector.open {
                 if let Some(cell) = app.edit_state.editing.clone() {
+                    app.ref_picker.open = false;
                     app.type_selector.open_with(&app.edit_state.edit_buffer, cell, group, name, source);
                     app.edit_state.editing = None;
                 }
@@ -17,6 +18,7 @@ pub fn render_edit(ui: &mut egui::Ui, app: &mut TblApp, kind: &CellKind, pos: eg
         CellKind::Ref { name: ref_name } => {
             if !app.ref_picker.open {
                 if let Some(cell) = app.edit_state.editing.clone() {
+                    app.type_selector.open = false;
                     app.ref_picker.open_with(ref_name, &app.edit_state.edit_buffer, cell, group, name, source);
                     app.edit_state.editing = None;
                 }

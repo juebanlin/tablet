@@ -493,13 +493,13 @@ impl TblApp {
                     .collapsible(false).resizable(false).open(&mut open)
                     .show(ctx, |ui| {
                         ui.label(format!("确定删除 Group \"{}\" 及其所有内容？", group));
-                        ui.horizontal(|ui| {
+                        ui::modal::dialog_buttons(ui, |ui| {
+                            if ui.button("取消").clicked() {
+                                self.pending_action = None;
+                            }
                             if ui.button("确定").clicked() {
                                 self.engine.delete_group(&group);
                                 self.selected = None;
-                                self.pending_action = None;
-                            }
-                            if ui.button("取消").clicked() {
                                 self.pending_action = None;
                             }
                         });
@@ -514,13 +514,13 @@ impl TblApp {
                     .collapsible(false).resizable(false).open(&mut open)
                     .show(ctx, |ui| {
                         ui.label(format!("确定删除 \"{}/{}\"？", group, name));
-                        ui.horizontal(|ui| {
+                        ui::modal::dialog_buttons(ui, |ui| {
+                            if ui.button("取消").clicked() {
+                                self.pending_action = None;
+                            }
                             if ui.button("确定").clicked() {
                                 self.engine.delete_node(&group, &name);
                                 self.selected = None;
-                                self.pending_action = None;
-                            }
-                            if ui.button("取消").clicked() {
                                 self.pending_action = None;
                             }
                         });
@@ -566,14 +566,14 @@ impl TblApp {
                 if let Some(ref msg) = err {
                     ui.label(egui::RichText::new(msg).color(egui::Color32::from_rgb(220, 50, 50)).size(11.0));
                 }
-                ui.horizontal(|ui| {
+                ui::modal::dialog_buttons(ui, |ui| {
                     let can_confirm = err.is_none() && !self.input_name.is_empty();
-                    if ui.add_enabled(can_confirm, egui::Button::new("确定")).clicked() {
-                        self.execute_action(&action);
+                    if ui.button("取消").clicked() {
                         self.pending_action = None;
                         self.input_name.clear();
                     }
-                    if ui.button("取消").clicked() {
+                    if ui.add_enabled(can_confirm, egui::Button::new("确定")).clicked() {
+                        self.execute_action(&action);
                         self.pending_action = None;
                         self.input_name.clear();
                     }

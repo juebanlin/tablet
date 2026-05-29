@@ -110,14 +110,17 @@ fn build_table_grid(app: &TblApp, group: &str, name: &str) -> Option<GridData> {
     let table = app.find_table(group, name)?;
     let fields = &table.schema.fields;
 
+    // id 列（首列）的 type/export/field 三行固定为 ReadOnly；desc 行允许编辑。
     let desc_row: Vec<HeaderCell> = fields.iter().map(|f| HeaderCell {
         text: f.desc.clone(), kind: CellKind::Text, color: egui::Color32::BLACK,
     }).collect();
-    let export_row: Vec<HeaderCell> = fields.iter().map(|f| HeaderCell {
-        text: f.export.code().to_string(), kind: CellKind::ExportEnum, color: egui::Color32::from_rgb(80, 160, 80),
+    let export_row: Vec<HeaderCell> = fields.iter().map(|f| {
+        let kind = if f.name == "id" { CellKind::ReadOnly } else { CellKind::ExportEnum };
+        HeaderCell { text: f.export.code().to_string(), kind, color: egui::Color32::from_rgb(80, 160, 80) }
     }).collect();
-    let type_row: Vec<HeaderCell> = fields.iter().map(|f| HeaderCell {
-        text: f.tbl_type.clone(), kind: CellKind::TypeEnum, color: egui::Color32::from_rgb(80, 130, 210),
+    let type_row: Vec<HeaderCell> = fields.iter().map(|f| {
+        let kind = if f.name == "id" { CellKind::ReadOnly } else { CellKind::TypeEnum };
+        HeaderCell { text: f.tbl_type.clone(), kind, color: egui::Color32::from_rgb(80, 130, 210) }
     }).collect();
     let field_row: Vec<HeaderCell> = fields.iter().map(|f| {
         let kind = if f.name == "id" { CellKind::ReadOnly } else { CellKind::Text };
@@ -224,6 +227,7 @@ fn render_col_context(ui: &mut egui::Ui, app: &mut TblApp) {
         })
     });
     let enum_locked = matches!(&app.selected, Some(SelectedNode::Enum { .. }));
+    let constant_locked = matches!(&app.selected, Some(SelectedNode::Constant { .. }));
     egui::Area::new(egui::Id::new("col_ctx"))
         .fixed_pos(app.context_pos)
         .order(egui::Order::Foreground)
@@ -231,6 +235,8 @@ fn render_col_context(ui: &mut egui::Ui, app: &mut TblApp) {
             egui::Frame::popup(ui.style()).show(ui, |ui| {
                 if enum_locked {
                     ui.add_enabled(false, egui::Button::new("枚举列固定（id|name|desc）"));
+                } else if constant_locked {
+                    ui.add_enabled(false, egui::Button::new("常量列固定（name|type|value|export|desc）"));
                 } else {
                     if ui.button("左侧插入列").clicked() { app.insert_column(&group, &name, col); app.context_col = None; }
                     if ui.button("右侧插入列").clicked() { app.insert_column(&group, &name, col + 1); app.context_col = None; }

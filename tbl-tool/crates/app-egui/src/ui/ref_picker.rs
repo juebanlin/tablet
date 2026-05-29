@@ -105,6 +105,11 @@ pub fn render_ref_picker(
 ) -> Option<String> {
     if !state.open { return None; }
 
+    if super::modal::modal_scrim(ctx, "ref_picker") {
+        state.open = false;
+        return None;
+    }
+
     let mut result: Option<String> = None;
     let mut close = false;
 
@@ -114,6 +119,7 @@ pub fn render_ref_picker(
     egui::Window::new(title)
         .collapsible(false)
         .resizable(false)
+        .order(egui::Order::Foreground)
         .show(ctx, |ui| {
             match &target {
                 None => {
@@ -142,39 +148,131 @@ pub fn render_ref_picker(
                             || r.desc.to_lowercase().contains(&search)
                     }).collect();
 
-                    ui.set_min_width(420.0);
+                    ui.set_min_width(440.0);
+                    let mut double_confirm = false;
+                    let id_w = 80.0;
+                    let name_w = 140.0;
+                    let desc_w = 200.0;
+                    let row_h = 22.0;
+                    let total_w = id_w + name_w + desc_w;
+
+                    // 表头
+                    let desc_header = match kind {
+                        RefTargetKind::Enum => "desc",
+                        RefTargetKind::Table => "",
+                    };
+                    let (header_rect, _) = ui.allocate_exact_size(
+                        egui::vec2(total_w, row_h),
+                        egui::Sense::hover(),
+                    );
+                    let painter = ui.painter();
+                    let header_bg = ui.visuals().widgets.noninteractive.bg_fill;
+                    painter.rect_filled(header_rect, 0.0, header_bg);
+                    let font = egui::FontId::proportional(11.0);
+                    let strong_color = ui.visuals().strong_text_color();
+                    painter.text(
+                        header_rect.left_center() + egui::vec2(6.0, 0.0),
+                        egui::Align2::LEFT_CENTER,
+                        "id",
+                        font.clone(),
+                        strong_color,
+                    );
+                    painter.text(
+                        header_rect.left_center() + egui::vec2(6.0 + id_w, 0.0),
+                        egui::Align2::LEFT_CENTER,
+                        "name",
+                        font.clone(),
+                        strong_color,
+                    );
+                    painter.text(
+                        header_rect.left_center() + egui::vec2(6.0 + id_w + name_w, 0.0),
+                        egui::Align2::LEFT_CENTER,
+                        desc_header,
+                        font.clone(),
+                        strong_color,
+                    );
+                    let grid_color = ui.visuals().widgets.noninteractive.bg_stroke.color;
+                    let stroke = egui::Stroke::new(1.0, grid_color);
+                    // 表头底边 + 列分隔
+                    painter.line_segment([header_rect.left_bottom(), header_rect.right_bottom()], stroke);
+                    let x1 = header_rect.left() + id_w;
+                    let x2 = x1 + name_w;
+                    painter.line_segment([egui::pos2(x1, header_rect.top()), egui::pos2(x1, header_rect.bottom())], stroke);
+                    painter.line_segment([egui::pos2(x2, header_rect.top()), egui::pos2(x2, header_rect.bottom())], stroke);
+
                     egui::ScrollArea::vertical().max_height(280.0).show(ui, |ui| {
                         if filtered.is_empty() {
                             ui.label(egui::RichText::new("（无匹配条目）").weak());
                         }
-                        egui::Grid::new("ref_picker_grid")
-                            .num_columns(3)
-                            .striped(true)
-                            .min_col_width(80.0)
-                            .show(ui, |ui| {
-                                ui.label(egui::RichText::new("id").size(11.0).strong());
-                                ui.label(egui::RichText::new("name").size(11.0).strong());
-                                let desc_header = match kind {
-                                    RefTargetKind::Enum => "desc",
-                                    RefTargetKind::Table => "",
-                                };
-                                ui.label(egui::RichText::new(desc_header).size(11.0).strong());
-                                ui.end_row();
+                        for row in &filtered {
+                            let selected = state.selected_id == row.id;
+                            let (rect, resp) = ui.allocate_exact_size(
+                                egui::vec2(total_w, row_h),
+                                egui::Sense::click(),
+                            );
+                            let painter = ui.painter();
 
-                                for row in &filtered {
-                                    let selected = state.selected_id == row.id;
-                                    let label = format!("{}", row.id);
-                                    if ui.selectable_label(selected, label).clicked() {
-                                        state.selected_id = row.id.clone();
-                                    }
-                                    if ui.selectable_label(selected, &row.name).clicked() {
-                                        state.selected_id = row.id.clone();
-                                    }
-                                    ui.label(&row.desc);
-                                    ui.end_row();
-                                }
-                            });
+                            // 背景
+                            let bg = if selected {
+                                ui.visuals().selection.bg_fill
+                            } else if resp.hovered() {
+                                ui.visuals().widgets.hovered.bg_fill
+                            } else {
+                                egui::Color32::TRANSPARENT
+                            };
+                            if bg != egui::Color32::TRANSPARENT {
+                                painter.rect_filled(rect, 0.0, bg);
+                            }
+
+                            // 文本
+                            let text_color = if selected {
+                                ui.visuals().selection.stroke.color
+                            } else {
+                                ui.visuals().text_color()
+                            };
+                            let text_font = egui::FontId::proportional(13.0);
+                            painter.text(
+                                rect.left_center() + egui::vec2(6.0, 0.0),
+                                egui::Align2::LEFT_CENTER,
+                                &row.id,
+                                text_font.clone(),
+                                text_color,
+                            );
+                            painter.text(
+                                rect.left_center() + egui::vec2(6.0 + id_w, 0.0),
+                                egui::Align2::LEFT_CENTER,
+                                &row.name,
+                                text_font.clone(),
+                                text_color,
+                            );
+                            painter.text(
+                                rect.left_center() + egui::vec2(6.0 + id_w + name_w, 0.0),
+                                egui::Align2::LEFT_CENTER,
+                                &row.desc,
+                                text_font.clone(),
+                                text_color,
+                            );
+
+                            // 列分隔 + 行底
+                            let x1 = rect.left() + id_w;
+                            let x2 = x1 + name_w;
+                            painter.line_segment([egui::pos2(x1, rect.top()), egui::pos2(x1, rect.bottom())], stroke);
+                            painter.line_segment([egui::pos2(x2, rect.top()), egui::pos2(x2, rect.bottom())], stroke);
+                            painter.line_segment([rect.left_bottom(), rect.right_bottom()], stroke);
+
+                            if resp.clicked() {
+                                state.selected_id = row.id.clone();
+                            }
+                            if resp.double_clicked() {
+                                state.selected_id = row.id.clone();
+                                double_confirm = true;
+                            }
+                        }
                     });
+                    if double_confirm {
+                        result = Some(state.selected_id.clone());
+                        close = true;
+                    }
 
                     ui.add_space(4.0);
                     ui.separator();
@@ -190,17 +288,17 @@ pub fn render_ref_picker(
             }
 
             ui.add_space(6.0);
-            ui.horizontal(|ui| {
+            super::modal::dialog_buttons(ui, |ui| {
                 let confirm_enabled = target.is_some();
+                if ui.button("取消").clicked() {
+                    close = true;
+                }
                 if ui.add_enabled(confirm_enabled, egui::Button::new("确定")).clicked() {
                     result = Some(state.selected_id.clone());
                     close = true;
                 }
                 if ui.button("清空").clicked() {
                     result = Some(String::new());
-                    close = true;
-                }
-                if ui.button("取消").clicked() {
                     close = true;
                 }
             });

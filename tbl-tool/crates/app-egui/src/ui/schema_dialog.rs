@@ -90,7 +90,7 @@ fn render_export_content(ui: &mut egui::Ui, app: &mut TblApp) {
 
     ui.separator();
     ui.label(format!("已选: {}/{} 项", selected, total));
-    ui.horizontal(|ui| {
+    super::modal::dialog_buttons(ui, |ui| {
         if ui.button("取消").clicked() {
             app.schema_export.open = false;
         }
@@ -234,7 +234,7 @@ fn render_import_content(ui: &mut egui::Ui, app: &mut TblApp) {
         ui.label(format!("已选: {}/{} 项", selected, total));
     }
 
-    ui.horizontal(|ui| {
+    super::modal::dialog_buttons(ui, |ui| {
         if ui.button("取消").clicked() {
             app.schema_import.open = false;
         }
@@ -391,7 +391,7 @@ pub fn render_data_export_dialog(ctx: &egui::Context, app: &mut TblApp) {
                 ui.checkbox(&mut app.data_export.lua, "Lua");
             });
             ui.separator();
-            ui.horizontal(|ui| {
+            super::modal::dialog_buttons(ui, |ui| {
                 if ui.button("取消").clicked() {
                     app.data_export.open = false;
                 }
