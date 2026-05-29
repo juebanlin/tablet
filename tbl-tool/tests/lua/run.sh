@@ -8,7 +8,7 @@ if [ -z "$CLI" ]; then
     CLI="$ROOT_DIR/target/release/tbl-cli"
 fi
 
-$CLI -w . generate-test --format json > /dev/null 2>&1
+$CLI -w . generate-test --format json --lang none > /dev/null 2>&1
 $CLI -w . export --lua > /dev/null 2>&1
 
 echo "=== HeroBase.lua ==="

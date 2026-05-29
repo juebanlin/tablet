@@ -55,6 +55,9 @@ enum Command {
         /// 数据格式（json 或 xml），影响 TestMain.java 的初始化方式
         #[arg(long, default_value = "json")]
         format: String,
+        /// 测试语言（java / none），none 时不生成 TestMain.java
+        #[arg(long, default_value = "java")]
+        lang: String,
     },
 }
 
@@ -110,7 +113,7 @@ fn main() -> Result<()> {
                 std::process::exit(1);
             }
         }
-        Command::GenerateTest { empty, schema, rows, seed, format } => {
+        Command::GenerateTest { empty, schema, rows, seed, format, lang } => {
             let config_dir = engine.project.workdir.join(&engine.project.config.project.config_dir);
             let opts = tbl_core::test_util::TestGenOptions {
                 include_empty: empty,
@@ -125,21 +128,25 @@ fn main() -> Result<()> {
                     .unwrap_or_else(|e| { eprintln!("解析 schema 失败: {}", e); std::process::exit(1); });
                 tbl_core::test_util::generate_from_schema(&config_dir, &parsed, &opts);
 
-                let pkg = engine.project.config.export.as_ref()
-                    .and_then(|e| e.server.as_ref())
-                    .and_then(|s| s.java.as_ref())
-                    .and_then(|j| j.package.as_deref())
-                    .unwrap_or("com.game.config");
-                tbl_core::test_util::generate_test_main_from_schema(&cli.workdir, &parsed, pkg, &format);
+                if lang == "java" {
+                    let pkg = engine.project.config.export.as_ref()
+                        .and_then(|e| e.server.as_ref())
+                        .and_then(|s| s.java.as_ref())
+                        .and_then(|j| j.package.as_deref())
+                        .unwrap_or("com.game.config");
+                    tbl_core::test_util::generate_test_main_from_schema(&cli.workdir, &parsed, pkg, &format);
+                }
             } else {
                 tbl_core::test_util::generate_test_config(&config_dir, &opts);
 
-                let pkg = engine.project.config.export.as_ref()
-                    .and_then(|e| e.server.as_ref())
-                    .and_then(|s| s.java.as_ref())
-                    .and_then(|j| j.package.as_deref())
-                    .unwrap_or("com.game.config");
-                tbl_core::test_util::generate_test_main(&cli.workdir, &opts, pkg, &format);
+                if lang == "java" {
+                    let pkg = engine.project.config.export.as_ref()
+                        .and_then(|e| e.server.as_ref())
+                        .and_then(|s| s.java.as_ref())
+                        .and_then(|j| j.package.as_deref())
+                        .unwrap_or("com.game.config");
+                    tbl_core::test_util::generate_test_main(&cli.workdir, &opts, pkg, &format);
+                }
             }
 
             println!("已生成测试配置");
