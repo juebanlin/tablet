@@ -58,6 +58,29 @@ gm_password|str|xxx|服务器|GM密码
 - export 列留空 = 默认"前后端"（双端导出）
 - 仅需限制时填写对应选项
 
+## Enum 模式
+
+```
+#!tbl v2
+#mode enum
+---
+1|WARRIOR|战士
+2|MAGE|法师
+3|ARCHER|弓手
+```
+
+数据行格式：`id|name|desc`，固定范式，**不需要** `#field/#type/#export` 表头。
+
+| 列 | 规则 |
+|----|------|
+| id | 正整数，必须唯一，**不能为 0**（0 留给"未设置"语义） |
+| name | UPPER_SNAKE_CASE（`[A-Z][A-Z0-9_]*`），同一枚举内唯一，不能为三语言关键字 |
+| desc | 任意文本（含中文），仅作业务可读说明 |
+
+枚举不参与数据文件（JSON/XML）导出 — 内容固定写死在生成的 Java/Go/Lua 代码里，加载时不需要数据来源。
+
+详见 `06-验证规则.md`「枚举命名规则」。
+
 ## 导出标记
 
 | UI 显示 | 含义 |
@@ -72,12 +95,14 @@ gm_password|str|xxx|服务器|GM密码
 | 指令 | 含义 |
 |------|------|
 | `#!tbl v2` | 格式版本标识 |
-| `#mode` | table 或 constant |
+| `#mode` | table / constant / enum |
 | `#desc` | 字段中文描述（仅 table） |
 | `#type` | 字段类型定义（仅 table） |
 | `#export` | 导出标记（仅 table） |
 | `#field` | 字段名（仅 table），第一列固定为 `id` |
 | `---` | 头部与数据分隔符 |
+
+enum 模式只有 `#!tbl v2` + `#mode enum` + `---`，无 `#desc/#type/#export/#field`（固定范式 id|name|desc）。
 
 ## 数据行规则
 
@@ -144,11 +169,18 @@ id     | int       | cs | 英雄ID
 name   | str       | cs | 名称
 hp     | int       | s  | 血量
 skills | List<int> | cs | 技能组
+type   | @HeroType | cs | 英雄类型
 
 [hero/HeroConst] constant
 # name | type | export | desc
 max_level | int            | cs | 最大等级
 start_pos | Tuple2<int,int>| cs | 出生坐标
+
+[hero/HeroType] enum
+# id | name | desc
+1 | WARRIOR | 战士
+2 | MAGE    | 法师
+3 | ARCHER  | 弓手
 
 [global/GlobalConst] constant
 version     | str | cs | 版本号
@@ -174,9 +206,9 @@ server_name | str | s  | 服务器名称
 
 - `group` — 组名（对应 config/ 下的子目录）
 - `Name` — 配置项名（对应 .tbl 文件名，大写驼峰）
-- `mode` — `table` 或 `constant`
+- `mode` — `table` / `constant` / `enum`
 
-Table 模式的第一个字段必须是 `id`（主键，int 类型）。
+Table 模式的第一个字段必须是 `id`（主键，int 类型）。Enum 模式数据行固定为 `id | name | desc` 三列。
 
 ### 字段行
 
@@ -189,9 +221,19 @@ field_name | type | export | desc
 | 列 | 说明 | 示例 |
 |----|------|------|
 | name | 字段名（snake_case） | `max_level` |
-| type | 类型声明 | `int`, `List<int>`, `Tuple2<int,str>` |
+| type | 类型声明 | `int`, `List<int>`, `Tuple2<int,str>`, `@HeroType` |
 | export | 导出标记缩写 | `cs`, `c`, `s`, `-` |
 | desc | 中文描述 | `最大等级` |
+
+### Enum 数据行
+
+enum 模式下数据行固定为：
+
+```
+id | name | desc
+```
+
+无 type / export 列。
 
 ### 导出标记缩写
 
