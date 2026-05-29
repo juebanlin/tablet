@@ -1,49 +1,85 @@
 // 公式栏：左侧坐标 + 右侧编辑区。归属于右侧表格面板上方，与 GridArea 等宽。
 // 对应 docs/02-UI设计.md §5.3。
+//
+// 闪退坑笔记：
+//   早期写法把 TouchArea 嵌套在 `if !root.editing` 里 → clicked 触发 request-edit
+//   → push_grid 设置 editing=true → 外层 if 销毁 → 正在执行的 TouchArea 一并 drop
+//   → use-after-free 闪退。
+//
+//   修法：TouchArea 提到顶层永久存在，靠 enabled 切换响应；LineEdit 用 if 切换
+//   （和 GridArea 单元格写法一致 —— cell 的 LineEdit if 切换不闪退是因为发起者
+//    是 cell TouchArea 而非编辑区里嵌套的元素）。
 
 import { Theme } from "../theme.slint";
 import { LineEdit } from "std-widgets.slint";
 
 export component FormulaBar inherits Rectangle {
-    in property <string> coord: "";          // 选中坐标，例 "B3"。空 → 整条隐藏
-    in-out property <string> formula;
-    in property <bool> readonly: false;
+    in property <string> coord: "";
+    in property <string> display-text: "";
+    in-out property <string> editing-buffer: "";
+    in property <bool> editing: false;
+    in property <bool> editable: false;
 
-    callback formula-edited(string);
+    callback request-edit();
+    callback commit();
+    callback cancel();
 
-    height: root.coord != "" ? Theme.formula-h + 2px : 0px;
+    height: Theme.row-h;
     background: Theme.bg-toolbar;
     border-color: Theme.border-light;
     border-width: 1px;
-    visible: root.coord != "";
 
     HorizontalLayout {
-        padding-left: Theme.sp-3;
-        padding-right: Theme.sp-3;
-        spacing: Theme.sp-3;
+        padding: 0;
+        spacing: 0;
         alignment: stretch;
 
+        // 坐标格：自带左 padding 让文字不贴左边框
         Rectangle {
-            width: 48px;
+            width: 48px + Theme.sp-3;
             Text {
+                x: Theme.sp-3;
                 text: root.coord;
                 font-size: Theme.fs-tiny;
                 color: Theme.text-secondary;
                 vertical-alignment: center;
             }
         }
+        // 分隔符
         Rectangle { width: 1px; background: Theme.border-light; }
-        if !root.readonly: LineEdit {
-            text <=> root.formula;
-            edited(s) => { root.formula-edited(s); }
-        }
-        if root.readonly: Rectangle {
-            Text {
+
+        // 编辑区：紧贴分隔符到右边框，无外部 padding/spacing
+        Rectangle {
+            // 编辑态 LineEdit：if 切换（cell 同款写法），自动获焦
+            if root.editing: LineEdit {
+                x: 0;
+                y: 0;
+                width: parent.width;
+                height: parent.height;
+                text <=> root.editing-buffer;
+                init => {
+                    self.focus();
+                    self.select-all();
+                }
+                accepted(s) => { root.commit(); }
+            }
+            // idle 态：纯 Text 显示
+            if !root.editing: Text {
                 x: Theme.sp-2;
-                text: root.formula;
+                text: root.display-text;
                 font-size: Theme.fs-tiny;
                 color: Theme.text-secondary;
                 vertical-alignment: center;
+            }
+            // 顶层永久 TouchArea：enabled 决定是否响应
+            // 关键：不嵌套在任何 `if` 里，clicked 触发 push_grid 也不会被销毁
+            TouchArea {
+                x: 0;
+                y: 0;
+                width: parent.width;
+                height: parent.height;
+                enabled: root.editable && !root.editing;
+                clicked => { root.request-edit(); }
             }
         }
     }
@@ -56,6 +92,9 @@ export component FormulaBarPreview inherits Window {
 
     FormulaBar {
         coord: "B3";
-        formula: "战士";
+        display-text: "战士";
+        editable: true;
     }
 }
+
+

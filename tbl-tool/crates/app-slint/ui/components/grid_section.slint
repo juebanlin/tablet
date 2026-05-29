@@ -22,12 +22,17 @@ export component GridSection inherits Rectangle {
 
     // ── 功能 bar ──
     in-out property <bool> show-enum-name: false;
+    callback show-enum-name-toggled(bool);
 
     // ── 公式栏 ──
     in property <string> coord;
-    in-out property <string> formula;
-    in property <bool> formula-readonly: false;
-    callback formula-edited(string);
+    in property <string> formula-display: "";
+    in property <bool> formula-editable: false;
+    in-out property <string> editing-buffer: "";
+    in property <bool> formula-editing: false;
+    callback formula-request-edit();
+    callback formula-commit();
+    callback formula-cancel();
 
     // ── 表格 ──
     in property <[[HeaderCell]]> header-rows;
@@ -37,6 +42,8 @@ export component GridSection inherits Rectangle {
     in property <int> selected-row: -1;
     in property <int> selected-cell-row: -1;
     in property <int> selected-cell-col: -1;
+    in property <int> editing-row: -1;
+    in property <int> editing-col: -1;
     callback header-clicked(int, int);
     callback cell-clicked(int, int);
     callback cell-double-clicked(int, int);
@@ -45,6 +52,9 @@ export component GridSection inherits Rectangle {
     callback col-context-menu(int, length, length);
     callback row-context-menu(int, length, length);
     callback cell-context-menu(int, int, length, length);
+    callback cell-edit-committed();
+    callback cell-edit-canceled();
+    callback blank-clicked();
 
     // ── 状态栏 ──
     in property <string> selection-info;
@@ -61,12 +71,17 @@ export component GridSection inherits Rectangle {
         }
         GridRibbon {
             show-enum-name <=> root.show-enum-name;
+            show-enum-name-toggled(c) => { root.show-enum-name-toggled(c); }
         }
         FormulaBar {
             coord: root.coord;
-            formula <=> root.formula;
-            readonly: root.formula-readonly;
-            formula-edited(s) => { root.formula-edited(s); }
+            display-text: root.formula-display;
+            editable: root.formula-editable;
+            editing: root.formula-editing;
+            editing-buffer <=> root.editing-buffer;
+            request-edit => { root.formula-request-edit(); }
+            commit => { root.formula-commit(); }
+            cancel => { root.formula-cancel(); }
         }
         GridArea {
             vertical-stretch: 1;
@@ -77,6 +92,9 @@ export component GridSection inherits Rectangle {
             selected-row: root.selected-row;
             selected-cell-row: root.selected-cell-row;
             selected-cell-col: root.selected-cell-col;
+            editing-row: root.editing-row;
+            editing-col: root.editing-col;
+            editing-buffer <=> root.editing-buffer;
             header-clicked(hi, ci) => { root.header-clicked(hi, ci); }
             cell-clicked(r, c) => { root.cell-clicked(r, c); }
             cell-double-clicked(r, c) => { root.cell-double-clicked(r, c); }
@@ -85,6 +103,9 @@ export component GridSection inherits Rectangle {
             col-context-menu(c, x, y) => { root.col-context-menu(c, x, y); }
             row-context-menu(r, x, y) => { root.row-context-menu(r, x, y); }
             cell-context-menu(r, c, x, y) => { root.cell-context-menu(r, c, x, y); }
+            cell-edit-committed() => { root.cell-edit-committed(); }
+            cell-edit-canceled() => { root.cell-edit-canceled(); }
+            blank-clicked() => { root.blank-clicked(); }
         }
         StatusBar {
             selection-info: root.selection-info;
@@ -103,7 +124,8 @@ export component GridSectionPreview inherits Window {
         subtitle: "Table · 3 行 · 5 列";
         show-enum-name: true;
         coord: "B3";
-        formula: "战士";
+        formula-display: "战士";
+        formula-editable: true;
         selection-info: "B2:D5 (4行×3列，共12格)";
         hover-info: "光标: C4";
         col-count: 5;

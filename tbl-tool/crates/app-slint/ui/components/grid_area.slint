@@ -4,7 +4,7 @@
 // 注意：本组件只做布局/渲染骨架，真实编辑逻辑由 Rust 端通过回调接管。
 
 import { Theme } from "../theme.slint";
-import { ScrollView } from "std-widgets.slint";
+import { ScrollView, LineEdit } from "std-widgets.slint";
 
 // ── 单元格类型，对应 grid_model::CellKind ──
 export enum CellKind {
@@ -44,6 +44,10 @@ export component GridArea inherits Rectangle {
     in property <int> selected-cell-row: -1;
     in property <int> selected-cell-col: -1;
     in property <string> empty-hint: "选择左侧节点查看详情";
+    // inline 编辑：editing-row/col == 当前 cell 时覆盖 LineEdit。-1 = 不编辑。
+    in property <int> editing-row: -1;
+    in property <int> editing-col: -1;
+    in-out property <string> editing-buffer: "";
 
     callback header-clicked(int /* hrow */, int /* col */);
     callback cell-clicked(int /* row */, int /* col */);
@@ -53,6 +57,9 @@ export component GridArea inherits Rectangle {
     callback col-context-menu(int, length, length);
     callback row-context-menu(int, length, length);
     callback cell-context-menu(int, int, length, length);
+    callback cell-edit-committed();
+    callback cell-edit-canceled();
+    callback blank-clicked();
 
     background: Theme.bg-panel;
 
@@ -168,6 +175,11 @@ export component GridArea inherits Rectangle {
 
         // ───── 数据区（可滚动）─────
         ScrollView {
+            // 背景兜底 TouchArea：点击数据区空白处 → blank-clicked（用于 Excel 风格 commit）
+            // 在 cell 之前声明，cell 的 TouchArea 会盖住它，只有点到空白才触发
+            TouchArea {
+                clicked => { root.blank-clicked(); }
+            }
             VerticalLayout {
                 spacing: 0;
                 for row[ri] in root.data-rows: HorizontalLayout {
@@ -204,22 +216,44 @@ export component GridArea inherits Rectangle {
                             : (row.row-color.alpha > 0 ? row.row-color : (mod(ri, 2) == 0 ? Theme.bg-panel : Theme.bg-row-alt));
                         border-color: cell.has-error ? Theme.border-error : Theme.border-light;
                         border-width: cell.has-error ? 1.5px : 0.5px;
-                        Text {
-                            text: cell.text;
-                            font-size: Theme.fs-small;
-                            color: cell.is-empty-ref ? Theme.text-disabled : Theme.text-primary;
-                            horizontal-alignment: left;
-                            vertical-alignment: center;
-                            x: 4px;
-                        }
-                        TouchArea {
-                            clicked => { root.cell-clicked(ri, ci); }
-                            double-clicked => { root.cell-double-clicked(ri, ci); }
-                            pointer-event(e) => {
-                                if e.button == PointerEventButton.right && e.kind == PointerEventKind.up {
-                                    root.cell-context-menu(ri, ci, self.mouse-x, self.mouse-y);
+                        // ── 非编辑态：Text + TouchArea ──
+                        if !(ri == root.editing-row && ci == root.editing-col): Rectangle {
+                            x: 0;
+                            y: 0;
+                            width: parent.width;
+                            height: parent.height;
+                            Text {
+                                text: cell.text;
+                                font-size: Theme.fs-small;
+                                color: cell.is-empty-ref ? Theme.text-disabled : Theme.text-primary;
+                                horizontal-alignment: left;
+                                vertical-alignment: center;
+                                x: 4px;
+                            }
+                            TouchArea {
+                                clicked => { root.cell-clicked(ri, ci); }
+                                double-clicked => { root.cell-double-clicked(ri, ci); }
+                                pointer-event(e) => {
+                                    if e.button == PointerEventButton.right && e.kind == PointerEventKind.up {
+                                        root.cell-context-menu(ri, ci, self.mouse-x, self.mouse-y);
+                                    }
                                 }
                             }
+                        }
+                        // ── 编辑态：LineEdit 占满 cell，TouchArea 不渲染 ──
+                        // 失焦 commit 不通过 changed has-focus（实测重入崩溃），
+                        // 由 Rust 在 cell-clicked / 切节点 等场景主动 commit
+                        if ri == root.editing-row && ci == root.editing-col: LineEdit {
+                            x: 0;
+                            y: 0;
+                            width: parent.width;
+                            height: parent.height;
+                            text <=> root.editing-buffer;
+                            init => {
+                                self.focus();
+                                self.select-all();
+                            }
+                            accepted(s) => { root.cell-edit-committed(); }
                         }
                     }
                 }

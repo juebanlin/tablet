@@ -46,16 +46,23 @@ export component AppWindow inherits Window {
     callback tree-node-context-menu(int, length, length);
     callback tree-blank-context-menu(length, length);
     callback tree-search-edited(string);
+    callback tree-filter-changed(int);
+    callback tree-full-group-toggled(bool);
 
     // ── GridSection ─────────────────────────────────────────
     in property <string> grid-title: "未选中";
     in property <string> grid-subtitle: "";
     in-out property <bool> show-enum-name: false;
+    callback show-enum-name-toggled(bool);
 
     in property <string> coord;
-    in-out property <string> formula;
-    in property <bool> formula-readonly: false;
-    callback formula-edited(string);
+    in property <string> formula-display: "";
+    in property <bool> formula-editable: false;
+    in-out property <string> editing-buffer: "";
+    in property <bool> formula-editing: false;
+    callback formula-request-edit();
+    callback formula-commit();
+    callback formula-cancel();
 
     in property <[[HeaderCell]]> grid-header-rows;
     in property <[DataRow]> grid-data-rows;
@@ -64,6 +71,8 @@ export component AppWindow inherits Window {
     in property <int> grid-selected-row: -1;
     in property <int> grid-selected-cell-row: -1;
     in property <int> grid-selected-cell-col: -1;
+    in property <int> grid-editing-row: -1;
+    in property <int> grid-editing-col: -1;
     callback grid-header-clicked(int, int);
     callback grid-cell-clicked(int, int);
     callback grid-cell-double-clicked(int, int);
@@ -72,6 +81,9 @@ export component AppWindow inherits Window {
     callback grid-col-context-menu(int, length, length);
     callback grid-row-context-menu(int, length, length);
     callback grid-cell-context-menu(int, int, length, length);
+    callback grid-cell-edit-committed();
+    callback grid-cell-edit-canceled();
+    callback grid-blank-clicked();
 
     in property <string> selection-info;
     in property <string> hover-info;
@@ -146,12 +158,33 @@ export component AppWindow inherits Window {
     callback si-toggle-item(int);
     callback si-confirm();
 
+    // ── 全局焦点抽屉 ────────────────────────────────────────
+    // 用来在点击 tree/cell/toolbar 等区域时抢走 LineEdit/TextInput 的焦点，
+    // 配合 Rust 端 commit_editing 让搜索框 / 公式栏 / cell 编辑都"点其它就退出"
+    callback drop-focus();
+    callback commit-pending-edit();   // Rust 监听：commit 当前 editing buffer 到 cell
+    drop-focus => {
+        focus-sink.focus();
+        root.commit-pending-edit();
+    }
+    focus-sink := FocusScope {
+        x: -1px; y: -1px;
+        width: 0px; height: 0px;
+    }
+    // 全屏底层 fallback：点击到任何"无人认领的空白"都触发 drop-focus
+    // z-order 在所有内容之前，前景的 TouchArea（按钮、cell、节点）会优先吃掉点击；
+    // 仅当落在日志区空白、ribbon 空白、toolbar 按钮间隙等无 TouchArea 区域时才命中。
+    blank-catcher := TouchArea {
+        clicked => { root.drop-focus(); }
+    }
+
     // ── 主布局 ──────────────────────────────────────────────
     VerticalLayout {
         spacing: 0;
 
         Toolbar {
             btn-clicked(id) => {
+                root.drop-focus();
                 if (id == "export") { root.dlg-export-open = true; }
                 if (id == "export-schema") { root.dlg-schema-export-open = true; }
                 if (id == "import-schema") { root.dlg-schema-import-open = true; }
@@ -171,12 +204,14 @@ export component AppWindow inherits Window {
                     filter-index: root.tree-filter-index;
                     full-group <=> root.tree-full-group;
                     search <=> root.tree-search;
-                    node-clicked(id) => { root.tree-node-clicked(id); }
-                    node-toggle-expand(id) => { root.tree-node-toggle-expand(id); }
+                    node-clicked(id) => { root.drop-focus(); root.tree-node-clicked(id); }
+                    node-toggle-expand(id) => { root.drop-focus(); root.tree-node-toggle-expand(id); }
                     node-context-menu(id, x, y) => { root.tree-node-context-menu(id, x, y); }
                     blank-context-menu(x, y) => { root.tree-blank-context-menu(x, y); }
-                    filter-changed(i) => { root.tree-filter-index = i; }
+                    blank-clicked() => { root.drop-focus(); }
+                    filter-changed(i) => { root.tree-filter-index = i; root.tree-filter-changed(i); }
                     search-edited(s) => { root.tree-search-edited(s); }
+                    full-group-toggled(c) => { root.tree-full-group-toggled(c); }
                 }
             }
 
@@ -185,10 +220,15 @@ export component AppWindow inherits Window {
                 title: root.grid-title;
                 subtitle: root.grid-subtitle;
                 show-enum-name <=> root.show-enum-name;
+                show-enum-name-toggled(c) => { root.show-enum-name-toggled(c); }
                 coord: root.coord;
-                formula <=> root.formula;
-                formula-readonly: root.formula-readonly;
-                formula-edited(s) => { root.formula-edited(s); }
+                formula-display: root.formula-display;
+                formula-editable: root.formula-editable;
+                formula-editing: root.formula-editing;
+                editing-buffer <=> root.editing-buffer;
+                formula-request-edit => { root.drop-focus(); root.formula-request-edit(); }
+                formula-commit => { root.formula-commit(); }
+                formula-cancel => { root.formula-cancel(); }
                 header-rows: root.grid-header-rows;
                 data-rows: root.grid-data-rows;
                 col-count: root.grid-col-count;
@@ -196,14 +236,19 @@ export component AppWindow inherits Window {
                 selected-row: root.grid-selected-row;
                 selected-cell-row: root.grid-selected-cell-row;
                 selected-cell-col: root.grid-selected-cell-col;
-                header-clicked(hi, ci) => { root.grid-header-clicked(hi, ci); }
-                cell-clicked(r, c) => { root.grid-cell-clicked(r, c); }
-                cell-double-clicked(r, c) => { root.grid-cell-double-clicked(r, c); }
-                row-num-clicked(r) => { root.grid-row-num-clicked(r); }
-                col-letter-clicked(c) => { root.grid-col-letter-clicked(c); }
+                editing-row: root.grid-editing-row;
+                editing-col: root.grid-editing-col;
+                header-clicked(hi, ci) => { root.drop-focus(); root.grid-header-clicked(hi, ci); }
+                cell-clicked(r, c) => { root.drop-focus(); root.grid-cell-clicked(r, c); }
+                cell-double-clicked(r, c) => { root.drop-focus(); root.grid-cell-double-clicked(r, c); }
+                row-num-clicked(r) => { root.drop-focus(); root.grid-row-num-clicked(r); }
+                col-letter-clicked(c) => { root.drop-focus(); root.grid-col-letter-clicked(c); }
                 col-context-menu(c, x, y) => { root.grid-col-context-menu(c, x, y); }
                 row-context-menu(r, x, y) => { root.grid-row-context-menu(r, x, y); }
                 cell-context-menu(r, c, x, y) => { root.grid-cell-context-menu(r, c, x, y); }
+                cell-edit-committed() => { root.grid-cell-edit-committed(); }
+                cell-edit-canceled() => { root.grid-cell-edit-canceled(); }
+                blank-clicked() => { root.drop-focus(); root.grid-blank-clicked(); }
                 selection-info: root.selection-info;
                 hover-info: root.hover-info;
             }
@@ -306,7 +351,8 @@ export component AppWindow inherits Window {
 // ── 单文件预览：填充示例数据 ─────────────────────────────────
 export component AppWindowPreview inherits AppWindow {
     coord: "B3";
-    formula: "战士";
+    formula-display: "战士";
+    formula-editable: true;
     show-enum-name: true;
 
     grid-title: "📊 hero / HeroBase";
