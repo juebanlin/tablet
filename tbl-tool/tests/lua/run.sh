@@ -12,7 +12,7 @@ $CLI -w . generate-test --format json --lang none > /dev/null 2>&1
 $CLI -w . export --lua > /dev/null 2>&1
 
 echo "=== HeroBase.lua ==="
-cat gen/client/hero/HeroBase.lua
+cat gen/client/HeroBase.lua
 echo ""
 echo "=== GlobalConst.lua ==="
-cat gen/client/global/GlobalConst.lua
+cat gen/client/GlobalConst.lua

@@ -42,7 +42,7 @@ fn needs_tuple_import(tbl_type_str: &str) -> bool {
 
 fn gen_table_tpl(table: &Table, pkg: &str, group: &str) -> String {
     let mut s = String::new();
-    writeln!(s, "package {}.{};", pkg, group).unwrap();
+    writeln!(s, "package {}.tpl;", pkg).unwrap();
     writeln!(s).unwrap();
     writeln!(s, "import {}.ITpl;", pkg).unwrap();
     writeln!(s, "import {}.TblType;", pkg).unwrap();
@@ -86,7 +86,7 @@ fn gen_table_tpl(table: &Table, pkg: &str, group: &str) -> String {
 
 fn gen_constant_tpl(constant: &Constant, pkg: &str, group: &str) -> String {
     let mut s = String::new();
-    writeln!(s, "package {}.{};", pkg, group).unwrap();
+    writeln!(s, "package {}.tpl;", pkg).unwrap();
     writeln!(s).unwrap();
     writeln!(s, "import {}.IConstTpl;", pkg).unwrap();
     writeln!(s, "import {}.TblType;", pkg).unwrap();
@@ -151,6 +151,7 @@ pub fn export_all_java(project: &Project) -> Result<super::ExportResult> {
     let pkg_path = pkg.replace('.', "/");
     let output_dir = project.workdir.join(code_output).join(&pkg_path);
     let types_dir = output_dir.join("types");
+    let tpl_dir = output_dir.join("tpl");
 
     let mut collected: Vec<(std::path::PathBuf, Vec<u8>)> = Vec::new();
 
@@ -178,24 +179,22 @@ pub fn export_all_java(project: &Project) -> Result<super::ExportResult> {
 
     let mut register_lines = String::new();
     for group in &project.groups {
-        let group_dir = output_dir.join(&group.name);
-
         for table in &group.tables {
             if table.deleted { continue; }
             let content = gen_table_tpl(table, pkg, &group.name);
             let filename = format!("{}Tpl.java", &table.name);
-            collect(&group_dir, &filename, &content);
-            writeln!(register_lines, "        map.put(\"{}/{}\", {}.{}.{}Tpl.class);",
-                group.name, table.name, pkg, group.name, table.name).unwrap();
+            collect(&tpl_dir, &filename, &content);
+            writeln!(register_lines, "        map.put(\"{}\", {}.tpl.{}Tpl.class);",
+                table.name, pkg, table.name).unwrap();
         }
 
         for constant in &group.constants {
             if constant.deleted { continue; }
             let content = gen_constant_tpl(constant, pkg, &group.name);
             let filename = format!("{}Tpl.java", &constant.name);
-            collect(&group_dir, &filename, &content);
-            writeln!(register_lines, "        map.put(\"{}/{}\", {}.{}.{}Tpl.class);",
-                group.name, constant.name, pkg, group.name, constant.name).unwrap();
+            collect(&tpl_dir, &filename, &content);
+            writeln!(register_lines, "        map.put(\"{}\", {}.tpl.{}Tpl.class);",
+                constant.name, pkg, constant.name).unwrap();
         }
     }
 

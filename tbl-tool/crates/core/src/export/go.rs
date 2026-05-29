@@ -253,10 +253,10 @@ const GEN_PARSE_STR: &str = r#"package {{PACKAGE}}
 func parseStr(raw string) string { return raw }
 "#;
 
-fn gen_table_tpl(table: &Table, pkg: &str, group: &str) -> String {
+fn gen_table_tpl(table: &Table, pkg: &str, _group: &str) -> String {
     let mut s = String::new();
     let cls = format!("{}Tpl", table.name);
-    let key = format!("{}/{}", group, table.name);
+    let key = table.name.clone();
 
     let fields: Vec<&FieldDef> = table.schema.fields.iter()
         .filter(|f| is_server_export(&f.export))
@@ -319,10 +319,10 @@ fn gen_table_tpl(table: &Table, pkg: &str, group: &str) -> String {
     s
 }
 
-fn gen_constant_tpl(constant: &Constant, pkg: &str, group: &str) -> String {
+fn gen_constant_tpl(constant: &Constant, pkg: &str, _group: &str) -> String {
     let mut s = String::new();
     let cls = format!("{}Tpl", constant.name);
-    let key = format!("{}/{}", group, constant.name);
+    let key = constant.name.clone();
 
     let entries: Vec<&ConstEntry> = constant.entries.iter()
         .filter(|e| is_server_export(&e.export) && !e.name.is_empty())

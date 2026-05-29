@@ -290,12 +290,7 @@ fn java_format_spec(tbl_type: &str) -> &'static str {
 fn build_test_main(schema: &TblSchema, pkg: &str, format: &str) -> String {
     let mut s = String::new();
     writeln!(s, "import {}.*;", pkg).unwrap();
-
-    let groups: Vec<&str> = schema.sections.iter().map(|sec| sec.group.as_str())
-        .collect::<std::collections::HashSet<_>>().into_iter().collect();
-    for g in &groups {
-        writeln!(s, "import {}.{}.*;", pkg, g).unwrap();
-    }
+    writeln!(s, "import {}.tpl.*;", pkg).unwrap();
     writeln!(s, "import java.util.Map;").unwrap();
     writeln!(s).unwrap();
     writeln!(s, "public class TestMain {{").unwrap();

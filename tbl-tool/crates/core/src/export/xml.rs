@@ -118,19 +118,17 @@ pub fn export_all_xml(project: &Project) -> Result<super::ExportResult> {
     let mut collected = Vec::new();
 
     for group in &project.groups {
-        let group_dir = output_dir.join(&group.name);
-
         for table in &group.tables {
             if table.deleted { continue; }
             let xml = export_table_xml(table, &strategy, sep);
-            let file_path = group_dir.join(format!("{}.xml", &table.name));
+            let file_path = output_dir.join(format!("{}.xml", &table.name));
             collected.push((file_path, opts.encode(&xml)));
         }
 
         for constant in &group.constants {
             if constant.deleted { continue; }
             let xml = export_constant_xml(constant, &strategy, sep);
-            let file_path = group_dir.join(format!("{}.xml", &constant.name));
+            let file_path = output_dir.join(format!("{}.xml", &constant.name));
             collected.push((file_path, opts.encode(&xml)));
         }
     }

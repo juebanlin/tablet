@@ -277,19 +277,17 @@ pub fn export_all_lua(project: &Project) -> Result<super::ExportResult> {
     let mut collected = Vec::new();
 
     for group in &project.groups {
-        let group_dir = output_dir.join(&group.name);
-
         for table in &group.tables {
             if table.deleted { continue; }
             let lua = export_table_lua(table, sep);
-            let file_path = group_dir.join(format!("{}.lua", &table.name));
+            let file_path = output_dir.join(format!("{}.lua", &table.name));
             collected.push((file_path, opts.encode(&lua)));
         }
 
         for constant in &group.constants {
             if constant.deleted { continue; }
             let lua = export_constant_lua(constant, sep);
-            let file_path = group_dir.join(format!("{}.lua", &constant.name));
+            let file_path = output_dir.join(format!("{}.lua", &constant.name));
             collected.push((file_path, opts.encode(&lua)));
         }
     }

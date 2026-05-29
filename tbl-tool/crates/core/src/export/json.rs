@@ -130,15 +130,13 @@ pub fn export_all_json(project: &Project) -> Result<super::ExportResult> {
     let mut collected = Vec::new();
 
     for group in &project.groups {
-        let group_dir = output_dir.join(&group.name);
-
         for table in &group.tables {
             if table.deleted { continue; }
             let data = export_table(table, &strategy);
             let mut wrapper = Map::new();
             wrapper.insert("_sep".to_string(), sep_meta.clone());
             wrapper.insert("data".to_string(), data);
-            let file_path = group_dir.join(format!("{}.json", &table.name));
+            let file_path = output_dir.join(format!("{}.json", &table.name));
             let content = serde_json::to_string_pretty(&Value::Object(wrapper))?;
             collected.push((file_path, opts.encode(&content)));
         }
@@ -149,7 +147,7 @@ pub fn export_all_json(project: &Project) -> Result<super::ExportResult> {
             let mut wrapper = Map::new();
             wrapper.insert("_sep".to_string(), sep_meta.clone());
             wrapper.insert("data".to_string(), data);
-            let file_path = group_dir.join(format!("{}.json", &constant.name));
+            let file_path = output_dir.join(format!("{}.json", &constant.name));
             let content = serde_json::to_string_pretty(&Value::Object(wrapper))?;
             collected.push((file_path, opts.encode(&content)));
         }
