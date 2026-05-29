@@ -31,7 +31,7 @@ pub struct TblApp {
 #[derive(Clone, Debug)]
 pub enum TreeContext {
     Group(String),
-    Node { group: String, name: String, is_table: bool },
+    Node { group: String, name: String, kind: tbl_core::ops::NodeKind },
     Blank,
 }
 
@@ -80,6 +80,7 @@ pub struct CellPos {
 pub enum SelectedNode {
     Table { group: String, name: String },
     Constant { group: String, name: String },
+    Enum { group: String, name: String },
 }
 
 #[derive(Clone, Debug)]
@@ -87,11 +88,12 @@ pub enum PendingAction {
     NewGroup,
     NewTable { group: String },
     NewConstant { group: String },
+    NewEnum { group: String },
     DeleteGroup { group: String },
     DeleteNode { group: String, name: String },
     RenameGroup { old_name: String },
     RenameNode { group: String, old_name: String },
-    CopyNode { group: String, name: String, is_table: bool },
+    CopyNode { group: String, name: String, kind: tbl_core::ops::NodeKind },
 }
 
 impl TblApp {
@@ -154,6 +156,10 @@ impl TblApp {
         self.engine.find_constant(group, name)
     }
 
+    pub fn find_enum(&self, group: &str, name: &str) -> Option<&EnumDef> {
+        self.engine.find_enum(group, name)
+    }
+
     pub fn log(&mut self, msg: String) {
         self.engine.log(msg);
     }
@@ -181,11 +187,17 @@ impl TblApp {
     }
 
     pub fn insert_row(&mut self, group: &str, name: &str, at: usize) {
-        self.engine.insert_row(group, name, at);
+        match &self.selected {
+            Some(SelectedNode::Enum { .. }) => self.engine.insert_enum_row(group, name, at),
+            _ => self.engine.insert_row(group, name, at),
+        }
     }
 
     pub fn delete_row(&mut self, group: &str, name: &str, at: usize) {
-        self.engine.delete_row(group, name, at);
+        match &self.selected {
+            Some(SelectedNode::Enum { .. }) => self.engine.delete_enum_row(group, name, at),
+            _ => self.engine.delete_row(group, name, at),
+        }
     }
 
     pub fn insert_column(&mut self, group: &str, name: &str, at: usize) {
@@ -201,6 +213,7 @@ impl TblApp {
         match source {
             GridSource::Table => self.engine.set_table_cell(group, name, row, col, val),
             GridSource::Constant => self.engine.set_constant_cell(group, name, row, col, val),
+            GridSource::Enum => self.engine.set_enum_cell(group, name, row, col, val),
         }
         if self.realtime_validate { self.engine.revalidate(group, name); }
     }
@@ -210,6 +223,7 @@ impl TblApp {
         match source {
             GridSource::Table => self.engine.paste_table_data(group, name, start_row, start_col, text),
             GridSource::Constant => self.engine.paste_constant_data(group, name, start_row, start_col, text),
+            GridSource::Enum => self.engine.paste_enum_data(group, name, start_row, start_col, text),
         }
         if self.realtime_validate { self.engine.revalidate(group, name); }
     }
@@ -250,7 +264,10 @@ impl TblApp {
     }
 
     pub fn delete_rows(&mut self, group: &str, name: &str, start: usize, end: usize) {
-        self.engine.delete_rows(group, name, start, end);
+        match &self.selected {
+            Some(SelectedNode::Enum { .. }) => self.engine.delete_enum_rows(group, name, start, end),
+            _ => self.engine.delete_rows(group, name, start, end),
+        }
     }
 
     pub fn grid_commit(&mut self, group: &str, name: &str, editing: &CellPos, source: &crate::ui::grid_model::GridSource) {
@@ -272,6 +289,14 @@ impl TblApp {
                 self.engine.commit_constant_cell(group, name, editing.row, editing.col, val);
                 self.edit_state.editing = None;
             }
+            GridSource::Enum => {
+                if editing.header_row.is_some() {
+                    self.edit_state.editing = None;
+                    return;
+                }
+                self.engine.commit_enum_cell(group, name, editing.row, editing.col, val);
+                self.edit_state.editing = None;
+            }
         }
     }
 
@@ -281,6 +306,7 @@ impl TblApp {
         match &grid.source {
             GridSource::Table => self.engine.clear_table_cells(group, name, &cells),
             GridSource::Constant => self.engine.clear_constant_cells(group, name, &cells),
+            GridSource::Enum => self.engine.clear_enum_cells(group, name, &cells),
         }
         self.engine.log("已删除选中内容".to_string());
     }
@@ -475,9 +501,8 @@ impl TblApp {
                 if !open { self.pending_action = None; }
                 return;
             }
-            PendingAction::CopyNode { group, name, is_table } => {
-                let (group, name, is_table) = (group.clone(), name.clone(), *is_table);
-                let kind = if is_table { tbl_core::ops::NodeKind::Table } else { tbl_core::ops::NodeKind::Constant };
+            PendingAction::CopyNode { group, name, kind } => {
+                let (group, name, kind) = (group.clone(), name.clone(), kind.clone());
                 self.engine.copy_node(&group, &name, kind);
                 self.pending_action = None;
                 return;
@@ -489,6 +514,7 @@ impl TblApp {
             PendingAction::NewGroup => "新建 Group",
             PendingAction::NewTable { .. } => "新建 Table",
             PendingAction::NewConstant { .. } => "新建 Constant",
+            PendingAction::NewEnum { .. } => "新建 Enum",
             PendingAction::RenameGroup { .. } => "重命名 Group",
             PendingAction::RenameNode { .. } => "重命名",
             _ => return,
@@ -538,6 +564,7 @@ impl TblApp {
             PendingAction::NewGroup => ProjectAction::NewGroup { name: self.input_name.clone() },
             PendingAction::NewTable { group } => ProjectAction::NewTable { group: group.clone(), name: self.input_name.clone() },
             PendingAction::NewConstant { group } => ProjectAction::NewConstant { group: group.clone(), name: self.input_name.clone() },
+            PendingAction::NewEnum { group } => ProjectAction::NewEnum { group: group.clone(), name: self.input_name.clone() },
             PendingAction::RenameGroup { old_name } => ProjectAction::RenameGroup { old_name: old_name.clone(), new_name: self.input_name.clone() },
             PendingAction::RenameNode { group, old_name } => ProjectAction::RenameNode { group: group.clone(), old_name: old_name.clone(), new_name: self.input_name.clone() },
             _ => return,

@@ -1,5 +1,6 @@
 use eframe::egui;
 use crate::app::{TblApp, SelectedNode, PendingAction, TreeFilter, TreeContext};
+use tbl_core::ops::NodeKind;
 
 pub fn render(ui: &mut egui::Ui, app: &mut TblApp) {
     ui.heading("配置树");
@@ -35,19 +36,22 @@ pub fn render(ui: &mut egui::Ui, app: &mut TblApp) {
         for group in &groups {
             let group_has_match = filter == TreeFilter::All
                 || group.tables.iter().any(|t| passes_filter(&filter, t.deleted, t.original.is_empty(), t.dirty))
-                || group.constants.iter().any(|c| passes_filter(&filter, c.deleted, c.original.is_empty(), c.dirty));
+                || group.constants.iter().any(|c| passes_filter(&filter, c.deleted, c.original.is_empty(), c.dirty))
+                || group.enums.iter().any(|e| passes_filter(&filter, e.deleted, e.original.is_empty(), e.dirty));
             if !group_has_match { continue; }
 
             let expanded = app.tree_expanded.contains(&group.name);
             let arrow = if expanded { "▼" } else { "▶" };
 
             // Compute group status
-            let all_deleted = !group.tables.is_empty() || !group.constants.is_empty();
+            let all_deleted = !group.tables.is_empty() || !group.constants.is_empty() || !group.enums.is_empty();
             let all_deleted = all_deleted
                 && group.tables.iter().all(|t| t.deleted)
-                && group.constants.iter().all(|c| c.deleted);
+                && group.constants.iter().all(|c| c.deleted)
+                && group.enums.iter().all(|e| e.deleted);
             let has_dirty = group.tables.iter().any(|t| t.dirty && !t.deleted)
-                || group.constants.iter().any(|c| c.dirty && !c.deleted);
+                || group.constants.iter().any(|c| c.dirty && !c.deleted)
+                || group.enums.iter().any(|e| e.dirty && !e.deleted);
             let group_deleted = all_deleted && !group.is_new;
             let group_is_new = group.is_new;
             let group_dirty = has_dirty && !group_is_new && !group_deleted;
@@ -92,7 +96,7 @@ pub fn render(ui: &mut egui::Ui, app: &mut TblApp) {
                         app.selected = Some(SelectedNode::Table { group: group.name.clone(), name: table.name.clone() });
                     }
                     if check_secondary_click(ui, row.response.rect) {
-                        app.tree_context = Some(TreeContext::Node { group: group.name.clone(), name: table.name.clone(), is_table: true });
+                        app.tree_context = Some(TreeContext::Node { group: group.name.clone(), name: table.name.clone(), kind: NodeKind::Table });
                         app.context_pos = ui.input(|i| i.pointer.interact_pos().unwrap_or_default());
                     }
                 }
@@ -112,7 +116,27 @@ pub fn render(ui: &mut egui::Ui, app: &mut TblApp) {
                         app.selected = Some(SelectedNode::Constant { group: group.name.clone(), name: constant.name.clone() });
                     }
                     if check_secondary_click(ui, row.response.rect) {
-                        app.tree_context = Some(TreeContext::Node { group: group.name.clone(), name: constant.name.clone(), is_table: false });
+                        app.tree_context = Some(TreeContext::Node { group: group.name.clone(), name: constant.name.clone(), kind: NodeKind::Constant });
+                        app.context_pos = ui.input(|i| i.pointer.interact_pos().unwrap_or_default());
+                    }
+                }
+                for enum_def in &group.enums {
+                    if !show_full && !passes_filter(&filter, enum_def.deleted, enum_def.original.is_empty(), enum_def.dirty) { continue; }
+                    let selected = matches!(&app.selected, Some(SelectedNode::Enum { group: g, name: n }) if g == &group.name && n == &enum_def.name);
+                    let row = ui.horizontal(|ui| {
+                        ui.add_space(18.0);
+                        let r = ui.selectable_label(selected, format!("🔢 {}", enum_def.name));
+                        render_marker(ui, enum_def.deleted, enum_def.original.is_empty(), enum_def.dirty);
+                        if app.engine.validation_errors.iter().any(|(g, n, _, _)| g == &group.name && n == &enum_def.name) {
+                            ui.label(egui::RichText::new("!").color(egui::Color32::from_rgb(220, 50, 50)).strong());
+                        }
+                        r
+                    });
+                    if row.inner.clicked() && !enum_def.deleted {
+                        app.selected = Some(SelectedNode::Enum { group: group.name.clone(), name: enum_def.name.clone() });
+                    }
+                    if check_secondary_click(ui, row.response.rect) {
+                        app.tree_context = Some(TreeContext::Node { group: group.name.clone(), name: enum_def.name.clone(), kind: NodeKind::Enum });
                         app.context_pos = ui.input(|i| i.pointer.interact_pos().unwrap_or_default());
                     }
                 }
@@ -179,6 +203,10 @@ fn render_tree_context(ui: &mut egui::Ui, app: &mut TblApp) {
                             app.pending_action = Some(PendingAction::NewConstant { group: name.clone() });
                             app.tree_context = None;
                         }
+                        if ui.button("新建 Enum").clicked() {
+                            app.pending_action = Some(PendingAction::NewEnum { group: name.clone() });
+                            app.tree_context = None;
+                        }
                         ui.separator();
                         if ui.button("重命名").clicked() {
                             app.pending_action = Some(PendingAction::RenameGroup { old_name: name.clone() });
@@ -189,9 +217,9 @@ fn render_tree_context(ui: &mut egui::Ui, app: &mut TblApp) {
                             app.tree_context = None;
                         }
                     }
-                    TreeContext::Node { group, name, is_table } => {
+                    TreeContext::Node { group, name, kind } => {
                         if ui.button("复制").clicked() {
-                            app.pending_action = Some(PendingAction::CopyNode { group: group.clone(), name: name.clone(), is_table: *is_table });
+                            app.pending_action = Some(PendingAction::CopyNode { group: group.clone(), name: name.clone(), kind: kind.clone() });
                             app.tree_context = None;
                         }
                         if ui.button("重命名").clicked() {

@@ -200,6 +200,19 @@ impl ProjectEngine {
         }
     }
 
+    pub fn delete_enum_rows(&mut self, group: &str, name: &str, start: usize, end: usize) {
+        if let Some(g) = self.project.groups.iter_mut().find(|g| g.name == group) {
+            if let Some(en) = g.enums.iter_mut().find(|e| e.name == name) {
+                let end = end.min(en.entries.len());
+                if start < end {
+                    en.entries.drain(start..end);
+                    en.update_dirty();
+                    self.log(format!("已删除 {} 行", end - start));
+                }
+            }
+        }
+    }
+
     pub fn mark_table_dirty(&mut self, group: &str, name: &str) {
         if let Some(t) = self.find_table_mut(group, name) {
             t.update_dirty();

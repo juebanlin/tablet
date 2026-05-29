@@ -55,6 +55,7 @@ pub struct HeaderCell {
 pub enum GridSource {
     Table,
     Constant,
+    Enum,
 }
 
 #[derive(Clone, Debug)]

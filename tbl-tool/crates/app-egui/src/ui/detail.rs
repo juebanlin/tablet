@@ -39,6 +39,15 @@ pub fn render(ui: &mut egui::Ui, app: &mut TblApp) {
                 grid::render_grid(ui, app, group, name, &gd);
             }
         }
+        Some(SelectedNode::Enum { group, name }) => {
+            let grid_data = build_enum_grid(app, group, name);
+            if let Some(gd) = grid_data {
+                let heading_resp = ui.heading(format!("🔢 {} ({}项)", name, gd.data_count));
+                if heading_resp.clicked() { app.edit_state.selected = Selection::None; app.edit_state.editing = None; }
+                render_formula_bar(ui, app, group, name, &gd);
+                grid::render_grid(ui, app, group, name, &gd);
+            }
+        }
     }
 
     // Right-click context menus
@@ -171,10 +180,42 @@ fn build_constant_grid(app: &TblApp, group: &str, name: &str) -> Option<GridData
     })
 }
 
+fn build_enum_grid(app: &TblApp, group: &str, name: &str) -> Option<GridData> {
+    let enum_def = app.find_enum(group, name)?;
+
+    let header_row = vec![
+        HeaderCell { text: "id".to_string(), kind: CellKind::ReadOnly, color: egui::Color32::BLACK },
+        HeaderCell { text: "name".to_string(), kind: CellKind::ReadOnly, color: egui::Color32::BLACK },
+        HeaderCell { text: "desc".to_string(), kind: CellKind::ReadOnly, color: egui::Color32::BLACK },
+    ];
+
+    let col_defs = vec![
+        ColDef { kind: CellKind::Text },
+        ColDef { kind: CellKind::Text },
+        ColDef { kind: CellKind::Text },
+    ];
+
+    let data: Vec<Vec<String>> = enum_def.entries.iter()
+        .map(|e| vec![e.id.clone(), e.name.clone(), e.desc.clone()])
+        .collect();
+
+    let valid_count = data.iter().filter(|r| !r[0].is_empty() || !r[1].is_empty()).count();
+
+    Some(GridData {
+        source: GridSource::Enum,
+        header_rows: vec![header_row],
+        col_defs,
+        data_count: valid_count,
+        data,
+    })
+}
+
 fn render_col_context(ui: &mut egui::Ui, app: &mut TblApp) {
     let col = match app.context_col { Some(c) => c, None => return };
     let (group, name) = match &app.selected {
-        Some(SelectedNode::Table { group, name }) | Some(SelectedNode::Constant { group, name }) => (group.clone(), name.clone()),
+        Some(SelectedNode::Table { group, name })
+        | Some(SelectedNode::Constant { group, name })
+        | Some(SelectedNode::Enum { group, name }) => (group.clone(), name.clone()),
         _ => return,
     };
     let is_index_col = matches!(&app.selected, Some(SelectedNode::Table { .. }) if {
@@ -182,18 +223,23 @@ fn render_col_context(ui: &mut egui::Ui, app: &mut TblApp) {
             t.schema.fields.get(col).map_or(false, |f| f.name == "id")
         })
     });
+    let enum_locked = matches!(&app.selected, Some(SelectedNode::Enum { .. }));
     egui::Area::new(egui::Id::new("col_ctx"))
         .fixed_pos(app.context_pos)
         .order(egui::Order::Foreground)
         .show(ui.ctx(), |ui| {
             egui::Frame::popup(ui.style()).show(ui, |ui| {
-                if ui.button("左侧插入列").clicked() { app.insert_column(&group, &name, col); app.context_col = None; }
-                if ui.button("右侧插入列").clicked() { app.insert_column(&group, &name, col + 1); app.context_col = None; }
-                ui.separator();
-                if is_index_col {
-                    ui.add_enabled(false, egui::Button::new("删除该列（主键）"));
-                } else if ui.button("删除该列").clicked() {
-                    app.delete_column(&group, &name, col); app.context_col = None;
+                if enum_locked {
+                    ui.add_enabled(false, egui::Button::new("枚举列固定（id|name|desc）"));
+                } else {
+                    if ui.button("左侧插入列").clicked() { app.insert_column(&group, &name, col); app.context_col = None; }
+                    if ui.button("右侧插入列").clicked() { app.insert_column(&group, &name, col + 1); app.context_col = None; }
+                    ui.separator();
+                    if is_index_col {
+                        ui.add_enabled(false, egui::Button::new("删除该列（主键）"));
+                    } else if ui.button("删除该列").clicked() {
+                        app.delete_column(&group, &name, col); app.context_col = None;
+                    }
                 }
             });
         });
@@ -203,7 +249,9 @@ fn render_col_context(ui: &mut egui::Ui, app: &mut TblApp) {
 fn render_row_context(ui: &mut egui::Ui, app: &mut TblApp) {
     let row = match app.context_row { Some(r) => r, None => return };
     let (group, name) = match &app.selected {
-        Some(SelectedNode::Table { group, name }) | Some(SelectedNode::Constant { group, name }) => (group.clone(), name.clone()),
+        Some(SelectedNode::Table { group, name })
+        | Some(SelectedNode::Constant { group, name })
+        | Some(SelectedNode::Enum { group, name }) => (group.clone(), name.clone()),
         _ => return,
     };
     egui::Area::new(egui::Id::new("row_ctx"))
@@ -234,7 +282,9 @@ fn render_row_context(ui: &mut egui::Ui, app: &mut TblApp) {
 fn render_cell_context(ui: &mut egui::Ui, app: &mut TblApp) {
     if !app.edit_state.selected.selectable() { return; }
     let (group, name) = match &app.selected {
-        Some(SelectedNode::Table { group, name }) | Some(SelectedNode::Constant { group, name }) => (group.clone(), name.clone()),
+        Some(SelectedNode::Table { group, name })
+        | Some(SelectedNode::Constant { group, name })
+        | Some(SelectedNode::Enum { group, name }) => (group.clone(), name.clone()),
         _ => return,
     };
 
@@ -273,6 +323,7 @@ fn render_cell_context(ui: &mut egui::Ui, app: &mut TblApp) {
                                 };
                                 let source = match &app.selected {
                                     Some(SelectedNode::Table { .. }) => GridSource::Table,
+                                    Some(SelectedNode::Enum { .. }) => GridSource::Enum,
                                     _ => GridSource::Constant,
                                 };
                                 app.paste_data(&group, &name, sr, sc, &text, &source);
@@ -300,6 +351,7 @@ fn build_grid_for_selected(app: &TblApp) -> Option<GridData> {
     match &app.selected {
         Some(SelectedNode::Table { group, name }) => build_table_grid(app, group, name),
         Some(SelectedNode::Constant { group, name }) => build_constant_grid(app, group, name),
+        Some(SelectedNode::Enum { group, name }) => build_enum_grid(app, group, name),
         _ => None,
     }
 }
