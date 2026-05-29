@@ -269,6 +269,7 @@ fn load_import_schema(app: &mut TblApp) {
                         match mode {
                             SchemaMode::Table => g.tables.iter().any(|t| &t.name == name && !t.deleted),
                             SchemaMode::Constant => g.constants.iter().any(|c| &c.name == name && !c.deleted),
+                            SchemaMode::Enum => g.enums.iter().any(|e| &e.name == name && !e.deleted),
                         }
                     } else { false };
                     gf.push(exists);

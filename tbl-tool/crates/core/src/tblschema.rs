@@ -19,6 +19,7 @@ pub struct SchemaSection {
 pub enum SchemaMode {
     Table,
     Constant,
+    Enum,
 }
 
 #[derive(Debug, Clone)]
@@ -62,7 +63,7 @@ pub fn parse_tblschema(content: &str) -> Result<TblSchema> {
             }
             current = Some(parse_section_header(line, line_num)?);
         } else if let Some(ref mut sec) = current {
-            let field = parse_field_line(line, line_num)?;
+            let field = parse_field_line(line, line_num, &sec.mode)?;
             sec.fields.push(field);
         } else {
             bail!("line {}: field outside section", line_num + 1);
@@ -90,7 +91,8 @@ fn parse_section_header(line: &str, line_num: usize) -> Result<SchemaSection> {
     let mode = match mode_str {
         "table" => SchemaMode::Table,
         "constant" => SchemaMode::Constant,
-        _ => bail!("line {}: mode must be 'table' or 'constant'", line_num + 1),
+        "enum" => SchemaMode::Enum,
+        _ => bail!("line {}: mode must be 'table' / 'constant' / 'enum'", line_num + 1),
     };
 
     // ignore index= option (backward compat, index is always "id")
@@ -102,18 +104,33 @@ fn parse_section_header(line: &str, line_num: usize) -> Result<SchemaSection> {
     })
 }
 
-fn parse_field_line(line: &str, line_num: usize) -> Result<SchemaField> {
+fn parse_field_line(line: &str, line_num: usize, mode: &SchemaMode) -> Result<SchemaField> {
     let parts: Vec<&str> = line.split('|').collect();
-    if parts.len() < 3 {
-        bail!("line {}: field needs at least name|type|export", line_num + 1);
+    match mode {
+        SchemaMode::Enum => {
+            // enum 数据行：id | name | desc
+            if parts.len() < 2 {
+                bail!("line {}: enum row needs at least id|name", line_num + 1);
+            }
+            Ok(SchemaField {
+                name: parts[1].trim().to_string(),
+                tbl_type: parts[0].trim().to_string(), // 借用 tbl_type 字段存储 id
+                export: String::new(),
+                desc: parts.get(2).map(|s| s.trim().to_string()).unwrap_or_default(),
+            })
+        }
+        _ => {
+            if parts.len() < 3 {
+                bail!("line {}: field needs at least name|type|export", line_num + 1);
+            }
+            Ok(SchemaField {
+                name: parts[0].trim().to_string(),
+                tbl_type: parts[1].trim().to_string(),
+                export: parts[2].trim().to_string(),
+                desc: parts.get(3).map(|s| s.trim().to_string()).unwrap_or_default(),
+            })
+        }
     }
-
-    Ok(SchemaField {
-        name: parts[0].trim().to_string(),
-        tbl_type: parts[1].trim().to_string(),
-        export: parts[2].trim().to_string(),
-        desc: parts.get(3).map(|s| s.trim().to_string()).unwrap_or_default(),
-    })
 }
 
 fn validate_section(sec: &SchemaSection, _line_num: usize) -> Result<()> {
@@ -153,10 +170,21 @@ pub fn serialize_tblschema(schema: &TblSchema) -> String {
         let mode = match sec.mode {
             SchemaMode::Table => "table",
             SchemaMode::Constant => "constant",
+            SchemaMode::Enum => "enum",
         };
         writeln!(s, "[{}/{}] {}", sec.group, sec.name, mode).unwrap();
-        for f in &sec.fields {
-            writeln!(s, "{} | {} | {} | {}", f.name, f.tbl_type, f.export, f.desc).unwrap();
+        match sec.mode {
+            SchemaMode::Enum => {
+                for f in &sec.fields {
+                    // tbl_type 借位存 id
+                    writeln!(s, "{} | {} | {}", f.tbl_type, f.name, f.desc).unwrap();
+                }
+            }
+            _ => {
+                for f in &sec.fields {
+                    writeln!(s, "{} | {} | {} | {}", f.name, f.tbl_type, f.export, f.desc).unwrap();
+                }
+            }
         }
     }
     s
@@ -197,6 +225,24 @@ pub fn schema_from_project(groups: &[Group]) -> TblSchema {
                 fields,
             });
         }
+        for enum_def in &group.enums {
+            if enum_def.deleted { continue; }
+            // tbl_type 借位存 id
+            let fields = enum_def.entries.iter()
+                .filter(|e| !e.id.is_empty() || !e.name.is_empty())
+                .map(|e| SchemaField {
+                    name: e.name.clone(),
+                    tbl_type: e.id.clone(),
+                    export: String::new(),
+                    desc: e.desc.clone(),
+                }).collect();
+            sections.push(SchemaSection {
+                group: group.name.clone(),
+                name: enum_def.name.clone(),
+                mode: SchemaMode::Enum,
+                fields,
+            });
+        }
     }
     TblSchema { sections }
 }
@@ -224,6 +270,7 @@ pub fn apply_schema_to_project(groups: &mut Vec<Group>, sections: &[SchemaSectio
                     dir,
                     tables: Vec::new(),
                     constants: Vec::new(),
+                    enums: Vec::new(),
                     is_new: true,
                 });
                 groups.last_mut().unwrap()
@@ -279,6 +326,31 @@ pub fn apply_schema_to_project(groups: &mut Vec<Group>, sections: &[SchemaSectio
                 } else {
                     let path = group.dir.join(format!("{}.tbl", sec.name));
                     group.constants.push(Constant {
+                        name: sec.name.clone(),
+                        path,
+                        entries,
+                        dirty: true,
+                        deleted: false,
+                        original: String::new(),
+                    });
+                    added += 1;
+                }
+            }
+            SchemaMode::Enum => {
+                // tbl_type 借位存 id
+                let entries: Vec<EnumEntry> = sec.fields.iter().map(|f| EnumEntry {
+                    id: f.tbl_type.clone(),
+                    name: f.name.clone(),
+                    desc: f.desc.clone(),
+                }).collect();
+
+                if let Some(en) = group.enums.iter_mut().find(|e| e.name == sec.name) {
+                    en.entries = entries;
+                    en.dirty = true;
+                    overwritten += 1;
+                } else {
+                    let path = group.dir.join(format!("{}.tbl", sec.name));
+                    group.enums.push(EnumDef {
                         name: sec.name.clone(),
                         path,
                         entries,

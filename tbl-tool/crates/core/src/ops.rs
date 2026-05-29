@@ -8,11 +8,19 @@ pub struct ProjectEngine {
     pub logs: Vec<String>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum NodeKind {
+    Table,
+    Constant,
+    Enum,
+}
+
 #[derive(Clone, Debug)]
 pub enum ProjectAction {
     NewGroup { name: String },
     NewTable { group: String, name: String },
     NewConstant { group: String, name: String },
+    NewEnum { group: String, name: String },
     RenameGroup { old_name: String, new_name: String },
     RenameNode { group: String, old_name: String, new_name: String },
 }
@@ -61,6 +69,135 @@ impl ProjectEngine {
             .find(|g| g.name == group)?
             .constants.iter_mut()
             .find(|c| c.name == name)
+    }
+
+    pub fn find_enum(&self, group: &str, name: &str) -> Option<&EnumDef> {
+        self.project.groups.iter()
+            .find(|g| g.name == group)?
+            .enums.iter()
+            .find(|e| e.name == name)
+    }
+
+    pub fn find_enum_mut(&mut self, group: &str, name: &str) -> Option<&mut EnumDef> {
+        self.project.groups.iter_mut()
+            .find(|g| g.name == group)?
+            .enums.iter_mut()
+            .find(|e| e.name == name)
+    }
+
+    pub fn mark_enum_dirty(&mut self, group: &str, name: &str) {
+        if let Some(e) = self.find_enum_mut(group, name) {
+            e.update_dirty();
+        }
+    }
+
+    pub fn set_enum_cell(&mut self, group: &str, name: &str, row: usize, col: usize, val: &str) {
+        if let Some(g) = self.project.groups.iter_mut().find(|g| g.name == group) {
+            if let Some(en) = g.enums.iter_mut().find(|e| e.name == name) {
+                if !val.is_empty() {
+                    while en.entries.len() <= row {
+                        en.entries.push(EnumEntry::default());
+                    }
+                }
+                if let Some(entry) = en.entries.get_mut(row) {
+                    match col {
+                        0 => entry.id = val.trim().to_string(),
+                        1 => entry.name = val.trim().replace(' ', ""),
+                        2 => entry.desc = val.to_string(),
+                        _ => {}
+                    }
+                }
+                en.update_dirty();
+            }
+        }
+    }
+
+    pub fn commit_enum_cell(&mut self, group: &str, name: &str, row: usize, col: usize, val: String) {
+        if let Some(g) = self.project.groups.iter_mut().find(|g| g.name == group) {
+            if let Some(en) = g.enums.iter_mut().find(|e| e.name == name) {
+                if !val.is_empty() {
+                    while en.entries.len() <= row {
+                        en.entries.push(EnumEntry::default());
+                    }
+                }
+                if let Some(entry) = en.entries.get_mut(row) {
+                    match col {
+                        0 => entry.id = val,
+                        1 => entry.name = val,
+                        2 => entry.desc = val,
+                        _ => {}
+                    }
+                }
+                en.update_dirty();
+            }
+        }
+    }
+
+    pub fn clear_enum_cells(&mut self, group: &str, name: &str, cells: &[(usize, usize)]) {
+        if let Some(g) = self.project.groups.iter_mut().find(|g| g.name == group) {
+            if let Some(en) = g.enums.iter_mut().find(|e| e.name == name) {
+                for &(row, col) in cells {
+                    if let Some(entry) = en.entries.get_mut(row) {
+                        match col {
+                            0 => entry.id.clear(),
+                            1 => entry.name.clear(),
+                            2 => entry.desc.clear(),
+                            _ => {}
+                        }
+                    }
+                }
+                en.update_dirty();
+            }
+        }
+    }
+
+    pub fn paste_enum_data(&mut self, group: &str, name: &str, start_row: usize, start_col: usize, text: &str) {
+        let lines: Vec<&str> = text.lines().collect();
+        if lines.is_empty() { return; }
+        if let Some(g) = self.project.groups.iter_mut().find(|g| g.name == group) {
+            if let Some(en) = g.enums.iter_mut().find(|e| e.name == name) {
+                for (i, line) in lines.iter().enumerate() {
+                    let row = start_row + i;
+                    while en.entries.len() <= row {
+                        en.entries.push(EnumEntry::default());
+                    }
+                    let cells: Vec<&str> = line.split('\t').collect();
+                    for (j, cell) in cells.iter().enumerate() {
+                        let col = start_col + j;
+                        let entry = &mut en.entries[row];
+                        match col {
+                            0 => entry.id = cell.to_string(),
+                            1 => entry.name = cell.to_string(),
+                            2 => entry.desc = cell.to_string(),
+                            _ => {}
+                        }
+                    }
+                }
+                en.update_dirty();
+            }
+        }
+        self.log(format!("粘贴 {}行 数据", lines.len()));
+    }
+
+    pub fn insert_enum_row(&mut self, group: &str, name: &str, at: usize) {
+        if let Some(g) = self.project.groups.iter_mut().find(|g| g.name == group) {
+            if let Some(en) = g.enums.iter_mut().find(|e| e.name == name) {
+                let at = at.min(en.entries.len());
+                en.entries.insert(at, EnumEntry::default());
+                en.update_dirty();
+            }
+        }
+    }
+
+    pub fn delete_enum_row(&mut self, group: &str, name: &str, at: usize) {
+        if let Some(g) = self.project.groups.iter_mut().find(|g| g.name == group) {
+            if let Some(en) = g.enums.iter_mut().find(|e| e.name == name) {
+                if at < en.entries.len() {
+                    en.entries.remove(at);
+                    en.update_dirty();
+                }
+            }
+        }
     }
 
     pub fn mark_table_dirty(&mut self, group: &str, name: &str) {
@@ -385,6 +522,28 @@ impl ProjectEngine {
                     }
                 }
             }
+            for enum_def in &group.enums {
+                if enum_def.deleted { continue; }
+                let mut seen_ids = std::collections::HashSet::new();
+                let mut seen_names = std::collections::HashSet::new();
+                for row in 0..enum_def.entries.len() {
+                    for (col, msg) in validate_enum_row(enum_def, row) {
+                        let entry = &enum_def.entries[row];
+                        let val = match col { 0 => &entry.id, 1 => &entry.name, 2 => &entry.desc, _ => "" };
+                        let pos = format!("{}{}", col_letter(col), row + 1);
+                        errors.push(format!("[验证] {}/{} {}: \"{}\" {}", group.name, enum_def.name, pos, val, msg));
+                    }
+                    let entry = &enum_def.entries[row];
+                    if !entry.id.is_empty() && !seen_ids.insert(entry.id.clone()) {
+                        let pos = format!("A{}", row + 1);
+                        errors.push(format!("[验证] {}/{} {}: id \"{}\" 重复", group.name, enum_def.name, pos, entry.id));
+                    }
+                    if !entry.name.is_empty() && !seen_names.insert(entry.name.clone()) {
+                        let pos = format!("B{}", row + 1);
+                        errors.push(format!("[验证] {}/{} {}: name \"{}\" 重复", group.name, enum_def.name, pos, entry.name));
+                    }
+                }
+            }
         }
         errors
     }
@@ -420,17 +579,39 @@ impl ProjectEngine {
                     }
                 }
             }
+            if let Some(enum_def) = g.enums.iter().find(|e| e.name == name) {
+                let mut seen_ids = std::collections::HashSet::new();
+                let mut seen_names = std::collections::HashSet::new();
+                for row in 0..enum_def.entries.len() {
+                    for (col, _msg) in validate_enum_row(enum_def, row) {
+                        self.validation_errors.insert((group.to_string(), name.to_string(), row, col));
+                    }
+                    let entry = &enum_def.entries[row];
+                    if !entry.id.is_empty() && !seen_ids.insert(entry.id.clone()) {
+                        self.validation_errors.insert((group.to_string(), name.to_string(), row, 0));
+                    }
+                    if !entry.name.is_empty() && !seen_names.insert(entry.name.clone()) {
+                        self.validation_errors.insert((group.to_string(), name.to_string(), row, 1));
+                    }
+                }
+            }
         }
     }
 
     pub fn revalidate_all(&mut self) {
         self.validation_errors.clear();
         let groups: Vec<_> = self.project.groups.iter()
-            .map(|g| (g.name.clone(), g.tables.iter().map(|t| t.name.clone()).collect::<Vec<_>>(), g.constants.iter().map(|c| c.name.clone()).collect::<Vec<_>>()))
+            .map(|g| (
+                g.name.clone(),
+                g.tables.iter().map(|t| t.name.clone()).collect::<Vec<_>>(),
+                g.constants.iter().map(|c| c.name.clone()).collect::<Vec<_>>(),
+                g.enums.iter().map(|e| e.name.clone()).collect::<Vec<_>>(),
+            ))
             .collect();
-        for (gname, tables, constants) in &groups {
+        for (gname, tables, constants, enums) in &groups {
             for tname in tables { self.revalidate(gname, tname); }
             for cname in constants { self.revalidate(gname, cname); }
+            for ename in enums { self.revalidate(gname, ename); }
         }
     }
 
@@ -482,13 +663,29 @@ impl ProjectEngine {
                     }
                 }
             }
+            for enum_def in &mut group.enums {
+                if enum_def.deleted {
+                    if !enum_def.original.is_empty() {
+                        let _ = std::fs::remove_file(&enum_def.path);
+                    }
+                    deleted += 1;
+                } else if enum_def.dirty {
+                    let content = crate::tbl::serialize_enum(enum_def);
+                    if std::fs::write(&enum_def.path, &content).is_ok() {
+                        enum_def.original = content;
+                        enum_def.dirty = false;
+                        count += 1;
+                    }
+                }
+            }
             group.tables.retain(|t| !t.deleted);
             group.constants.retain(|c| !c.deleted);
-            if group.tables.is_empty() && group.constants.is_empty() && !group.is_new && group.dir.is_dir() {
+            group.enums.retain(|e| !e.deleted);
+            if group.tables.is_empty() && group.constants.is_empty() && group.enums.is_empty() && !group.is_new && group.dir.is_dir() {
                 let _ = std::fs::remove_dir_all(&group.dir);
             }
         }
-        self.project.groups.retain(|g| !g.tables.is_empty() || !g.constants.is_empty());
+        self.project.groups.retain(|g| !g.tables.is_empty() || !g.constants.is_empty() || !g.enums.is_empty());
         if count > 0 || deleted > 0 {
             self.log(format!("已保存 {} 个文件, 删除 {} 个", count, deleted));
         } else {
@@ -515,6 +712,7 @@ impl ProjectEngine {
                 if let Some(g) = self.project.groups.iter_mut().find(|g| g.name == group_name) {
                     for t in &mut g.tables { t.deleted = true; }
                     for c in &mut g.constants { c.deleted = true; }
+                    for e in &mut g.enums { e.deleted = true; }
                 }
                 self.log(format!("已标记删除 Group: {}", group_name));
             }
@@ -529,31 +727,47 @@ impl ProjectEngine {
             if let Some(c) = g.constants.iter_mut().find(|c| c.name == node_name) {
                 c.deleted = true;
             }
+            if let Some(e) = g.enums.iter_mut().find(|e| e.name == node_name) {
+                e.deleted = true;
+            }
         }
         self.log(format!("已标记删除: {}/{}", group_name, node_name));
     }
 
-    pub fn copy_node(&mut self, group_name: &str, node_name: &str, is_table: bool) {
+    pub fn copy_node(&mut self, group_name: &str, node_name: &str, kind: NodeKind) {
         if let Some(g) = self.project.groups.iter_mut().find(|g| g.name == group_name) {
             let new_name = format!("{}_copy", node_name);
             let dst = g.dir.join(format!("{}.tbl", new_name));
-            if is_table {
-                if let Some(t) = g.tables.iter().find(|t| t.name == node_name).cloned() {
-                    let mut copy = t;
-                    copy.name = new_name.clone();
-                    copy.path = dst;
-                    copy.dirty = true;
-                    copy.original = String::new();
-                    g.tables.push(copy);
+            match kind {
+                NodeKind::Table => {
+                    if let Some(t) = g.tables.iter().find(|t| t.name == node_name).cloned() {
+                        let mut copy = t;
+                        copy.name = new_name.clone();
+                        copy.path = dst;
+                        copy.dirty = true;
+                        copy.original = String::new();
+                        g.tables.push(copy);
+                    }
                 }
-            } else {
-                if let Some(c) = g.constants.iter().find(|c| c.name == node_name).cloned() {
-                    let mut copy = c;
-                    copy.name = new_name.clone();
-                    copy.path = dst;
-                    copy.dirty = true;
-                    copy.original = String::new();
-                    g.constants.push(copy);
+                NodeKind::Constant => {
+                    if let Some(c) = g.constants.iter().find(|c| c.name == node_name).cloned() {
+                        let mut copy = c;
+                        copy.name = new_name.clone();
+                        copy.path = dst;
+                        copy.dirty = true;
+                        copy.original = String::new();
+                        g.constants.push(copy);
+                    }
+                }
+                NodeKind::Enum => {
+                    if let Some(e) = g.enums.iter().find(|e| e.name == node_name).cloned() {
+                        let mut copy = e;
+                        copy.name = new_name.clone();
+                        copy.path = dst;
+                        copy.dirty = true;
+                        copy.original = String::new();
+                        g.enums.push(copy);
+                    }
                 }
             }
             self.log(format!("已复制: {}/{} → {}", group_name, node_name, new_name));
@@ -572,6 +786,7 @@ impl ProjectEngine {
                     dir,
                     tables: Vec::new(),
                     constants: Vec::new(),
+                    enums: Vec::new(),
                     is_new: true,
                 });
                 self.log(format!("新建 Group: {}", name));
@@ -612,6 +827,20 @@ impl ProjectEngine {
                     self.log(format!("新建 Constant: {}/{}", group, name));
                 }
             }
+            ProjectAction::NewEnum { group, name } => {
+                if let Some(g) = self.project.groups.iter_mut().find(|g| g.name == *group) {
+                    let path = g.dir.join(format!("{}.tbl", name));
+                    g.enums.push(EnumDef {
+                        name: name.clone(),
+                        path,
+                        entries: Vec::new(),
+                        dirty: true,
+                        deleted: false,
+                        original: String::new(),
+                    });
+                    self.log(format!("新建 Enum: {}/{}", group, name));
+                }
+            }
             ProjectAction::RenameGroup { old_name, new_name } => {
                 let old_dir = config_dir.join(old_name);
                 let new_dir = config_dir.join(new_name);
@@ -633,7 +862,11 @@ impl ProjectEngine {
                     }
                     if let Some(c) = g.constants.iter_mut().find(|c| c.name == *old_name) {
                         c.name = new_name.clone();
-                        c.path = new_path;
+                        c.path = new_path.clone();
+                    }
+                    if let Some(e) = g.enums.iter_mut().find(|e| e.name == *old_name) {
+                        e.name = new_name.clone();
+                        e.path = new_path;
                     }
                 }
                 self.log(format!("重命名: {}/{} → {}", group, old_name, new_name));
@@ -690,6 +923,9 @@ impl ProjectEngine {
             for c in &g.constants {
                 if !c.deleted && c.name.to_lowercase() == lower { return Some("配置项名重复（忽略大小写）".to_string()); }
             }
+            for e in &g.enums {
+                if !e.deleted && e.name.to_lowercase() == lower { return Some("配置项名重复（忽略大小写）".to_string()); }
+            }
         }
         None
     }
@@ -704,6 +940,9 @@ impl ProjectEngine {
             }
             for c in &g.constants {
                 if !c.deleted && c.name.to_lowercase() == lower && c.name != old_name { return Some("配置项名重复（忽略大小写）".to_string()); }
+            }
+            for e in &g.enums {
+                if !e.deleted && e.name.to_lowercase() == lower && e.name != old_name { return Some("配置项名重复（忽略大小写）".to_string()); }
             }
         }
         None

@@ -128,6 +128,7 @@ pub fn load_project(workdir: &Path) -> Result<Project> {
 fn load_group(name: &str, dir: &Path) -> Result<Group> {
     let mut tables = Vec::new();
     let mut constants = Vec::new();
+    let mut enums = Vec::new();
 
     let mut entries: Vec<_> = std::fs::read_dir(dir)?
         .filter_map(|e| e.ok())
@@ -140,6 +141,7 @@ fn load_group(name: &str, dir: &Path) -> Result<Group> {
         match tbl::parse_tbl(&path) {
             Ok(TblFile::Table(t)) => tables.push(t),
             Ok(TblFile::Constant(c)) => constants.push(c),
+            Ok(TblFile::Enum(e)) => enums.push(e),
             Err(e) => eprintln!("warn: failed to parse {}: {}", path.display(), e),
         }
     }
@@ -149,6 +151,7 @@ fn load_group(name: &str, dir: &Path) -> Result<Group> {
         dir: dir.to_path_buf(),
         tables,
         constants,
+        enums,
         is_new: false,
     })
 }

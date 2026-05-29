@@ -97,7 +97,20 @@ fn generate_tbl_content(sec: &SchemaSection, opts: &TestGenOptions) -> String {
     match sec.mode {
         SchemaMode::Table => generate_table_tbl(sec, opts),
         SchemaMode::Constant => generate_const_tbl(sec),
+        SchemaMode::Enum => generate_enum_tbl(sec),
     }
+}
+
+fn generate_enum_tbl(sec: &SchemaSection) -> String {
+    let mut s = String::new();
+    writeln!(s, "#!tbl v2").unwrap();
+    writeln!(s, "#mode enum").unwrap();
+    writeln!(s, "---").unwrap();
+    // sec.fields: tbl_type 借位存 id, name 存条目名, desc 存描述
+    for f in &sec.fields {
+        writeln!(s, "{}|{}|{}", f.tbl_type, f.name, f.desc).unwrap();
+    }
+    s
 }
 
 fn generate_table_tbl(sec: &SchemaSection, opts: &TestGenOptions) -> String {
@@ -303,7 +316,10 @@ fn build_test_main(schema: &TblSchema, pkg: &str, format: &str) -> String {
     }
 
     for sec in &schema.sections {
-        let cls = format!("{}Tpl", sec.name);
+        let cls = match sec.mode {
+            SchemaMode::Enum => format!("{}Enum", sec.name),
+            _ => format!("{}Tpl", sec.name),
+        };
         writeln!(s).unwrap();
         writeln!(s, "        System.out.println(\"=== {} ===\");", sec.name).unwrap();
 
@@ -344,6 +360,12 @@ fn build_test_main(schema: &TblSchema, pkg: &str, format: &str) -> String {
 
                 writeln!(s, "        System.out.printf(\"{}%n\",", fmt_parts.join(" ")).unwrap();
                 writeln!(s, "            {});", arg_parts.join(", ")).unwrap();
+            }
+            SchemaMode::Enum => {
+                // 枚举打印：列出所有条目 (id, name, desc)
+                writeln!(s, "        for ({} v : {}.values()) {{", cls, cls).unwrap();
+                writeln!(s, "            System.out.printf(\"id=%d name=%s desc=%s%n\", v.id, v.name(), v.desc);").unwrap();
+                writeln!(s, "        }}").unwrap();
             }
         }
     }
@@ -441,6 +463,15 @@ fn build_test_main_go(schema: &TblSchema, pkg: &str, import_path: &str, format: 
                     fmt_parts.join(" "),
                     arg_parts.join(", ")
                 ).unwrap();
+                writeln!(s, "\t}}").unwrap();
+            }
+            SchemaMode::Enum => {
+                // sec.fields: tbl_type 借位存 id, name 存条目名
+                writeln!(s, "\t{{").unwrap();
+                for f in &sec.fields {
+                    writeln!(s, "\t\tfmt.Printf(\"id=%d name=%s desc=%s\\n\", int32(cfg.{}_{}), \"{}\", cfg.{}_{}.Desc())",
+                        sec.name, f.name, f.name, sec.name, f.name).unwrap();
+                }
                 writeln!(s, "\t}}").unwrap();
             }
         }

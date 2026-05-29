@@ -143,6 +143,62 @@ pub fn is_valid_node_name(s: &str) -> bool {
     s.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
 }
 
+/// 枚举条目命名规则：UPPER_SNAKE_CASE，[A-Z][A-Z0-9_]*
+pub fn is_valid_enum_entry_name(s: &str) -> bool {
+    if s.is_empty() { return false; }
+    let first = s.chars().next().unwrap();
+    if !first.is_ascii_uppercase() { return false; }
+    s.chars().all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_')
+}
+
+pub fn validate_enum_entry_name(name: &str) -> Option<String> {
+    if name.is_empty() { return Some("枚举条目名不能为空".to_string()); }
+    if !is_valid_enum_entry_name(name) {
+        return Some(format!("\"{}\" 不是合法枚举条目名（需大写字母开头，只含大写字母/数字/下划线）", name));
+    }
+    if is_reserved_keyword(name) {
+        return Some(format!("\"{}\" 是语言关键字", name));
+    }
+    None
+}
+
+pub fn validate_enum_id(id: &str) -> Option<String> {
+    if id.is_empty() { return None; }
+    match id.parse::<i32>() {
+        Ok(v) if v < 0 => Some("id 必须是正整数".to_string()),
+        Ok(0) => Some("id 不能为 0（保留为未设置语义）".to_string()),
+        Ok(_) => None,
+        Err(_) => Some("id 必须是正整数".to_string()),
+    }
+}
+
+pub fn validate_enum_cell(entry: &EnumEntry, col: usize) -> Option<String> {
+    match col {
+        0 => validate_enum_id(&entry.id),
+        1 => {
+            if entry.name.is_empty() { return None; }
+            validate_enum_entry_name(&entry.name)
+        }
+        _ => None,
+    }
+}
+
+pub fn validate_enum_row(enum_def: &EnumDef, row: usize) -> Vec<(usize, String)> {
+    let mut errors = Vec::new();
+    let entry = match enum_def.entries.get(row) { Some(e) => e, None => return errors };
+
+    for col in 0..3 {
+        if let Some(msg) = validate_enum_cell(entry, col) {
+            errors.push((col, msg));
+        }
+    }
+
+    if !entry.name.is_empty() && entry.id.is_empty() {
+        errors.push((0, "name已填但id为空".to_string()));
+    }
+    errors
+}
+
 // --- 字段名验证 ---
 
 pub fn validate_field_name(name: &str) -> Option<String> {
@@ -248,6 +304,41 @@ pub fn validate_constant_schema(constant: &Constant, sep: &SeparatorsSection) ->
             errors.push(SchemaError {
                 field: entry.name.clone(),
                 message: format!("类型 \"{}\" 不合法", entry.tbl_type),
+            });
+        }
+    }
+
+    errors
+}
+
+pub fn validate_enum_schema(enum_def: &EnumDef) -> Vec<SchemaError> {
+    let mut errors = Vec::new();
+
+    if enum_def.entries.iter().all(|e| e.id.is_empty() && e.name.is_empty()) {
+        errors.push(SchemaError { field: String::new(), message: "枚举至少需要一个条目".to_string() });
+        return errors;
+    }
+
+    let mut seen_ids = std::collections::HashSet::new();
+    let mut seen_names = std::collections::HashSet::new();
+    for entry in &enum_def.entries {
+        if entry.id.is_empty() && entry.name.is_empty() { continue; }
+        if let Some(msg) = validate_enum_id(&entry.id) {
+            errors.push(SchemaError { field: entry.name.clone(), message: msg });
+        }
+        if let Some(msg) = validate_enum_entry_name(&entry.name) {
+            errors.push(SchemaError { field: entry.name.clone(), message: msg });
+        }
+        if !entry.id.is_empty() && !seen_ids.insert(entry.id.clone()) {
+            errors.push(SchemaError {
+                field: entry.name.clone(),
+                message: format!("id \"{}\" 重复", entry.id),
+            });
+        }
+        if !entry.name.is_empty() && !seen_names.insert(entry.name.clone()) {
+            errors.push(SchemaError {
+                field: entry.name.clone(),
+                message: format!("枚举条目名 \"{}\" 重复", entry.name),
             });
         }
     }

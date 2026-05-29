@@ -110,6 +110,7 @@ pub struct Group {
     pub dir: PathBuf,
     pub tables: Vec<Table>,
     pub constants: Vec<Constant>,
+    pub enums: Vec<EnumDef>,
     pub is_new: bool,
 }
 
@@ -171,6 +172,32 @@ pub struct ConstEntry {
     pub tbl_type: String,
     pub value: String,
     pub export: Export,
+    pub desc: String,
+}
+
+/// 枚举定义：mode=enum 的 .tbl 文件
+///
+/// 表头固定 id|name|desc 三列，无 #desc/#type/#export/#field 头。
+#[derive(Debug, Clone)]
+pub struct EnumDef {
+    pub name: String,
+    pub path: PathBuf,
+    pub entries: Vec<EnumEntry>,
+    pub dirty: bool,
+    pub deleted: bool,
+    pub original: String,
+}
+
+impl EnumDef {
+    pub fn update_dirty(&mut self) {
+        self.dirty = crate::tbl::serialize_enum(self) != self.original;
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct EnumEntry {
+    pub id: String,
+    pub name: String,
     pub desc: String,
 }
 

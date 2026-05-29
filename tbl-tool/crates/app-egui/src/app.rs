@@ -477,7 +477,8 @@ impl TblApp {
             }
             PendingAction::CopyNode { group, name, is_table } => {
                 let (group, name, is_table) = (group.clone(), name.clone(), *is_table);
-                self.engine.copy_node(&group, &name, is_table);
+                let kind = if is_table { tbl_core::ops::NodeKind::Table } else { tbl_core::ops::NodeKind::Constant };
+                self.engine.copy_node(&group, &name, kind);
                 self.pending_action = None;
                 return;
             }

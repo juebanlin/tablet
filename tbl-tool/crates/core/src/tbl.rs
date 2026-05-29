@@ -48,6 +48,7 @@ pub fn parse_tbl(path: &Path) -> Result<TblFile> {
     match mode.as_str() {
         "table" => parse_table(path, &desc_line, &type_line, &export_line, &field_line, &data_lines),
         "constant" => parse_constant(path, &data_lines),
+        "enum" => parse_enum(path, &data_lines),
         _ => bail!("unknown mode: {}", mode),
     }
 }
@@ -130,9 +131,39 @@ fn parse_constant(path: &Path, data_lines: &[&str]) -> Result<TblFile> {
     Ok(TblFile::Constant(constant))
 }
 
+fn parse_enum(path: &Path, data_lines: &[&str]) -> Result<TblFile> {
+    let mut entries = Vec::new();
+
+    for line in data_lines {
+        let parts: Vec<&str> = line.split('|').collect();
+        if parts.is_empty() {
+            continue;
+        }
+        entries.push(EnumEntry {
+            id: parts[0].trim().to_string(),
+            name: parts.get(1).unwrap_or(&"").trim().to_string(),
+            desc: parts.get(2).unwrap_or(&"").trim().to_string(),
+        });
+    }
+
+    let name = path.file_stem().unwrap_or_default().to_string_lossy().to_string();
+
+    let mut enum_def = EnumDef {
+        name,
+        path: path.to_path_buf(),
+        entries,
+        dirty: false,
+        deleted: false,
+        original: String::new(),
+    };
+    enum_def.original = serialize_enum(&enum_def);
+    Ok(TblFile::Enum(enum_def))
+}
+
 pub enum TblFile {
     Table(Table),
     Constant(Constant),
+    Enum(EnumDef),
 }
 
 pub fn serialize_table(table: &Table) -> String {
@@ -159,6 +190,17 @@ pub fn serialize_constant(constant: &Constant) -> String {
     s.push_str("---\n");
     for e in &constant.entries {
         s.push_str(&format!("{}|{}|{}|{}|{}\n", e.name, e.tbl_type, e.value, e.export.to_tbl(), e.desc));
+    }
+    s
+}
+
+pub fn serialize_enum(enum_def: &EnumDef) -> String {
+    let mut s = String::new();
+    s.push_str("#!tbl v2\n");
+    s.push_str("#mode enum\n");
+    s.push_str("---\n");
+    for e in &enum_def.entries {
+        s.push_str(&format!("{}|{}|{}\n", e.id, e.name, e.desc));
     }
     s
 }
