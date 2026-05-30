@@ -2,6 +2,40 @@ use std::collections::HashSet;
 use crate::model::*;
 use crate::validate::*;
 
+/// 把一条 ValidationError 格式化为日志行（统一 B 格式：`位置:[内容] -> 原因`）：
+/// - Table 表头：`[验证] group/node 表头第N行X列:[field] -> message`
+///   N = 1 desc / 2 export / 3 type / 4 field（与 UI 表头从上到下一致）
+/// - Constant/Enum 表头：`[验证] group/node 表头X列:[field] -> message`
+/// - 数据行：`[验证] group/node X<row>:[value] -> message`，value 过长截断为 `xxx...`
+fn format_validation_log(group: &str, node: &str, err: &ValidationError) -> String {
+    if err.is_schema() {
+        let col = col_letter(err.col);
+        let field = if err.field.is_empty() { "?".to_string() } else { err.field.clone() };
+        match err.header_row {
+            Some(hr) => {
+                let n = hr as usize;
+                format!("[验证] {}/{} 表头第{}行{}列:[{}] -> {}", group, node, n, col, field, err.message)
+            }
+            None => {
+                format!("[验证] {}/{} 表头{}列:[{}] -> {}", group, node, col, field, err.message)
+            }
+        }
+    } else {
+        let pos = format!("{}{}", col_letter(err.col), err.row + 1);
+        let display = truncate_display(&err.value, 16);
+        format!("[验证] {}/{} {}:[{}] -> {}", group, node, pos, display, err.message)
+    }
+}
+
+/// 截断显示用值：超过 max 个 char 时保留前 max 个 + `...`，否则原样返回。
+fn truncate_display(s: &str, max: usize) -> String {
+    let n = s.chars().count();
+    if n <= max { return s.to_string(); }
+    let mut out: String = s.chars().take(max).collect();
+    out.push_str("...");
+    out
+}
+
 pub struct ProjectEngine {
     pub project: Project,
     pub validation_errors: HashSet<(String, String, usize, usize)>,
@@ -307,6 +341,9 @@ impl ProjectEngine {
         }
     }
 
+    /// 提交表头编辑。
+    /// `header_row` 是 0-based UI 行号（与 `TableHeaderRow::row()` 等价）：
+    ///   0=desc, 1=export, 2=type, 3=field —— 顺序与 UI 表头从上到下一致，也与 .tbl 序列化顺序一致。
     pub fn commit_header_edit(&mut self, group: &str, name: &str, header_row: usize, col: usize, val: String) {
         let mut keyword_err = None;
         if let Some(g) = self.project.groups.iter_mut().find(|g| g.name == group) {
@@ -503,67 +540,20 @@ impl ProjectEngine {
         for group in &self.project.groups {
             for table in &group.tables {
                 if table.deleted { continue; }
-                for sch_err in validate_table_schema_with_refs(table, sep, Some(&refs)) {
-                    errors.push(format!("[验证] {}/{} 表头: {} {}",
-                        group.name, table.name, sch_err.field, sch_err.message));
-                }
-                let index_col = table.schema.fields.iter().position(|f| f.name == "id");
-                let mut seen_ids = std::collections::HashSet::new();
-                for row in 0..table.records.len() {
-                    for (col, msg) in validate_table_row_with_refs(table, row, sep, Some(&refs)) {
-                        let val = table.records[row].get(col).map(|s| s.as_str()).unwrap_or("");
-                        let pos = format!("{}{}", col_letter(col), row + 1);
-                        errors.push(format!("[验证] {}/{} {}: \"{}\" {}", group.name, table.name, pos, val, msg));
-                    }
-                    if let Some(idx) = index_col {
-                        let id = table.records[row].get(idx).map(|s| s.as_str()).unwrap_or("");
-                        if !id.is_empty() && !seen_ids.insert(id.to_string()) {
-                            let pos = format!("{}{}", col_letter(idx), row + 1);
-                            errors.push(format!("[验证] {}/{} {}: ID \"{}\" 重复", group.name, table.name, pos, id));
-                        }
-                    }
+                for err in validate_table(table, sep, Some(&refs)) {
+                    errors.push(format_validation_log(&group.name, &table.name, &err));
                 }
             }
             for constant in &group.constants {
                 if constant.deleted { continue; }
-                for sch_err in validate_constant_schema(constant, sep) {
-                    errors.push(format!("[验证] {}/{} 表头: {} {}",
-                        group.name, constant.name, sch_err.field, sch_err.message));
-                }
-                let mut seen_names = std::collections::HashSet::new();
-                for row in 0..constant.entries.len() {
-                    for (col, msg) in validate_constant_row(constant, row, sep) {
-                        let val = match col { 0 => &constant.entries[row].name, 2 => &constant.entries[row].value, _ => "" };
-                        let pos = format!("{}{}", col_letter(col), row + 1);
-                        errors.push(format!("[验证] {}/{} {}: \"{}\" {}", group.name, constant.name, pos, val, msg));
-                    }
-                    let n = &constant.entries[row].name;
-                    if !n.is_empty() && !seen_names.insert(n.clone()) {
-                        let pos = format!("A{}", row + 1);
-                        errors.push(format!("[验证] {}/{} {}: name \"{}\" 重复", group.name, constant.name, pos, n));
-                    }
+                for err in validate_constant(constant, sep) {
+                    errors.push(format_validation_log(&group.name, &constant.name, &err));
                 }
             }
             for enum_def in &group.enums {
                 if enum_def.deleted { continue; }
-                let mut seen_ids = std::collections::HashSet::new();
-                let mut seen_names = std::collections::HashSet::new();
-                for row in 0..enum_def.entries.len() {
-                    for (col, msg) in validate_enum_row(enum_def, row) {
-                        let entry = &enum_def.entries[row];
-                        let val = match col { 0 => &entry.id, 1 => &entry.name, 2 => &entry.desc, _ => "" };
-                        let pos = format!("{}{}", col_letter(col), row + 1);
-                        errors.push(format!("[验证] {}/{} {}: \"{}\" {}", group.name, enum_def.name, pos, val, msg));
-                    }
-                    let entry = &enum_def.entries[row];
-                    if !entry.id.is_empty() && !seen_ids.insert(entry.id.clone()) {
-                        let pos = format!("A{}", row + 1);
-                        errors.push(format!("[验证] {}/{} {}: id \"{}\" 重复", group.name, enum_def.name, pos, entry.id));
-                    }
-                    if !entry.name.is_empty() && !seen_names.insert(entry.name.clone()) {
-                        let pos = format!("B{}", row + 1);
-                        errors.push(format!("[验证] {}/{} {}: name \"{}\" 重复", group.name, enum_def.name, pos, entry.name));
-                    }
+                for err in validate_enum(enum_def) {
+                    errors.push(format_validation_log(&group.name, &enum_def.name, &err));
                 }
             }
         }
@@ -574,49 +564,21 @@ impl ProjectEngine {
         self.validation_errors.retain(|(g, n, _, _)| g != group || n != name);
         let sep = self.project.config.separators.clone();
         let refs = RefIndex::build(&self.project.groups);
-        if let Some(g) = self.project.groups.iter().find(|g| g.name == group) {
-            if let Some(table) = g.tables.iter().find(|t| t.name == name) {
-                let mut seen_ids = std::collections::HashSet::new();
-                let index_col = table.schema.fields.iter().position(|f| f.name == "id");
-                for row in 0..table.records.len() {
-                    for (col, _msg) in validate_table_row_with_refs(table, row, &sep, Some(&refs)) {
-                        self.validation_errors.insert((group.to_string(), name.to_string(), row, col));
-                    }
-                    if let Some(idx) = index_col {
-                        let id = table.records[row].get(idx).map(|s| s.as_str()).unwrap_or("");
-                        if !id.is_empty() && !seen_ids.insert(id.to_string()) {
-                            self.validation_errors.insert((group.to_string(), name.to_string(), row, idx));
-                        }
-                    }
-                }
+        let g = match self.project.groups.iter().find(|g| g.name == group) { Some(g) => g, None => return };
+
+        if let Some(table) = g.tables.iter().find(|t| t.name == name) {
+            for err in validate_table(table, &sep, Some(&refs)) {
+                self.validation_errors.insert((group.to_string(), name.to_string(), err.row, err.col));
             }
-            if let Some(constant) = g.constants.iter().find(|c| c.name == name) {
-                let mut seen_names = std::collections::HashSet::new();
-                for row in 0..constant.entries.len() {
-                    for (col, _msg) in validate_constant_row(constant, row, &sep) {
-                        self.validation_errors.insert((group.to_string(), name.to_string(), row, col));
-                    }
-                    let n = &constant.entries[row].name;
-                    if !n.is_empty() && !seen_names.insert(n.clone()) {
-                        self.validation_errors.insert((group.to_string(), name.to_string(), row, 0));
-                    }
-                }
+        }
+        if let Some(constant) = g.constants.iter().find(|c| c.name == name) {
+            for err in validate_constant(constant, &sep) {
+                self.validation_errors.insert((group.to_string(), name.to_string(), err.row, err.col));
             }
-            if let Some(enum_def) = g.enums.iter().find(|e| e.name == name) {
-                let mut seen_ids = std::collections::HashSet::new();
-                let mut seen_names = std::collections::HashSet::new();
-                for row in 0..enum_def.entries.len() {
-                    for (col, _msg) in validate_enum_row(enum_def, row) {
-                        self.validation_errors.insert((group.to_string(), name.to_string(), row, col));
-                    }
-                    let entry = &enum_def.entries[row];
-                    if !entry.id.is_empty() && !seen_ids.insert(entry.id.clone()) {
-                        self.validation_errors.insert((group.to_string(), name.to_string(), row, 0));
-                    }
-                    if !entry.name.is_empty() && !seen_names.insert(entry.name.clone()) {
-                        self.validation_errors.insert((group.to_string(), name.to_string(), row, 1));
-                    }
-                }
+        }
+        if let Some(enum_def) = g.enums.iter().find(|e| e.name == name) {
+            for err in validate_enum(enum_def) {
+                self.validation_errors.insert((group.to_string(), name.to_string(), err.row, err.col));
             }
         }
     }

@@ -61,8 +61,8 @@ gm_password | str             | s  | GM 密码（仅服务端）
 #!tbl v2
 #mode table
 #desc 英雄ID|名称|血量|英雄类型|技能组
-#type int|str|int|@HeroType|List<int>
 #export 前后端|前后端|服务器|前后端|前后端
+#type int|str|int|@HeroType|List<int>
 #field id|name|hp|type|skills
 ---
 1001|战士|100|1|1;2;3
@@ -70,7 +70,7 @@ gm_password | str             | s  | GM 密码（仅服务端）
 1003|弓手|90|3|6;7;8
 ```
 
-- 表头四行**必须按顺序** `#desc → #type → #export → #field`
+- 表头四行**必须按顺序** `#desc → #export → #type → #field`（与 UI 表头从上到下一致）
 - 第一列字段名固定为 `id`（int），不可改名、不可删除、不可移动
 - 数据行从 `---` 之后开始，每行一条记录
 
@@ -123,8 +123,8 @@ gm_password|str            |xxx  |s  |GM密码
 | `#!tbl v2` | 格式版本标识，必须第一行 | 所有 .tbl |
 | `#mode` | `table / constant / enum` | 所有 .tbl |
 | `#desc` | 字段中文描述 | 仅 table |
-| `#type` | 字段 [TblFieldType](#7-tblfieldtype-类型系统) | 仅 table |
 | `#export` | 导出标记 | 仅 table |
+| `#type` | 字段 [TblFieldType](#7-tblfieldtype-类型系统) | 仅 table |
 | `#field` | 字段名（snake_case） | 仅 table |
 | `---` | 头部与数据分隔符 | 所有 .tbl |
 
@@ -557,23 +557,60 @@ Enum mode 的数据行为 `id | name | desc`，无 type/export 列。
 
 ## 附录 A. 验证架构
 
-工具内部以三层函数实现验证，层层复用：
+工具内部以**四层函数**实现验证，层层复用、可组合调用：
 
 ```
-validate_*_cell(node, row, col)         → Option<String>          单元格级
-validate_*_row(node, row)               → Vec<(col, String)>      行级（调用 cell + 行逻辑）
-validate_*_schema(node)                 → Vec<SchemaError>        schema 级（结构完整性）
-revalidate(group, name)                 → 更新 errors 集合         节点级（遍历行 + 跨行/跨表逻辑）
+validate_*_cell(node, row, col)      → Option<String>            单元格级
+validate_*_row(node, row)            → Vec<(col, String)>        行级（调用 cell + 行逻辑）
+validate_*_schema(node)              → Vec<SchemaError>          schema 级（结构完整性）
+validate_*(node, sep, refs?)         → Vec<ValidationError>      整表级（schema + 行 + 跨行唯一性）
+revalidate / revalidate_all(...)     → 更新 errors 集合           项目级（遍历所有节点 + 跨表引用）
 ```
 
-`*` 是 `table` / `constant` / `enum` 之一。
+`*` 是 `table` / `constant` / `enum` 之一。整表层是节点级聚合入口，UI 只需要调用它就能拿到一个节点的全部错误，节点级 `revalidate` 只负责把整表层结果写入 `validation_errors` 索引。
 
 | 层 | 触发时机 | 内容 |
 |---|---------|------|
-| cell | 编辑提交、 [ui] realtime_validate=true 时键入 | 单值类型/格式/命名 |
+| cell | 编辑提交、`[ui] realtime_validate=true` 时键入 | 单值类型/格式/命名 |
 | row | 同上 | cell 验证 + 行内一致性（如 name 已填 id 为空） |
 | schema | 保存前、导出前 | 字段列表完整性、字段名不重 |
-| 节点（项目级） | 同上 | 跨行的唯一性（id/name 重复）+ 跨表的引用有效性（RefIndex） |
+| 整表（节点级） | 同上 | schema + 所有行 + 跨行唯一性（id/name 重复） |
+| 项目级 | 加载、保存、reload、导出 | 整表层 × N 节点 + RefIndex 跨表引用 |
+
+### A.1 ValidationError 结构
+
+整表层与项目级输出的统一结构（HTTP response 风格：状态码 + 上下文）：
+
+```rust
+struct ValidationError {
+    code: ValidationCode,       // 预定义错误类型枚举（FieldNameKeyword / TypeInvalid / DuplicateId / ...）
+    row: usize,                 // 数据行索引；SCHEMA_ROW (= usize::MAX) 表示表头层错误
+    col: usize,                 // 0-based 列索引
+    header_row: Option<TableHeaderRow>,  // 仅 Table schema 错误有意义
+    field: String,              // 出错字段/常量/枚举条目名
+    value: String,              // 出错单元格的值（数据行错误）
+    message: String,            // 人类可读消息（不参与日志格式判断，仅用于显示）
+}
+```
+
+### A.2 行/列范式枚举
+
+为避免 0-based / 1-based 混用导致的歧义，固定范式编号统一以"第 N 行 / 第 N 列"语义（1-based）。内部用作下标必须调用 `.row()` / `.col()`（返回 0-based）：
+
+| 枚举 | 用途 | 1-based 编号 = 第几行 / 第几列 |
+|------|------|------------------|
+| `TableHeaderRow` | Table 表头行号（4 行 UI 顺序） | 1=Desc, 2=Export, 3=Type, 4=Field |
+| `ConstantCol` | Constant 行内列号（5 列固定范式） | 1=Name, 2=Type, 3=Value, 4=Export, 5=Desc |
+| `EnumCol` | Enum 行内列号（3 列固定范式） | 1=Id, 2=Name, 3=Desc |
+
+这三个枚举的命名差异（Row vs Col）反映了三种 mode 的**数据模型差异**：
+
+- **Table 是表格型数据**：动态多列（用户定义的若干字段），但每个字段的元数据（描述/导出/类型/字段名）固定为四行 schema 头——所以用 `TableHeaderRow` 标识这四行表头中的某一行。
+- **Constant / Enum 是离散型数据**：每条记录就是一行，行内列固定（5 列 / 3 列），没有可变字段——所以用 `ConstantCol` / `EnumCol` 标识行内的列位置。
+
+`TableHeaderRow` 的编号顺序与 UI 表头从上到下一致，也与 `.tbl` 文件 `#desc → #export → #type → #field` 的物理顺序一致。
+
+### A.3 RefIndex（跨表引用索引）
 
 `RefIndex` 是项目级跨表索引，构建一次后供 `validate_ref_value` / `validate_ref_type` 查询：
 
@@ -583,5 +620,18 @@ RefIndex {
     // name → (Table | Enum | Constant, 该项的有效 id 集合)
 }
 ```
+
+### A.4 日志格式
+
+项目级验证（`ProjectEngine::validate`）输出统一格式 `位置:[内容] -> 原因`：
+
+```
+[验证] hero/HeroBase 表头第3行D列:[type] -> "type" 是 Go 关键字
+[验证] hero/HeroBase C3:[abc] -> 不是合法int, 示例: 1
+```
+
+- 表头错误：`表头第N行X列:[字段名] -> 原因`（Table，N 为 1–4）
+  - Constant/Enum 表头无 N：`表头X列:[字段名] -> 原因`
+- 数据行错误：`<列字母><行号>:[内容] -> 原因`，内容超过 16 字符截断为 `xxx...`
 
 UI 上的视觉反馈（红框、树节点 `!`、日志框）见 @02.5.4。验证开关配置见 @07.4.10。

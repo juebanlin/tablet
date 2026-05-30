@@ -172,8 +172,8 @@ pub fn serialize_table(table: &Table) -> String {
     s.push_str("#!tbl v2\n");
     s.push_str("#mode table\n");
     s.push_str(&format!("#desc {}\n", fields.iter().map(|f| f.desc.as_str()).collect::<Vec<_>>().join("|")));
-    s.push_str(&format!("#type {}\n", fields.iter().map(|f| f.tbl_type.as_str()).collect::<Vec<_>>().join("|")));
     s.push_str(&format!("#export {}\n", fields.iter().map(|f| f.export.to_tbl()).collect::<Vec<_>>().join("|")));
+    s.push_str(&format!("#type {}\n", fields.iter().map(|f| f.tbl_type.as_str()).collect::<Vec<_>>().join("|")));
     s.push_str(&format!("#field {}\n", fields.iter().map(|f| f.name.as_str()).collect::<Vec<_>>().join("|")));
     s.push_str("---\n");
     for row in &table.records {

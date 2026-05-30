@@ -118,8 +118,8 @@ fn generate_table_tbl(sec: &SchemaSection, opts: &TestGenOptions) -> String {
     writeln!(s, "#!tbl v2").unwrap();
     writeln!(s, "#mode table").unwrap();
     writeln!(s, "#desc {}", sec.fields.iter().map(|f| f.desc.as_str()).collect::<Vec<_>>().join("|")).unwrap();
-    writeln!(s, "#type {}", sec.fields.iter().map(|f| f.tbl_type.as_str()).collect::<Vec<_>>().join("|")).unwrap();
     writeln!(s, "#export {}", sec.fields.iter().map(|f| f.export_display()).collect::<Vec<_>>().join("|")).unwrap();
+    writeln!(s, "#type {}", sec.fields.iter().map(|f| f.tbl_type.as_str()).collect::<Vec<_>>().join("|")).unwrap();
     writeln!(s, "#field {}", sec.fields.iter().map(|f| f.name.as_str()).collect::<Vec<_>>().join("|")).unwrap();
     writeln!(s, "---").unwrap();
 
