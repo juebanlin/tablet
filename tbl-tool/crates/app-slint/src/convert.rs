@@ -260,7 +260,11 @@ fn enrich_selection(snap: &mut GridSnapshot, state: &AppState) {
             } else {
                 String::new()
             };
-            snap.selection_info = snap.coord.clone();
+            // 单格选中时，若该格有验证错误，状态栏在坐标后追加错误信息（实时验证 UX）。
+            snap.selection_info = match cell_validation_message(state, r, c) {
+                Some(msg) => format!("{} ⚠ {}", snap.coord, msg),
+                None => snap.coord.clone(),
+            };
         }
         GridSelection::CellRange { r1, c1, r2, c2 } => {
             let rmin = r1.min(r2);
@@ -352,6 +356,70 @@ pub fn col_letter(idx: usize) -> String {
     s
 }
 
+/// 取 (r,c) 单元格的具体验证错误信息；当前节点不存在 / 该格无错误时返回 None。
+/// 用于 StatusBar 在选中单格时把"红框是因为什么"展示给用户，对齐文档 §5.4 实时验证 UX。
+fn cell_validation_message(state: &AppState, r: usize, c: usize) -> Option<String> {
+    use tbl_core::validate::{
+        validate_table_cell_with_refs, validate_constant_cell, validate_enum_cell, RefIndex,
+    };
+    let sep = &state.engine.project.config.separators;
+    match &state.selected {
+        Some(SelectedNode::Table { group, name }) => {
+            let table = state.engine.find_table(group, name)?;
+            let refs = RefIndex::build(&state.engine.project.groups);
+            if let Some(msg) = validate_table_cell_with_refs(table, r, c, sep, Some(&refs)) {
+                return Some(msg);
+            }
+            // 主键 id 重复检测
+            if let Some(idx) = table.schema.fields.iter().position(|f| f.name == "id") {
+                if c == idx {
+                    let id = table.records.get(r).and_then(|row| row.get(idx))
+                        .map(|s| s.as_str()).unwrap_or("");
+                    if !id.is_empty() {
+                        let mut count = 0;
+                        for row in &table.records {
+                            if row.get(idx).map_or(false, |v| v == id) { count += 1; }
+                        }
+                        if count > 1 { return Some(format!("ID \"{}\" 重复", id)); }
+                    }
+                }
+            }
+            None
+        }
+        Some(SelectedNode::Constant { group, name }) => {
+            let constant = state.engine.find_constant(group, name)?;
+            let entry = constant.entries.get(r)?;
+            if let Some(msg) = validate_constant_cell(entry, c, sep) { return Some(msg); }
+            // name 重复
+            if c == 0 && !entry.name.is_empty() {
+                let count = constant.entries.iter().filter(|e| e.name == entry.name).count();
+                if count > 1 { return Some(format!("name \"{}\" 重复", entry.name)); }
+            }
+            // name 已填但 value 为空
+            if c == 2 && !entry.name.is_empty() && entry.value.is_empty() {
+                return Some("name已填但value为空".to_string());
+            }
+            None
+        }
+        Some(SelectedNode::Enum { group, name }) => {
+            let enum_def = state.engine.find_enum(group, name)?;
+            let entry = enum_def.entries.get(r)?;
+            if let Some(msg) = validate_enum_cell(entry, c) { return Some(msg); }
+            // id / name 重复
+            if c == 0 && !entry.id.is_empty() {
+                let count = enum_def.entries.iter().filter(|e| e.id == entry.id).count();
+                if count > 1 { return Some(format!("id \"{}\" 重复", entry.id)); }
+            }
+            if c == 1 && !entry.name.is_empty() {
+                let count = enum_def.entries.iter().filter(|e| e.name == entry.name).count();
+                if count > 1 { return Some(format!("name \"{}\" 重复", entry.name)); }
+            }
+            None
+        }
+        None => None,
+    }
+}
+
 fn build_table_grid(state: &AppState, group: &str, name: &str) -> GridSnapshot {
     let table = match state.engine.find_table(group, name) {
         Some(t) => t,
@@ -359,12 +427,37 @@ fn build_table_grid(state: &AppState, group: &str, name: &str) -> GridSnapshot {
     };
     let fields = &table.schema.fields;
 
-    let desc_row: Vec<HeaderCell> = fields.iter().map(|f| HeaderCell {
+    // 把 schema 错误按"问题归属哪一行表头"分散成 (hi,ci) 的红框集合：
+    //   类型不合法 / 引用不存在 → type 行（hi=2）
+    //   字段名非法 / 关键字 / 重复 / 第一列必须是 id → field 行（hi=3）
+    //   主键值重复 → 不是表头错误（已在 row 级 cell.has_error 处理）
+    let mut header_errors: std::collections::HashSet<(usize, usize)> = std::collections::HashSet::new();
+    {
+        use tbl_core::validate::validate_table_schema_with_refs;
+        let sep = &state.engine.project.config.separators;
+        let refs = tbl_core::validate::RefIndex::build(&state.engine.project.groups);
+        for sch in validate_table_schema_with_refs(table, sep, Some(&refs)) {
+            // SchemaError 没有 col 字段，按 field name 反查 col；找不到 (空 / 主键消息) 时 col=0
+            let ci = fields.iter().position(|f| f.name == sch.field).unwrap_or(0);
+            let hi = if sch.message.contains("类型") || sch.message.contains("引用") {
+                2  // type 行
+            } else if sch.message.contains("主键值") {
+                continue;  // 这条已经由 row 级 dup-id 标记覆盖
+            } else {
+                3  // field 行
+            };
+            header_errors.insert((hi, ci));
+        }
+    }
+    let h_err = |hi: usize, ci: usize| header_errors.contains(&(hi, ci));
+
+    let desc_row: Vec<HeaderCell> = fields.iter().enumerate().map(|(ci, f)| HeaderCell {
         text: SharedString::from(f.desc.clone()),
         kind: CellKind::Text,
         color: color_text_primary(),
+        has_error: h_err(0, ci),
     }).collect();
-    let export_row: Vec<HeaderCell> = fields.iter().map(|f| {
+    let export_row: Vec<HeaderCell> = fields.iter().enumerate().map(|(ci, f)| {
         let (kind, color) = if f.name == "id" {
             (CellKind::ReadOnly, color_text_readonly())
         } else {
@@ -374,21 +467,28 @@ fn build_table_grid(state: &AppState, group: &str, name: &str) -> GridSnapshot {
             text: SharedString::from(f.export.display().to_string()),
             kind,
             color,
+            has_error: h_err(1, ci),
         }
     }).collect();
-    let type_row: Vec<HeaderCell> = fields.iter().map(|f| {
+    let type_row: Vec<HeaderCell> = fields.iter().enumerate().map(|(ci, f)| {
         let kind = if f.name == "id" { CellKind::ReadOnly } else { CellKind::TypeEnum };
         let color = if f.name == "id" { color_text_readonly() } else { color_text_info() };
         HeaderCell {
             text: SharedString::from(f.tbl_type.clone()),
             kind,
             color,
+            has_error: h_err(2, ci),
         }
     }).collect();
-    let field_row: Vec<HeaderCell> = fields.iter().map(|f| {
+    let field_row: Vec<HeaderCell> = fields.iter().enumerate().map(|(ci, f)| {
         let kind = if f.name == "id" { CellKind::ReadOnly } else { CellKind::Text };
         let color = if f.name == "id" { color_text_readonly() } else { color_text_primary() };
-        HeaderCell { text: SharedString::from(f.name.clone()), kind, color }
+        HeaderCell {
+            text: SharedString::from(f.name.clone()),
+            kind,
+            color,
+            has_error: h_err(3, ci),
+        }
     }).collect();
 
     let valid_count = table.records.iter()
@@ -463,11 +563,11 @@ fn build_constant_grid(state: &AppState, group: &str, name: &str) -> GridSnapsho
     };
 
     let header_row = vec![
-        HeaderCell { text: "name".into(),   kind: CellKind::ReadOnly, color: color_text_readonly() },
-        HeaderCell { text: "type".into(),   kind: CellKind::ReadOnly, color: color_text_info() },
-        HeaderCell { text: "value".into(),  kind: CellKind::ReadOnly, color: color_text_readonly() },
-        HeaderCell { text: "export".into(), kind: CellKind::ReadOnly, color: color_text_success() },
-        HeaderCell { text: "desc".into(),   kind: CellKind::ReadOnly, color: color_text_readonly() },
+        HeaderCell { text: "name".into(),   kind: CellKind::ReadOnly, color: color_text_readonly(), has_error: false },
+        HeaderCell { text: "type".into(),   kind: CellKind::ReadOnly, color: color_text_info(), has_error: false },
+        HeaderCell { text: "value".into(),  kind: CellKind::ReadOnly, color: color_text_readonly(), has_error: false },
+        HeaderCell { text: "export".into(), kind: CellKind::ReadOnly, color: color_text_success(), has_error: false },
+        HeaderCell { text: "desc".into(),   kind: CellKind::ReadOnly, color: color_text_readonly(), has_error: false },
     ];
 
     let valid_count = constant.entries.iter().filter(|e| !e.name.is_empty()).count();
@@ -522,9 +622,9 @@ fn build_enum_grid(state: &AppState, group: &str, name: &str) -> GridSnapshot {
     };
 
     let header_row = vec![
-        HeaderCell { text: "id".into(),   kind: CellKind::ReadOnly, color: color_text_readonly() },
-        HeaderCell { text: "name".into(), kind: CellKind::ReadOnly, color: color_text_readonly() },
-        HeaderCell { text: "desc".into(), kind: CellKind::ReadOnly, color: color_text_readonly() },
+        HeaderCell { text: "id".into(),   kind: CellKind::ReadOnly, color: color_text_readonly(), has_error: false },
+        HeaderCell { text: "name".into(), kind: CellKind::ReadOnly, color: color_text_readonly(), has_error: false },
+        HeaderCell { text: "desc".into(), kind: CellKind::ReadOnly, color: color_text_readonly(), has_error: false },
     ];
 
     let valid_count = enum_def.entries.iter()

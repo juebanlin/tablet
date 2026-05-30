@@ -883,6 +883,9 @@ fn wire_toolbar(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
             }
             "save" => {
                 s.borrow_mut().engine.save_all();
+                // save_all 内部会跑 revalidate_all 重算 validation_errors，
+                // 必须刷新 tree（! 标记）和 grid（红框）才能让用户看到错误
+                full_refresh = true;
             }
             "reload" => {
                 s.borrow_mut().engine.reload();
@@ -948,6 +951,12 @@ fn reset_view_after_reload(state: &Rc<RefCell<AppState>>) {
     st.pending.close();
     // 重新展开所有 group（与 AppState::load 一致的初始态）
     st.tree_expanded = st.engine.project.groups.iter().map(|g| g.name.clone()).collect();
+    // 同步 AppState::load：reload / generate-test / clear 后跑一遍全表验证。
+    st.engine.revalidate_all();
+    if !st.engine.validation_errors.is_empty() {
+        let n = st.engine.validation_errors.len();
+        st.engine.log(format!("[验证] 共 {} 个错误", n));
+    }
 }
 
 /// 监听 slint 端 drop-focus → commit-pending-edit：

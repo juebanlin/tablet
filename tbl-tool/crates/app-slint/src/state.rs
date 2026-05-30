@@ -526,6 +526,12 @@ impl AppState {
         let expanded: HashSet<String> = project.groups.iter().map(|g| g.name.clone()).collect();
         let mut engine = ProjectEngine::new(project);
         engine.log(format!("已加载 {} 个 Group", group_count));
+        // 加载即跑一遍全表验证：让 cell 红框 / 节点 ! 标记在打开就可见，
+        // 不必等用户编辑触发 revalidate。realtime_validate 仅控制后续编辑期是否复算。
+        engine.revalidate_all();
+        if !engine.validation_errors.is_empty() {
+            engine.log(format!("[验证] 加载后发现 {} 个错误", engine.validation_errors.len()));
+        }
         Ok(Self {
             engine,
             selected: None,

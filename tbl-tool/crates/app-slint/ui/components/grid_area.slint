@@ -21,6 +21,7 @@ export struct HeaderCell {
     text: string,
     kind: CellKind,
     color: color,
+    has-error: bool,
 }
 
 export struct DataCell {
@@ -214,8 +215,8 @@ export component GridArea inherits Rectangle {
                         background: cell.kind == CellKind.read-only
                             ? Theme.bg-header-readonly
                             : (ci == root.selected-col ? Theme.bg-cell-selected : Theme.bg-header);
-                        border-color: Theme.border;
-                        border-width: 0.5px;
+                        border-color: cell.has-error ? Theme.border-error : Theme.border;
+                        border-width: cell.has-error ? 1.5px : 0.5px;
                         // 非编辑态：纯 Text（编辑态时不渲染）
                         if !is-editing: Text {
                             text: cell.text;
