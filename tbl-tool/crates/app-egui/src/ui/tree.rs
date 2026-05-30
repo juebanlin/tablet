@@ -1,10 +1,24 @@
 use eframe::egui;
 use crate::app::{TblApp, SelectedNode, PendingAction, TreeFilter, TreeContext};
 use tbl_core::ops::NodeKind;
+use tbl_core::name_matches;
 
+/// TreeSection 大区渲染：3 段子区域（标题 / 功能区 / 节点列表）。
+/// 对应 docs/02-UI设计.md §1.4 §2。
 pub fn render(ui: &mut egui::Ui, app: &mut TblApp) {
+    // ─── 1. 标题栏 ───
     ui.heading("配置树");
+    ui.separator();
+
+    // ─── 2. 功能区：搜索 / 过滤 / 完整组（顺序固定，对应 02-UI §2.3）───
     ui.horizontal(|ui| {
+        ui.label("搜索:");
+        ui.add(egui::TextEdit::singleline(&mut app.tree_search)
+            .desired_width(ui.available_width().min(140.0))
+            .hint_text("名称 / 拼音首字母"));
+    });
+    ui.horizontal(|ui| {
+        ui.label("过滤:");
         let label = match app.tree_filter {
             TreeFilter::All => "全部",
             TreeFilter::New => "新增",
@@ -22,23 +36,41 @@ pub fn render(ui: &mut egui::Ui, app: &mut TblApp) {
                 ui.selectable_value(&mut app.tree_filter, TreeFilter::Modified, "修改");
                 ui.selectable_value(&mut app.tree_filter, TreeFilter::Deleted, "删除");
             });
-        if app.tree_filter != TreeFilter::All {
-            ui.checkbox(&mut app.tree_filter_show_full_group, "完整组");
-        }
     });
+    ui.checkbox(&mut app.tree_filter_show_full_group, "完整组");
     ui.separator();
 
+    // ─── 3. 节点列表 ───
     egui::ScrollArea::both().auto_shrink([false, false]).show(ui, |ui| {
         let groups = app.engine.project.groups.clone();
         let filter = app.tree_filter.clone();
-        let show_full = app.tree_filter_show_full_group;
+        let full_group = app.tree_filter_show_full_group;
+        let search = app.tree_search.clone();
 
         for group in &groups {
-            let group_has_match = filter == TreeFilter::All
+            // 子项级 AND（filter ∧ search）
+            let table_hits: Vec<bool> = group.tables.iter().map(|t| {
+                passes_filter(&filter, t.deleted, t.original.is_empty(), t.dirty)
+                    && name_matches(&t.name, &search)
+            }).collect();
+            let const_hits: Vec<bool> = group.constants.iter().map(|c| {
+                passes_filter(&filter, c.deleted, c.original.is_empty(), c.dirty)
+                    && name_matches(&c.name, &search)
+            }).collect();
+            let enum_hits: Vec<bool> = group.enums.iter().map(|e| {
+                passes_filter(&filter, e.deleted, e.original.is_empty(), e.dirty)
+                    && name_matches(&e.name, &search)
+            }).collect();
+            let any_child_hit = table_hits.iter().any(|b| *b)
+                || const_hits.iter().any(|b| *b)
+                || enum_hits.iter().any(|b| *b);
+
+            let group_filter_pass = filter == TreeFilter::All
                 || group.tables.iter().any(|t| passes_filter(&filter, t.deleted, t.original.is_empty(), t.dirty))
                 || group.constants.iter().any(|c| passes_filter(&filter, c.deleted, c.original.is_empty(), c.dirty))
                 || group.enums.iter().any(|e| passes_filter(&filter, e.deleted, e.original.is_empty(), e.dirty));
-            if !group_has_match { continue; }
+            let group_self_hit = group_filter_pass && name_matches(&group.name, &search);
+            if !group_self_hit && !any_child_hit { continue; }
 
             let expanded = app.tree_expanded.contains(&group.name);
             let arrow = if expanded { "▼" } else { "▶" };
@@ -80,8 +112,11 @@ pub fn render(ui: &mut egui::Ui, app: &mut TblApp) {
             }
 
             if expanded {
-                for table in &group.tables {
-                    if !show_full && !passes_filter(&filter, table.deleted, table.original.is_empty(), table.dirty) { continue; }
+                // 完整组打开 → 忽略 filter+search，展示所有未删子项
+                // 否则 → 仅展示子项级 AND 命中的项
+                for (idx, table) in group.tables.iter().enumerate() {
+                    let show = if full_group { !table.deleted } else { table_hits[idx] };
+                    if !show { continue; }
                     let selected = matches!(&app.selected, Some(SelectedNode::Table { group: g, name: n }) if g == &group.name && n == &table.name);
                     let row = ui.horizontal(|ui| {
                         ui.add_space(18.0);
@@ -100,8 +135,9 @@ pub fn render(ui: &mut egui::Ui, app: &mut TblApp) {
                         app.context_pos = ui.input(|i| i.pointer.interact_pos().unwrap_or_default());
                     }
                 }
-                for constant in &group.constants {
-                    if !show_full && !passes_filter(&filter, constant.deleted, constant.original.is_empty(), constant.dirty) { continue; }
+                for (idx, constant) in group.constants.iter().enumerate() {
+                    let show = if full_group { !constant.deleted } else { const_hits[idx] };
+                    if !show { continue; }
                     let selected = matches!(&app.selected, Some(SelectedNode::Constant { group: g, name: n }) if g == &group.name && n == &constant.name);
                     let row = ui.horizontal(|ui| {
                         ui.add_space(18.0);
@@ -120,8 +156,9 @@ pub fn render(ui: &mut egui::Ui, app: &mut TblApp) {
                         app.context_pos = ui.input(|i| i.pointer.interact_pos().unwrap_or_default());
                     }
                 }
-                for enum_def in &group.enums {
-                    if !show_full && !passes_filter(&filter, enum_def.deleted, enum_def.original.is_empty(), enum_def.dirty) { continue; }
+                for (idx, enum_def) in group.enums.iter().enumerate() {
+                    let show = if full_group { !enum_def.deleted } else { enum_hits[idx] };
+                    if !show { continue; }
                     let selected = matches!(&app.selected, Some(SelectedNode::Enum { group: g, name: n }) if g == &group.name && n == &enum_def.name);
                     let row = ui.horizontal(|ui| {
                         ui.add_space(18.0);
