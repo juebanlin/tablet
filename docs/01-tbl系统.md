@@ -569,9 +569,7 @@ revalidate / revalidate_all(...)     → 更新 errors 集合           项目�
 
 `*` 是 `table` / `constant` / `enum` 之一。
 
-整表层是 **节点级聚合入口**，几乎所有上层（UI、日志、ops）只需要调用它就能拿到一个节点的全部错误。节点级 `revalidate` 只负责把整表层结果写入 `validation_errors` 索引。
-
-四层验证全部返回 `Vec<ValidationError>`（cell 层为 `Option<ValidationError>`），意味着上层不再需要知道一个错误是 schema 层还是 row 层产生的——分类信息（行号、列号、是否表头错误）都已经写到结构体里。
+整表层是 **节点级聚合入口**，几乎所有上层（UI、日志、ops）调用它就能拿到一个节点的全部错误。节点级 `revalidate` 只负责把整表层结果写入 `validation_errors` 索引。
 
 | 层 | 触发时机 | 内容 |
 |---|---------|------|
