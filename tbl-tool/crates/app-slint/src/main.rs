@@ -18,7 +18,7 @@ use simplelog::*;
 
 slint::include_modules!();
 
-use state::{AppState, GridSelection, SelectedNode, TreeFilter, TreeTarget, TsRefFilter, TsTab, TypeEditTarget};
+use state::{AppState, CtxMenuKind, GridSelection, PendingAction, SelectedNode, TreeFilter, TreeTarget, TsRefFilter, TsTab, TypeEditTarget};
 
 #[derive(Parser)]
 #[command(name = "tbl-tool", version = "0.1.0")]
@@ -75,11 +75,15 @@ fn main() -> anyhow::Result<()> {
     push_tree(&ui, &app_state);
     push_grid(&ui, &app_state);
     push_logs(&ui, &app_state);
+    push_context_menu(&ui, &app_state);
+    push_input_dialog(&ui, &app_state);
+    push_confirm_dialog(&ui, &app_state);
     wire_tree(&ui, &app_state);
     wire_grid(&ui, &app_state);
     wire_toolbar(&ui, &app_state);
     wire_type_selector(&ui, &app_state);
     wire_ref_picker(&ui, &app_state);
+    wire_context_menu(&ui, &app_state);
     wire_focus(&ui, &app_state);
 
     let result = ui.run().map_err(|e| anyhow::anyhow!("{}", e));
@@ -337,6 +341,40 @@ fn wire_tree(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
                 push_tree(&ui, &s);
                 if grid_dirty { push_grid(&ui, &s); }
             }
+        });
+    }
+    // 树节点右键 → 打开 ContextMenu
+    {
+        let s = state.clone();
+        let weak = ui.as_weak();
+        ui.on_tree_node_context_menu(move |id, x, y| {
+            let kind = {
+                let st = s.borrow();
+                st.tree_targets.get(id as usize).cloned()
+            };
+            let menu_kind = match kind {
+                Some(TreeTarget::Group(name)) => Some(CtxMenuKind::TreeGroup { name }),
+                Some(TreeTarget::Table { group, name }) =>
+                    Some(CtxMenuKind::TreeNode { group, name, kind: tbl_core::ops::NodeKind::Table }),
+                Some(TreeTarget::Constant { group, name }) =>
+                    Some(CtxMenuKind::TreeNode { group, name, kind: tbl_core::ops::NodeKind::Constant }),
+                Some(TreeTarget::Enum { group, name }) =>
+                    Some(CtxMenuKind::TreeNode { group, name, kind: tbl_core::ops::NodeKind::Enum }),
+                None => None,
+            };
+            if let Some(k) = menu_kind {
+                s.borrow_mut().ctx_menu.open_at(k, x as f32, y as f32);
+                if let Some(ui) = weak.upgrade() { push_context_menu(&ui, &s); }
+            }
+        });
+    }
+    // 树空白右键 → ContextMenu(TreeBlank)
+    {
+        let s = state.clone();
+        let weak = ui.as_weak();
+        ui.on_tree_blank_context_menu(move |x, y| {
+            s.borrow_mut().ctx_menu.open_at(CtxMenuKind::TreeBlank, x as f32, y as f32);
+            if let Some(ui) = weak.upgrade() { push_context_menu(&ui, &s); }
         });
     }
 }
@@ -648,6 +686,33 @@ fn wire_grid(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
             if let Some(ui) = weak.upgrade() { push_grid(&ui, &s); }
         });
     }
+    // grid 列字母右键
+    {
+        let s = state.clone();
+        let weak = ui.as_weak();
+        ui.on_grid_col_context_menu(move |c, x, y| {
+            s.borrow_mut().ctx_menu.open_at(CtxMenuKind::GridCol { col: c as usize }, x as f32, y as f32);
+            if let Some(ui) = weak.upgrade() { push_context_menu(&ui, &s); }
+        });
+    }
+    // grid 行号右键
+    {
+        let s = state.clone();
+        let weak = ui.as_weak();
+        ui.on_grid_row_context_menu(move |r, x, y| {
+            s.borrow_mut().ctx_menu.open_at(CtxMenuKind::GridRow { row: r as usize }, x as f32, y as f32);
+            if let Some(ui) = weak.upgrade() { push_context_menu(&ui, &s); }
+        });
+    }
+    // grid 数据格右键
+    {
+        let s = state.clone();
+        let weak = ui.as_weak();
+        ui.on_grid_cell_context_menu(move |r, c, x, y| {
+            s.borrow_mut().ctx_menu.open_at(CtxMenuKind::GridCell { row: r as usize, col: c as usize }, x as f32, y as f32);
+            if let Some(ui) = weak.upgrade() { push_context_menu(&ui, &s); }
+        });
+    }
 }
 
 /// 顶部工具栏按钮 → ProjectEngine 操作。
@@ -687,6 +752,9 @@ fn wire_toolbar(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
                 push_grid(&ui, &s);
                 push_type_selector(&ui, &s);
                 push_ref_picker(&ui, &s);
+                push_context_menu(&ui, &s);
+                push_input_dialog(&ui, &s);
+                push_confirm_dialog(&ui, &s);
             }
             // 任何 toolbar 操作都可能产生日志（save/reload/generate/clear 全会 log）
             push_logs(&ui, &s);
@@ -706,6 +774,8 @@ fn reset_view_after_reload(state: &Rc<RefCell<AppState>>) {
     st.editing_header_col = -1;
     st.type_selector.close();
     st.ref_picker.close();
+    st.ctx_menu.close();
+    st.pending.close();
     // 重新展开所有 group（与 AppState::load 一致的初始态）
     st.tree_expanded = st.engine.project.groups.iter().map(|g| g.name.clone()).collect();
 }
@@ -1305,6 +1375,429 @@ fn sync_rp_search(state: &Rc<RefCell<AppState>>, ui_weak: &slint::Weak<AppWindow
     if let Some(ui) = ui_weak.upgrade() {
         let s = ui.get_rp_search().to_string();
         state.borrow_mut().ref_picker.search = s;
+    }
+}
+
+// ──────── ContextMenu / InputDialog / ConfirmDialog ────────
+
+/// 计算当前 ctx_menu.kind 应展示的菜单项列表。
+/// action-id 形如 "tree.new-group" / "grid.col-insert-left" 等，由 wire_context_menu 分发。
+fn ctx_menu_items_for(kind: &CtxMenuKind) -> Vec<CtxMenuItem> {
+    let sep = || CtxMenuItem {
+        label: slint::SharedString::new(),
+        action_id: slint::SharedString::new(),
+        is_separator: true,
+        disabled: false,
+    };
+    let item = |label: &str, id: &str, disabled: bool| CtxMenuItem {
+        label: label.into(),
+        action_id: id.into(),
+        is_separator: false,
+        disabled,
+    };
+    match kind {
+        CtxMenuKind::TreeBlank => vec![
+            item("新建 Group", "tree.new-group", false),
+        ],
+        CtxMenuKind::TreeGroup { .. } => vec![
+            item("新建 Table", "tree.new-table", false),
+            item("新建 Constant", "tree.new-constant", false),
+            item("新建 Enum", "tree.new-enum", false),
+            sep(),
+            item("重命名", "tree.rename-group", false),
+            item("删除", "tree.delete-group", false),
+        ],
+        CtxMenuKind::TreeNode { .. } => vec![
+            item("复制", "tree.copy-node", false),
+            item("重命名", "tree.rename-node", false),
+            item("删除", "tree.delete-node", false),
+        ],
+        CtxMenuKind::GridCol { .. } => vec![
+            item("左侧插入列", "grid.col-insert-left", false),
+            item("右侧插入列", "grid.col-insert-right", false),
+            item("删除列", "grid.col-delete", false),
+        ],
+        CtxMenuKind::GridRow { .. } => vec![
+            item("上方插入行", "grid.row-insert-above", false),
+            item("下方插入行", "grid.row-insert-below", false),
+            item("删除行", "grid.row-delete", false),
+        ],
+        CtxMenuKind::GridCell { .. } => vec![
+            item("复制", "grid.cell-copy", false),
+            item("粘贴", "grid.cell-paste", false),
+            item("删除内容", "grid.cell-clear", false),
+        ],
+    }
+}
+
+fn push_context_menu(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
+    let st = state.borrow();
+    let cm = &st.ctx_menu;
+    ui.set_ctx_menu_open(cm.open);
+    if !cm.open {
+        ui.set_ctx_menu_items(slint::ModelRc::new(slint::VecModel::from(Vec::<CtxMenuItem>::new())));
+        return;
+    }
+    let kind = match &cm.kind { Some(k) => k, None => return };
+    // slint length 属性的 setter 接受 Coord（f32）
+    ui.set_ctx_menu_x(cm.x);
+    ui.set_ctx_menu_y(cm.y);
+    ui.set_ctx_menu_items(slint::ModelRc::new(slint::VecModel::from(ctx_menu_items_for(kind))));
+}
+
+fn push_input_dialog(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
+    let st = state.borrow();
+    match &st.pending.action {
+        Some(action) if action.needs_input() => {
+            ui.set_dlg_input_open(true);
+            ui.set_dlg_input_title(action.input_title().into());
+            ui.set_dlg_input_label("名称:".into());
+            ui.set_dlg_input_buffer(st.pending.input_buffer.clone().into());
+            ui.set_dlg_input_error(st.pending.error.clone().unwrap_or_default().into());
+            let can_confirm = st.pending.error.is_none() && !st.pending.input_buffer.is_empty();
+            ui.set_dlg_input_can_confirm(can_confirm);
+        }
+        _ => {
+            ui.set_dlg_input_open(false);
+            ui.set_dlg_input_buffer(slint::SharedString::new());
+            ui.set_dlg_input_error(slint::SharedString::new());
+            ui.set_dlg_input_can_confirm(false);
+        }
+    }
+}
+
+fn push_confirm_dialog(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
+    let st = state.borrow();
+    match &st.pending.action {
+        Some(action) if action.needs_confirm() => {
+            ui.set_dlg_confirm_open(true);
+            ui.set_dlg_confirm_title(action.confirm_title().into());
+            ui.set_dlg_confirm_message(action.confirm_message().into());
+        }
+        _ => {
+            ui.set_dlg_confirm_open(false);
+        }
+    }
+}
+
+/// 根据 PendingAction 当前 input_buffer，刷新 error 字段（命名校验）。
+fn revalidate_pending_input(state: &Rc<RefCell<AppState>>) {
+    let mut st = state.borrow_mut();
+    let action = match &st.pending.action { Some(a) => a.clone(), None => return };
+    let buf = st.pending.input_buffer.clone();
+    let err: Option<String> = match &action {
+        PendingAction::NewGroup => st.engine.validate_group_name(&buf),
+        PendingAction::RenameGroup { old_name } => st.engine.validate_group_name_rename(&buf, old_name),
+        PendingAction::RenameNode { old_name, .. } => st.engine.validate_node_name_rename(&buf, old_name),
+        PendingAction::NewTable { .. } | PendingAction::NewConstant { .. } | PendingAction::NewEnum { .. } =>
+            st.engine.validate_node_name(&buf),
+        _ => None,
+    };
+    st.pending.error = err;
+}
+
+fn execute_pending_action(state: &Rc<RefCell<AppState>>) {
+    use tbl_core::ops::ProjectAction;
+    let mut st = state.borrow_mut();
+    let action = match st.pending.action.clone() { Some(a) => a, None => return };
+    let buf = st.pending.input_buffer.clone();
+    let core_action = match &action {
+        PendingAction::NewGroup => ProjectAction::NewGroup { name: buf.clone() },
+        PendingAction::NewTable { group } => ProjectAction::NewTable { group: group.clone(), name: buf.clone() },
+        PendingAction::NewConstant { group } => ProjectAction::NewConstant { group: group.clone(), name: buf.clone() },
+        PendingAction::NewEnum { group } => ProjectAction::NewEnum { group: group.clone(), name: buf.clone() },
+        PendingAction::RenameGroup { old_name } => ProjectAction::RenameGroup { old_name: old_name.clone(), new_name: buf.clone() },
+        PendingAction::RenameNode { group, old_name } => ProjectAction::RenameNode { group: group.clone(), old_name: old_name.clone(), new_name: buf.clone() },
+        PendingAction::DeleteGroup { group } => {
+            st.engine.delete_group(group);
+            // 如果当前选中的节点在被删除的 group 下，清空选中
+            if let Some(SelectedNode::Table { group: g, .. }
+                | SelectedNode::Constant { group: g, .. }
+                | SelectedNode::Enum { group: g, .. }) = &st.selected
+            {
+                if g == group { st.selected = None; st.grid_selection = GridSelection::None; }
+            }
+            st.pending.close();
+            return;
+        }
+        PendingAction::DeleteNode { group, name } => {
+            st.engine.delete_node(group, name);
+            if let Some(SelectedNode::Table { group: g, name: n }
+                | SelectedNode::Constant { group: g, name: n }
+                | SelectedNode::Enum { group: g, name: n }) = &st.selected
+            {
+                if g == group && n == name { st.selected = None; st.grid_selection = GridSelection::None; }
+            }
+            st.pending.close();
+            return;
+        }
+    };
+    if matches!(action, PendingAction::NewGroup) {
+        st.tree_expanded.insert(buf.clone());
+    }
+    st.engine.execute_action(&core_action);
+    st.pending.close();
+}
+
+/// 列右键操作（依赖当前选中 Table）
+fn perform_grid_col_action(state: &Rc<RefCell<AppState>>, col: usize, action: &str) {
+    let mut st = state.borrow_mut();
+    let (group, name) = match &st.selected {
+        Some(SelectedNode::Table { group, name }) => (group.clone(), name.clone()),
+        _ => return,
+    };
+    match action {
+        "grid.col-insert-left" => st.engine.insert_column(&group, &name, col),
+        "grid.col-insert-right" => st.engine.insert_column(&group, &name, col + 1),
+        "grid.col-delete" => st.engine.delete_column(&group, &name, col),
+        _ => {}
+    }
+    if st.realtime_validate { st.engine.revalidate(&group, &name); }
+}
+
+/// 行右键操作（Table 走 insert/delete_row；Constant/Enum 暂只支持当前节点的 row 删除占位）
+fn perform_grid_row_action(state: &Rc<RefCell<AppState>>, row: usize, action: &str) {
+    let mut st = state.borrow_mut();
+    let (group, name, is_table, is_constant, is_enum) = match &st.selected {
+        Some(SelectedNode::Table { group, name }) => (group.clone(), name.clone(), true, false, false),
+        Some(SelectedNode::Constant { group, name }) => (group.clone(), name.clone(), false, true, false),
+        Some(SelectedNode::Enum { group, name }) => (group.clone(), name.clone(), false, false, true),
+        _ => return,
+    };
+    if is_table {
+        match action {
+            "grid.row-insert-above" => st.engine.insert_row(&group, &name, row),
+            "grid.row-insert-below" => st.engine.insert_row(&group, &name, row + 1),
+            "grid.row-delete" => st.engine.delete_row(&group, &name, row),
+            _ => {}
+        }
+    } else if is_constant {
+        // Constant 没有专门的 insert/delete API；用 entries 直接增删
+        if let Some(g) = st.engine.project.groups.iter_mut().find(|g| g.name == group) {
+            if let Some(c) = g.constants.iter_mut().find(|c| c.name == name) {
+                use tbl_core::model::{ConstEntry, Export};
+                match action {
+                    "grid.row-insert-above" | "grid.row-insert-below" => {
+                        let at = if action == "grid.row-insert-above" { row } else { row + 1 };
+                        let at = at.min(c.entries.len());
+                        c.entries.insert(at, ConstEntry {
+                            name: String::new(), tbl_type: "str".to_string(),
+                            value: String::new(), export: Export::ClientServer, desc: String::new(),
+                        });
+                        c.update_dirty();
+                    }
+                    "grid.row-delete" => {
+                        if row < c.entries.len() { c.entries.remove(row); c.update_dirty(); }
+                    }
+                    _ => {}
+                }
+            }
+        }
+    } else if is_enum {
+        if let Some(g) = st.engine.project.groups.iter_mut().find(|g| g.name == group) {
+            if let Some(e) = g.enums.iter_mut().find(|e| e.name == name) {
+                use tbl_core::model::EnumEntry;
+                match action {
+                    "grid.row-insert-above" | "grid.row-insert-below" => {
+                        let at = if action == "grid.row-insert-above" { row } else { row + 1 };
+                        let at = at.min(e.entries.len());
+                        e.entries.insert(at, EnumEntry { id: String::new(), name: String::new(), desc: String::new() });
+                        e.update_dirty();
+                    }
+                    "grid.row-delete" => {
+                        if row < e.entries.len() { e.entries.remove(row); e.update_dirty(); }
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+    if st.realtime_validate { st.engine.revalidate(&group, &name); }
+}
+
+/// 单元格右键 → 复制/粘贴/删除内容。复制/粘贴使用系统剪贴板（TSV 单格）。
+fn perform_grid_cell_action(state: &Rc<RefCell<AppState>>, r: usize, c: usize, action: &str) {
+    use arboard::Clipboard;
+    match action {
+        "grid.cell-copy" => {
+            let raw = {
+                let st = state.borrow();
+                convert::raw_cell_for(&st, r, c)
+            };
+            if let Ok(mut cb) = Clipboard::new() {
+                let _ = cb.set_text(raw);
+            }
+            state.borrow_mut().engine.log("[右键] 已复制".to_string());
+        }
+        "grid.cell-paste" => {
+            let text = match Clipboard::new().and_then(|mut cb| cb.get_text()) {
+                Ok(t) => t,
+                Err(_) => return,
+            };
+            // 单格粘贴：取首行首格内容
+            let single = text.lines().next().and_then(|l| l.split('\t').next()).unwrap_or("").to_string();
+            let mut st = state.borrow_mut();
+            st.set_cell(r, c, &single);
+            st.engine.log("[右键] 已粘贴".to_string());
+        }
+        "grid.cell-clear" => {
+            let mut st = state.borrow_mut();
+            st.set_cell(r, c, "");
+        }
+        _ => {}
+    }
+}
+
+fn wire_context_menu(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
+    // ctx-menu-dismiss
+    {
+        let s = state.clone();
+        let weak = ui.as_weak();
+        ui.on_ctx_menu_dismiss(move || {
+            s.borrow_mut().ctx_menu.close();
+            if let Some(ui) = weak.upgrade() { push_context_menu(&ui, &s); }
+        });
+    }
+    // ctx-menu-action(action_id)：根据当前 ctx_menu.kind + id 分发
+    {
+        let s = state.clone();
+        let weak = ui.as_weak();
+        ui.on_ctx_menu_action(move |id| {
+            let id = id.to_string();
+            // 取走当前 kind 后立即关闭菜单
+            let kind = {
+                let mut st = s.borrow_mut();
+                let k = st.ctx_menu.kind.clone();
+                st.ctx_menu.close();
+                k
+            };
+            match (kind, id.as_str()) {
+                // ── 树空白 ──
+                (Some(CtxMenuKind::TreeBlank), "tree.new-group") => {
+                    s.borrow_mut().pending.open(PendingAction::NewGroup);
+                }
+                // ── 树 Group ──
+                (Some(CtxMenuKind::TreeGroup { name }), "tree.new-table") => {
+                    s.borrow_mut().pending.open(PendingAction::NewTable { group: name });
+                }
+                (Some(CtxMenuKind::TreeGroup { name }), "tree.new-constant") => {
+                    s.borrow_mut().pending.open(PendingAction::NewConstant { group: name });
+                }
+                (Some(CtxMenuKind::TreeGroup { name }), "tree.new-enum") => {
+                    s.borrow_mut().pending.open(PendingAction::NewEnum { group: name });
+                }
+                (Some(CtxMenuKind::TreeGroup { name }), "tree.rename-group") => {
+                    let mut st = s.borrow_mut();
+                    st.pending.open(PendingAction::RenameGroup { old_name: name.clone() });
+                    st.pending.input_buffer = name;
+                }
+                (Some(CtxMenuKind::TreeGroup { name }), "tree.delete-group") => {
+                    s.borrow_mut().pending.open(PendingAction::DeleteGroup { group: name });
+                }
+                // ── 树节点 ──
+                (Some(CtxMenuKind::TreeNode { group, name, kind }), "tree.copy-node") => {
+                    let mut st = s.borrow_mut();
+                    st.engine.copy_node(&group, &name, kind);
+                }
+                (Some(CtxMenuKind::TreeNode { group, name, .. }), "tree.rename-node") => {
+                    let mut st = s.borrow_mut();
+                    st.pending.open(PendingAction::RenameNode { group, old_name: name.clone() });
+                    st.pending.input_buffer = name;
+                }
+                (Some(CtxMenuKind::TreeNode { group, name, .. }), "tree.delete-node") => {
+                    s.borrow_mut().pending.open(PendingAction::DeleteNode { group, name });
+                }
+                // ── grid 列 ──
+                (Some(CtxMenuKind::GridCol { col }), action @ ("grid.col-insert-left"
+                    | "grid.col-insert-right" | "grid.col-delete")) => {
+                    perform_grid_col_action(&s, col, action);
+                }
+                // ── grid 行 ──
+                (Some(CtxMenuKind::GridRow { row }), action @ ("grid.row-insert-above"
+                    | "grid.row-insert-below" | "grid.row-delete")) => {
+                    perform_grid_row_action(&s, row, action);
+                }
+                // ── grid 单元格 ──
+                (Some(CtxMenuKind::GridCell { row, col }), action @ ("grid.cell-copy"
+                    | "grid.cell-paste" | "grid.cell-clear")) => {
+                    perform_grid_cell_action(&s, row, col, action);
+                }
+                _ => {}
+            }
+            // pending input 需要校验首次 buffer
+            revalidate_pending_input(&s);
+            if let Some(ui) = weak.upgrade() {
+                push_context_menu(&ui, &s);
+                push_input_dialog(&ui, &s);
+                push_confirm_dialog(&ui, &s);
+                push_tree(&ui, &s);
+                push_grid(&ui, &s);
+                push_logs(&ui, &s);
+            }
+        });
+    }
+    // 输入对话框：set-input / confirm / cancel
+    {
+        let s = state.clone();
+        let weak = ui.as_weak();
+        ui.on_inp_set_input(move |t| {
+            s.borrow_mut().pending.input_buffer = t.to_string();
+            revalidate_pending_input(&s);
+            if let Some(ui) = weak.upgrade() { push_input_dialog(&ui, &s); }
+        });
+    }
+    {
+        let s = state.clone();
+        let weak = ui.as_weak();
+        ui.on_inp_confirm(move || {
+            // 再校验一次
+            revalidate_pending_input(&s);
+            let ok = {
+                let st = s.borrow();
+                st.pending.error.is_none() && !st.pending.input_buffer.is_empty()
+            };
+            if !ok {
+                if let Some(ui) = weak.upgrade() { push_input_dialog(&ui, &s); }
+                return;
+            }
+            execute_pending_action(&s);
+            if let Some(ui) = weak.upgrade() {
+                push_input_dialog(&ui, &s);
+                push_tree(&ui, &s);
+                push_grid(&ui, &s);
+                push_logs(&ui, &s);
+            }
+        });
+    }
+    {
+        let s = state.clone();
+        let weak = ui.as_weak();
+        ui.on_inp_cancel(move || {
+            s.borrow_mut().pending.close();
+            if let Some(ui) = weak.upgrade() { push_input_dialog(&ui, &s); }
+        });
+    }
+    // 确认对话框：confirm / cancel
+    {
+        let s = state.clone();
+        let weak = ui.as_weak();
+        ui.on_cf_confirm(move || {
+            execute_pending_action(&s);
+            if let Some(ui) = weak.upgrade() {
+                push_confirm_dialog(&ui, &s);
+                push_tree(&ui, &s);
+                push_grid(&ui, &s);
+                push_logs(&ui, &s);
+            }
+        });
+    }
+    {
+        let s = state.clone();
+        let weak = ui.as_weak();
+        ui.on_cf_cancel(move || {
+            s.borrow_mut().pending.close();
+            if let Some(ui) = weak.upgrade() { push_confirm_dialog(&ui, &s); }
+        });
     }
 }
 

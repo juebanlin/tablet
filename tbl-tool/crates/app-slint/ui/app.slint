@@ -23,8 +23,11 @@ import { TypeSelector, RefItem, TsParamSlot } from "dialogs/type_selector.slint"
 import { RefPicker, RefRow } from "dialogs/ref_picker.slint";
 import { ExportDialog } from "dialogs/export_dialog.slint";
 import { SchemaExportDialog, SchemaImportDialog, SchemaItem } from "dialogs/schema_dialog.slint";
+import { ContextMenu, CtxMenuItem } from "dialogs/context_menu.slint";
+import { InputDialog } from "dialogs/input_dialog.slint";
+import { ConfirmDialog } from "dialogs/confirm_dialog.slint";
 
-export { TreeNode, HeaderCell, DataCell, DataRow, CellKind, LogEntry, RefItem, TsParamSlot, RefRow, SchemaItem }
+export { TreeNode, HeaderCell, DataCell, DataRow, CellKind, LogEntry, RefItem, TsParamSlot, RefRow, SchemaItem, CtxMenuItem }
 
 export component AppWindow inherits Window {
     title: "tbl-tool";
@@ -169,6 +172,30 @@ export component AppWindow inherits Window {
     callback si-toggle-all(bool);
     callback si-toggle-item(int);
     callback si-confirm();
+
+    // ── ContextMenu / InputDialog / ConfirmDialog ───────────
+    in property <bool> ctx-menu-open: false;
+    in property <length> ctx-menu-x: 0;
+    in property <length> ctx-menu-y: 0;
+    in property <[CtxMenuItem]> ctx-menu-items;
+    callback ctx-menu-action(string);
+    callback ctx-menu-dismiss();
+
+    in property <bool> dlg-input-open: false;
+    in property <string> dlg-input-title: "输入";
+    in property <string> dlg-input-label: "名称:";
+    in-out property <string> dlg-input-buffer: "";
+    in property <string> dlg-input-error: "";
+    in property <bool> dlg-input-can-confirm: false;
+    callback inp-set-input(string);
+    callback inp-confirm();
+    callback inp-cancel();
+
+    in property <bool> dlg-confirm-open: false;
+    in property <string> dlg-confirm-title: "确认";
+    in property <string> dlg-confirm-message: "";
+    callback cf-confirm();
+    callback cf-cancel();
 
     // ── 全局焦点抽屉 ────────────────────────────────────────
     // 用来在点击 tree/cell/toolbar 等区域时抢走 LineEdit/TextInput 的焦点，
@@ -362,6 +389,36 @@ export component AppWindow inherits Window {
         toggle-item(i) => { root.si-toggle-item(i); }
         confirm => { root.si-confirm(); root.dlg-schema-import-open = false; }
         cancel => { root.dlg-schema-import-open = false; }
+    }
+
+    InputDialog {
+        open: root.dlg-input-open;
+        title: root.dlg-input-title;
+        label-text: root.dlg-input-label;
+        input-buffer <=> root.dlg-input-buffer;
+        error-text: root.dlg-input-error;
+        can-confirm: root.dlg-input-can-confirm;
+        set-input(s) => { root.inp-set-input(s); }
+        confirm => { root.inp-confirm(); }
+        cancel => { root.inp-cancel(); }
+    }
+
+    ConfirmDialog {
+        open: root.dlg-confirm-open;
+        title: root.dlg-confirm-title;
+        message: root.dlg-confirm-message;
+        confirm => { root.cf-confirm(); }
+        cancel => { root.cf-cancel(); }
+    }
+
+    // ContextMenu 必须放在最顶层（z 在所有 dialog 之上），点击 item 触发 ctx-menu-action
+    ContextMenu {
+        open: root.ctx-menu-open;
+        menu-x: root.ctx-menu-x;
+        menu-y: root.ctx-menu-y;
+        items: root.ctx-menu-items;
+        action(id) => { root.ctx-menu-action(id); }
+        dismiss => { root.ctx-menu-dismiss(); }
     }
 }
 

@@ -2,7 +2,7 @@
 // slint 是 retained UI，需要 Rust 显式 push 数据；AppState 持有 engine + UI 临时态。
 
 use std::collections::HashSet;
-use tbl_core::ops::ProjectEngine;
+use tbl_core::ops::{NodeKind, ProjectEngine};
 use tbl_core::project::load_project;
 use tbl_core::types::{BaseType, Paradigm, TblType};
 use std::path::Path;
@@ -280,6 +280,114 @@ impl RefPickerState {
     }
 }
 
+// ──────── 右键菜单 + 弹窗 action 系统 ────────
+
+/// 右键菜单弹起源。决定菜单显示哪些项 + 点击 action 时怎么分发。
+#[derive(Clone, Debug)]
+pub enum CtxMenuKind {
+    TreeBlank,
+    TreeGroup { name: String },
+    TreeNode { group: String, name: String, kind: NodeKind },
+    GridCol { col: usize },
+    GridRow { row: usize },
+    GridCell { row: usize, col: usize },
+}
+
+#[derive(Default)]
+pub struct ContextMenuState {
+    pub open: bool,
+    pub kind: Option<CtxMenuKind>,
+    pub x: f32,
+    pub y: f32,
+}
+
+impl ContextMenuState {
+    pub fn open_at(&mut self, kind: CtxMenuKind, x: f32, y: f32) {
+        self.open = true;
+        self.kind = Some(kind);
+        self.x = x;
+        self.y = y;
+    }
+    pub fn close(&mut self) {
+        self.open = false;
+        self.kind = None;
+    }
+}
+
+/// 待执行的命名/确认型操作。需要走 InputDialog 或 ConfirmDialog 收集用户输入。
+#[derive(Clone, Debug)]
+pub enum PendingAction {
+    NewGroup,
+    NewTable { group: String },
+    NewConstant { group: String },
+    NewEnum { group: String },
+    DeleteGroup { group: String },
+    DeleteNode { group: String, name: String },
+    RenameGroup { old_name: String },
+    RenameNode { group: String, old_name: String },
+}
+
+impl PendingAction {
+    pub fn needs_input(&self) -> bool {
+        matches!(self, PendingAction::NewGroup
+            | PendingAction::NewTable { .. }
+            | PendingAction::NewConstant { .. }
+            | PendingAction::NewEnum { .. }
+            | PendingAction::RenameGroup { .. }
+            | PendingAction::RenameNode { .. })
+    }
+    pub fn needs_confirm(&self) -> bool {
+        matches!(self, PendingAction::DeleteGroup { .. } | PendingAction::DeleteNode { .. })
+    }
+    pub fn input_title(&self) -> &'static str {
+        match self {
+            PendingAction::NewGroup => "新建 Group",
+            PendingAction::NewTable { .. } => "新建 Table",
+            PendingAction::NewConstant { .. } => "新建 Constant",
+            PendingAction::NewEnum { .. } => "新建 Enum",
+            PendingAction::RenameGroup { .. } => "重命名 Group",
+            PendingAction::RenameNode { .. } => "重命名",
+            _ => "",
+        }
+    }
+    pub fn confirm_title(&self) -> &'static str {
+        match self {
+            PendingAction::DeleteGroup { .. } => "确认删除",
+            PendingAction::DeleteNode { .. } => "确认删除",
+            _ => "",
+        }
+    }
+    pub fn confirm_message(&self) -> String {
+        match self {
+            PendingAction::DeleteGroup { group } =>
+                format!("确定删除 Group \"{}\" 及其所有内容？", group),
+            PendingAction::DeleteNode { group, name } =>
+                format!("确定删除 \"{}/{}\"？", group, name),
+            _ => String::new(),
+        }
+    }
+}
+
+#[derive(Default)]
+pub struct PendingActionState {
+    pub action: Option<PendingAction>,
+    pub input_buffer: String,
+    pub error: Option<String>,
+}
+
+impl PendingActionState {
+    pub fn open(&mut self, action: PendingAction) {
+        self.action = Some(action);
+        self.input_buffer.clear();
+        self.error = None;
+    }
+    pub fn close(&mut self) {
+        self.action = None;
+        self.input_buffer.clear();
+        self.error = None;
+    }
+}
+
 pub struct AppState {
     pub engine: ProjectEngine,
     pub selected: Option<SelectedNode>,
@@ -317,6 +425,10 @@ pub struct AppState {
     pub type_selector: TypeSelectorState,
     /// 引用选择器当前状态
     pub ref_picker: RefPickerState,
+    /// 右键菜单
+    pub ctx_menu: ContextMenuState,
+    /// 待执行的 New/Rename/Delete 操作（Input/Confirm 对话框收集输入）
+    pub pending: PendingActionState,
 }
 
 impl AppState {
@@ -348,6 +460,8 @@ impl AppState {
             editing_header_col: -1,
             type_selector: TypeSelectorState::new(),
             ref_picker: RefPickerState::new(),
+            ctx_menu: ContextMenuState::default(),
+            pending: PendingActionState::default(),
         })
     }
 

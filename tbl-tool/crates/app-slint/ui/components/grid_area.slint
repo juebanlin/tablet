@@ -177,7 +177,9 @@ export component GridArea inherits Rectangle {
                             clicked => { root.col-letter-clicked(c); }
                             pointer-event(e) => {
                                 if e.button == PointerEventButton.right && e.kind == PointerEventKind.up {
-                                    root.col-context-menu(c, self.mouse-x, self.mouse-y);
+                                    root.col-context-menu(c,
+                                        self.absolute-position.x + self.mouse-x,
+                                        self.absolute-position.y + self.mouse-y);
                                 }
                             }
                         }
@@ -286,7 +288,9 @@ export component GridArea inherits Rectangle {
                             clicked => { root.row-num-clicked(ri); }
                             pointer-event(e) => {
                                 if e.button == PointerEventButton.right && e.kind == PointerEventKind.up {
-                                    root.row-context-menu(ri, self.mouse-x, self.mouse-y);
+                                    root.row-context-menu(ri,
+                                        self.absolute-position.x + self.mouse-x,
+                                        self.absolute-position.y + self.mouse-y);
                                 }
                             }
                         }
@@ -329,7 +333,9 @@ export component GridArea inherits Rectangle {
                             double-clicked => { root.cell-double-clicked(ri, ci); }
                             pointer-event(e) => {
                                 if e.button == PointerEventButton.right && e.kind == PointerEventKind.up {
-                                    root.cell-context-menu(ri, ci, self.mouse-x, self.mouse-y);
+                                    root.cell-context-menu(ri, ci,
+                                        self.absolute-position.x + self.mouse-x,
+                                        self.absolute-position.y + self.mouse-y);
                                 }
                             }
                         }
@@ -346,7 +352,9 @@ export component GridArea inherits Rectangle {
                             }
                             pointer-event(e) => {
                                 if e.button == PointerEventButton.right && e.kind == PointerEventKind.up {
-                                    root.cell-context-menu(ri, ci, self.mouse-x, self.mouse-y);
+                                    root.cell-context-menu(ri, ci,
+                                        self.absolute-position.x + self.mouse-x,
+                                        self.absolute-position.y + self.mouse-y);
                                 }
                             }
                         }

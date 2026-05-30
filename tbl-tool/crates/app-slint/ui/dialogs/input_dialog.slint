@@ -1,0 +1,63 @@
+// InputDialog：模态输入对话框（新建 / 重命名）。
+// 上面一行 LineEdit，下面一行 error label（红色），底部 [确定] [取消]。
+
+import { Theme } from "../theme.slint";
+import { DialogChrome } from "dialog_chrome.slint";
+import { LineEdit } from "std-widgets.slint";
+
+export component InputDialog inherits Rectangle {
+    in property <bool> open: false;
+    in property <string> title: "输入";
+    in property <string> label-text: "名称:";
+    in-out property <string> input-buffer: "";
+    in property <string> error-text: "";
+    in property <bool> can-confirm: false;
+
+    callback set-input(string);
+    callback confirm();
+    callback cancel();
+
+    visible: root.open;
+    width: 100%;
+    height: 100%;
+
+    DialogChrome {
+        title: root.title;
+        dialog-w: 360px;
+        dialog-h: 170px;
+        primary-enabled: root.can-confirm;
+        primary-clicked => { root.confirm(); }
+        cancel-clicked => { root.cancel(); }
+        scrim-clicked => { root.cancel(); }
+
+        VerticalLayout {
+            padding: Theme.sp-4;
+            spacing: Theme.sp-3;
+            HorizontalLayout {
+                spacing: Theme.sp-2;
+                alignment: stretch;
+                Text {
+                    text: root.label-text;
+                    font-size: Theme.fs-small;
+                    color: Theme.text-primary;
+                    vertical-alignment: center;
+                    width: 60px;
+                }
+                LineEdit {
+                    text: root.input-buffer;
+                    edited(s) => { root.set-input(s); }
+                    accepted(s) => {
+                        if (root.can-confirm) { root.confirm(); }
+                    }
+                }
+            }
+            if root.error-text != "": Text {
+                text: root.error-text;
+                font-size: Theme.fs-tiny;
+                color: Theme.text-error;
+                wrap: word-wrap;
+            }
+            Rectangle { vertical-stretch: 1; }
+        }
+    }
+}

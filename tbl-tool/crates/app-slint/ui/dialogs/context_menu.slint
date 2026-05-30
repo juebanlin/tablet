@@ -1,0 +1,77 @@
+// ContextMenu：浮层右键菜单。条件 Rectangle + 全屏 dismiss TouchArea + 列表项。
+// 由 root 控制 open / x / y / items；点击 item 触发 action(string) + 自动关闭。
+// 不走 PopupWindow，避免 PopupWindow 的"不能在 if/for 内"限制。
+
+import { Theme } from "../theme.slint";
+
+export struct CtxMenuItem {
+    label: string,
+    action-id: string,
+    is-separator: bool,
+    disabled: bool,
+}
+
+export component ContextMenu inherits Rectangle {
+    in property <bool> open: false;
+    in property <length> menu-x: 0;
+    in property <length> menu-y: 0;
+    in property <[CtxMenuItem]> items;
+
+    callback action(string);
+    callback dismiss();
+
+    visible: root.open;
+    width: 100%;
+    height: 100%;
+
+    if root.open: TouchArea {
+        clicked => { root.dismiss(); }
+        // 右键也关闭
+        pointer-event(e) => {
+            if e.button == PointerEventButton.right && e.kind == PointerEventKind.up {
+                root.dismiss();
+            }
+        }
+    }
+
+    if root.open: Rectangle {
+        x: root.menu-x;
+        y: root.menu-y;
+        width: 160px;
+        height: root.items.length * 26px + 4px;
+        background: Theme.bg-panel;
+        border-color: Theme.border;
+        border-width: 1px;
+        drop-shadow-blur: 6px;
+        drop-shadow-color: #00000040;
+        VerticalLayout {
+            padding: 2px;
+            spacing: 0;
+            for item[i] in root.items: Rectangle {
+                height: item.is-separator ? 5px : 24px;
+                background: hover-area.has-hover && !item.is-separator && !item.disabled
+                    ? Theme.bg-row-selected : transparent;
+                if item.is-separator: Rectangle {
+                    x: 4px;
+                    y: 2px;
+                    width: parent.width - 8px;
+                    height: 1px;
+                    background: Theme.border-light;
+                }
+                if !item.is-separator: Text {
+                    x: Theme.sp-3;
+                    text: item.label;
+                    font-size: Theme.fs-small;
+                    color: item.disabled ? Theme.text-disabled : Theme.text-primary;
+                    vertical-alignment: center;
+                }
+                hover-area := TouchArea {
+                    enabled: !item.is-separator && !item.disabled;
+                    clicked => {
+                        root.action(item.action-id);
+                    }
+                }
+            }
+        }
+    }
+}

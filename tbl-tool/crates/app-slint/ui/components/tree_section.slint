@@ -166,7 +166,9 @@ export component TreeSection inherits Rectangle {
                         clicked => { root.node-clicked(node.id); }
                         pointer-event(e) => {
                             if e.button == PointerEventButton.right && e.kind == PointerEventKind.up {
-                                root.node-context-menu(node.id, self.mouse-x, self.mouse-y);
+                                root.node-context-menu(node.id,
+                                    self.absolute-position.x + self.mouse-x,
+                                    self.absolute-position.y + self.mouse-y);
                             }
                         }
                     }
@@ -179,7 +181,9 @@ export component TreeSection inherits Rectangle {
             clicked => { root.blank-clicked(); }
             pointer-event(e) => {
                 if e.button == PointerEventButton.right && e.kind == PointerEventKind.up {
-                    root.blank-context-menu(self.mouse-x, self.mouse-y);
+                    root.blank-context-menu(
+                        self.absolute-position.x + self.mouse-x,
+                        self.absolute-position.y + self.mouse-y);
                 }
             }
         }

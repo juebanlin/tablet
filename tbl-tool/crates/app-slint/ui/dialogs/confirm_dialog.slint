@@ -1,0 +1,41 @@
+// ConfirmDialog：模态确认对话框（删除等危险操作）。
+// 中间一段提示文本，底部 [确定] [取消]。
+
+import { Theme } from "../theme.slint";
+import { DialogChrome } from "dialog_chrome.slint";
+
+export component ConfirmDialog inherits Rectangle {
+    in property <bool> open: false;
+    in property <string> title: "确认";
+    in property <string> message: "";
+
+    callback confirm();
+    callback cancel();
+
+    visible: root.open;
+    width: 100%;
+    height: 100%;
+
+    DialogChrome {
+        title: root.title;
+        dialog-w: 360px;
+        dialog-h: 160px;
+        primary-text: "确定";
+        primary-enabled: true;
+        primary-clicked => { root.confirm(); }
+        cancel-clicked => { root.cancel(); }
+        scrim-clicked => { root.cancel(); }
+
+        VerticalLayout {
+            padding: Theme.sp-4;
+            spacing: Theme.sp-3;
+            Text {
+                text: root.message;
+                font-size: Theme.fs-small;
+                color: Theme.text-primary;
+                wrap: word-wrap;
+            }
+            Rectangle { vertical-stretch: 1; }
+        }
+    }
+}
