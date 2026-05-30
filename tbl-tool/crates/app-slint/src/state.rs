@@ -388,6 +388,65 @@ impl PendingActionState {
     }
 }
 
+// ──────── 数据导出 / Schema 导出 / Schema 导入 ────────
+
+/// 数据导出对话框选项
+#[derive(Clone, Debug)]
+pub struct DataExportState {
+    pub open: bool,
+    pub json: bool,
+    pub xml: bool,
+    pub java: bool,
+    pub go: bool,
+    pub lua: bool,
+}
+
+impl Default for DataExportState {
+    fn default() -> Self {
+        Self { open: false, json: true, xml: true, java: true, go: false, lua: true }
+    }
+}
+
+/// Schema 导出对话框：列出当前项目内 Table/Constant，按勾选写 .tblschema。
+/// items 与 checked 一一对应；items 是扁平化（组节点 + 子节点）后的视图，
+/// 只有 indent=1 的项参与勾选；组节点的勾选靠子节点聚合判断。
+#[derive(Default)]
+pub struct SchemaExportState {
+    pub open: bool,
+    /// 扁平 items：每项 (group_name, name_opt, is_table)。组节点 name_opt = None。
+    pub items: Vec<SchemaExportItem>,
+    /// items 同步长度的 checked。组节点 checked 由子节点聚合，不直接读写。
+    pub checked: Vec<bool>,
+}
+
+#[derive(Clone, Debug)]
+pub struct SchemaExportItem {
+    pub indent: u8,           // 0=group / 1=node
+    pub group: String,
+    pub name: String,         // 组名 或 子节点名
+    pub is_table: bool,       // indent=1 时有效
+}
+
+/// Schema 导入对话框：读 .tblschema 后扁平展示并允许勾选。
+/// items 与 checked 长度一致；conflicts 与 items 长度一致（仅 indent=1 有效）。
+#[derive(Default)]
+pub struct SchemaImportState {
+    pub open: bool,
+    pub file_path: String,
+    pub schema: Option<tbl_core::tblschema::TblSchema>,
+    pub items: Vec<SchemaImportItem>,
+    pub checked: Vec<bool>,
+    pub conflicts: Vec<bool>,
+}
+
+#[derive(Clone, Debug)]
+pub struct SchemaImportItem {
+    pub indent: u8,           // 0=group / 1=section
+    pub group: String,
+    pub name: String,
+    pub mode: tbl_core::tblschema::SchemaMode,
+}
+
 pub struct AppState {
     pub engine: ProjectEngine,
     pub selected: Option<SelectedNode>,
@@ -429,6 +488,12 @@ pub struct AppState {
     pub ctx_menu: ContextMenuState,
     /// 待执行的 New/Rename/Delete 操作（Input/Confirm 对话框收集输入）
     pub pending: PendingActionState,
+    /// 数据导出对话框
+    pub data_export: DataExportState,
+    /// Schema 导出对话框
+    pub schema_export: SchemaExportState,
+    /// Schema 导入对话框
+    pub schema_import: SchemaImportState,
 }
 
 impl AppState {
@@ -462,6 +527,9 @@ impl AppState {
             ref_picker: RefPickerState::new(),
             ctx_menu: ContextMenuState::default(),
             pending: PendingActionState::default(),
+            data_export: DataExportState::default(),
+            schema_export: SchemaExportState::default(),
+            schema_import: SchemaImportState::default(),
         })
     }
 

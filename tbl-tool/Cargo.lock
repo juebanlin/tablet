@@ -5593,6 +5593,7 @@ dependencies = [
  "chrono",
  "clap",
  "log",
+ "rfd",
  "simplelog",
  "slint",
  "slint-build",
