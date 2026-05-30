@@ -213,6 +213,13 @@ export component AppWindow inherits Window {
     callback grid-shortcut-delete();
     callback debug-key(string, bool);  // (text, ctrl) 调试用
 
+    // ── 大区拉伸尺寸 ───────────────────────────────────────
+    // TreeSection 宽度、LogPanel 高度由 splitter 拖动调整。
+    // tree-w 最小 220px：slint 端 TreeSection 内层有功能区 border + padding 双层堆叠，
+    // 比 egui 多消耗约 20px，所以下限比 egui 的 200px 多出 20px 才能给搜索框留同样间隔。
+    in-out property <length> tree-w: 240px;
+    in-out property <length> log-h: 120px;
+
     // ── 全局焦点抽屉 ────────────────────────────────────────
     // 用来在点击 tree/cell/toolbar 等区域时抢走 LineEdit/TextInput 的焦点，
     // 配合 Rust 端 commit_editing 让搜索框 / 公式栏 / cell 编辑都"点其它就退出"
@@ -277,7 +284,7 @@ export component AppWindow inherits Window {
             vertical-stretch: 1;
 
             Rectangle {
-                width: 240px;
+                width: root.tree-w;
                 TreeSection {
                     nodes: root.tree-nodes;
                     filters: root.tree-filters;
@@ -292,6 +299,22 @@ export component AppWindow inherits Window {
                     filter-changed(i) => { root.tree-filter-index = i; root.tree-filter-changed(i); }
                     search-edited(s) => { root.tree-search-edited(s); }
                     full-group-toggled(c) => { root.tree-full-group-toggled(c); }
+                }
+            }
+
+            // ── 横向 splitter：tree ↔ grid ──
+            Rectangle {
+                width: 4px;
+                background: Theme.border-light;
+                vsplit := TouchArea {
+                    mouse-cursor: ew-resize;
+                    moved => {
+                        if (self.pressed) {
+                            // mouse-x 是 splitter 内坐标；splitter 处于 tree 右侧，
+                            // 所以 root.tree-w 直接累加 delta。
+                            root.tree-w = max(220px, min(root.tree-w + (self.mouse-x - self.pressed-x), 800px));
+                        }
+                    }
                 }
             }
 
@@ -348,7 +371,23 @@ export component AppWindow inherits Window {
             }
         }
 
+        // ── 纵向 splitter：上半 ↔ log ──
+        Rectangle {
+            height: 4px;
+            background: Theme.border-light;
+            hsplit := TouchArea {
+                mouse-cursor: ns-resize;
+                moved => {
+                    if (self.pressed) {
+                        // splitter 在 log 上方，向上拖（mouse-y 变小）增加 log-h
+                        root.log-h = max(40px, min(root.log-h - (self.mouse-y - self.pressed-y), 600px));
+                    }
+                }
+            }
+        }
+
         LogPanel {
+            log-height: root.log-h;
             logs: root.logs;
             text-flat: root.logs-text;
         }
