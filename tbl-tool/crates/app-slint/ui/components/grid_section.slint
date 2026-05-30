@@ -56,6 +56,7 @@ export component GridSection inherits Rectangle {
     callback header-double-clicked(int, int);
     callback cell-clicked(int, int);
     callback cell-shift-clicked(int, int);
+    callback cell-pressed(int, int);
     callback cell-double-clicked(int, int);
     callback cell-drag(int, int, length, length);
     callback row-num-clicked(int);
@@ -120,6 +121,7 @@ export component GridSection inherits Rectangle {
             header-double-clicked(hi, ci) => { root.header-double-clicked(hi, ci); }
             cell-clicked(r, c) => { root.cell-clicked(r, c); }
             cell-shift-clicked(r, c) => { root.cell-shift-clicked(r, c); }
+            cell-pressed(r, c) => { root.cell-pressed(r, c); }
             cell-double-clicked(r, c) => { root.cell-double-clicked(r, c); }
             cell-drag(r, c, mx, my) => { root.cell-drag(r, c, mx, my); }
             row-num-clicked(r) => { root.row-num-clicked(r); }

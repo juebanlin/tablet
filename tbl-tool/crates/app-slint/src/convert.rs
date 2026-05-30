@@ -5,7 +5,7 @@ use slint::{Color, SharedString};
 use crate::state::{AppState, ColumnKind, GridSelection, SelectedNode, TreeFilter, TreeTarget};
 use crate::{CellKind, DataCell, DataRow, HeaderCell, TreeNode};
 
-const EXTRA_ROWS: usize = 5;
+pub const EXTRA_ROWS: usize = 5;
 
 const ICON_GROUP: &str = "📁";
 const ICON_TABLE: &str = "📊";

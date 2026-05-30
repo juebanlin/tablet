@@ -1,5 +1,10 @@
 // 日志面板：全窗口底部独立区域，带「日志」标题。
 // 对应 docs/02-UI设计.md §1.1。
+//
+// 实现：把所有日志合成单个多行字符串，渲染为 read-only 多行 TextInput，
+// 这样用户可以跨行选中 + Ctrl+C 复制（egui 端用 ScrollArea + 多行 SelectableLabel 实现，
+// 在 slint 里用单 TextInput 更简单）。
+// 颜色 tint 因此从"按 level"退化为"统一颜色"——错误信息从 `[验证]/失败/错误` 前缀辨识。
 
 import { Theme } from "../theme.slint";
 import { ScrollView } from "std-widgets.slint";
@@ -11,17 +16,16 @@ export struct LogEntry {
 }
 
 export component LogPanel inherits Rectangle {
+    // logs：仍保留旧 struct 列表，方便 Rust 端不改 push_logs 调用方式
     in property <[LogEntry]> logs;
+    // text-flat：拼接好的多行字符串。Rust 端直接 set_logs_text 传入。
+    in property <string> text-flat: "";
     in property <length> log-height: 120px;
 
     height: root.log-height;
     background: Theme.bg-panel;
     border-color: Theme.border-light;
     border-width: 1px;
-
-    pure function level-color(level: int) -> color {
-        level == 2 ? Theme.text-error : (level == 1 ? Theme.mark-modified : Theme.text-secondary)
-    }
 
     VerticalLayout {
         spacing: 0;
@@ -41,25 +45,15 @@ export component LogPanel inherits Rectangle {
         ScrollView {
             VerticalLayout {
                 padding: Theme.sp-2;
-                spacing: 1px;
-                for log in root.logs: HorizontalLayout {
-                    spacing: Theme.sp-3;
-                    alignment: start;
-                    Text {
-                        text: log.time;
-                        font-size: Theme.fs-tiny;
-                        color: Theme.text-secondary;
-                        vertical-alignment: center;
-                    }
-                    // read-only TextInput：用户可选中/Ctrl+C 复制，不能编辑
-                    TextInput {
-                        text: log.msg;
-                        read-only: true;
-                        single-line: true;
-                        font-size: Theme.fs-tiny;
-                        color: root.level-color(log.level);
-                        vertical-alignment: center;
-                    }
+                spacing: 0;
+                // 整个日志一个多行 read-only TextInput：可跨行选中 + Ctrl+C 复制
+                TextInput {
+                    text: root.text-flat;
+                    read-only: true;
+                    single-line: false;
+                    wrap: word-wrap;
+                    font-size: Theme.fs-tiny;
+                    color: Theme.text-secondary;
                 }
             }
         }
@@ -72,10 +66,6 @@ export component LogPanelPreview inherits Window {
     height: 200px;
 
     LogPanel {
-        logs: [
-            { time: "14:32:01", msg: "已加载 hero/HeroBase.tbl (3条)", level: 0 },
-            { time: "14:33:15", msg: "新建 Table: hero/HeroSkill", level: 0 },
-            { time: "14:34:02", msg: "[验证] hero/HeroBase D2: \"4,5\" 列表元素类型不匹配, 示例: 1;2;3", level: 2 },
-        ];
+        text-flat: "14:32:01 已加载 hero/HeroBase.tbl (3条)\n14:33:15 新建 Table: hero/HeroSkill\n14:34:02 [验证] hero/HeroBase D2: 列表元素类型不匹配";
     }
 }

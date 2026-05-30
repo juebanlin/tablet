@@ -100,6 +100,8 @@ export component GridArea inherits Rectangle {
     callback header-double-clicked(int /* hrow */, int /* col */);
     callback cell-clicked(int /* row */, int /* col */);
     callback cell-shift-clicked(int /* row */, int /* col */);
+    // 鼠标左键按下（无 shift）：Rust 端立即重置选区为单格，作为后续拖选 anchor。
+    callback cell-pressed(int /* row */, int /* col */);
     callback cell-double-clicked(int /* row */, int /* col */);
     /// 鼠标拖选：按下后拖动时持续触发。pi/cj = 起手 cell；mx/my = 相对该 cell 的鼠标偏移。
     /// Rust 端按 col-w / row-h 推算终点 cell。
@@ -345,6 +347,9 @@ export component GridArea inherits Rectangle {
                             // 记录最近一次按下时的 shift 修饰键状态；clicked 时分发 shift-clicked
                             // vs cell-clicked。slint 的 clicked 信号不暴露 modifiers，故用 pointer-event 兜底。
                             property <bool> last-shift: false;
+                            // 记录从按下后是否产生过位移（dr/dc 任一非零）。仅在产生位移时通知 Rust 扩选区，
+                            // 避免单击释放前的微小抖动把单格强制扩成 CellRange。
+                            property <bool> dragged: false;
                             clicked => {
                                 if (self.last-shift) { root.cell-shift-clicked(ri, ci); }
                                 else { root.cell-clicked(ri, ci); }
@@ -352,11 +357,18 @@ export component GridArea inherits Rectangle {
                             double-clicked => { root.cell-double-clicked(ri, ci); }
                             // 按下后拖动：持续把鼠标位置发给 Rust，Rust 推算终点 cell 并扩 GridSelection
                             moved => {
+                                self.dragged = true;
                                 root.cell-drag(ri, ci, self.mouse-x, self.mouse-y);
                             }
                             pointer-event(e) => {
                                 if e.kind == PointerEventKind.down {
                                     self.last-shift = e.modifiers.shift;
+                                    self.dragged = false;
+                                    // 左键按下立刻通知 Rust 重置 anchor 到本 cell，旧选区清掉。
+                                    // shift+down 不重置（让 shift+click 能从旧 anchor 扩展）。
+                                    if e.button == PointerEventButton.left && !e.modifiers.shift {
+                                        root.cell-pressed(ri, ci);
+                                    }
                                 }
                                 if e.button == PointerEventButton.right && e.kind == PointerEventKind.up {
                                     root.cell-context-menu(ri, ci,

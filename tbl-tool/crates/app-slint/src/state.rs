@@ -309,7 +309,10 @@ pub enum CtxMenuKind {
     TreeNode { group: String, name: String, kind: NodeKind },
     GridCol { col: usize },
     GridRow { row: usize },
-    GridCell { row: usize, col: usize },
+    GridCell {
+        #[allow(dead_code)] row: usize,
+        #[allow(dead_code)] col: usize,
+    },
 }
 
 #[derive(Default)]

@@ -92,8 +92,10 @@ fn main() -> anyhow::Result<()> {
     result
 }
 
-/// 把 engine.logs（"HH:MM:SS msg" 格式的字符串）转成 slint LogEntry 列表。
+/// 把 engine.logs（"HH:MM:SS msg" 格式的字符串）转成 slint LogEntry 列表 + 拼接的多行文本。
 /// level 推断：消息含 "失败" / "错误" / "[验证]" → error；含 "警告" → warn；其它 info。
+/// LogPanel 主要用 logs-text（read-only 多行 TextInput，可跨行选中复制）；
+/// LogEntry 列表保留以兼容旧字段 / 将来按 level 着色。
 fn push_logs(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
     let st = state.borrow();
     let entries: Vec<LogEntry> = st.engine.logs.iter().map(|line| {
@@ -110,7 +112,9 @@ fn push_logs(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
         };
         LogEntry { time: time.into(), msg: msg.into(), level }
     }).collect();
+    let flat = st.engine.logs.join("\n");
     ui.set_logs(slint::ModelRc::new(slint::VecModel::from(entries)));
+    ui.set_logs_text(flat.into());
 }
 
 /// 构建树并推送到 slint。
@@ -475,9 +479,75 @@ fn wire_grid(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
             }
         });
     }
-    // 鼠标拖选：暂时禁用，先把单格选中/复制粘贴做稳。多格选区后续步骤再启。
+    // 鼠标按下（左键，无 shift）：立即把选区收缩为单格 anchor。
+    // 这是拖选 / 普通点击的统一起点：commit 编辑 + 重置选区，使后续 cell-drag 从干净状态开始。
     {
-        ui.on_grid_cell_drag(move |_anchor_r, _anchor_c, _mx, _my| {});
+        let s = state.clone();
+        let weak = ui.as_weak();
+        let ui_for_buf = ui.as_weak();
+        ui.on_grid_cell_pressed(move |r, c| {
+            let was_editing = {
+                let st = s.borrow();
+                st.editing.is_some() || st.editing_header_row >= 0
+            };
+            if was_editing { commit_editing(&ui_for_buf, &s); }
+            let r = r as usize;
+            let c = c as usize;
+            let changed = {
+                let mut st = s.borrow_mut();
+                let new_sel = GridSelection::Cell(r, c);
+                let changed = st.grid_selection != new_sel;
+                if changed { st.grid_selection = new_sel; }
+                changed
+            };
+            if let Some(ui) = weak.upgrade() {
+                if was_editing { push_grid(&ui, &s); }
+                else if changed { push_selection_only(&ui, &s); }
+            }
+        });
+    }
+    // 鼠标拖选：anchor cell 抓住鼠标后 moved 只在它本身触发，
+    // mouse-x/y 是相对 anchor cell 原点的位移。按 col-w / row-h 推算目标 cell。
+    {
+        let s = state.clone();
+        let weak = ui.as_weak();
+        let ui_for_buf = ui.as_weak();
+        ui.on_grid_cell_drag(move |anchor_r, anchor_c, mx, my| {
+            // Theme.col-w=100px, Theme.row-h=22px（与 ui/theme.slint 一致）
+            const COL_W: f32 = 100.0;
+            const ROW_H: f32 = 22.0;
+            let dc = (mx / COL_W).floor() as i32;
+            let dr = (my / ROW_H).floor() as i32;
+            let raw_r = anchor_r + dr;
+            let raw_c = anchor_c + dc;
+            // 计算实际行列上限做裁剪
+            let (rows, cols) = grid_dims(&s);
+            if rows == 0 || cols == 0 { return; }
+            let r2 = raw_r.max(0).min(rows as i32 - 1) as usize;
+            let c2 = raw_c.max(0).min(cols as i32 - 1) as usize;
+            let r1 = anchor_r.max(0) as usize;
+            let c1 = anchor_c.max(0) as usize;
+            // 第一次拖动若仍在 anchor 内：保持单格选区，不进 CellRange
+            let new_sel = if r1 == r2 && c1 == c2 {
+                GridSelection::Cell(r1, c1)
+            } else {
+                GridSelection::CellRange { r1, c1, r2, c2 }
+            };
+            let changed = {
+                let st = s.borrow();
+                st.grid_selection != new_sel
+            };
+            if !changed { return; }
+            let was_editing = {
+                let st = s.borrow();
+                st.editing.is_some() || st.editing_header_row >= 0
+            };
+            if was_editing { commit_editing(&ui_for_buf, &s); }
+            s.borrow_mut().grid_selection = new_sel;
+            if let Some(ui) = weak.upgrade() {
+                if was_editing { push_grid(&ui, &s); } else { push_selection_only(&ui, &s); }
+            }
+        });
     }
     // Table 表头点击 → 按 grid_header_kinds[hi][ci] 分发：
     //   ExportEnumCol ：选中 + 同步 editing-export-index（slint popup.show 自动弹）
@@ -757,7 +827,8 @@ fn wire_grid(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
         let weak = ui.as_weak();
         let ui_for_buf = ui.as_weak();
         ui.on_grid_cell_context_menu(move |r, c, x, y| {
-            // 先 commit 任何在编辑的 cell；右键命中的格设为单格选区（与 Excel 一致：右键先选中再开菜单）。
+            // 先 commit 任何在编辑的 cell。
+            // Excel 语义：右键命中格若已在当前选区内则保留选区，否则收缩为单格选区。
             let was_editing = {
                 let st = s.borrow();
                 st.editing.is_some() || st.editing_header_row >= 0
@@ -765,8 +836,20 @@ fn wire_grid(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
             if was_editing { commit_editing(&ui_for_buf, &s); }
             {
                 let mut st = s.borrow_mut();
-                st.grid_selection = GridSelection::Cell(r as usize, c as usize);
-                st.ctx_menu.open_at(CtxMenuKind::GridCell { row: r as usize, col: c as usize }, x as f32, y as f32);
+                let r = r as usize;
+                let c = c as usize;
+                let inside = match st.grid_selection.bounds() {
+                    Some((rmin, rmax, cmin, cmax)) => {
+                        let rmax = rmax.min(usize::MAX - 1);
+                        let cmax = cmax.min(usize::MAX - 1);
+                        r >= rmin && r <= rmax && c >= cmin && c <= cmax
+                    }
+                    None => false,
+                };
+                if !inside {
+                    st.grid_selection = GridSelection::Cell(r, c);
+                }
+                st.ctx_menu.open_at(CtxMenuKind::GridCell { row: r, col: c }, x as f32, y as f32);
             }
             if let Some(ui) = weak.upgrade() {
                 push_grid(&ui, &s);
@@ -889,13 +972,23 @@ fn wire_focus(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
         let s = state.clone();
         let weak = ui.as_weak();
         ui.on_grid_shortcut_copy(move || {
-            let anchor = grid_selection_anchor(&s);
-            if let Some((r, c)) = anchor {
-                perform_grid_cell_action(&s, r, c, "grid.cell-copy", "Ctrl+C");
-                if let Some(ui) = weak.upgrade() {
-                    push_grid(&ui, &s);
-                    push_logs(&ui, &s);
-                }
+            if grid_selection_anchor(&s).is_none() { return; }
+            perform_grid_action(&s, "grid.cell-copy", "Ctrl+C");
+            if let Some(ui) = weak.upgrade() {
+                push_grid(&ui, &s);
+                push_logs(&ui, &s);
+            }
+        });
+    }
+    {
+        let s = state.clone();
+        let weak = ui.as_weak();
+        ui.on_grid_shortcut_cut(move || {
+            if grid_selection_anchor(&s).is_none() { return; }
+            perform_grid_action(&s, "grid.cell-cut", "Ctrl+X");
+            if let Some(ui) = weak.upgrade() {
+                push_grid(&ui, &s);
+                push_logs(&ui, &s);
             }
         });
     }
@@ -903,13 +996,11 @@ fn wire_focus(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
         let s = state.clone();
         let weak = ui.as_weak();
         ui.on_grid_shortcut_paste(move || {
-            let anchor = grid_selection_anchor(&s);
-            if let Some((r, c)) = anchor {
-                perform_grid_cell_action(&s, r, c, "grid.cell-paste", "Ctrl+V");
-                if let Some(ui) = weak.upgrade() {
-                    push_grid(&ui, &s);
-                    push_logs(&ui, &s);
-                }
+            if grid_selection_anchor(&s).is_none() { return; }
+            perform_grid_action(&s, "grid.cell-paste", "Ctrl+V");
+            if let Some(ui) = weak.upgrade() {
+                push_grid(&ui, &s);
+                push_logs(&ui, &s);
             }
         });
     }
@@ -917,13 +1008,11 @@ fn wire_focus(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
         let s = state.clone();
         let weak = ui.as_weak();
         ui.on_grid_shortcut_delete(move || {
-            let anchor = grid_selection_anchor(&s);
-            if let Some((r, c)) = anchor {
-                perform_grid_cell_action(&s, r, c, "grid.cell-clear", "Delete");
-                if let Some(ui) = weak.upgrade() {
-                    push_grid(&ui, &s);
-                    push_logs(&ui, &s);
-                }
+            if grid_selection_anchor(&s).is_none() { return; }
+            perform_grid_action(&s, "grid.cell-clear", "Delete");
+            if let Some(ui) = weak.upgrade() {
+                push_grid(&ui, &s);
+                push_logs(&ui, &s);
             }
         });
     }
@@ -954,6 +1043,23 @@ fn grid_selection_anchor(state: &Rc<RefCell<AppState>>) -> Option<(usize, usize)
         GridSelection::Col(c) => Some((0, c)),
         GridSelection::None => None,
     }
+}
+
+/// 取当前选中节点的 (rows, cols)，用于鼠标拖选 / 区域操作的边界裁剪。
+/// rows 包含 EXTRA_ROWS 占位行：用户可以拖选 / 粘贴 / 清空到表尾的空白行，
+/// 跟 egui 端 display_rows 行为一致；engine.paste_*_data 内部会按需 push 新行。
+/// 没有选中节点时返回 (0, 0)。
+fn grid_dims(state: &Rc<RefCell<AppState>>) -> (usize, usize) {
+    let st = state.borrow();
+    let rows = st.grid_data_count + convert::EXTRA_ROWS;
+    let cols = match &st.selected {
+        Some(SelectedNode::Table { group, name }) => st.engine.find_table(group, name)
+            .map(|t| t.schema.fields.len()).unwrap_or(0),
+        Some(SelectedNode::Constant { .. }) => 5,
+        Some(SelectedNode::Enum { .. }) => 3,
+        None => 0,
+    };
+    (rows, cols)
 }
 
 /// Constant ExportEnumCol popup 选项被选中：写回 entries[r].export。
@@ -1582,6 +1688,7 @@ fn ctx_menu_items_for(kind: &CtxMenuKind) -> Vec<CtxMenuItem> {
         ],
         CtxMenuKind::GridCell { .. } => vec![
             item("复制", "grid.cell-copy", false),
+            item("剪切", "grid.cell-cut", false),
             item("粘贴", "grid.cell-paste", false),
             item("删除内容", "grid.cell-clear", false),
         ],
@@ -1773,54 +1880,175 @@ fn perform_grid_row_action(state: &Rc<RefCell<AppState>>, row: usize, action: &s
     if st.realtime_validate { st.engine.revalidate(&group, &name); }
 }
 
-/// 单元格右键 → 复制/粘贴/删除内容（**单格**）。
-/// (r,c) 来自右键命中的格 / 快捷键时的 anchor cell。
-/// 不依赖 GridSelection；多格区域逻辑后续再加。
-/// 单元格 copy/paste/clear。`tag` 决定日志前缀：右键传中文动词（复制/粘贴/清空），
-/// 键盘传按键组合（Ctrl+C/Ctrl+V/Delete）。
-fn perform_grid_cell_action(state: &Rc<RefCell<AppState>>, r: usize, c: usize, action: &str, tag: &str) {
+/// 复制/粘贴/清空：单元格或矩形区域。
+/// 选区由 GridSelection 决定（单格 / 区域 / 整行 / 整列）；由调用方确保命中合法选区。
+/// `tag` 决定日志前缀：右键传中文动词（复制/粘贴/清空），键盘传按键组合（Ctrl+C/Ctrl+V/Delete）。
+///
+/// 范围语义对齐 Excel + egui：
+/// - Copy: TSV 拼接区域，UI 日志只打范围（如 `[Ctrl+C] B2:D5 (4行×3列)`），不打内容
+/// - Paste: clipboard TSV 从锚点展开覆盖
+/// - Clear: 清空区域所有 cell
+fn perform_grid_action(state: &Rc<RefCell<AppState>>, action: &str, tag: &str) {
     use arboard::Clipboard;
-    let coord = format!("{}{}", convert::col_letter(c), r + 1);
+    let (r1, c1, r2, c2) = match resolve_selection_rect(state) {
+        Some(v) => v,
+        None => return,
+    };
+    let coord_label = if r1 == r2 && c1 == c2 {
+        format!("{}{}", convert::col_letter(c1), r1 + 1)
+    } else {
+        format!(
+            "{}{}:{}{} ({}行×{}列)",
+            convert::col_letter(c1), r1 + 1,
+            convert::col_letter(c2), r2 + 1,
+            r2 - r1 + 1, c2 - c1 + 1,
+        )
+    };
+    let is_single = r1 == r2 && c1 == c2;
     match action {
         "grid.cell-copy" => {
-            let raw = {
+            // TSV：行内 \t、行间 \n
+            let tsv = {
                 let st = state.borrow();
-                convert::raw_cell_for(&st, r, c)
+                (r1..=r2).map(|r| {
+                    (c1..=c2).map(|c| convert::raw_cell_for(&st, r, c))
+                        .collect::<Vec<_>>().join("\t")
+                }).collect::<Vec<_>>().join("\n")
             };
-            match Clipboard::new().and_then(|mut cb| cb.set_text(raw.clone())) {
-                Ok(()) => state.borrow_mut().engine.log(format!("[{}] {} = \"{}\"", tag, coord, raw)),
-                Err(e) => state.borrow_mut().engine.log(format!("[{}] {} 失败: {}", tag, coord, e)),
+            match Clipboard::new().and_then(|mut cb| cb.set_text(tsv.clone())) {
+                Ok(()) => {
+                    let msg = if is_single {
+                        format!("[{}] {} = \"{}\"", tag, coord_label, tsv)
+                    } else {
+                        format!("[{}] {}", tag, coord_label)
+                    };
+                    state.borrow_mut().engine.log(msg);
+                }
+                Err(e) => state.borrow_mut().engine.log(format!("[{}] {} 失败: {}", tag, coord_label, e)),
             }
         }
         "grid.cell-paste" => {
             let text = match Clipboard::new().and_then(|mut cb| cb.get_text()) {
                 Ok(t) => t,
                 Err(e) => {
-                    state.borrow_mut().engine.log(format!("[{}] {} 读剪贴板失败: {}", tag, coord, e));
+                    state.borrow_mut().engine.log(format!("[{}] {} 读剪贴板失败: {}", tag, coord_label, e));
                     return;
                 }
             };
-            // 单格粘贴：取首行首格
-            let single = text.lines().next().and_then(|l| l.split('\t').next()).unwrap_or("").to_string();
-            let before = {
-                let st = state.borrow();
-                convert::raw_cell_for(&st, r, c)
-            };
-            let mut st = state.borrow_mut();
-            st.set_cell(r, c, &single);
-            st.engine.log(format!("[{}] {} \"{}\" → \"{}\"", tag, coord, before, single));
+            // Excel 规则：剪贴板矩形从锚点 (r1,c1) 向右下展开，跟目标选区大小无关。
+            // 单格目标 + 多格剪贴板 ⇒ 自动扩展；多格目标 + 单格剪贴板 ⇒ 只填左上角。
+            let lines: Vec<&str> = text.lines().collect();
+            let row_n = lines.len().max(1);
+            let col_n = lines.iter().map(|l| l.split('\t').count()).max().unwrap_or(1);
+            let clip_is_single = row_n == 1 && col_n == 1;
+            if clip_is_single && is_single {
+                // 都是单格：保留 before → after 详细日志
+                let single = lines.first().map(|s| s.to_string()).unwrap_or_default();
+                let before = {
+                    let st = state.borrow();
+                    convert::raw_cell_for(&st, r1, c1)
+                };
+                let mut st = state.borrow_mut();
+                st.set_cell(r1, c1, &single);
+                st.engine.log(format!("[{}] {} \"{}\" → \"{}\"", tag, coord_label, before, single));
+            } else {
+                paste_region(state, r1, c1, &text);
+                let dst = format!(
+                    "{}{}:{}{}",
+                    convert::col_letter(c1), r1 + 1,
+                    convert::col_letter(c1 + col_n - 1), r1 + row_n,
+                );
+                state.borrow_mut().engine.log(format!("[{}] {} → {} ({}行×{}列)", tag, coord_label, dst, row_n, col_n));
+            }
         }
         "grid.cell-clear" => {
-            let before = {
+            if is_single {
+                let before = {
+                    let st = state.borrow();
+                    convert::raw_cell_for(&st, r1, c1)
+                };
+                let mut st = state.borrow_mut();
+                st.set_cell(r1, c1, "");
+                st.engine.log(format!("[{}] {} \"{}\" → \"\"", tag, coord_label, before));
+            } else {
+                clear_region(state, r1, c1, r2, c2);
+                state.borrow_mut().engine.log(format!("[{}] {}", tag, coord_label));
+            }
+        }
+        "grid.cell-cut" => {
+            // 剪切 = 复制到剪贴板 + 清空原区域
+            let tsv = {
                 let st = state.borrow();
-                convert::raw_cell_for(&st, r, c)
+                (r1..=r2).map(|r| {
+                    (c1..=c2).map(|c| convert::raw_cell_for(&st, r, c))
+                        .collect::<Vec<_>>().join("\t")
+                }).collect::<Vec<_>>().join("\n")
             };
-            let mut st = state.borrow_mut();
-            st.set_cell(r, c, "");
-            st.engine.log(format!("[{}] {} \"{}\" → \"\"", tag, coord, before));
+            match Clipboard::new().and_then(|mut cb| cb.set_text(tsv.clone())) {
+                Ok(()) => {
+                    if is_single {
+                        let mut st = state.borrow_mut();
+                        st.set_cell(r1, c1, "");
+                        st.engine.log(format!("[{}] {} \"{}\" → \"\"", tag, coord_label, tsv));
+                    } else {
+                        clear_region(state, r1, c1, r2, c2);
+                        state.borrow_mut().engine.log(format!("[{}] {}", tag, coord_label));
+                    }
+                }
+                Err(e) => state.borrow_mut().engine.log(format!("[{}] {} 失败: {}", tag, coord_label, e)),
+            }
         }
         _ => {}
     }
+}
+
+/// 把当前 GridSelection 解析成裁剪到表实际尺寸的矩形 (r1,c1,r2,c2)。
+/// 整行/整列时按 grid_dims 截断。无选区返回 None。
+fn resolve_selection_rect(state: &Rc<RefCell<AppState>>) -> Option<(usize, usize, usize, usize)> {
+    let (rows, cols) = grid_dims(state);
+    if rows == 0 || cols == 0 { return None; }
+    let st = state.borrow();
+    let (rmin, rmax, cmin, cmax) = st.grid_selection.bounds()?;
+    let r1 = rmin.min(rows - 1);
+    let r2 = rmax.min(rows - 1);
+    let c1 = cmin.min(cols - 1);
+    let c2 = cmax.min(cols - 1);
+    Some((r1, c1, r2, c2))
+}
+
+/// 区域粘贴：按当前选中节点类型走 engine.paste_*_data。
+fn paste_region(state: &Rc<RefCell<AppState>>, r1: usize, c1: usize, text: &str) {
+    let (group, name, kind) = match state.borrow().selected.clone() {
+        Some(SelectedNode::Table { group, name }) => (group, name, "table"),
+        Some(SelectedNode::Constant { group, name }) => (group, name, "constant"),
+        Some(SelectedNode::Enum { group, name }) => (group, name, "enum"),
+        None => return,
+    };
+    let mut st = state.borrow_mut();
+    match kind {
+        "table" => st.engine.paste_table_data(&group, &name, r1, c1, text),
+        "constant" => st.engine.paste_constant_data(&group, &name, r1, c1, text),
+        _ => st.engine.paste_enum_data(&group, &name, r1, c1, text),
+    }
+    if st.realtime_validate { st.engine.revalidate(&group, &name); }
+}
+
+/// 区域清空：按当前选中节点类型走 engine.clear_*_cells。
+fn clear_region(state: &Rc<RefCell<AppState>>, r1: usize, c1: usize, r2: usize, c2: usize) {
+    let (group, name, kind) = match state.borrow().selected.clone() {
+        Some(SelectedNode::Table { group, name }) => (group, name, "table"),
+        Some(SelectedNode::Constant { group, name }) => (group, name, "constant"),
+        Some(SelectedNode::Enum { group, name }) => (group, name, "enum"),
+        None => return,
+    };
+    let cells: Vec<(usize, usize)> = (r1..=r2).flat_map(|r| (c1..=c2).map(move |c| (r, c))).collect();
+    let mut st = state.borrow_mut();
+    match kind {
+        "table" => st.engine.clear_table_cells(&group, &name, &cells),
+        "constant" => st.engine.clear_constant_cells(&group, &name, &cells),
+        _ => st.engine.clear_enum_cells(&group, &name, &cells),
+    }
+    if st.realtime_validate { st.engine.revalidate(&group, &name); }
 }
 
 fn wire_context_menu(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
@@ -1893,15 +2121,16 @@ fn wire_context_menu(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
                     perform_grid_row_action(&s, row, action);
                 }
                 // ── grid 单元格 ──
-                (Some(CtxMenuKind::GridCell { row, col }), action @ ("grid.cell-copy"
-                    | "grid.cell-paste" | "grid.cell-clear")) => {
+                (Some(CtxMenuKind::GridCell { row: _, col: _ }), action @ ("grid.cell-copy"
+                    | "grid.cell-cut" | "grid.cell-paste" | "grid.cell-clear")) => {
                     let tag = match action {
                         "grid.cell-copy" => "复制",
+                        "grid.cell-cut" => "剪切",
                         "grid.cell-paste" => "粘贴",
                         "grid.cell-clear" => "清空",
                         _ => "操作",
                     };
-                    perform_grid_cell_action(&s, row, col, action, tag);
+                    perform_grid_action(&s, action, tag);
                 }
                 _ => {}
             }

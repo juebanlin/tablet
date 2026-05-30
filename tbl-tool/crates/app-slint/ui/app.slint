@@ -88,6 +88,7 @@ export component AppWindow inherits Window {
     callback grid-header-double-clicked(int, int);
     callback grid-cell-clicked(int, int);
     callback grid-cell-shift-clicked(int, int);
+    callback grid-cell-pressed(int, int);
     callback grid-cell-double-clicked(int, int);
     callback grid-cell-drag(int, int, length, length);
     callback grid-row-num-clicked(int);
@@ -106,6 +107,7 @@ export component AppWindow inherits Window {
 
     // ── LogPanel ────────────────────────────────────────────
     in property <[LogEntry]> logs;
+    in property <string> logs-text;
 
     // ── Dialog: TypeSelector ────────────────────────────────
     in-out property <bool> dlg-type-open: false;
@@ -204,8 +206,9 @@ export component AppWindow inherits Window {
     callback cf-cancel();
 
     // ── 键盘快捷键 ──────────────────────────────────────────
-    // grid 区获得焦点时（focus-sink 抢焦后）触发：复制/粘贴/删除走与右键菜单同一路径
+    // grid 区获得焦点时（focus-sink 抢焦后）触发：复制/剪切/粘贴/删除走与右键菜单同一路径
     callback grid-shortcut-copy();
+    callback grid-shortcut-cut();
     callback grid-shortcut-paste();
     callback grid-shortcut-delete();
     callback debug-key(string, bool);  // (text, ctrl) 调试用
@@ -231,6 +234,10 @@ export component AppWindow inherits Window {
             // 也可能仍是 "c"/"v"（取决于键盘布局/IME），两种都接住。
             if (e.modifiers.control && (e.text == "c" || e.text == "C" || e.text == "\u{3}")) {
                 root.grid-shortcut-copy();
+                return accept;
+            }
+            if (e.modifiers.control && (e.text == "x" || e.text == "X" || e.text == "\u{18}")) {
+                root.grid-shortcut-cut();
                 return accept;
             }
             if (e.modifiers.control && (e.text == "v" || e.text == "V" || e.text == "\u{16}")) {
@@ -323,6 +330,7 @@ export component AppWindow inherits Window {
                 header-double-clicked(hi, ci) => { root.drop-focus(); root.grid-header-double-clicked(hi, ci); }
                 cell-clicked(r, c) => { root.drop-focus(); root.grid-cell-clicked(r, c); }
                 cell-shift-clicked(r, c) => { root.drop-focus(); root.grid-cell-shift-clicked(r, c); }
+                cell-pressed(r, c) => { root.drop-focus(); root.grid-cell-pressed(r, c); }
                 cell-double-clicked(r, c) => { root.drop-focus(); root.grid-cell-double-clicked(r, c); }
                 cell-drag(r, c, mx, my) => { root.grid-cell-drag(r, c, mx, my); }
                 row-num-clicked(r) => { root.drop-focus(); root.grid-row-num-clicked(r); }
@@ -342,6 +350,7 @@ export component AppWindow inherits Window {
 
         LogPanel {
             logs: root.logs;
+            text-flat: root.logs-text;
         }
     }
 
