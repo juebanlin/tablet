@@ -1,6 +1,174 @@
 use crate::model::*;
 use crate::types::{TblType, Paradigm, SeparatorsSection};
 
+// ────────────────────────────────────────────────────────────────────────────
+// 验证结构（cell / row / schema / table 各层共用）
+// ────────────────────────────────────────────────────────────────────────────
+
+/// 表头层错误使用的行号哨兵值，区分于普通数据行。
+pub const SCHEMA_ROW: usize = usize::MAX;
+
+/// Table 表头四行（按 UI/编辑器从上到下顺序，1-based "第 N 行"）。
+/// 与 .tbl 文件序列化顺序无关，仅决定日志/UI 的展示行号。
+/// 用作数据索引时必须调用 [`TableHeaderRow::row`]（返回 0-based）。
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[repr(usize)]
+pub enum TableHeaderRow {
+    /// 第 1 行：字段描述
+    Desc = 1,
+    /// 第 2 行:导出范围（client/server/...）
+    Export = 2,
+    /// 第 3 行：字段类型
+    Type = 3,
+    /// 第 4 行：字段名
+    Field = 4,
+}
+
+impl TableHeaderRow {
+    /// 0-based 行索引（用于 `header_rows[i]` 之类的下标）。
+    pub fn row(self) -> usize { (self as usize) - 1 }
+}
+
+/// Constant 行内列号枚举：每行 5 列固定范式（1-based "第 N 列"）。
+/// 用作列索引时必须调用 [`ConstantCol::col`]（返回 0-based）。
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[repr(usize)]
+pub enum ConstantCol {
+    /// 第 1 列：常量名
+    Name = 1,
+    /// 第 2 列：类型
+    Type = 2,
+    /// 第 3 列：常量值
+    Value = 3,
+    /// 第 4 列：导出范围
+    Export = 4,
+    /// 第 5 列：描述
+    Desc = 5,
+}
+
+impl ConstantCol {
+    /// 0-based 列索引（用于 records 下标）。
+    pub fn col(self) -> usize { (self as usize) - 1 }
+}
+
+/// Enum 行内列号枚举：每行 3 列固定范式（1-based "第 N 列"）。
+/// 用作列索引时必须调用 [`EnumCol::col`]（返回 0-based）。
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[repr(usize)]
+pub enum EnumCol {
+    /// 第 1 列：枚举 id
+    Id = 1,
+    /// 第 2 列：枚举条目名
+    Name = 2,
+    /// 第 3 列：描述
+    Desc = 3,
+}
+
+impl EnumCol {
+    /// 0-based 列索引（用于 entries 字段访问）。
+    pub fn col(self) -> usize { (self as usize) - 1 }
+}
+
+/// 验证错误分类码（HTTP response 风格的"业务码"）。
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum ValidationCode {
+    // schema
+    SchemaEmptyFields,
+    SchemaIdNotFirst,
+    FieldNameInvalid,
+    FieldNameKeyword,
+    FieldNameDuplicate,
+    TypeInvalid,
+    TypeRefMissing,
+    TypeRefIsConstant,
+    ConstantRefForbidden,
+    EnumEmpty,
+    // row / cell
+    BaseTypeMismatch,
+    IdNotInteger,
+    NameNotIdentifier,
+    EnumIdInvalid,
+    EnumNameInvalid,
+    RefValueMissing,
+    IdEmptyButHasData,
+    NameFilledButValueEmpty,
+    NameFilledButIdEmpty,
+    DuplicateId,
+    DuplicateName,
+    Other,
+}
+
+/// 一条验证错误（atomic）：含错误码、定位信息、原值与人类可读消息。
+/// 表示"无错误"用 `Option::None` 或空 `Vec`，不在本结构内体现。
+#[derive(Clone, Debug)]
+pub struct ValidationError {
+    pub code: ValidationCode,
+    /// SCHEMA_ROW 表示表头层错误，其它为 0-based 数据行索引。
+    pub row: usize,
+    pub col: usize,
+    /// 仅 Table schema 层有意义；Constant/Enum schema 与数据行均为 None。
+    pub header_row: Option<TableHeaderRow>,
+    pub field: String,
+    pub value: String,
+    pub message: String,
+}
+
+impl ValidationError {
+    pub fn is_schema(&self) -> bool { self.row == SCHEMA_ROW }
+
+    /// cell 层用：仅有 code + message，行/列/字段由调用方在 row 层填充。
+    fn cell(code: ValidationCode, message: String) -> Self {
+        Self {
+            code, row: 0, col: 0,
+            header_row: None,
+            field: String::new(),
+            value: String::new(),
+            message,
+        }
+    }
+
+    fn with_pos(mut self, row: usize, col: usize) -> Self {
+        self.row = row; self.col = col; self
+    }
+
+    fn with_row(mut self, row: usize) -> Self {
+        self.row = row; self
+    }
+
+    fn with_field(mut self, field: impl Into<String>) -> Self {
+        self.field = field.into(); self
+    }
+
+    fn with_value(mut self, value: impl Into<String>) -> Self {
+        self.value = value.into(); self
+    }
+
+    /// Constant/Enum cell 层常用：一次填好 col + field + value（row 由 row 层补）。
+    fn with_col_field_value(mut self, col: usize, field: impl Into<String>, value: impl Into<String>) -> Self {
+        self.col = col;
+        self.field = field.into();
+        self.value = value.into();
+        self
+    }
+
+    /// schema 层常用：标记为表头错误（row=SCHEMA_ROW），可选指定 Table 表头行号。
+    fn schema(code: ValidationCode, message: String, col: usize, header_row: Option<TableHeaderRow>) -> Self {
+        Self {
+            code,
+            row: SCHEMA_ROW,
+            col,
+            header_row,
+            field: String::new(),
+            value: String::new(),
+            message,
+        }
+    }
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// 引用索引与基础校验
+// ────────────────────────────────────────────────────────────────────────────
+
 /// 引用目标类型
 #[derive(Debug, Clone, PartialEq)]
 pub enum RefKind {
@@ -59,29 +227,34 @@ impl RefIndex {
 }
 
 /// 校验 @Xxx 字段类型本身（schema 层，不看具体值）
-pub fn validate_ref_type(type_str: &str, refs: &RefIndex) -> Option<String> {
+pub fn validate_ref_type(type_str: &str, refs: &RefIndex) -> Option<(ValidationCode, String)> {
     let t = TblType::parse(type_str)?;
     if t.paradigm != Paradigm::Ref { return None; }
     let name = t.ref_name.as_deref()?;
     match refs.lookup(name) {
-        None => Some(format!("引用的配置项 {} 不存在", name)),
-        Some(RefKind::Constant) => Some("不能引用 constant（无 id 概念）".to_string()),
+        None => Some((ValidationCode::TypeRefMissing,
+            format!("引用的配置项 {} 不存在", name))),
+        Some(RefKind::Constant) => Some((ValidationCode::TypeRefIsConstant,
+            "不能引用 constant（无 id 概念）".to_string())),
         _ => None,
     }
 }
 
 /// 校验 @Xxx 字段的具体值是否能在被引用项中找到
-fn validate_ref_value(type_str: &str, value: &str, refs: &RefIndex) -> Option<String> {
+fn validate_ref_value(type_str: &str, value: &str, refs: &RefIndex) -> Option<(ValidationCode, String)> {
     if value.is_empty() { return None; }
     let t = TblType::parse(type_str)?;
     if t.paradigm != Paradigm::Ref { return None; }
     let name = t.ref_name.as_deref()?;
     match refs.lookup(name) {
-        None => Some(format!("引用的配置项 {} 不存在", name)),
-        Some(RefKind::Constant) => Some("不能引用 constant".to_string()),
+        None => Some((ValidationCode::TypeRefMissing,
+            format!("引用的配置项 {} 不存在", name))),
+        Some(RefKind::Constant) => Some((ValidationCode::TypeRefIsConstant,
+            "不能引用 constant".to_string())),
         Some(_) => {
             if refs.id_exists(name, value) { None }
-            else { Some(format!("引用值 {} 不存在于 {}", value, name)) }
+            else { Some((ValidationCode::RefValueMissing,
+                format!("引用值 {} 不存在于 {}", value, name))) }
         }
     }
 }
@@ -97,7 +270,7 @@ pub fn col_letter(idx: usize) -> String {
     result
 }
 
-pub fn validate_table_cell(table: &Table, row: usize, col: usize, sep: &SeparatorsSection) -> Option<String> {
+pub fn validate_table_cell(table: &Table, row: usize, col: usize, sep: &SeparatorsSection) -> Option<ValidationError> {
     validate_table_cell_with_refs(table, row, col, sep, None)
 }
 
@@ -107,33 +280,39 @@ pub fn validate_table_cell_with_refs(
     col: usize,
     sep: &SeparatorsSection,
     refs: Option<&RefIndex>,
-) -> Option<String> {
+) -> Option<ValidationError> {
     let fields = &table.schema.fields;
     if col >= fields.len() { return None; }
     let value = table.records.get(row).and_then(|r| r.get(col)).map(|s| s.as_str()).unwrap_or("");
     if value.is_empty() { return None; }
+    let field_name = fields[col].name.as_str();
 
-    if fields[col].name == "id" {
+    if field_name == "id" {
         if value.parse::<i64>().is_err() {
-            return Some("ID必须是数字".to_string());
+            return Some(ValidationError::cell(ValidationCode::IdNotInteger, "ID必须是数字".to_string())
+                .with_pos(row, col).with_field(field_name).with_value(value));
         }
     }
 
     let type_str = &fields[col].tbl_type;
     if let Some(tbl_type) = TblType::parse(type_str) {
         if let Some(msg) = tbl_type.validate_value(value, sep) {
-            return Some(msg);
+            let code = if field_name == "id" { ValidationCode::IdNotInteger }
+                else { ValidationCode::BaseTypeMismatch };
+            return Some(ValidationError::cell(code, msg)
+                .with_pos(row, col).with_field(field_name).with_value(value));
         }
         if let Some(refs) = refs {
-            if let Some(msg) = validate_ref_value(type_str, value, refs) {
-                return Some(msg);
+            if let Some((code, msg)) = validate_ref_value(type_str, value, refs) {
+                return Some(ValidationError::cell(code, msg)
+                    .with_pos(row, col).with_field(field_name).with_value(value));
             }
         }
     }
     None
 }
 
-pub fn validate_table_row(table: &Table, row: usize, sep: &SeparatorsSection) -> Vec<(usize, String)> {
+pub fn validate_table_row(table: &Table, row: usize, sep: &SeparatorsSection) -> Vec<ValidationError> {
     validate_table_row_with_refs(table, row, sep, None)
 }
 
@@ -142,14 +321,14 @@ pub fn validate_table_row_with_refs(
     row: usize,
     sep: &SeparatorsSection,
     refs: Option<&RefIndex>,
-) -> Vec<(usize, String)> {
+) -> Vec<ValidationError> {
     let mut errors = Vec::new();
     let fields = &table.schema.fields;
     let record = match table.records.get(row) { Some(r) => r, None => return errors };
 
     for col in 0..fields.len() {
-        if let Some(msg) = validate_table_cell_with_refs(table, row, col, sep, refs) {
-            errors.push((col, msg));
+        if let Some(err) = validate_table_cell_with_refs(table, row, col, sep, refs) {
+            errors.push(err);
         }
     }
 
@@ -159,44 +338,50 @@ pub fn validate_table_row_with_refs(
         if id_val.is_empty() {
             let has_data = record.iter().enumerate().any(|(i, v)| i != idx_col && !v.is_empty());
             if has_data {
-                errors.push((idx_col, "有数据但ID为空".to_string()));
+                errors.push(ValidationError::cell(ValidationCode::IdEmptyButHasData, "有数据但ID为空".to_string())
+                    .with_pos(row, idx_col).with_field("id"));
             }
         }
     }
     errors
 }
 
-pub fn validate_constant_cell(entry: &ConstEntry, col: usize, sep: &SeparatorsSection) -> Option<String> {
-    match col {
-        0 => {
-            let name = &entry.name;
-            if name.is_empty() { return None; }
-            validate_const_name(name)
-        }
-        2 => {
-            let value = &entry.value;
-            if value.is_empty() { return None; }
-            if let Some(tbl_type) = TblType::parse(&entry.tbl_type) {
-                return tbl_type.validate_value(value, sep);
-            }
-            None
-        }
-        _ => None,
+pub fn validate_constant_cell(entry: &ConstEntry, col: usize, sep: &SeparatorsSection) -> Option<ValidationError> {
+    if col == ConstantCol::Name.col() {
+        let name = &entry.name;
+        if name.is_empty() { return None; }
+        return validate_const_name(name).map(|(code, msg)| {
+            ValidationError::cell(code, msg).with_col_field_value(col, name, name)
+        });
     }
+    if col == ConstantCol::Value.col() {
+        let value = &entry.value;
+        if value.is_empty() { return None; }
+        if let Some(tbl_type) = TblType::parse(&entry.tbl_type) {
+            return tbl_type.validate_value(value, sep).map(|msg| {
+                ValidationError::cell(ValidationCode::BaseTypeMismatch, msg)
+                    .with_col_field_value(col, &entry.name, value)
+            });
+        }
+    }
+    None
 }
 
-pub fn validate_constant_row(constant: &Constant, row: usize, sep: &SeparatorsSection) -> Vec<(usize, String)> {
+pub fn validate_constant_row(constant: &Constant, row: usize, sep: &SeparatorsSection) -> Vec<ValidationError> {
     let mut errors = Vec::new();
     let entry = match constant.entries.get(row) { Some(e) => e, None => return errors };
 
     for col in 0..5 {
-        if let Some(msg) = validate_constant_cell(entry, col, sep) {
-            errors.push((col, msg));
+        if let Some(err) = validate_constant_cell(entry, col, sep) {
+            errors.push(err.with_row(row));
         }
     }
 
     if !entry.name.is_empty() && entry.value.is_empty() {
-        errors.push((2, "name已填但value为空".to_string()));
+        errors.push(
+            ValidationError::cell(ValidationCode::NameFilledButValueEmpty, "name已填但value为空".to_string())
+                .with_pos(row, ConstantCol::Value.col()).with_field(&entry.name)
+        );
     }
     errors
 }
@@ -272,87 +457,98 @@ pub fn is_valid_enum_entry_name(s: &str) -> bool {
     s.chars().all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_')
 }
 
-pub fn validate_enum_entry_name(name: &str) -> Option<String> {
-    if name.is_empty() { return Some("枚举条目名不能为空".to_string()); }
+pub fn validate_enum_entry_name(name: &str) -> Option<(ValidationCode, String)> {
+    if name.is_empty() {
+        return Some((ValidationCode::EnumNameInvalid, "枚举条目名不能为空".to_string()));
+    }
     if !is_valid_enum_entry_name(name) {
-        return Some(format!("\"{}\" 不是合法枚举条目名（需大写字母开头，只含大写字母/数字/下划线）", name));
+        return Some((ValidationCode::EnumNameInvalid,
+            format!("\"{}\" 不是合法枚举条目名（需大写字母开头，只含大写字母/数字/下划线）", name)));
     }
     if is_reserved_keyword(name) {
-        return Some(format!("\"{}\" 是 {} 关键字", name, reserved_keyword_languages(name)));
+        return Some((ValidationCode::FieldNameKeyword,
+            format!("\"{}\" 是 {} 关键字", name, reserved_keyword_languages(name))));
     }
     None
 }
 
-pub fn validate_enum_id(id: &str) -> Option<String> {
+pub fn validate_enum_id(id: &str) -> Option<(ValidationCode, String)> {
     if id.is_empty() { return None; }
     match id.parse::<i32>() {
-        Ok(v) if v < 0 => Some("id 必须是正整数".to_string()),
-        Ok(0) => Some("id 不能为 0（保留为未设置语义）".to_string()),
+        Ok(v) if v < 0 => Some((ValidationCode::EnumIdInvalid, "id 必须是正整数".to_string())),
+        Ok(0) => Some((ValidationCode::EnumIdInvalid, "id 不能为 0（保留为未设置语义）".to_string())),
         Ok(_) => None,
-        Err(_) => Some("id 必须是正整数".to_string()),
+        Err(_) => Some((ValidationCode::EnumIdInvalid, "id 必须是正整数".to_string())),
     }
 }
 
-pub fn validate_enum_cell(entry: &EnumEntry, col: usize) -> Option<String> {
-    match col {
-        0 => validate_enum_id(&entry.id),
-        1 => {
-            if entry.name.is_empty() { return None; }
-            validate_enum_entry_name(&entry.name)
-        }
-        _ => None,
+pub fn validate_enum_cell(entry: &EnumEntry, col: usize) -> Option<ValidationError> {
+    if col == EnumCol::Id.col() {
+        return validate_enum_id(&entry.id).map(|(code, msg)| {
+            ValidationError::cell(code, msg).with_col_field_value(col, &entry.name, &entry.id)
+        });
     }
+    if col == EnumCol::Name.col() {
+        if entry.name.is_empty() { return None; }
+        return validate_enum_entry_name(&entry.name).map(|(code, msg)| {
+            ValidationError::cell(code, msg).with_col_field_value(col, &entry.name, &entry.name)
+        });
+    }
+    None
 }
 
-pub fn validate_enum_row(enum_def: &EnumDef, row: usize) -> Vec<(usize, String)> {
+pub fn validate_enum_row(enum_def: &EnumDef, row: usize) -> Vec<ValidationError> {
     let mut errors = Vec::new();
     let entry = match enum_def.entries.get(row) { Some(e) => e, None => return errors };
 
     for col in 0..3 {
-        if let Some(msg) = validate_enum_cell(entry, col) {
-            errors.push((col, msg));
+        if let Some(err) = validate_enum_cell(entry, col) {
+            errors.push(err.with_row(row));
         }
     }
 
     if !entry.name.is_empty() && entry.id.is_empty() {
-        errors.push((0, "name已填但id为空".to_string()));
+        errors.push(
+            ValidationError::cell(ValidationCode::NameFilledButIdEmpty, "name已填但id为空".to_string())
+                .with_pos(row, EnumCol::Id.col()).with_field(&entry.name)
+        );
     }
     errors
 }
 
 // --- 字段名验证 ---
 
-pub fn validate_field_name(name: &str) -> Option<String> {
-    if name.is_empty() { return Some("字段名不能为空".to_string()); }
+pub fn validate_field_name(name: &str) -> Option<(ValidationCode, String)> {
+    if name.is_empty() {
+        return Some((ValidationCode::FieldNameInvalid, "字段名不能为空".to_string()));
+    }
     if !is_valid_identifier(name) {
-        return Some(format!("\"{}\" 不是合法字段名（需小写字母开头，只含小写字母/数字/下划线）", name));
+        return Some((ValidationCode::FieldNameInvalid,
+            format!("\"{}\" 不是合法字段名（需小写字母开头，只含小写字母/数字/下划线）", name)));
     }
     if is_reserved_keyword(name) {
-        return Some(format!("\"{}\" 是 {} 关键字", name, reserved_keyword_languages(name)));
+        return Some((ValidationCode::FieldNameKeyword,
+            format!("\"{}\" 是 {} 关键字", name, reserved_keyword_languages(name))));
     }
     None
 }
 
-pub fn validate_const_name(name: &str) -> Option<String> {
+pub fn validate_const_name(name: &str) -> Option<(ValidationCode, String)> {
     if name.is_empty() { return None; }
     if !is_valid_identifier(name) {
-        return Some(format!("\"{}\" 不是合法常量名（需小写字母开头，只含小写字母/数字/下划线）", name));
+        return Some((ValidationCode::NameNotIdentifier,
+            format!("\"{}\" 不是合法常量名（需小写字母开头，只含小写字母/数字/下划线）", name)));
     }
     if is_reserved_keyword(name) {
-        return Some(format!("\"{}\" 是 {} 关键字", name, reserved_keyword_languages(name)));
+        return Some((ValidationCode::FieldNameKeyword,
+            format!("\"{}\" 是 {} 关键字", name, reserved_keyword_languages(name))));
     }
     None
 }
 
-// --- 表头验证 ---
+// --- 表头/Schema 验证 ---
 
-#[derive(Debug, Clone)]
-pub struct SchemaError {
-    pub field: String,
-    pub message: String,
-}
-
-pub fn validate_table_schema(table: &Table, sep: &SeparatorsSection) -> Vec<SchemaError> {
+pub fn validate_table_schema(table: &Table, sep: &SeparatorsSection) -> Vec<ValidationError> {
     validate_table_schema_with_refs(table, sep, None)
 }
 
@@ -360,56 +556,83 @@ pub fn validate_table_schema_with_refs(
     table: &Table,
     _sep: &SeparatorsSection,
     refs: Option<&RefIndex>,
-) -> Vec<SchemaError> {
+) -> Vec<ValidationError> {
     let mut errors = Vec::new();
     let fields = &table.schema.fields;
 
     if fields.is_empty() {
-        errors.push(SchemaError { field: String::new(), message: "表没有定义任何字段".to_string() });
+        errors.push(ValidationError::schema(
+            ValidationCode::SchemaEmptyFields,
+            "表没有定义任何字段".to_string(),
+            0,
+            Some(TableHeaderRow::Field),
+        ));
         return errors;
     }
 
     if fields[0].name != "id" {
-        errors.push(SchemaError {
-            field: fields[0].name.clone(),
-            message: "第一列必须是主键 id".to_string(),
-        });
+        errors.push(
+            ValidationError::schema(
+                ValidationCode::SchemaIdNotFirst,
+                "第一列必须是主键 id".to_string(),
+                0,
+                Some(TableHeaderRow::Field),
+            ).with_field(&fields[0].name)
+        );
     }
 
     let mut seen_names = std::collections::HashSet::new();
-    for field in fields {
-        if let Some(msg) = validate_field_name(&field.name) {
-            errors.push(SchemaError { field: field.name.clone(), message: msg });
+    for (col, field) in fields.iter().enumerate() {
+        if let Some((code, msg)) = validate_field_name(&field.name) {
+            errors.push(
+                ValidationError::schema(code, msg, col, Some(TableHeaderRow::Field))
+                    .with_field(&field.name)
+            );
         }
-        if !field.name.is_empty() && !seen_names.insert(&field.name) {
-            errors.push(SchemaError {
-                field: field.name.clone(),
-                message: format!("字段名 \"{}\" 重复", field.name),
-            });
+        if !field.name.is_empty() && !seen_names.insert(field.name.clone()) {
+            errors.push(
+                ValidationError::schema(
+                    ValidationCode::FieldNameDuplicate,
+                    format!("字段名 \"{}\" 重复", field.name),
+                    col,
+                    Some(TableHeaderRow::Field),
+                ).with_field(&field.name)
+            );
         }
         if TblType::parse(&field.tbl_type).is_none() {
-            errors.push(SchemaError {
-                field: field.name.clone(),
-                message: format!("类型 \"{}\" 不合法", field.tbl_type),
-            });
+            errors.push(
+                ValidationError::schema(
+                    ValidationCode::TypeInvalid,
+                    format!("类型 \"{}\" 不合法", field.tbl_type),
+                    col,
+                    Some(TableHeaderRow::Type),
+                ).with_field(&field.name)
+            );
         } else if let Some(refs) = refs {
-            if let Some(msg) = validate_ref_type(&field.tbl_type, refs) {
-                errors.push(SchemaError { field: field.name.clone(), message: msg });
+            if let Some((code, msg)) = validate_ref_type(&field.tbl_type, refs) {
+                errors.push(
+                    ValidationError::schema(code, msg, col, Some(TableHeaderRow::Type))
+                        .with_field(&field.name)
+                );
             }
         }
     }
 
-    // 主键值重复检测
+    // 主键值重复检测：归到对应数据行（row != SCHEMA_ROW），而非表头错误
     if let Some(idx_col) = fields.iter().position(|f| f.name == "id") {
-        let mut seen_ids = std::collections::HashSet::new();
+        let mut seen_ids: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
         for (row, record) in table.records.iter().enumerate() {
             let id = record.get(idx_col).map(|s| s.as_str()).unwrap_or("");
             if id.is_empty() { continue; }
-            if !seen_ids.insert(id.to_string()) {
-                errors.push(SchemaError {
-                    field: "id".to_string(),
-                    message: format!("第{}行主键值 \"{}\" 重复", row + 1, id),
-                });
+            if let Some(&first) = seen_ids.get(id) {
+                errors.push(
+                    ValidationError::cell(
+                        ValidationCode::DuplicateId,
+                        format!("ID \"{}\" 与第 {} 行重复", id, first + 1),
+                    ).with_pos(row, idx_col).with_field("id").with_value(id)
+                );
+            } else {
+                seen_ids.insert(id.to_string(), row);
             }
         }
     }
@@ -417,31 +640,46 @@ pub fn validate_table_schema_with_refs(
     errors
 }
 
-pub fn validate_constant_schema(constant: &Constant, _sep: &SeparatorsSection) -> Vec<SchemaError> {
+pub fn validate_constant_schema(constant: &Constant, _sep: &SeparatorsSection) -> Vec<ValidationError> {
     let mut errors = Vec::new();
 
     let mut seen_names = std::collections::HashSet::new();
     for entry in &constant.entries {
         if entry.name.is_empty() { continue; }
 
-        if let Some(msg) = validate_const_name(&entry.name) {
-            errors.push(SchemaError { field: entry.name.clone(), message: msg });
+        if let Some((code, msg)) = validate_const_name(&entry.name) {
+            errors.push(
+                ValidationError::schema(code, msg, ConstantCol::Name.col(), None)
+                    .with_field(&entry.name)
+            );
         }
-        if !seen_names.insert(&entry.name) {
-            errors.push(SchemaError {
-                field: entry.name.clone(),
-                message: format!("常量名 \"{}\" 重复", entry.name),
-            });
+        if !seen_names.insert(entry.name.clone()) {
+            errors.push(
+                ValidationError::schema(
+                    ValidationCode::DuplicateName,
+                    format!("常量名 \"{}\" 重复", entry.name),
+                    ConstantCol::Name.col(),
+                    None,
+                ).with_field(&entry.name)
+            );
         }
         match TblType::parse(&entry.tbl_type) {
-            None => errors.push(SchemaError {
-                field: entry.name.clone(),
-                message: format!("类型 \"{}\" 不合法", entry.tbl_type),
-            }),
-            Some(t) if t.paradigm == Paradigm::Ref => errors.push(SchemaError {
-                field: entry.name.clone(),
-                message: "constant 不允许使用 @Xxx 引用类型".to_string(),
-            }),
+            None => errors.push(
+                ValidationError::schema(
+                    ValidationCode::TypeInvalid,
+                    format!("类型 \"{}\" 不合法", entry.tbl_type),
+                    ConstantCol::Type.col(),
+                    None,
+                ).with_field(&entry.name)
+            ),
+            Some(t) if t.paradigm == Paradigm::Ref => errors.push(
+                ValidationError::schema(
+                    ValidationCode::ConstantRefForbidden,
+                    "constant 不允许使用 @Xxx 引用类型".to_string(),
+                    ConstantCol::Type.col(),
+                    None,
+                ).with_field(&entry.name)
+            ),
             _ => {}
         }
     }
@@ -449,11 +687,16 @@ pub fn validate_constant_schema(constant: &Constant, _sep: &SeparatorsSection) -
     errors
 }
 
-pub fn validate_enum_schema(enum_def: &EnumDef) -> Vec<SchemaError> {
+pub fn validate_enum_schema(enum_def: &EnumDef) -> Vec<ValidationError> {
     let mut errors = Vec::new();
 
     if enum_def.entries.iter().all(|e| e.id.is_empty() && e.name.is_empty()) {
-        errors.push(SchemaError { field: String::new(), message: "枚举至少需要一个条目".to_string() });
+        errors.push(ValidationError::schema(
+            ValidationCode::EnumEmpty,
+            "枚举至少需要一个条目".to_string(),
+            EnumCol::Id.col(),
+            None,
+        ));
         return errors;
     }
 
@@ -461,23 +704,37 @@ pub fn validate_enum_schema(enum_def: &EnumDef) -> Vec<SchemaError> {
     let mut seen_names = std::collections::HashSet::new();
     for entry in &enum_def.entries {
         if entry.id.is_empty() && entry.name.is_empty() { continue; }
-        if let Some(msg) = validate_enum_id(&entry.id) {
-            errors.push(SchemaError { field: entry.name.clone(), message: msg });
+        if let Some((code, msg)) = validate_enum_id(&entry.id) {
+            errors.push(
+                ValidationError::schema(code, msg, EnumCol::Id.col(), None)
+                    .with_field(&entry.name)
+            );
         }
-        if let Some(msg) = validate_enum_entry_name(&entry.name) {
-            errors.push(SchemaError { field: entry.name.clone(), message: msg });
+        if let Some((code, msg)) = validate_enum_entry_name(&entry.name) {
+            errors.push(
+                ValidationError::schema(code, msg, EnumCol::Name.col(), None)
+                    .with_field(&entry.name)
+            );
         }
         if !entry.id.is_empty() && !seen_ids.insert(entry.id.clone()) {
-            errors.push(SchemaError {
-                field: entry.name.clone(),
-                message: format!("id \"{}\" 重复", entry.id),
-            });
+            errors.push(
+                ValidationError::schema(
+                    ValidationCode::DuplicateId,
+                    format!("id \"{}\" 重复", entry.id),
+                    EnumCol::Id.col(),
+                    None,
+                ).with_field(&entry.name)
+            );
         }
         if !entry.name.is_empty() && !seen_names.insert(entry.name.clone()) {
-            errors.push(SchemaError {
-                field: entry.name.clone(),
-                message: format!("枚举条目名 \"{}\" 重复", entry.name),
-            });
+            errors.push(
+                ValidationError::schema(
+                    ValidationCode::DuplicateName,
+                    format!("枚举条目名 \"{}\" 重复", entry.name),
+                    EnumCol::Name.col(),
+                    None,
+                ).with_field(&entry.name)
+            );
         }
     }
 
@@ -488,176 +745,15 @@ pub fn validate_enum_schema(enum_def: &EnumDef) -> Vec<SchemaError> {
 // 整表层（节点级）：合并 schema + 行 + 跨行唯一性，输出 ValidationError 列表
 // ────────────────────────────────────────────────────────────────────────────
 
-/// 表头层错误使用的行号哨兵值，区分于普通数据行。
-pub const SCHEMA_ROW: usize = usize::MAX;
-
-/// Table 表头四行（按 UI/编辑器从上到下顺序，1-based "第 N 行"）。
-/// 与 .tbl 文件序列化顺序无关，仅决定日志/UI 的展示行号。
-/// 用作数据索引时必须调用 [`TableHeaderRow::row`]（返回 0-based）。
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-#[repr(usize)]
-pub enum TableHeaderRow {
-    /// 第 1 行：字段描述
-    Desc = 1,
-    /// 第 2 行：导出范围（client/server/...）
-    Export = 2,
-    /// 第 3 行：字段类型
-    Type = 3,
-    /// 第 4 行：字段名
-    Field = 4,
-}
-
-impl TableHeaderRow {
-    /// 0-based 行索引（用于 `header_rows[i]` 之类的下标）。
-    pub fn row(self) -> usize { (self as usize) - 1 }
-}
-
-/// Constant 行内列号枚举：每行 5 列固定范式（1-based "第 N 列"）。
-/// 用作列索引时必须调用 [`ConstantCol::col`]（返回 0-based）。
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-#[repr(usize)]
-pub enum ConstantCol {
-    /// 第 1 列：常量名
-    Name = 1,
-    /// 第 2 列：类型
-    Type = 2,
-    /// 第 3 列：常量值
-    Value = 3,
-    /// 第 4 列：导出范围
-    Export = 4,
-    /// 第 5 列：描述
-    Desc = 5,
-}
-
-impl ConstantCol {
-    /// 0-based 列索引（用于 records 下标）。
-    pub fn col(self) -> usize { (self as usize) - 1 }
-}
-
-/// Enum 行内列号枚举：每行 3 列固定范式（1-based "第 N 列"）。
-/// 用作列索引时必须调用 [`EnumCol::col`]（返回 0-based）。
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-#[repr(usize)]
-pub enum EnumCol {
-    /// 第 1 列：枚举 id
-    Id = 1,
-    /// 第 2 列：枚举条目名
-    Name = 2,
-    /// 第 3 列：描述
-    Desc = 3,
-}
-
-impl EnumCol {
-    /// 0-based 列索引（用于 entries 字段访问）。
-    pub fn col(self) -> usize { (self as usize) - 1 }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum ValidationCode {
-    // schema
-    SchemaEmptyFields,
-    SchemaIdNotFirst,
-    FieldNameInvalid,
-    FieldNameKeyword,
-    FieldNameDuplicate,
-    TypeInvalid,
-    TypeRefMissing,
-    TypeRefIsConstant,
-    ConstantRefForbidden,
-    EnumEmpty,
-    // row / cell
-    BaseTypeMismatch,
-    IdNotInteger,
-    NameNotIdentifier,
-    EnumIdInvalid,
-    EnumNameInvalid,
-    RefValueMissing,
-    IdEmptyButHasData,
-    NameFilledButValueEmpty,
-    NameFilledButIdEmpty,
-    DuplicateId,
-    DuplicateName,
-    Other,
-}
-
-#[derive(Clone, Debug)]
-pub struct ValidationError {
-    pub code: ValidationCode,
-    /// SCHEMA_ROW 表示表头层错误，其它为 0-based 数据行索引。
-    pub row: usize,
-    pub col: usize,
-    /// 仅 Table schema 层有意义；Constant/Enum schema 与数据行均为 None。
-    pub header_row: Option<TableHeaderRow>,
-    pub field: String,
-    pub value: String,
-    pub message: String,
-}
-
-impl ValidationError {
-    pub fn is_schema(&self) -> bool { self.row == SCHEMA_ROW }
-}
-
 pub fn validate_table(
     table: &Table,
     sep: &SeparatorsSection,
     refs: Option<&RefIndex>,
 ) -> Vec<ValidationError> {
-    let mut errors = Vec::new();
-    let fields = &table.schema.fields;
-
-    for sch in validate_table_schema_with_refs(table, sep, refs) {
-        // 主键值重复在 schema 列表里，但属于数据行错误，统一在下面 dup 检测里产出
-        if sch.message.contains("主键值") { continue; }
-        let col = fields.iter().position(|f| f.name == sch.field).unwrap_or(0);
-        let (code, header_row) = classify_table_schema(&sch.message);
-        errors.push(ValidationError {
-            code,
-            row: SCHEMA_ROW,
-            col,
-            header_row: Some(header_row),
-            field: sch.field,
-            value: String::new(),
-            message: sch.message,
-        });
-    }
-
-    let id_col = fields.iter().position(|f| f.name == "id");
-    let mut seen_ids: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
-
+    let mut errors = validate_table_schema_with_refs(table, sep, refs);
     for row in 0..table.records.len() {
-        for (col, msg) in validate_table_row_with_refs(table, row, sep, refs) {
-            let value = table.records[row].get(col).cloned().unwrap_or_default();
-            let field_name = fields.get(col).map(|f| f.name.as_str()).unwrap_or("");
-            errors.push(ValidationError {
-                code: classify_table_row(&msg, field_name),
-                row,
-                col,
-                header_row: None,
-                field: field_name.to_string(),
-                value,
-                message: msg,
-            });
-        }
-        if let Some(idx) = id_col {
-            let id = table.records[row].get(idx).cloned().unwrap_or_default();
-            if !id.is_empty() {
-                if let Some(&first) = seen_ids.get(&id) {
-                    errors.push(ValidationError {
-                        code: ValidationCode::DuplicateId,
-                        row,
-                        col: idx,
-                        header_row: None,
-                        field: "id".to_string(),
-                        value: id.clone(),
-                        message: format!("ID \"{}\" 与第 {} 行重复", id, first + 1),
-                    });
-                } else {
-                    seen_ids.insert(id, row);
-                }
-            }
-        }
+        errors.extend(validate_table_row_with_refs(table, row, sep, refs));
     }
-
     errors
 }
 
@@ -665,183 +761,17 @@ pub fn validate_constant(
     constant: &Constant,
     sep: &SeparatorsSection,
 ) -> Vec<ValidationError> {
-    let mut errors = Vec::new();
-
-    for sch in validate_constant_schema(constant, sep) {
-        let code = classify_constant_schema(&sch.message);
-        // 类型相关错误指向 type 列，其余指向 name 列
-        let col = match code {
-            ValidationCode::TypeInvalid | ValidationCode::ConstantRefForbidden => ConstantCol::Type.col(),
-            _ => ConstantCol::Name.col(),
-        };
-        errors.push(ValidationError {
-            code,
-            row: SCHEMA_ROW,
-            col,
-            header_row: None,
-            field: sch.field,
-            value: String::new(),
-            message: sch.message,
-        });
-    }
-
+    let mut errors = validate_constant_schema(constant, sep);
     for row in 0..constant.entries.len() {
-        for (col, msg) in validate_constant_row(constant, row, sep) {
-            let entry = &constant.entries[row];
-            let value = if col == ConstantCol::Name.col() { entry.name.clone() }
-                else if col == ConstantCol::Value.col() { entry.value.clone() }
-                else { String::new() };
-            errors.push(ValidationError {
-                code: classify_constant_row(&msg, col),
-                row,
-                col,
-                header_row: None,
-                field: entry.name.clone(),
-                value,
-                message: msg,
-            });
-        }
+        errors.extend(validate_constant_row(constant, row, sep));
     }
-
     errors
 }
 
 pub fn validate_enum(enum_def: &EnumDef) -> Vec<ValidationError> {
-    let mut errors = Vec::new();
-
-    for sch in validate_enum_schema(enum_def) {
-        errors.push(ValidationError {
-            code: classify_enum_schema(&sch.message),
-            row: SCHEMA_ROW,
-            col: EnumCol::Id.col(),
-            header_row: None,
-            field: sch.field,
-            value: String::new(),
-            message: sch.message,
-        });
-    }
-
+    let mut errors = validate_enum_schema(enum_def);
     for row in 0..enum_def.entries.len() {
-        for (col, msg) in validate_enum_row(enum_def, row) {
-            let entry = &enum_def.entries[row];
-            let value = if col == EnumCol::Id.col() { entry.id.clone() }
-                else if col == EnumCol::Name.col() { entry.name.clone() }
-                else { String::new() };
-            errors.push(ValidationError {
-                code: classify_enum_row(&msg, col),
-                row,
-                col,
-                header_row: None,
-                field: entry.name.clone(),
-                value,
-                message: msg,
-            });
-        }
+        errors.extend(validate_enum_row(enum_def, row));
     }
-
     errors
-}
-
-// ───── classifiers：把字符串错误映射回 (code, header_row) ─────
-
-fn classify_table_schema(msg: &str) -> (ValidationCode, TableHeaderRow) {
-    if msg.contains("表没有定义任何字段") {
-        (ValidationCode::SchemaEmptyFields, TableHeaderRow::Field)
-    } else if msg.contains("第一列必须是主键") {
-        (ValidationCode::SchemaIdNotFirst, TableHeaderRow::Field)
-    } else if msg.contains("不是合法字段名") {
-        (ValidationCode::FieldNameInvalid, TableHeaderRow::Field)
-    } else if msg.contains("关键字") {
-        (ValidationCode::FieldNameKeyword, TableHeaderRow::Field)
-    } else if msg.contains("字段名") && msg.contains("重复") {
-        (ValidationCode::FieldNameDuplicate, TableHeaderRow::Field)
-    } else if msg.contains("类型") && msg.contains("不合法") {
-        (ValidationCode::TypeInvalid, TableHeaderRow::Type)
-    } else if msg.contains("引用的配置项") && msg.contains("不存在") {
-        (ValidationCode::TypeRefMissing, TableHeaderRow::Type)
-    } else if msg.contains("不能引用 constant") {
-        (ValidationCode::TypeRefIsConstant, TableHeaderRow::Type)
-    } else {
-        (ValidationCode::Other, TableHeaderRow::Field)
-    }
-}
-
-fn classify_table_row(msg: &str, field_name: &str) -> ValidationCode {
-    if msg == "ID必须是数字" {
-        ValidationCode::IdNotInteger
-    } else if msg == "有数据但ID为空" {
-        ValidationCode::IdEmptyButHasData
-    } else if msg.contains("引用值") && msg.contains("不存在") {
-        ValidationCode::RefValueMissing
-    } else if msg.contains("引用的配置项") {
-        ValidationCode::TypeRefMissing
-    } else if msg.contains("不能引用 constant") {
-        ValidationCode::TypeRefIsConstant
-    } else if field_name == "id" {
-        ValidationCode::IdNotInteger
-    } else {
-        ValidationCode::BaseTypeMismatch
-    }
-}
-
-fn classify_constant_schema(msg: &str) -> ValidationCode {
-    if msg.contains("不是合法常量名") {
-        ValidationCode::NameNotIdentifier
-    } else if msg.contains("关键字") {
-        ValidationCode::FieldNameKeyword
-    } else if msg.contains("常量名") && msg.contains("重复") {
-        ValidationCode::DuplicateName
-    } else if msg.contains("类型") && msg.contains("不合法") {
-        ValidationCode::TypeInvalid
-    } else if msg.contains("constant 不允许使用") {
-        ValidationCode::ConstantRefForbidden
-    } else {
-        ValidationCode::Other
-    }
-}
-
-fn classify_constant_row(msg: &str, col: usize) -> ValidationCode {
-    if msg == "name已填但value为空" {
-        ValidationCode::NameFilledButValueEmpty
-    } else if msg.contains("不是合法常量名") {
-        ValidationCode::NameNotIdentifier
-    } else if msg.contains("关键字") {
-        ValidationCode::FieldNameKeyword
-    } else if col == ConstantCol::Value.col() {
-        ValidationCode::BaseTypeMismatch
-    } else {
-        ValidationCode::Other
-    }
-}
-
-fn classify_enum_schema(msg: &str) -> ValidationCode {
-    if msg.contains("枚举至少需要一个条目") {
-        ValidationCode::EnumEmpty
-    } else if msg.contains("id") && msg.contains("重复") {
-        ValidationCode::DuplicateId
-    } else if msg.contains("枚举条目名") && msg.contains("重复") {
-        ValidationCode::DuplicateName
-    } else if msg.contains("枚举条目名") {
-        ValidationCode::EnumNameInvalid
-    } else if msg.contains("id") {
-        ValidationCode::EnumIdInvalid
-    } else if msg.contains("关键字") {
-        ValidationCode::FieldNameKeyword
-    } else {
-        ValidationCode::Other
-    }
-}
-
-fn classify_enum_row(msg: &str, col: usize) -> ValidationCode {
-    if msg == "name已填但id为空" {
-        ValidationCode::NameFilledButIdEmpty
-    } else if msg.contains("枚举条目名") {
-        ValidationCode::EnumNameInvalid
-    } else if msg.contains("关键字") {
-        ValidationCode::FieldNameKeyword
-    } else if col == EnumCol::Id.col() {
-        ValidationCode::EnumIdInvalid
-    } else {
-        ValidationCode::Other
-    }
 }

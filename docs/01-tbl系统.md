@@ -557,17 +557,21 @@ Enum mode 的数据行为 `id | name | desc`，无 type/export 列。
 
 ## 附录 A. 验证架构
 
-工具内部以**四层函数**实现验证，层层复用、可组合调用：
+工具内部以**四层函数**实现验证，所有层都返回统一的 `ValidationError` 结构：
 
 ```
-validate_*_cell(node, row, col)      → Option<String>            单元格级
-validate_*_row(node, row)            → Vec<(col, String)>        行级（调用 cell + 行逻辑）
-validate_*_schema(node)              → Vec<SchemaError>          schema 级（结构完整性）
+validate_*_cell(node, row, col)      → Option<ValidationError>   单元格级
+validate_*_row(node, row)            → Vec<ValidationError>      行级（调用 cell + 行逻辑）
+validate_*_schema(node)              → Vec<ValidationError>      schema 级（结构完整性，row=SCHEMA_ROW）
 validate_*(node, sep, refs?)         → Vec<ValidationError>      整表级（schema + 行 + 跨行唯一性）
 revalidate / revalidate_all(...)     → 更新 errors 集合           项目级（遍历所有节点 + 跨表引用）
 ```
 
-`*` 是 `table` / `constant` / `enum` 之一。整表层是节点级聚合入口，UI 只需要调用它就能拿到一个节点的全部错误，节点级 `revalidate` 只负责把整表层结果写入 `validation_errors` 索引。
+`*` 是 `table` / `constant` / `enum` 之一。
+
+整表层是 **节点级聚合入口**，几乎所有上层（UI、日志、ops）只需要调用它就能拿到一个节点的全部错误。节点级 `revalidate` 只负责把整表层结果写入 `validation_errors` 索引。
+
+四层验证全部返回 `Vec<ValidationError>`（cell 层为 `Option<ValidationError>`），意味着上层不再需要知道一个错误是 schema 层还是 row 层产生的——分类信息（行号、列号、是否表头错误）都已经写到结构体里。
 
 | 层 | 触发时机 | 内容 |
 |---|---------|------|
