@@ -56,6 +56,7 @@ export component AppWindow inherits Window {
     in property <string> grid-title: "未选中";
     in property <string> grid-subtitle: "";
     in-out property <bool> show-enum-name: false;
+    in property <bool> show-enum-name-enabled: false;
     callback show-enum-name-toggled(bool);
 
     in property <string> coord;
@@ -323,6 +324,7 @@ export component AppWindow inherits Window {
                 title: root.grid-title;
                 subtitle: root.grid-subtitle;
                 show-enum-name <=> root.show-enum-name;
+                show-enum-name-enabled: root.show-enum-name-enabled;
                 show-enum-name-toggled(c) => { root.show-enum-name-toggled(c); }
                 coord: root.coord;
                 formula-display: root.formula-display;

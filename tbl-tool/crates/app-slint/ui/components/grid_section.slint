@@ -22,6 +22,7 @@ export component GridSection inherits Rectangle {
 
     // ── 功能 bar ──
     in-out property <bool> show-enum-name: false;
+    in property <bool> show-enum-name-enabled: true;
     callback show-enum-name-toggled(bool);
 
     // ── 公式栏 ──
@@ -85,6 +86,7 @@ export component GridSection inherits Rectangle {
         }
         GridRibbon {
             show-enum-name <=> root.show-enum-name;
+            show-enum-name-enabled: root.show-enum-name-enabled;
             show-enum-name-toggled(c) => { root.show-enum-name-toggled(c); }
         }
         FormulaBar {

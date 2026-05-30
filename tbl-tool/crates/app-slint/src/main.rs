@@ -144,6 +144,8 @@ fn push_grid(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
     }
     ui.set_grid_title(snap.title.into());
     ui.set_grid_subtitle(snap.subtitle.into());
+    // 「枚举显示名字」仅在 Table 选中时启用（constant/enum 没有 @ref 列，勾上无效）
+    ui.set_show_enum_name_enabled(matches!(state.borrow().selected, Some(SelectedNode::Table { .. })));
     ui.set_grid_col_count(snap.col_count);
     ui.set_grid_header_rows(slint::ModelRc::new(slint::VecModel::from(
         snap.header_rows.into_iter()

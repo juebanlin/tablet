@@ -6,6 +6,7 @@ import { CheckBox } from "std-widgets.slint";
 
 export component GridRibbon inherits Rectangle {
     in-out property <bool> show-enum-name: false;
+    in property <bool> show-enum-name-enabled: true;
     callback show-enum-name-toggled(bool);
 
     height: Theme.ribbon-h;
@@ -22,6 +23,7 @@ export component GridRibbon inherits Rectangle {
         CheckBox {
             text: "枚举显示名字";
             checked <=> root.show-enum-name;
+            enabled: root.show-enum-name-enabled;
             toggled => { root.show-enum-name-toggled(self.checked); }
         }
     }
