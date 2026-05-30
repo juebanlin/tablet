@@ -18,7 +18,7 @@ use simplelog::*;
 
 slint::include_modules!();
 
-use state::{AppState, GridSelection, SelectedNode, TreeFilter, TreeTarget};
+use state::{AppState, GridSelection, SelectedNode, TreeFilter, TreeTarget, TsRefFilter, TsTab, TypeEditTarget};
 
 #[derive(Parser)]
 #[command(name = "tbl-tool", version = "0.1.0")]
@@ -78,6 +78,8 @@ fn main() -> anyhow::Result<()> {
     wire_tree(&ui, &app_state);
     wire_grid(&ui, &app_state);
     wire_toolbar(&ui, &app_state);
+    wire_type_selector(&ui, &app_state);
+    wire_ref_picker(&ui, &app_state);
     wire_focus(&ui, &app_state);
 
     let result = ui.run().map_err(|e| anyhow::anyhow!("{}", e));
@@ -354,8 +356,8 @@ fn wire_grid(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
     //   ReadOnly      ：选中（不编辑）
     //   Text          ：选中（双击才进 inline 编辑）
     //   ExportEnumCol ：选中 + 同步 editing-export-index（slint 端 popup.show 弹自制下拉）
-    //   TypeEnumCol   ：TODO（弹 TypeSelector，Step 7）
-    //   Ref           ：TODO（弹 RefPicker，Step 8）
+    //   TypeEnumCol   ：弹 TypeSelector 弹窗
+    //   Ref           ：弹 RefPicker 弹窗
     {
         let s = state.clone();
         let weak = ui.as_weak();
@@ -370,18 +372,31 @@ fn wire_grid(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
             let kind = s.borrow().grid_column_kinds.get(c as usize).cloned();
             // ExportEnumCol：先把 selection + editing_export_index 推到 slint，popup 由 slint 端 .show()
             // 弹起。需要 push_grid 才能让 editing-export-index 是最新值。
-            // TypeEnumCol / Ref 走选中（dialog 暂未实现）
+            // TypeEnumCol：弹 TypeSelector
+            // Ref：弹 RefPicker
             // ReadOnly / Text 默认走选中
             s.borrow_mut().grid_selection = GridSelection::Cell(r as usize, c as usize);
+            let open_type_dlg = matches!(kind, Some(state::ColumnKind::TypeEnumCol));
+            let open_ref_dlg = matches!(kind, Some(state::ColumnKind::Ref { .. }));
+            if open_type_dlg {
+                open_type_selector_for_cell(&s, r as usize, c as usize);
+            }
+            if open_ref_dlg {
+                if let Some(state::ColumnKind::Ref { ref target }) = kind {
+                    open_ref_picker_for_cell(&s, r as usize, c as usize, target);
+                }
+            }
             if let Some(ui) = weak.upgrade() {
                 let need_full = was_editing || matches!(kind, Some(state::ColumnKind::ExportEnumCol));
                 if need_full { push_grid(&ui, &s); } else { push_selection_only(&ui, &s); }
+                if open_type_dlg { push_type_selector(&ui, &s); }
+                if open_ref_dlg { push_ref_picker(&ui, &s); }
             }
         });
     }
     // Table 表头点击 → 按 grid_header_kinds[hi][ci] 分发：
     //   ExportEnumCol ：选中 + 同步 editing-export-index（slint popup.show 自动弹）
-    //   TypeEnumCol   ：TODO（弹 TypeSelector）
+    //   TypeEnumCol   ：弹 TypeSelector 弹窗
     //   Text          ：仅作用于双击（commit 当前编辑保持不变）
     //   ReadOnly      ：忽略
     {
@@ -408,6 +423,13 @@ fn wire_grid(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
                         st.editing_header_col = ci;
                     }
                     if let Some(ui) = weak.upgrade() { push_grid(&ui, &s); }
+                }
+                Some(state::ColumnKind::TypeEnumCol) => {
+                    open_type_selector_for_header(&s, ci as usize);
+                    if let Some(ui) = weak.upgrade() {
+                        if was_editing { push_grid(&ui, &s); }
+                        push_type_selector(&ui, &s);
+                    }
                 }
                 _ => {
                     if was_editing {
@@ -663,6 +685,8 @@ fn wire_toolbar(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
             if full_refresh {
                 push_tree(&ui, &s);
                 push_grid(&ui, &s);
+                push_type_selector(&ui, &s);
+                push_ref_picker(&ui, &s);
             }
             // 任何 toolbar 操作都可能产生日志（save/reload/generate/clear 全会 log）
             push_logs(&ui, &s);
@@ -680,6 +704,8 @@ fn reset_view_after_reload(state: &Rc<RefCell<AppState>>) {
     st.editing_in_formula = false;
     st.editing_header_row = -1;
     st.editing_header_col = -1;
+    st.type_selector.close();
+    st.ref_picker.close();
     // 重新展开所有 group（与 AppState::load 一致的初始态）
     st.tree_expanded = st.engine.project.groups.iter().map(|g| g.name.clone()).collect();
 }
@@ -742,6 +768,543 @@ fn on_header_export_selected(state: &Rc<RefCell<AppState>>, col: i32, idx: i32) 
     st.engine.commit_header_edit(&group, &name, 1, col as usize, opt.code().to_string());
     if st.realtime_validate {
         st.engine.revalidate(&group, &name);
+    }
+}
+
+// ──────── TypeSelector ────────
+
+/// Constant data cell type 列单击 → 打开 TypeSelector（编辑该数据格的 type）
+fn open_type_selector_for_cell(state: &Rc<RefCell<AppState>>, r: usize, c: usize) {
+    let mut st = state.borrow_mut();
+    let (group, name, is_table, current) = match &st.selected {
+        Some(SelectedNode::Constant { group, name }) => {
+            let cur = st.engine.find_constant(group, name)
+                .and_then(|cst| cst.entries.get(r))
+                .map(|e| e.tbl_type.clone())
+                .unwrap_or_default();
+            (group.clone(), name.clone(), false, cur)
+        }
+        Some(SelectedNode::Table { group, name }) => {
+            // Table 数据格不会是 TypeEnumCol，但保留兜底
+            (group.clone(), name.clone(), true, String::new())
+        }
+        _ => return,
+    };
+    st.type_selector.open_with(&current, TypeEditTarget::CellType { row: r, col: c }, &group, &name, is_table);
+}
+
+/// Table 表头 type 行单击 → 打开 TypeSelector（编辑该列的 tbl_type）
+fn open_type_selector_for_header(state: &Rc<RefCell<AppState>>, col: usize) {
+    let mut st = state.borrow_mut();
+    let (group, name, current) = match &st.selected {
+        Some(SelectedNode::Table { group, name }) => {
+            let cur = st.engine.find_table(group, name)
+                .and_then(|t| t.schema.fields.get(col))
+                .map(|f| f.tbl_type.clone())
+                .unwrap_or_default();
+            (group.clone(), name.clone(), cur)
+        }
+        _ => return,
+    };
+    st.type_selector.open_with(&current, TypeEditTarget::HeaderType { col }, &group, &name, true);
+}
+
+/// 收集项目内可被引用的项（table + enum，排除 deleted），按名称排序。
+fn collect_ref_targets(state: &AppState) -> Vec<(String, bool /* is_table */)> {
+    let mut out: Vec<(String, bool)> = Vec::new();
+    for g in &state.engine.project.groups {
+        for t in &g.tables { if !t.deleted { out.push((t.name.clone(), true)); } }
+        for e in &g.enums  { if !e.deleted { out.push((e.name.clone(), false)); } }
+    }
+    out.sort_by(|a, b| a.0.cmp(&b.0));
+    out
+}
+
+/// 把 TypeSelectorState 派生成 slint 端属性并 push。每次状态变化都重新调用。
+fn push_type_selector(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
+    use tbl_core::types::{BaseType, Paradigm};
+    let st = state.borrow();
+    let ts = &st.type_selector;
+    ui.set_dlg_type_open(ts.open);
+    if !ts.open { return; }
+
+    ui.set_ts_tab(if ts.tab == TsTab::Reference { 1 } else { 0 });
+    ui.set_ts_ref_disabled(ts.ref_disabled);
+
+    // paradigms 列表（仅 Data 范式，14 项）
+    let paradigms: Vec<slint::SharedString> = Paradigm::all_data().iter()
+        .map(|p| slint::SharedString::from(p.label()))
+        .collect();
+    ui.set_ts_paradigms(slint::ModelRc::new(slint::VecModel::from(paradigms)));
+    let paradigm_index = Paradigm::all_data().iter().position(|p| *p == ts.paradigm).unwrap_or(0) as i32;
+    ui.set_ts_paradigm_index(paradigm_index);
+
+    // param-slots：每个槽给 label / 该槽可选基础类型 / 当前选中下标
+    let slots = ts.paradigm.param_slots();
+    let bt_all: Vec<slint::SharedString> = BaseType::all().iter().map(|b| slint::SharedString::from(b.name())).collect();
+    let bt_keys: Vec<slint::SharedString> = BaseType::map_key_types().iter().map(|b| slint::SharedString::from(b.name())).collect();
+    let mut ts_slots: Vec<TsParamSlot> = Vec::with_capacity(slots.len());
+    for (i, slot) in slots.iter().enumerate() {
+        let options = if slot.is_map_key { bt_keys.clone() } else { bt_all.clone() };
+        let cur = ts.params.get(i).copied().unwrap_or(BaseType::Int);
+        let avail = if slot.is_map_key { BaseType::map_key_types() } else { BaseType::all() };
+        let cur_idx = avail.iter().position(|b| *b == cur).unwrap_or(0) as i32;
+        ts_slots.push(TsParamSlot {
+            label: slint::SharedString::from(slot.label),
+            type_options: slint::ModelRc::new(slint::VecModel::from(options)),
+            selected_index: cur_idx,
+        });
+    }
+    ui.set_ts_param_slots(slint::ModelRc::new(slint::VecModel::from(ts_slots)));
+
+    // 预览：依据当前 tab 选择 data_type / ref_type
+    let sep = st.engine.project.config.separators.clone();
+    let (preview, example, java, go, lua) = match ts.tab {
+        TsTab::Data => {
+            let t = ts.data_type();
+            (t.to_type_string(), t.example_with_sep(&sep), t.java_decl(), t.go_decl(), t.lua_decl())
+        }
+        TsTab::Reference => {
+            if let Some(t) = ts.ref_type() {
+                (t.to_type_string(),
+                 String::from("（id）"),
+                 String::from("int"),
+                 String::from("int32"),
+                 String::from("number"))
+            } else {
+                (String::from("（未选择）"), String::new(), String::new(), String::new(), String::new())
+            }
+        }
+    };
+    ui.set_ts_result_preview(preview.into());
+    ui.set_ts_example_value(example.into());
+    ui.set_ts_java_decl(java.into());
+    ui.set_ts_go_decl(go.into());
+    ui.set_ts_lua_decl(lua.into());
+
+    // ref-items：按 filter + search 过滤，并标 selected
+    let search = ts.ref_search.to_lowercase();
+    let targets = collect_ref_targets(&st);
+    let items: Vec<RefItem> = targets.iter().filter(|(name, is_table)| {
+        let kind_ok = match ts.ref_filter {
+            TsRefFilter::All => true,
+            TsRefFilter::Table => *is_table,
+            TsRefFilter::Enum => !*is_table,
+        };
+        let search_ok = search.is_empty() || name.to_lowercase().contains(&search);
+        kind_ok && search_ok
+    }).map(|(name, is_table)| {
+        let icon = if *is_table { "📊" } else { "🔢" };
+        let kind_label = if *is_table { "table" } else { "enum" };
+        RefItem {
+            icon: icon.into(),
+            name: name.clone().into(),
+            kind_label: kind_label.into(),
+            selected: ts.ref_name == *name,
+        }
+    }).collect();
+    ui.set_ts_ref_items(slint::ModelRc::new(slint::VecModel::from(items)));
+    ui.set_ts_ref_search(ts.ref_search.clone().into());
+    ui.set_ts_ref_filter(match ts.ref_filter {
+        TsRefFilter::All => 0, TsRefFilter::Table => 1, TsRefFilter::Enum => 2,
+    });
+}
+
+/// 接通 TypeSelector 的所有回调：set-paradigm / set-param / set-ref-* / select-ref / confirm / cancel。
+fn wire_type_selector(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
+    use tbl_core::types::{BaseType, Paradigm};
+
+    // tab 切换：slint 端 ts-tab 是 in-out，由 slint 自己写。每次切换需要重新 push 让预览刷新。
+    // 这里通过 ts-set-paradigm 等所有 set-* 同时刷新预览即可，不单独 hook tab。
+    // 但 tab 切换后预览会改，所以也接一个 setter：在 ChangeEvents 里重 push（slint 没有
+    // property-changed 回调暴露给 Rust），workaround：监听 ts-set-paradigm/set-param/set-ref-* 都重 push。
+    // tab 自身的切换在 slint 端就改了 ts-tab，渲染随之刷新；预览文本由 push_type_selector 算。
+    // 用户切 tab 后没改 paradigm 的话预览看似旧——为简单起见，confirm 时再用 Rust 的 ts.tab 拿真值；
+    // 视觉上 tab 切到 Reference 不显示参数行 / 切到 Data 不显示 ref 列表，问题不大。
+
+    // ts-set-tab：用户在 slint 端切 tab，Rust 同步并刷新预览/可见列表
+    {
+        let s = state.clone();
+        let weak = ui.as_weak();
+        ui.on_ts_set_tab(move |i| {
+            let mut st = s.borrow_mut();
+            // constant 禁用引用 tab：忽略切到 1 的请求
+            if i == 1 && st.type_selector.ref_disabled { return; }
+            st.type_selector.tab = if i == 1 { TsTab::Reference } else { TsTab::Data };
+            drop(st);
+            if let Some(ui) = weak.upgrade() { push_type_selector(&ui, &s); }
+        });
+    }
+    // ts-set-paradigm
+    {
+        let s = state.clone();
+        let weak = ui.as_weak();
+        ui.on_ts_set_paradigm(move |i| {
+            let mut st = s.borrow_mut();
+            if let Some(p) = Paradigm::all_data().get(i as usize).cloned() {
+                st.type_selector.paradigm = p;
+                st.type_selector.sync_params();
+            }
+            drop(st);
+            if let Some(ui) = weak.upgrade() { push_type_selector(&ui, &s); }
+        });
+    }
+    // ts-set-param(slot, type-idx)
+    {
+        let s = state.clone();
+        let weak = ui.as_weak();
+        ui.on_ts_set_param(move |slot, idx| {
+            let mut st = s.borrow_mut();
+            let slots = st.type_selector.paradigm.param_slots();
+            if let Some(slot_def) = slots.get(slot as usize) {
+                let avail = if slot_def.is_map_key { BaseType::map_key_types() } else { BaseType::all() };
+                if let Some(bt) = avail.get(idx as usize).copied() {
+                    if (slot as usize) < st.type_selector.params.len() {
+                        st.type_selector.params[slot as usize] = bt;
+                    }
+                }
+            }
+            drop(st);
+            if let Some(ui) = weak.upgrade() { push_type_selector(&ui, &s); }
+        });
+    }
+    // ts-set-ref-search
+    {
+        let s = state.clone();
+        let weak = ui.as_weak();
+        ui.on_ts_set_ref_search(move |t| {
+            s.borrow_mut().type_selector.ref_search = t.to_string();
+            if let Some(ui) = weak.upgrade() { push_type_selector(&ui, &s); }
+        });
+    }
+    // ts-set-ref-filter
+    {
+        let s = state.clone();
+        let weak = ui.as_weak();
+        ui.on_ts_set_ref_filter(move |i| {
+            let f = match i { 1 => TsRefFilter::Table, 2 => TsRefFilter::Enum, _ => TsRefFilter::All };
+            s.borrow_mut().type_selector.ref_filter = f;
+            if let Some(ui) = weak.upgrade() { push_type_selector(&ui, &s); }
+        });
+    }
+    // select-ref：用 filter+search 过滤后的索引去拿真名
+    {
+        let s = state.clone();
+        let weak = ui.as_weak();
+        ui.on_ts_select_ref(move |i| {
+            let chosen: Option<String> = {
+                let st = s.borrow();
+                let ts = &st.type_selector;
+                let search = ts.ref_search.to_lowercase();
+                let targets = collect_ref_targets(&st);
+                let filtered: Vec<&(String, bool)> = targets.iter().filter(|(name, is_table)| {
+                    let kind_ok = match ts.ref_filter {
+                        TsRefFilter::All => true,
+                        TsRefFilter::Table => *is_table,
+                        TsRefFilter::Enum => !*is_table,
+                    };
+                    let search_ok = search.is_empty() || name.to_lowercase().contains(&search);
+                    kind_ok && search_ok
+                }).collect();
+                filtered.get(i as usize).map(|(n, _)| n.clone())
+            };
+            if let Some(name) = chosen {
+                s.borrow_mut().type_selector.ref_name = name;
+                if let Some(ui) = weak.upgrade() { push_type_selector(&ui, &s); }
+            }
+        });
+    }
+    // ts-confirm：构造 type 字符串写回；slint 端会自动把 dlg-type-open 设 false
+    {
+        let s = state.clone();
+        let weak = ui.as_weak();
+        ui.on_ts_confirm(move || {
+            let mut st = s.borrow_mut();
+            // 计算 type 字符串
+            let type_str = match st.type_selector.tab {
+                TsTab::Data => st.type_selector.data_type().to_type_string(),
+                TsTab::Reference => match st.type_selector.ref_type() {
+                    Some(t) => t.to_type_string(),
+                    None => { st.type_selector.close(); return; }
+                }
+            };
+            // 写回 target
+            let target = st.type_selector.target.clone();
+            let group = st.type_selector.editing_group.clone();
+            let name = st.type_selector.editing_name.clone();
+            let is_table = st.type_selector.editing_source_table;
+            match target {
+                Some(TypeEditTarget::HeaderType { col }) => {
+                    if is_table {
+                        st.engine.commit_header_edit(&group, &name, 2, col, type_str);
+                        if st.realtime_validate { st.engine.revalidate(&group, &name); }
+                    }
+                }
+                Some(TypeEditTarget::CellType { row, col }) => {
+                    if !is_table {
+                        // Constant：col 应该是 1（type 列）
+                        st.engine.commit_constant_cell(&group, &name, row, col, type_str);
+                        if st.realtime_validate { st.engine.revalidate(&group, &name); }
+                    }
+                }
+                None => {}
+            }
+            st.type_selector.close();
+            drop(st);
+            if let Some(ui) = weak.upgrade() {
+                push_grid(&ui, &s);
+                push_tree(&ui, &s);
+                push_type_selector(&ui, &s);
+            }
+        });
+    }
+    // ts-cancel
+    {
+        let s = state.clone();
+        let weak = ui.as_weak();
+        ui.on_ts_cancel(move || {
+            s.borrow_mut().type_selector.close();
+            if let Some(ui) = weak.upgrade() { push_type_selector(&ui, &s); }
+        });
+    }
+}
+
+// ──────── RefPicker ────────
+
+/// 收集被引用项 (table or enum) 的所有可选条目，返回 (is_table, [(id, name, desc)])。
+/// None = 未找到该 ref_name 对应的项。
+fn collect_ref_rows(state: &AppState, ref_name: &str) -> Option<(bool, Vec<(String, String, String)>)> {
+    for g in &state.engine.project.groups {
+        for t in &g.tables {
+            if t.deleted || t.name != ref_name { continue; }
+            let id_idx = t.schema.fields.iter().position(|f| f.name == "id");
+            let name_idx = t.schema.fields.iter().position(|f| f.name == "name");
+            let mut rows = Vec::new();
+            if let Some(idx) = id_idx {
+                for row in &t.records {
+                    let id = row.get(idx).cloned().unwrap_or_default();
+                    if id.is_empty() { continue; }
+                    let nm = name_idx.and_then(|i| row.get(i).cloned()).unwrap_or_default();
+                    rows.push((id, nm, String::new()));
+                }
+            }
+            return Some((true, rows));
+        }
+        for e in &g.enums {
+            if e.deleted || e.name != ref_name { continue; }
+            let rows: Vec<(String, String, String)> = e.entries.iter()
+                .filter(|en| !en.id.is_empty())
+                .map(|en| (en.id.clone(), en.name.clone(), en.desc.clone()))
+                .collect();
+            return Some((false, rows));
+        }
+    }
+    None
+}
+
+/// Ref 列单击 → 打开 RefPicker。current_value 取自该 cell 的真实存储值。
+fn open_ref_picker_for_cell(state: &Rc<RefCell<AppState>>, r: usize, c: usize, ref_target: &str) {
+    let mut st = state.borrow_mut();
+    let (group, name, is_table, current) = match &st.selected {
+        Some(SelectedNode::Table { group, name }) => {
+            let cur = st.engine.find_table(group, name)
+                .and_then(|t| t.records.get(r).and_then(|row| row.get(c)).cloned())
+                .unwrap_or_default();
+            (group.clone(), name.clone(), true, cur)
+        }
+        Some(SelectedNode::Constant { group, name }) => {
+            // Constant 不允许 Ref 类型；保留兜底
+            (group.clone(), name.clone(), false, String::new())
+        }
+        _ => return,
+    };
+    st.ref_picker.open_with(ref_target, &current, r, c, &group, &name, is_table);
+}
+
+/// 把 RefPickerState 派生成 slint 端属性并 push。
+fn push_ref_picker(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
+    let st = state.borrow();
+    let rp = &st.ref_picker;
+    ui.set_dlg_ref_open(rp.open);
+    if !rp.open { return; }
+
+    ui.set_rp_ref_name(rp.ref_name.clone().into());
+    ui.set_rp_search(rp.search.clone().into());
+
+    let target = collect_ref_rows(&st, &rp.ref_name);
+    let (kind_label, target_missing, show_desc, rows): (&str, bool, bool, Vec<(String, String, String)>) = match target {
+        Some((true, rows))  => ("📊 表引用", false, false, rows),
+        Some((false, rows)) => ("🔢 枚举引用", false, true, rows),
+        None => ("⚠️ 引用不存在", true, true, Vec::new()),
+    };
+    ui.set_rp_kind_label(kind_label.into());
+    ui.set_rp_target_missing(target_missing);
+    ui.set_rp_show_desc(show_desc);
+
+    let search = rp.search.to_lowercase();
+    let filtered: Vec<RefRow> = rows.iter().filter(|(id, name, desc)| {
+        if search.is_empty() { return true; }
+        id.to_lowercase().contains(&search)
+            || name.to_lowercase().contains(&search)
+            || desc.to_lowercase().contains(&search)
+    }).map(|(id, name, desc)| RefRow {
+        id: id.clone().into(),
+        name: name.clone().into(),
+        desc: if show_desc { desc.clone().into() } else { slint::SharedString::new() },
+        selected: rp.selected_id == *id,
+    }).collect();
+    ui.set_rp_rows(slint::ModelRc::new(slint::VecModel::from(filtered)));
+
+    let preview = if rp.selected_id.is_empty() {
+        String::from("（未选择）")
+    } else {
+        rows.iter().find(|(id, _, _)| id == &rp.selected_id)
+            .map(|(id, n, _)| if n.is_empty() { id.clone() } else { format!("{} ({})", id, n) })
+            .unwrap_or_else(|| format!("{} ⚠️ 不存在", rp.selected_id))
+    };
+    ui.set_rp_selection_preview(preview.into());
+}
+
+/// 写回当前 RefPicker 的选中 id 到 cell（空字符串 = 清空）。
+fn commit_ref_picker(state: &Rc<RefCell<AppState>>, value: String) {
+    let mut st = state.borrow_mut();
+    let r = match st.ref_picker.editing_row { Some(v) => v, None => return };
+    let c = match st.ref_picker.editing_col { Some(v) => v, None => return };
+    let group = st.ref_picker.editing_group.clone();
+    let name = st.ref_picker.editing_name.clone();
+    let is_table = st.ref_picker.editing_source_table;
+    if is_table {
+        st.engine.commit_table_cell(&group, &name, r, c, value);
+    } else {
+        st.engine.commit_constant_cell(&group, &name, r, c, value);
+    }
+    if st.realtime_validate {
+        st.engine.revalidate(&group, &name);
+    }
+    st.ref_picker.close();
+}
+
+fn wire_ref_picker(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
+    // rp-set-search → 已在 app.slint 内：set-search(s) => { root.rp-search = s; }
+    // 但 rp-search 改了不会自动触发 push；hook 一个外部 callback 让 Rust 重 push。
+    // 当前 app.slint 用 in-out + LineEdit edited(s) => set-search(s) → root.rp-search = s。
+    // 没有专门的 callback。简化：直接用 in-out 让 slint 自己保持 text；过滤逻辑由 push 时取
+    // ui.get_rp_search() 兜底。但 RefPickerState.search 在 Rust 侧是真值，
+    // 必须监听到 rp-search 变化。最简洁：让 select-row 时把 ui.get_rp_search() 同步过来。
+    // 同样地，我们也给搜索建一个 callback。先在 set-search 里调用一个 Rust 侧 hook。
+
+    // 当前 app.slint 的 RefPicker.set-search(s) 处理方式只把 rp-search 写回 root，没调用 Rust。
+    // 这里通过 ui.on_<...> 监听 rp callbacks（select/double/confirm/clear/cancel）拿到状态：
+    // - select-row(i)：以 push 之后过滤后的索引 i 拿到 id，写入 selected_id 并重 push
+    // - row-double-clicked(i)：select + 直接 confirm
+    // - confirm：写回 selected_id
+    // - clear：写回空字符串
+    // - cancel：仅关闭
+
+    // 取 rp-search 的快照：每次回调用 ui.get_rp_search() 同步到 Rust state.search
+    // 这样不必为搜索单独建 callback。
+    {
+        let s = state.clone();
+        let weak = ui.as_weak();
+        ui.on_rp_select_row(move |i| {
+            sync_rp_search(&s, &weak);
+            let chosen: Option<String> = {
+                let st = s.borrow();
+                let rp = &st.ref_picker;
+                let target = collect_ref_rows(&st, &rp.ref_name);
+                let rows: Vec<(String, String, String)> = match target {
+                    Some((_, rows)) => rows,
+                    None => Vec::new(),
+                };
+                let search = rp.search.to_lowercase();
+                let filtered: Vec<&(String, String, String)> = rows.iter().filter(|(id, name, desc)| {
+                    if search.is_empty() { return true; }
+                    id.to_lowercase().contains(&search)
+                        || name.to_lowercase().contains(&search)
+                        || desc.to_lowercase().contains(&search)
+                }).collect();
+                filtered.get(i as usize).map(|(id, _, _)| id.clone())
+            };
+            if let Some(id) = chosen {
+                s.borrow_mut().ref_picker.selected_id = id;
+                if let Some(ui) = weak.upgrade() { push_ref_picker(&ui, &s); }
+            }
+        });
+    }
+    {
+        let s = state.clone();
+        let weak = ui.as_weak();
+        ui.on_rp_row_double_clicked(move |i| {
+            sync_rp_search(&s, &weak);
+            let chosen: Option<String> = {
+                let st = s.borrow();
+                let rp = &st.ref_picker;
+                let target = collect_ref_rows(&st, &rp.ref_name);
+                let rows: Vec<(String, String, String)> = match target {
+                    Some((_, rows)) => rows,
+                    None => Vec::new(),
+                };
+                let search = rp.search.to_lowercase();
+                let filtered: Vec<&(String, String, String)> = rows.iter().filter(|(id, name, desc)| {
+                    if search.is_empty() { return true; }
+                    id.to_lowercase().contains(&search)
+                        || name.to_lowercase().contains(&search)
+                        || desc.to_lowercase().contains(&search)
+                }).collect();
+                filtered.get(i as usize).map(|(id, _, _)| id.clone())
+            };
+            if let Some(id) = chosen {
+                s.borrow_mut().ref_picker.selected_id = id.clone();
+                commit_ref_picker(&s, id);
+                if let Some(ui) = weak.upgrade() {
+                    push_grid(&ui, &s);
+                    push_tree(&ui, &s);
+                    push_ref_picker(&ui, &s);
+                }
+            }
+        });
+    }
+    {
+        let s = state.clone();
+        let weak = ui.as_weak();
+        ui.on_rp_confirm(move || {
+            sync_rp_search(&s, &weak);
+            let id = s.borrow().ref_picker.selected_id.clone();
+            commit_ref_picker(&s, id);
+            if let Some(ui) = weak.upgrade() {
+                push_grid(&ui, &s);
+                push_tree(&ui, &s);
+                push_ref_picker(&ui, &s);
+            }
+        });
+    }
+    {
+        let s = state.clone();
+        let weak = ui.as_weak();
+        ui.on_rp_clear(move || {
+            commit_ref_picker(&s, String::new());
+            if let Some(ui) = weak.upgrade() {
+                push_grid(&ui, &s);
+                push_tree(&ui, &s);
+                push_ref_picker(&ui, &s);
+            }
+        });
+    }
+    {
+        let s = state.clone();
+        let weak = ui.as_weak();
+        ui.on_rp_cancel(move || {
+            s.borrow_mut().ref_picker.close();
+            if let Some(ui) = weak.upgrade() { push_ref_picker(&ui, &s); }
+        });
+    }
+}
+
+/// 把 slint 端 rp-search 文本同步回 Rust state，方便后续 collect/filter 用。
+fn sync_rp_search(state: &Rc<RefCell<AppState>>, ui_weak: &slint::Weak<AppWindow>) {
+    if let Some(ui) = ui_weak.upgrade() {
+        let s = ui.get_rp_search().to_string();
+        state.borrow_mut().ref_picker.search = s;
     }
 }
 

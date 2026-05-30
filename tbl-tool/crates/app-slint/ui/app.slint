@@ -19,12 +19,12 @@ import { TreeSection, TreeNode } from "components/tree_section.slint";
 import { GridSection } from "components/grid_section.slint";
 import { GridArea, HeaderCell, DataCell, DataRow, CellKind } from "components/grid_area.slint";
 import { LogPanel, LogEntry } from "components/log_panel.slint";
-import { TypeSelector, RefItem } from "dialogs/type_selector.slint";
+import { TypeSelector, RefItem, TsParamSlot } from "dialogs/type_selector.slint";
 import { RefPicker, RefRow } from "dialogs/ref_picker.slint";
 import { ExportDialog } from "dialogs/export_dialog.slint";
 import { SchemaExportDialog, SchemaImportDialog, SchemaItem } from "dialogs/schema_dialog.slint";
 
-export { TreeNode, HeaderCell, DataCell, DataRow, CellKind, LogEntry, RefItem, RefRow, SchemaItem }
+export { TreeNode, HeaderCell, DataCell, DataRow, CellKind, LogEntry, RefItem, TsParamSlot, RefRow, SchemaItem }
 
 export component AppWindow inherits Window {
     title: "tbl-tool";
@@ -102,10 +102,9 @@ export component AppWindow inherits Window {
     in-out property <bool> dlg-type-open: false;
     in-out property <int> ts-tab: 0;
     in property <bool> ts-ref-disabled: false;
+    in property <[string]> ts-paradigms;
     in-out property <int> ts-paradigm-index: 0;
-    in-out property <int> ts-p1-index: 0;
-    in-out property <int> ts-p2-index: 0;
-    in property <bool> ts-show-p2: false;
+    in property <[TsParamSlot]> ts-param-slots;
     in property <string> ts-result-preview;
     in property <string> ts-example-value;
     in property <string> ts-java-decl;
@@ -114,6 +113,12 @@ export component AppWindow inherits Window {
     in-out property <string> ts-ref-search;
     in property <[RefItem]> ts-ref-items;
     in-out property <int> ts-ref-filter: 0;
+    callback ts-set-tab(int);
+    callback ts-set-paradigm(int);
+    callback ts-set-param(int, int);
+    callback ts-set-ref-search(string);
+    callback ts-set-ref-filter(int);
+    callback ts-select-ref(int);
     callback ts-confirm();
     callback ts-cancel();
 
@@ -278,10 +283,9 @@ export component AppWindow inherits Window {
         open: root.dlg-type-open;
         tab: root.ts-tab;
         ref-disabled: root.ts-ref-disabled;
+        paradigms: root.ts-paradigms;
         paradigm-index: root.ts-paradigm-index;
-        p1-index: root.ts-p1-index;
-        p2-index: root.ts-p2-index;
-        show-p2: root.ts-show-p2;
+        param-slots: root.ts-param-slots;
         result-preview: root.ts-result-preview;
         example-value: root.ts-example-value;
         java-decl: root.ts-java-decl;
@@ -290,13 +294,12 @@ export component AppWindow inherits Window {
         ref-search: root.ts-ref-search;
         ref-items: root.ts-ref-items;
         ref-filter: root.ts-ref-filter;
-        set-tab(i) => { root.ts-tab = i; }
-        set-paradigm(i) => { root.ts-paradigm-index = i; }
-        set-p1(i) => { root.ts-p1-index = i; }
-        set-p2(i) => { root.ts-p2-index = i; }
-        set-ref-search(s) => { root.ts-ref-search = s; }
-        set-ref-filter(i) => { root.ts-ref-filter = i; }
-        select-ref(i) => { /* 由 Rust 端处理 */ }
+        set-tab(i) => { root.ts-tab = i; root.ts-set-tab(i); }
+        set-paradigm(i) => { root.ts-set-paradigm(i); }
+        set-param(slot, idx) => { root.ts-set-param(slot, idx); }
+        set-ref-search(s) => { root.ts-set-ref-search(s); }
+        set-ref-filter(i) => { root.ts-set-ref-filter(i); }
+        select-ref(i) => { root.ts-select-ref(i); }
         confirm => { root.ts-confirm(); root.dlg-type-open = false; }
         cancel => { root.ts-cancel(); root.dlg-type-open = false; }
     }

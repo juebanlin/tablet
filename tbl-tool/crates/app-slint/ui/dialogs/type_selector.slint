@@ -12,22 +12,24 @@ export struct RefItem {
     selected: bool,
 }
 
+// 单个参数槽：label + 该槽允许的基础类型集合 + 当前选中下标。
+// Map 的 key 槽 type-options 排除 bool；其余槽 = 全部 BaseType。
+export struct TsParamSlot {
+    label: string,
+    type-options: [string],
+    selected-index: int,
+}
+
 export component TypeSelector inherits Rectangle {
     in property <bool> open: false;
     in property <int> tab: 0;                       // 0=数据类型 1=引用类型
     in property <bool> ref-disabled: false;         // constant 表禁用引用 tab
 
     // ─ 数据类型 tab ─
-    in property <[string]> paradigms: [
-        "基础类型", "Tuple2<_,_>", "Tuple3<_,_,_>", "Tuple4<_,_,_,_>",
-        "List<_>", "Set<_>", "Map<_,_>",
-        "List<Tuple2<_,_>>", "Map<_,Tuple2<_,_>>", "Map<_,List<_>>",
-    ];
+    // paradigms / param-slots 由 Rust 端按当前 paradigm 推送（长度可变）
+    in property <[string]> paradigms;
     in property <int> paradigm-index: 0;
-    in property <[string]> base-types: ["int", "long", "float", "double", "str", "bool"];
-    in property <int> p1-index: 0;
-    in property <int> p2-index: 0;
-    in property <bool> show-p2: false;
+    in property <[TsParamSlot]> param-slots;
     in property <string> result-preview: "int";
     in property <string> example-value: "100";
     in property <string> java-decl: "int";
@@ -41,8 +43,7 @@ export component TypeSelector inherits Rectangle {
 
     callback set-tab(int);
     callback set-paradigm(int);
-    callback set-p1(int);
-    callback set-p2(int);
+    callback set-param(int /*slot*/, int /*type-idx*/);
     callback set-ref-search(string);
     callback set-ref-filter(int);
     callback select-ref(int);
@@ -152,36 +153,20 @@ export component TypeSelector inherits Rectangle {
                     VerticalLayout {
                         spacing: Theme.sp-3;
 
-                        HorizontalLayout {
+                        for slot[i] in root.param-slots: HorizontalLayout {
                             spacing: Theme.sp-2;
                             alignment: start;
                             Text {
-                                text: "P1:";
+                                text: slot.label + ":";
                                 font-size: Theme.fs-small;
                                 color: Theme.text-secondary;
                                 vertical-alignment: center;
-                                width: 28px;
+                                width: 40px;
                             }
                             ComboBox {
-                                model: root.base-types;
-                                current-index: root.p1-index;
-                                selected(s) => { root.set-p1(self.current-index); }
-                            }
-                        }
-                        if root.show-p2: HorizontalLayout {
-                            spacing: Theme.sp-2;
-                            alignment: start;
-                            Text {
-                                text: "P2:";
-                                font-size: Theme.fs-small;
-                                color: Theme.text-secondary;
-                                vertical-alignment: center;
-                                width: 28px;
-                            }
-                            ComboBox {
-                                model: root.base-types;
-                                current-index: root.p2-index;
-                                selected(s) => { root.set-p2(self.current-index); }
+                                model: slot.type-options;
+                                current-index: slot.selected-index;
+                                selected(s) => { root.set-param(i, self.current-index); }
                             }
                         }
 
@@ -280,11 +265,15 @@ export component TypeSelectorPreview inherits Window {
     TypeSelector {
         open: true;
         tab: 0;
+        paradigms: ["基础类型", "Tuple2<_,_>", "List<_>"];
         paradigm-index: 1;
-        show-p2: true;
+        param-slots: [
+            { label: "P1", type-options: ["int","long","float","double","str","bool"], selected-index: 0 },
+            { label: "P2", type-options: ["int","long","float","double","str","bool"], selected-index: 0 },
+        ];
         result-preview: "Tuple2<int,int>";
         example-value: "5,10";
-        java-decl: "int[]";
+        java-decl: "Tuple2<Integer,Integer>";
         go-decl: "[2]int32";
         lua-decl: "{p1,p2}";
         ref-items: [
