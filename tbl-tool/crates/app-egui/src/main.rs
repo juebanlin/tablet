@@ -61,6 +61,7 @@ fn main() -> anyhow::Result<()> {
             .with_inner_size([960.0, 640.0])
             .with_title("TBL Tool v0.1"),
         renderer: eframe::Renderer::Glow,
+        centered: true,
         ..Default::default()
     };
 
