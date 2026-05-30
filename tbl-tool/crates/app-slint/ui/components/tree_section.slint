@@ -83,7 +83,7 @@ export component TreeSection inherits Rectangle {
                     }
                     LineEdit {
                         text <=> root.search;
-                        placeholder-text: "名称关键字";
+                        placeholder-text: "名称 / 拼音首字母";
                         edited(s) => { root.search-edited(s); }
                     }
                 }

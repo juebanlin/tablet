@@ -4,6 +4,7 @@
 use slint::{Color, SharedString};
 use crate::state::{AppState, ColumnKind, GridSelection, SelectedNode, TreeFilter, TreeTarget};
 use crate::{CellKind, DataCell, DataRow, HeaderCell, TreeNode};
+use tbl_core::name_matches;
 
 pub const EXTRA_ROWS: usize = 5;
 
@@ -20,29 +21,50 @@ fn color_default() -> Color { Color::from_rgb_u8(0xe6, 0xe6, 0xe6) }
 
 /// 构建 slint TreeNode 列表，并同步 state.tree_targets。
 /// 调用方负责把返回值 push 到 AppWindow.tree-nodes。
+///
+/// 过滤语义（filter ∧ search 是 AND 关系）：
+/// - 子项级：passes_filter(child) ∧ name_matches(child.name, search)
+/// - 组级：(组内任一子项 passes_filter) ∧ name_matches(group.name, search) → 组本身命中
+/// - 组要不要展示：组本身命中 ∨ 任一子项级命中
+/// - 完整组打开后：组要不要展示 = true 时，子项忽略 filter+search 全部展开（仅过滤 deleted）
 pub fn build_tree_nodes(state: &mut AppState) -> Vec<TreeNode> {
     state.tree_targets.clear();
     let mut nodes = Vec::new();
 
     let filter = state.tree_filter.clone();
-    let show_full = state.tree_full_group;
-    let search = state.tree_search.to_lowercase();
+    let full_group_open = state.tree_full_group;
+    let search = state.tree_search.clone();
 
     let groups = state.engine.project.groups.clone();
     for group in &groups {
-        let group_has_filter_match = filter == TreeFilter::All
+        // 子项级 AND（filter ∧ search）：先按位标记，下面统一渲染
+        let table_hits: Vec<bool> = group.tables.iter().map(|t| {
+            passes_filter(&filter, t.deleted, t.original.is_empty(), t.dirty)
+                && name_matches(&t.name, &search)
+        }).collect();
+        let const_hits: Vec<bool> = group.constants.iter().map(|c| {
+            passes_filter(&filter, c.deleted, c.original.is_empty(), c.dirty)
+                && name_matches(&c.name, &search)
+        }).collect();
+        let enum_hits: Vec<bool> = group.enums.iter().map(|e| {
+            passes_filter(&filter, e.deleted, e.original.is_empty(), e.dirty)
+                && name_matches(&e.name, &search)
+        }).collect();
+        let any_child_hit = table_hits.iter().any(|b| *b)
+            || const_hits.iter().any(|b| *b)
+            || enum_hits.iter().any(|b| *b);
+
+        // 组本身命中：组级 filter（任一子项通过 filter，All 时恒真）∧ 组名通过 search
+        let group_filter_pass = filter == TreeFilter::All
             || group.tables.iter().any(|t| passes_filter(&filter, t.deleted, t.original.is_empty(), t.dirty))
             || group.constants.iter().any(|c| passes_filter(&filter, c.deleted, c.original.is_empty(), c.dirty))
             || group.enums.iter().any(|e| passes_filter(&filter, e.deleted, e.original.is_empty(), e.dirty));
-        if !group_has_filter_match { continue; }
+        let group_self_hit = group_filter_pass && name_matches(&group.name, &search);
 
-        let group_match_search = search.is_empty()
-            || group.name.to_lowercase().contains(&search)
-            || group.tables.iter().any(|t| t.name.to_lowercase().contains(&search))
-            || group.constants.iter().any(|c| c.name.to_lowercase().contains(&search))
-            || group.enums.iter().any(|e| e.name.to_lowercase().contains(&search));
-        if !group_match_search { continue; }
+        // 组要不要显示：组本身命中 ∨ 任一子项命中
+        if !group_self_hit && !any_child_hit { continue; }
 
+        // 组节点的 marker 计算（与原逻辑一致）
         let all_deleted_self =
             !group.tables.is_empty() || !group.constants.is_empty() || !group.enums.is_empty();
         let all_deleted = all_deleted_self
@@ -58,11 +80,6 @@ pub fn build_tree_nodes(state: &mut AppState) -> Vec<TreeNode> {
         let group_has_errors = state.engine.validation_errors.iter().any(|(g, _, _, _)| g == &group.name);
 
         let expanded = state.tree_expanded.contains(&group.name);
-        let group_selected = matches!(&state.selected,
-            Some(SelectedNode::Table { group: g, .. } | SelectedNode::Constant { group: g, .. } | SelectedNode::Enum { group: g, .. })
-            if g == &group.name && false // 组本身不显示选中态，仅子节点
-        );
-
         let (group_mark, group_mark_color) = marker(group_deleted, group_is_new, group_dirty, group_has_errors);
         nodes.push(TreeNode {
             id: state.tree_targets.len() as i32,
@@ -73,16 +90,17 @@ pub fn build_tree_nodes(state: &mut AppState) -> Vec<TreeNode> {
             mark: SharedString::from(group_mark),
             mark_color: group_mark_color,
             is_group: true,
-            selected: group_selected,
+            selected: false, // 组本身不显示选中态，仅子节点
         });
         state.tree_targets.push(TreeTarget::Group(group.name.clone()));
 
         if !expanded { continue; }
 
-        for t in &group.tables {
-            if !show_full && !passes_filter(&filter, t.deleted, t.original.is_empty(), t.dirty) { continue; }
-            if !search.is_empty() && !t.name.to_lowercase().contains(&search)
-                && !group.name.to_lowercase().contains(&search) { continue; }
+        // 完整组打开：忽略 filter+search，展示所有未删子项
+        // 否则：仅展示子项级 AND 命中的项
+        for (idx, t) in group.tables.iter().enumerate() {
+            let show = if full_group_open { !t.deleted } else { table_hits[idx] };
+            if !show { continue; }
             let selected = matches!(&state.selected,
                 Some(SelectedNode::Table { group: g, name: n }) if g == &group.name && n == &t.name);
             let has_err = state.engine.validation_errors.iter()
@@ -101,10 +119,9 @@ pub fn build_tree_nodes(state: &mut AppState) -> Vec<TreeNode> {
             });
             state.tree_targets.push(TreeTarget::Table { group: group.name.clone(), name: t.name.clone() });
         }
-        for c in &group.constants {
-            if !show_full && !passes_filter(&filter, c.deleted, c.original.is_empty(), c.dirty) { continue; }
-            if !search.is_empty() && !c.name.to_lowercase().contains(&search)
-                && !group.name.to_lowercase().contains(&search) { continue; }
+        for (idx, c) in group.constants.iter().enumerate() {
+            let show = if full_group_open { !c.deleted } else { const_hits[idx] };
+            if !show { continue; }
             let selected = matches!(&state.selected,
                 Some(SelectedNode::Constant { group: g, name: n }) if g == &group.name && n == &c.name);
             let has_err = state.engine.validation_errors.iter()
@@ -123,10 +140,9 @@ pub fn build_tree_nodes(state: &mut AppState) -> Vec<TreeNode> {
             });
             state.tree_targets.push(TreeTarget::Constant { group: group.name.clone(), name: c.name.clone() });
         }
-        for e in &group.enums {
-            if !show_full && !passes_filter(&filter, e.deleted, e.original.is_empty(), e.dirty) { continue; }
-            if !search.is_empty() && !e.name.to_lowercase().contains(&search)
-                && !group.name.to_lowercase().contains(&search) { continue; }
+        for (idx, e) in group.enums.iter().enumerate() {
+            let show = if full_group_open { !e.deleted } else { enum_hits[idx] };
+            if !show { continue; }
             let selected = matches!(&state.selected,
                 Some(SelectedNode::Enum { group: g, name: n }) if g == &group.name && n == &e.name);
             let has_err = state.engine.validation_errors.iter()
