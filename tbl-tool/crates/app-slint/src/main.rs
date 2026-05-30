@@ -113,19 +113,22 @@ fn push_tree(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
 }
 
 /// 构建当前选中节点的 GridSection 快照并推送到 slint。
-/// 同时把 column_kinds / data_count 写回 AppState，供后续 callback 判断单元格行为。
+/// 同时把 column_kinds / header_kinds / data_count 写回 AppState，供后续 callback 判断单元格行为。
 fn push_grid(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
     let snap = convert::build_grid(&state.borrow());
-    let (editing_r, editing_c, editing_buffer, editing_in_formula) = {
+    let (editing_r, editing_c, editing_buffer, editing_in_formula, editing_header_row, editing_header_col) = {
         let st = state.borrow();
         match st.editing {
-            Some((r, c)) => (r as i32, c as i32, st.editing_buffer.clone(), st.editing_in_formula),
-            None => (-1, -1, String::new(), false),
+            Some((r, c)) => (r as i32, c as i32, st.editing_buffer.clone(), st.editing_in_formula, st.editing_header_row, st.editing_header_col),
+            None => (-1, -1, st.editing_buffer.clone(), false, st.editing_header_row, st.editing_header_col),
         }
     };
+    let editing_export_index = compute_editing_export_index(state, editing_r, editing_c, editing_header_col);
+    let slint_column_kinds: Vec<CellKind> = snap.column_kinds.iter().map(column_kind_to_slint).collect();
     {
         let mut st = state.borrow_mut();
         st.grid_column_kinds = snap.column_kinds.clone();
+        st.grid_header_kinds = snap.header_kinds.clone();
         st.grid_data_count = snap.data_count;
     }
     ui.set_grid_title(snap.title.into());
@@ -137,15 +140,18 @@ fn push_grid(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
             .collect::<Vec<_>>(),
     )));
     ui.set_grid_data_rows(slint::ModelRc::new(slint::VecModel::from(snap.data_rows)));
+    ui.set_grid_column_kinds(slint::ModelRc::new(slint::VecModel::from(slint_column_kinds)));
     ui.set_grid_selected_col(snap.selected_col);
     ui.set_grid_selected_row(snap.selected_row);
     ui.set_grid_selected_cell_row(snap.selected_cell_row);
     ui.set_grid_selected_cell_col(snap.selected_cell_col);
-    // 单元格内 LineEdit 仅在 inline 编辑（非公式栏）时显示
-    let cell_editing_r = if editing_in_formula { -1 } else { editing_r };
-    let cell_editing_c = if editing_in_formula { -1 } else { editing_c };
-    ui.set_grid_editing_row(cell_editing_r);
-    ui.set_grid_editing_col(cell_editing_c);
+    // 单元格内 LineEdit 仅在 inline 编辑数据格（非公式栏 + 非表头编辑）时显示
+    let editing_data_cell = editing_r >= 0 && !editing_in_formula && editing_header_row < 0;
+    ui.set_grid_editing_row(if editing_data_cell { editing_r } else { -1 });
+    ui.set_grid_editing_col(if editing_data_cell { editing_c } else { -1 });
+    ui.set_grid_editing_header_row(editing_header_row);
+    ui.set_grid_editing_header_col(editing_header_col);
+    ui.set_grid_editing_export_index(editing_export_index);
     ui.set_editing_buffer(editing_buffer.into());
     // 公式栏 LineEdit 仅在「在公式栏编辑」时显示
     ui.set_formula_editing(editing_r >= 0 && editing_in_formula);
@@ -154,6 +160,48 @@ fn push_grid(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
     ui.set_formula_editable(snap.formula_editable);
     ui.set_selection_info(snap.selection_info.into());
     ui.set_hover_info(snap.hover_info.into());
+}
+
+/// 把 Rust 端 ColumnKind 映射成 slint 端 CellKind（仅用于 column-kinds 数据列指引）。
+fn column_kind_to_slint(k: &state::ColumnKind) -> CellKind {
+    match k {
+        state::ColumnKind::ReadOnly => CellKind::ReadOnly,
+        state::ColumnKind::Text => CellKind::Text,
+        state::ColumnKind::Ref { .. } => CellKind::Ref,
+        state::ColumnKind::TypeEnumCol => CellKind::TypeEnumCol,
+        state::ColumnKind::ExportEnumCol => CellKind::ExportEnumCol,
+    }
+}
+
+/// 计算 export popup 的 current-index：从当前 cell / header 读出 export code，映射到 0..3。
+/// popup 列表顺序：["前后端","客户端","服务器","不导出"]。
+fn compute_editing_export_index(state: &Rc<RefCell<AppState>>, editing_r: i32, editing_c: i32, editing_header_col: i32) -> i32 {
+    let st = state.borrow();
+    let code: Option<String> = if editing_header_col >= 0 {
+        // Table 表头 export 行
+        if let Some(SelectedNode::Table { group, name }) = &st.selected {
+            st.engine.find_table(group, name)
+                .and_then(|t| t.schema.fields.get(editing_header_col as usize))
+                .map(|f| f.export.code().to_string())
+        } else { None }
+    } else if editing_r >= 0 && editing_c >= 0 {
+        // Constant 数据行的 export 列
+        match &st.selected {
+            Some(SelectedNode::Constant { group, name }) => {
+                st.engine.find_constant(group, name)
+                    .and_then(|c| c.entries.get(editing_r as usize))
+                    .map(|e| e.export.code().to_string())
+            }
+            _ => None,
+        }
+    } else { None };
+    match code.as_deref() {
+        Some("cs") => 0,
+        Some("c") => 1,
+        Some("s") => 2,
+        Some("-") => 3,
+        _ => 0,
+    }
 }
 
 /// 仅更新选区相关的轻量属性（不重建 header/data 模型）。
@@ -172,19 +220,32 @@ fn push_selection_only(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
     ui.set_hover_info(snap.hover_info.into());
 }
 
-/// 用 slint 的 editing-buffer property 当前值，写回当前 editing cell。
+/// 用 slint 的 editing-buffer property 当前值，写回当前 editing cell / header cell。
 /// editing buffer 是 slint LineEdit 的 text 双向绑定，用户输入实时同步在 ui 端。
+/// editing_header_row >= 0 时走 commit_header_edit；否则走 set_cell。
 fn commit_editing(ui_weak: &slint::Weak<AppWindow>, state: &Rc<RefCell<AppState>>) {
     let buf = match ui_weak.upgrade() {
         Some(ui) => ui.get_editing_buffer().to_string(),
         None => return,
     };
     let mut st = state.borrow_mut();
+    if st.editing_header_row >= 0 && st.editing_header_col >= 0 {
+        let hi = st.editing_header_row as usize;
+        let ci = st.editing_header_col as usize;
+        st.set_header_cell(hi, ci, buf);
+        st.editing_header_row = -1;
+        st.editing_header_col = -1;
+        st.editing_buffer.clear();
+        st.editing_in_formula = false;
+        return;
+    }
     if let Some((r, c)) = st.editing {
         st.set_cell(r, c, &buf);
         st.editing = None;
         st.editing_buffer.clear();
         st.editing_in_formula = false;
+        st.editing_header_row = -1;
+        st.editing_header_col = -1;
     }
 }
 
@@ -289,67 +350,122 @@ fn wire_grid(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
             if let Some(ui) = weak.upgrade() { push_grid(&ui, &s); }
         });
     }
-    // 单元格点击 → 选中（如果当前在编辑别的 cell，先 commit）
-    // ExportEnumCol（Constant 第 3 列）特殊：点击直接 cycle export 四态，不进选中
+    // 单元格点击 → 行为按 ColumnKind 分发：
+    //   ReadOnly      ：选中（不编辑）
+    //   Text          ：选中（双击才进 inline 编辑）
+    //   ExportEnumCol ：选中 + 同步 editing-export-index（slint 端 popup.show 弹自制下拉）
+    //   TypeEnumCol   ：TODO（弹 TypeSelector，Step 7）
+    //   Ref           ：TODO（弹 RefPicker，Step 8）
     {
         let s = state.clone();
         let weak = ui.as_weak();
         let ui_for_buf = ui.as_weak();
         ui.on_grid_cell_clicked(move |r, c| {
-            let was_editing = s.borrow().editing.is_some();
+            let was_editing = {
+                let st = s.borrow();
+                st.editing.is_some() || st.editing_header_row >= 0
+            };
             // 切到别的 cell：先 commit 当前编辑（用 slint 端 editing-buffer 真值）
-            if was_editing {
-                let buf = ui_for_buf.upgrade()
-                    .map(|ui| ui.get_editing_buffer().to_string())
-                    .unwrap_or_default();
-                let mut st = s.borrow_mut();
-                if let Some((er, ec)) = st.editing {
-                    if (er, ec) != (r as usize, c as usize) {
-                        st.set_cell(er, ec, &buf);
-                    }
-                    st.editing = None;
-                    st.editing_buffer.clear();
-                    st.editing_in_formula = false;
-                }
-            }
-            // ExportEnumCol cycle：cs → c → s → - → cs
-            let is_export_col = matches!(
-                s.borrow().grid_column_kinds.get(c as usize),
-                Some(state::ColumnKind::ExportEnumCol)
-            );
-            if is_export_col {
-                cycle_export_for_cell(&s, r as usize, c as usize);
-                if let Some(ui) = weak.upgrade() { push_grid(&ui, &s); }
-                return;
-            }
+            if was_editing { commit_editing(&ui_for_buf, &s); }
+            let kind = s.borrow().grid_column_kinds.get(c as usize).cloned();
+            // ExportEnumCol：先把 selection + editing_export_index 推到 slint，popup 由 slint 端 .show()
+            // 弹起。需要 push_grid 才能让 editing-export-index 是最新值。
+            // TypeEnumCol / Ref 走选中（dialog 暂未实现）
+            // ReadOnly / Text 默认走选中
             s.borrow_mut().grid_selection = GridSelection::Cell(r as usize, c as usize);
             if let Some(ui) = weak.upgrade() {
-                if was_editing { push_grid(&ui, &s); } else { push_selection_only(&ui, &s); }
+                let need_full = was_editing || matches!(kind, Some(state::ColumnKind::ExportEnumCol));
+                if need_full { push_grid(&ui, &s); } else { push_selection_only(&ui, &s); }
             }
         });
     }
-    // Table 表头点击 → export 行（hi=1）支持 cycle；其它表头行暂不处理
+    // Table 表头点击 → 按 grid_header_kinds[hi][ci] 分发：
+    //   ExportEnumCol ：选中 + 同步 editing-export-index（slint popup.show 自动弹）
+    //   TypeEnumCol   ：TODO（弹 TypeSelector）
+    //   Text          ：仅作用于双击（commit 当前编辑保持不变）
+    //   ReadOnly      ：忽略
     {
         let s = state.clone();
         let weak = ui.as_weak();
+        let ui_for_buf = ui.as_weak();
         ui.on_grid_header_clicked(move |hi, ci| {
-            let is_table = matches!(s.borrow().selected, Some(SelectedNode::Table { .. }));
-            if !is_table || hi != 1 || ci == 0 {
-                return; // 仅 Table 的 export 行（id 列除外）支持单击 cycle
+            let was_editing = {
+                let st = s.borrow();
+                st.editing.is_some() || st.editing_header_row >= 0
+            };
+            if was_editing { commit_editing(&ui_for_buf, &s); }
+            let kind = s.borrow().grid_header_kinds
+                .get(hi as usize)
+                .and_then(|row| row.get(ci as usize))
+                .cloned();
+            match kind {
+                Some(state::ColumnKind::ExportEnumCol) => {
+                    // 把 editing_header_col 设为当前列，方便 push_grid 计算 editing-export-index；
+                    // 不进 inline 编辑（editing_header_row 仍为 -1）
+                    {
+                        let mut st = s.borrow_mut();
+                        st.editing_header_row = -1;
+                        st.editing_header_col = ci;
+                    }
+                    if let Some(ui) = weak.upgrade() { push_grid(&ui, &s); }
+                }
+                _ => {
+                    if was_editing {
+                        if let Some(ui) = weak.upgrade() { push_grid(&ui, &s); }
+                    }
+                }
             }
-            cycle_table_field_export(&s, ci as usize);
+        });
+    }
+    // 表头双击 → desc/field 行（hi=0/3）非 ReadOnly 列进 inline LineEdit 编辑
+    {
+        let s = state.clone();
+        let weak = ui.as_weak();
+        ui.on_grid_header_double_clicked(move |hi, ci| {
+            let allow = {
+                let st = s.borrow();
+                st.grid_header_kinds.get(hi as usize)
+                    .and_then(|row| row.get(ci as usize))
+                    .map_or(false, |k| k.double_click_to_edit())
+            };
+            if !allow { return; }
+            // 读当前 header cell 的存储值作为初始 buffer
+            let raw = {
+                let st = s.borrow();
+                if let Some(SelectedNode::Table { group, name }) = &st.selected {
+                    st.engine.find_table(group, name)
+                        .and_then(|t| t.schema.fields.get(ci as usize))
+                        .map(|f| match hi {
+                            0 => f.desc.clone(),
+                            2 => f.tbl_type.clone(),
+                            3 => f.name.clone(),
+                            _ => String::new(),
+                        })
+                        .unwrap_or_default()
+                } else {
+                    String::new()
+                }
+            };
+            {
+                let mut st = s.borrow_mut();
+                st.editing = None;
+                st.editing_buffer = raw;
+                st.editing_in_formula = false;
+                st.editing_header_row = hi;
+                st.editing_header_col = ci;
+            }
             if let Some(ui) = weak.upgrade() { push_grid(&ui, &s); }
         });
     }
-    // 单元格双击 → 进入 inline 编辑
+    // 单元格双击 → 进入 inline LineEdit 编辑（仅 Text 列）
     {
         let s = state.clone();
         let weak = ui.as_weak();
         ui.on_grid_cell_double_clicked(move |r, c| {
             let allow = {
                 let st = s.borrow();
-                let kind = st.grid_column_kinds.get(c as usize).cloned();
-                matches!(kind, Some(state::ColumnKind::Text))
+                st.grid_column_kinds.get(c as usize)
+                    .map_or(false, |k| k.double_click_to_edit())
             };
             if !allow { return; }
             let raw = convert::raw_cell_for(&s.borrow(), r as usize, c as usize);
@@ -358,6 +474,8 @@ fn wire_grid(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
                 st.editing = Some((r as usize, c as usize));
                 st.editing_buffer = raw;
                 st.editing_in_formula = false;
+                st.editing_header_row = -1;
+                st.editing_header_col = -1;
                 st.grid_selection = GridSelection::Cell(r as usize, c as usize);
             }
             if let Some(ui) = weak.upgrade() { push_grid(&ui, &s); }
@@ -392,6 +510,8 @@ fn wire_grid(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
                 st.editing = None;
                 st.editing_buffer.clear();
                 st.editing_in_formula = false;
+                st.editing_header_row = -1;
+                st.editing_header_col = -1;
             }
             if let Some(ui) = weak.upgrade() { push_grid(&ui, &s); }
         });
@@ -405,6 +525,8 @@ fn wire_grid(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
                 st.editing = None;
                 st.editing_buffer.clear();
                 st.editing_in_formula = false;
+                st.editing_header_row = -1;
+                st.editing_header_col = -1;
             }
             if let Some(ui) = weak.upgrade() { push_grid(&ui, &s); }
         });
@@ -444,7 +566,10 @@ fn wire_grid(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
         let weak = ui.as_weak();
         let ui_for_buf = ui.as_weak();
         ui.on_grid_row_num_clicked(move |r| {
-            let was_editing = s.borrow().editing.is_some();
+            let was_editing = {
+                let st = s.borrow();
+                st.editing.is_some() || st.editing_header_row >= 0
+            };
             if was_editing { commit_editing(&ui_for_buf, &s); }
             s.borrow_mut().grid_selection = GridSelection::Row(r as usize);
             if let Some(ui) = weak.upgrade() {
@@ -458,7 +583,10 @@ fn wire_grid(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
         let weak = ui.as_weak();
         let ui_for_buf = ui.as_weak();
         ui.on_grid_col_letter_clicked(move |c| {
-            let was_editing = s.borrow().editing.is_some();
+            let was_editing = {
+                let st = s.borrow();
+                st.editing.is_some() || st.editing_header_row >= 0
+            };
             if was_editing { commit_editing(&ui_for_buf, &s); }
             s.borrow_mut().grid_selection = GridSelection::Col(c as usize);
             if let Some(ui) = weak.upgrade() {
@@ -472,8 +600,29 @@ fn wire_grid(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
         let weak = ui.as_weak();
         let ui_for_buf = ui.as_weak();
         ui.on_grid_blank_clicked(move || {
-            if s.borrow().editing.is_none() { return; }
+            let need = {
+                let st = s.borrow();
+                st.editing.is_some() || st.editing_header_row >= 0
+            };
+            if !need { return; }
             commit_editing(&ui_for_buf, &s);
+            if let Some(ui) = weak.upgrade() { push_grid(&ui, &s); }
+        });
+    }
+    // Export Popup 选项被选中（Constant 数据格 / Table 表头 export 行）
+    {
+        let s = state.clone();
+        let weak = ui.as_weak();
+        ui.on_grid_cell_export_selected(move |r, c, idx| {
+            on_cell_export_selected(&s, r, c, idx);
+            if let Some(ui) = weak.upgrade() { push_grid(&ui, &s); }
+        });
+    }
+    {
+        let s = state.clone();
+        let weak = ui.as_weak();
+        ui.on_grid_header_export_selected(move |c, idx| {
+            on_header_export_selected(&s, c, idx);
             if let Some(ui) = weak.upgrade() { push_grid(&ui, &s); }
         });
     }
@@ -528,6 +677,9 @@ fn reset_view_after_reload(state: &Rc<RefCell<AppState>>) {
     st.grid_selection = GridSelection::None;
     st.editing = None;
     st.editing_buffer.clear();
+    st.editing_in_formula = false;
+    st.editing_header_row = -1;
+    st.editing_header_col = -1;
     // 重新展开所有 group（与 AppState::load 一致的初始态）
     st.tree_expanded = st.engine.project.groups.iter().map(|g| g.name.clone()).collect();
 }
@@ -540,61 +692,56 @@ fn wire_focus(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
     let weak = ui.as_weak();
     let ui_for_buf = ui.as_weak();
     ui.on_commit_pending_edit(move || {
-        if s.borrow().editing.is_none() { return; }
+        let need = {
+            let st = s.borrow();
+            st.editing.is_some() || st.editing_header_row >= 0
+        };
+        if !need { return; }
         commit_editing(&ui_for_buf, &s);
         if let Some(ui) = weak.upgrade() { push_grid(&ui, &s); }
     });
 }
 
-/// Constant ExportEnumCol cycle：cs → c → s → - → cs，写回当前选中 Constant 的 row.export。
-fn cycle_export_for_cell(state: &Rc<RefCell<AppState>>, r: usize, _c: usize) {
+/// Constant ExportEnumCol popup 选项被选中：写回 entries[r].export。
+/// (r,c) 来自 slint cell 端的 ri/ci 闭包，不依赖 editing 状态（popup 由 cell-clicked 即时弹出）。
+fn on_cell_export_selected(state: &Rc<RefCell<AppState>>, r: i32, _c: i32, idx: i32) {
     use tbl_core::model::Export;
+    let opt = match idx {
+        0 => Export::ClientServer,
+        1 => Export::ClientOnly,
+        2 => Export::ServerOnly,
+        3 => Export::None,
+        _ => return,
+    };
     let mut st = state.borrow_mut();
     let (group, name) = match &st.selected {
         Some(SelectedNode::Constant { group, name }) => (group.clone(), name.clone()),
         _ => return,
     };
-    let current = st.engine.find_constant(&group, &name)
-        .and_then(|c| c.entries.get(r))
-        .map(|e| e.export.clone())
-        .unwrap_or(Export::ClientServer);
-    let next = next_export(&current);
-    let val = next.code().to_string();
-    st.engine.commit_constant_cell(&group, &name, r, 3, val);
+    st.engine.commit_constant_cell(&group, &name, r as usize, 3, opt.code().to_string());
     if st.realtime_validate {
         st.engine.revalidate(&group, &name);
     }
 }
 
-/// Table 表头 export 行点击 cycle：写回 schema.fields[col].export。
-fn cycle_table_field_export(state: &Rc<RefCell<AppState>>, col: usize) {
+/// Table 表头 export 行的 popup 选项被选中：写回 schema.fields[col].export。
+fn on_header_export_selected(state: &Rc<RefCell<AppState>>, col: i32, idx: i32) {
     use tbl_core::model::Export;
+    let opt = match idx {
+        0 => Export::ClientServer,
+        1 => Export::ClientOnly,
+        2 => Export::ServerOnly,
+        3 => Export::None,
+        _ => return,
+    };
     let mut st = state.borrow_mut();
     let (group, name) = match &st.selected {
         Some(SelectedNode::Table { group, name }) => (group.clone(), name.clone()),
         _ => return,
     };
-    let current = st.engine.find_table(&group, &name)
-        .and_then(|t| t.schema.fields.get(col))
-        .map(|f| f.export.clone())
-        .unwrap_or(Export::ClientServer);
-    let next = next_export(&current);
-    let val = next.code().to_string();
-    st.engine.commit_header_edit(&group, &name, 1, col, val);
+    st.engine.commit_header_edit(&group, &name, 1, col as usize, opt.code().to_string());
     if st.realtime_validate {
         st.engine.revalidate(&group, &name);
-    }
-}
-
-/// Export 四态轮转：cs → c → s → - → cs（不包含 Unselected，UI 中不暴露空状态）
-fn next_export(cur: &tbl_core::model::Export) -> tbl_core::model::Export {
-    use tbl_core::model::Export::*;
-    match cur {
-        ClientServer => ClientOnly,
-        ClientOnly => ServerOnly,
-        ServerOnly => None,
-        None => ClientServer,
-        Unselected => ClientServer,
     }
 }
 

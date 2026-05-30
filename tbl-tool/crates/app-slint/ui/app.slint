@@ -66,6 +66,7 @@ export component AppWindow inherits Window {
 
     in property <[[HeaderCell]]> grid-header-rows;
     in property <[DataRow]> grid-data-rows;
+    in property <[CellKind]> grid-column-kinds;
     in property <int> grid-col-count;
     in property <int> grid-selected-col: -1;
     in property <int> grid-selected-row: -1;
@@ -73,7 +74,11 @@ export component AppWindow inherits Window {
     in property <int> grid-selected-cell-col: -1;
     in property <int> grid-editing-row: -1;
     in property <int> grid-editing-col: -1;
+    in property <int> grid-editing-header-row: -1;
+    in property <int> grid-editing-header-col: -1;
+    in property <int> grid-editing-export-index: 0;
     callback grid-header-clicked(int, int);
+    callback grid-header-double-clicked(int, int);
     callback grid-cell-clicked(int, int);
     callback grid-cell-double-clicked(int, int);
     callback grid-row-num-clicked(int);
@@ -84,6 +89,8 @@ export component AppWindow inherits Window {
     callback grid-cell-edit-committed();
     callback grid-cell-edit-canceled();
     callback grid-blank-clicked();
+    callback grid-cell-export-selected(int, int, int);
+    callback grid-header-export-selected(int, int);
 
     in property <string> selection-info;
     in property <string> hover-info;
@@ -238,7 +245,12 @@ export component AppWindow inherits Window {
                 selected-cell-col: root.grid-selected-cell-col;
                 editing-row: root.grid-editing-row;
                 editing-col: root.grid-editing-col;
+                editing-header-row: root.grid-editing-header-row;
+                editing-header-col: root.grid-editing-header-col;
+                editing-export-index: root.grid-editing-export-index;
+                column-kinds: root.grid-column-kinds;
                 header-clicked(hi, ci) => { root.drop-focus(); root.grid-header-clicked(hi, ci); }
+                header-double-clicked(hi, ci) => { root.drop-focus(); root.grid-header-double-clicked(hi, ci); }
                 cell-clicked(r, c) => { root.drop-focus(); root.grid-cell-clicked(r, c); }
                 cell-double-clicked(r, c) => { root.drop-focus(); root.grid-cell-double-clicked(r, c); }
                 row-num-clicked(r) => { root.drop-focus(); root.grid-row-num-clicked(r); }
@@ -249,6 +261,8 @@ export component AppWindow inherits Window {
                 cell-edit-committed() => { root.grid-cell-edit-committed(); }
                 cell-edit-canceled() => { root.grid-cell-edit-canceled(); }
                 blank-clicked() => { root.drop-focus(); root.grid-blank-clicked(); }
+                cell-export-selected(r, c, i) => { root.grid-cell-export-selected(r, c, i); }
+                header-export-selected(c, i) => { root.grid-header-export-selected(c, i); }
                 selection-info: root.selection-info;
                 hover-info: root.hover-info;
             }

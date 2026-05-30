@@ -44,16 +44,31 @@ pub enum TreeTarget {
 }
 
 /// 列的可编辑性维度。决定单/双击进入哪种编辑器、公式栏是否可写。
+/// 与 egui 端 `CellKind` 对应；颜色（ReadOnly 灰色等）是另一维度，不依赖此 enum。
 #[derive(Clone, Debug, PartialEq)]
 pub enum ColumnKind {
-    /// 普通字符串列，公式栏可写、双击进入编辑
+    /// 不可编辑（id 列等）。颜色是否灰色由展示层独立决定。
+    ReadOnly,
+    /// 普通字符串列，公式栏可写、双击进入 LineEdit 编辑
     Text,
     /// @TableName / @EnumName 引用列，单击弹 RefPicker
     Ref { target: String },
-    /// Constant 的 type 列，单击弹 TypeSelector
+    /// type 列（Constant 整列 / Table 表头 type 行单元格），单击弹 TypeSelector
     TypeEnumCol,
-    /// Constant 的 export 列，单击下拉 export 四态
+    /// export 列（Constant 整列 / Table 表头 export 行单元格），单击弹 Popup
     ExportEnumCol,
+}
+
+impl ColumnKind {
+    /// 是否双击进 LineEdit 编辑（仅 Text）
+    pub fn double_click_to_edit(&self) -> bool {
+        matches!(self, Self::Text)
+    }
+    /// 是否单击进入弹窗/下拉
+    #[allow(dead_code)]
+    pub fn single_click_to_pick(&self) -> bool {
+        matches!(self, Self::Ref { .. } | Self::TypeEnumCol | Self::ExportEnumCol)
+    }
 }
 
 /// grid 当前选区。step 4 仅支持 Cell；CellRange / Row / Col 留给后续 step。
@@ -81,6 +96,9 @@ pub struct AppState {
     pub grid_selection: GridSelection,
     /// 当前节点每列的可编辑性，由 build_grid 同步刷新。供 callback 判断点击行为。
     pub grid_column_kinds: Vec<ColumnKind>,
+    /// 当前节点表头每个 cell 的可编辑性（按 [hrow][col] 索引）。callback 收到 (hi,ci)
+    /// 后查这里决定双击 LineEdit / 单击下拉 / 弹窗。
+    pub grid_header_kinds: Vec<Vec<ColumnKind>>,
     /// 当前节点的 data_count（valid 行数），决定哪些行是"占位行"。
     pub grid_data_count: usize,
     /// 写回单元格后是否立即 revalidate。来自 [ui] realtime_validate。
@@ -92,6 +110,10 @@ pub struct AppState {
     /// 当前编辑器在公式栏（true）还是单元格内联（false）。
     /// 用来在 slint 端控制两处 LineEdit 互斥渲染，避免同时存在争 focus。
     pub editing_in_formula: bool,
+    /// 表头正在编辑的行/列（hi=0 desc / hi=3 field 才允许）；-1 = 未在编辑表头。
+    /// 表头不属于 data_rows，复用 editing 不便，单独两字段。
+    pub editing_header_row: i32,
+    pub editing_header_col: i32,
 }
 
 impl AppState {
@@ -113,11 +135,14 @@ impl AppState {
             view_show_enum_name: false,
             grid_selection: GridSelection::None,
             grid_column_kinds: Vec::new(),
+            grid_header_kinds: Vec::new(),
             grid_data_count: 0,
             realtime_validate: rt_validate,
             editing: None,
             editing_buffer: String::new(),
             editing_in_formula: false,
+            editing_header_row: -1,
+            editing_header_col: -1,
         })
     }
 
@@ -137,6 +162,18 @@ impl AppState {
         } else {
             self.engine.set_enum_cell(&group, &name, r, c, val);
         }
+        if self.realtime_validate {
+            self.engine.revalidate(&group, &name);
+        }
+    }
+
+    /// 写表头单元格（仅 Table）；hi: 0=desc / 1=export / 2=type / 3=field。
+    pub fn set_header_cell(&mut self, hi: usize, ci: usize, val: String) {
+        let (group, name) = match &self.selected {
+            Some(SelectedNode::Table { group, name }) => (group.clone(), name.clone()),
+            _ => return,
+        };
+        self.engine.commit_header_edit(&group, &name, hi, ci, val);
         if self.realtime_validate {
             self.engine.revalidate(&group, &name);
         }

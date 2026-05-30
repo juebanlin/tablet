@@ -35,21 +35,64 @@ export struct DataRow {
     selected: bool,
 }
 
+// 自制 Export 下拉：用普通 Rectangle 渲染（不用 PopupWindow，因 PopupWindow 不能在 for/if 内）。
+// 由父级条件渲染控制可见性，dismiss TouchArea 见 GridArea 顶层。
+component ExportDropdown inherits Rectangle {
+    in property <int> current-index: 0;
+    callback selected(int);
+    width: Theme.col-w;
+    height: Theme.row-h * 4;
+    background: Theme.bg-panel;
+    border-color: Theme.border;
+    border-width: 1px;
+    drop-shadow-blur: 6px;
+    drop-shadow-color: #00000040;
+    VerticalLayout {
+        spacing: 0;
+        for label[i] in ["前后端","客户端","服务器","不导出"]: Rectangle {
+            height: Theme.row-h;
+            background: hover-area.has-hover ? Theme.bg-row-selected
+                : (i == root.current-index ? Theme.bg-cell-selected : Theme.bg-panel);
+            Text {
+                text: label;
+                font-size: Theme.fs-small;
+                color: Theme.text-primary;
+                horizontal-alignment: left;
+                vertical-alignment: center;
+                x: 6px;
+            }
+            hover-area := TouchArea {
+                clicked => { root.selected(i); }
+            }
+        }
+    }
+}
+
 export component GridArea inherits Rectangle {
     in property <[[HeaderCell]]> header-rows;     // 多行表头（Table 4 行 / Constant 1 行 / Enum 1 行）
     in property <[DataRow]> data-rows;
+    // 数据列的 kind（与 header.field 行对齐）。slint 侧靠它判断 cell 单击行为
+    // （ExportEnumCol → 弹 popup；其它 → 仅选中）。
+    in property <[CellKind]> column-kinds;
     in property <int> col-count: 0;
     in property <int> selected-col: -1;           // 整列选中（-1 = 无）
     in property <int> selected-row: -1;           // 整行选中
     in property <int> selected-cell-row: -1;
     in property <int> selected-cell-col: -1;
     in property <string> empty-hint: "选择左侧节点查看详情";
-    // inline 编辑：editing-row/col == 当前 cell 时覆盖 LineEdit。-1 = 不编辑。
+    // inline 编辑（数据格）：editing-row/col 命中时覆盖 LineEdit。-1 = 不编辑。
     in property <int> editing-row: -1;
     in property <int> editing-col: -1;
+    // 表头编辑：editing-header-row + editing-header-col 命中时覆盖 LineEdit；-1 = 不编辑。
+    // 与数据格 editing-row/col 互斥（同一时刻最多一个 LineEdit）。
+    in property <int> editing-header-row: -1;
+    in property <int> editing-header-col: -1;
     in-out property <string> editing-buffer: "";
+    // 当前 cell / 表头 cell 的 export 当前索引（0..3）。Rust 端选中后 push 进来。
+    in property <int> editing-export-index: 0;
 
     callback header-clicked(int /* hrow */, int /* col */);
+    callback header-double-clicked(int /* hrow */, int /* col */);
     callback cell-clicked(int /* row */, int /* col */);
     callback cell-double-clicked(int /* row */, int /* col */);
     callback row-num-clicked(int);
@@ -60,8 +103,19 @@ export component GridArea inherits Rectangle {
     callback cell-edit-committed();
     callback cell-edit-canceled();
     callback blank-clicked();
+    callback cell-export-selected(int /* row */, int /* col */, int /* idx */);
+    callback header-export-selected(int /* col */, int /* idx */);
 
     background: Theme.bg-panel;
+
+    // popup 目标坐标：cell 模式 (export-target-row, export-target-col)；header 模式 export-target-is-header=true 时 export-target-row=hi。
+    // 由 cell/header click 写入；用作 popup.selected 时分发回调。
+    property <int> export-target-row: -1;
+    property <int> export-target-col: -1;
+    property <bool> export-target-is-header: false;
+    property <length> export-popup-x: 0px;
+    property <length> export-popup-y: 0px;
+    property <bool> export-popup-open: false;
 
     // 字母列函数：A..Z（>26 暂不支持，显示 "?"）。
     // Slint 1.x 不支持 string 下标，因此用一长串三元展开。
@@ -140,6 +194,8 @@ export component GridArea inherits Rectangle {
                         border-width: 0.5px;
                     }
                     for cell[ci] in hrow: Rectangle {
+                        property <bool> is-editing: hi == root.editing-header-row && ci == root.editing-header-col;
+                        property <bool> is-export: cell.kind == CellKind.export-enum || cell.kind == CellKind.export-enum-col;
                         width: Theme.col-w;
                         height: Theme.row-h;
                         background: cell.kind == CellKind.read-only
@@ -147,7 +203,8 @@ export component GridArea inherits Rectangle {
                             : (ci == root.selected-col ? Theme.bg-cell-selected : Theme.bg-header);
                         border-color: Theme.border;
                         border-width: 0.5px;
-                        Text {
+                        // 非编辑态：纯 Text（编辑态时不渲染）
+                        if !is-editing: Text {
                             text: cell.text;
                             font-size: Theme.fs-tiny;
                             color: cell.kind == CellKind.read-only ? Theme.text-readonly : cell.color;
@@ -155,18 +212,45 @@ export component GridArea inherits Rectangle {
                             vertical-alignment: center;
                         }
                         // 下拉箭头（type/export 类）
-                        if cell.kind == CellKind.type-enum
+                        if !is-editing && (cell.kind == CellKind.type-enum
                           || cell.kind == CellKind.export-enum
                           || cell.kind == CellKind.type-enum-col
-                          || cell.kind == CellKind.export-enum-col: Text {
+                          || cell.kind == CellKind.export-enum-col): Text {
                             x: parent.width - 12px;
                             text: "▼";
                             font-size: 8px;
                             color: Theme.text-secondary;
                             vertical-alignment: center;
                         }
-                        if cell.kind != CellKind.read-only: TouchArea {
+                        // 编辑态：表头 desc / field 等 Text 类——LineEdit 占满 cell
+                        if is-editing: LineEdit {
+                            x: 0;
+                            y: 0;
+                            width: parent.width;
+                            height: parent.height;
+                            text <=> root.editing-buffer;
+                            init => {
+                                self.focus();
+                                self.select-all();
+                            }
+                            accepted(s) => { root.cell-edit-committed(); }
+                        }
+                        // 普通可编辑（非 Export）的 TouchArea：单击选中 / 双击编辑
+                        if cell.kind != CellKind.read-only && !is-editing && !is-export: TouchArea {
                             clicked => { root.header-clicked(hi, ci); }
+                            double-clicked => { root.header-double-clicked(hi, ci); }
+                        }
+                        // Export 单元格：先设 popup 状态（保证 TouchArea 销毁前 root 状态写完），再调 root callback
+                        if is-export && !is-editing: TouchArea {
+                            clicked => {
+                                root.export-target-is-header = true;
+                                root.export-target-row = hi;
+                                root.export-target-col = ci;
+                                root.export-popup-x = self.absolute-position.x - root.absolute-position.x;
+                                root.export-popup-y = self.absolute-position.y - root.absolute-position.y + parent.height;
+                                root.export-popup-open = true;
+                                root.header-clicked(hi, ci);  // 让 Rust 同步 editing-export-index（最后调，避免 TouchArea 因 push_grid 销毁后丢状态）
+                            }
                         }
                     }
                 }
@@ -208,6 +292,9 @@ export component GridArea inherits Rectangle {
                         }
                     }
                     for cell[ci] in row.cells: Rectangle {
+                        property <bool> is-editing: ri == root.editing-row && ci == root.editing-col;
+                        property <CellKind> col-kind: ci < root.column-kinds.length ? root.column-kinds[ci] : CellKind.text;
+                        property <bool> is-export: col-kind == CellKind.export-enum-col || col-kind == CellKind.export-enum;
                         width: Theme.col-w;
                         height: Theme.row-h;
                         background:
@@ -216,34 +303,57 @@ export component GridArea inherits Rectangle {
                             : (row.row-color.alpha > 0 ? row.row-color : (mod(ri, 2) == 0 ? Theme.bg-panel : Theme.bg-row-alt));
                         border-color: cell.has-error ? Theme.border-error : Theme.border-light;
                         border-width: cell.has-error ? 1.5px : 0.5px;
-                        // ── 非编辑态：Text + TouchArea ──
-                        if !(ri == root.editing-row && ci == root.editing-col): Rectangle {
-                            x: 0;
-                            y: 0;
-                            width: parent.width;
-                            height: parent.height;
-                            Text {
-                                text: cell.text;
-                                font-size: Theme.fs-small;
-                                color: cell.is-empty-ref ? Theme.text-disabled : Theme.text-primary;
-                                horizontal-alignment: left;
-                                vertical-alignment: center;
-                                x: 4px;
-                            }
-                            TouchArea {
-                                clicked => { root.cell-clicked(ri, ci); }
-                                double-clicked => { root.cell-double-clicked(ri, ci); }
-                                pointer-event(e) => {
-                                    if e.button == PointerEventButton.right && e.kind == PointerEventKind.up {
-                                        root.cell-context-menu(ri, ci, self.mouse-x, self.mouse-y);
-                                    }
+                        // 非编辑态显示文字
+                        if !is-editing: Text {
+                            text: cell.text;
+                            font-size: Theme.fs-small;
+                            color: cell.is-empty-ref ? Theme.text-disabled : Theme.text-primary;
+                            horizontal-alignment: left;
+                            vertical-alignment: center;
+                            x: 4px;
+                        }
+                        // 下拉箭头（ExportEnumCol / TypeEnumCol / Ref 列）
+                        if !is-editing && (is-export
+                          || col-kind == CellKind.type-enum-col
+                          || col-kind == CellKind.type-enum
+                          || col-kind == CellKind.ref): Text {
+                            x: parent.width - 12px;
+                            text: "▼";
+                            font-size: 8px;
+                            color: Theme.text-secondary;
+                            vertical-alignment: center;
+                        }
+                        // 普通 cell（非 Export）：单 TouchArea 处理 click / 双击 / 右键
+                        if !is-editing && !is-export: TouchArea {
+                            clicked => { root.cell-clicked(ri, ci); }
+                            double-clicked => { root.cell-double-clicked(ri, ci); }
+                            pointer-event(e) => {
+                                if e.button == PointerEventButton.right && e.kind == PointerEventKind.up {
+                                    root.cell-context-menu(ri, ci, self.mouse-x, self.mouse-y);
                                 }
                             }
                         }
-                        // ── 编辑态：LineEdit 占满 cell，TouchArea 不渲染 ──
+                        // ExportEnumCol cell：先设 popup 状态再调 root callback
+                        if !is-editing && is-export: TouchArea {
+                            clicked => {
+                                root.export-target-is-header = false;
+                                root.export-target-row = ri;
+                                root.export-target-col = ci;
+                                root.export-popup-x = self.absolute-position.x - root.absolute-position.x;
+                                root.export-popup-y = self.absolute-position.y - root.absolute-position.y + parent.height;
+                                root.export-popup-open = true;
+                                root.cell-clicked(ri, ci);
+                            }
+                            pointer-event(e) => {
+                                if e.button == PointerEventButton.right && e.kind == PointerEventKind.up {
+                                    root.cell-context-menu(ri, ci, self.mouse-x, self.mouse-y);
+                                }
+                            }
+                        }
+                        // 编辑态：LineEdit 占满 cell
                         // 失焦 commit 不通过 changed has-focus（实测重入崩溃），
                         // 由 Rust 在 cell-clicked / 切节点 等场景主动 commit
-                        if ri == root.editing-row && ci == root.editing-col: LineEdit {
+                        if is-editing: LineEdit {
                             x: 0;
                             y: 0;
                             width: parent.width;
@@ -257,6 +367,32 @@ export component GridArea inherits Rectangle {
                         }
                     }
                 }
+            }
+        }
+    }
+
+    // ── Export Popup overlay（条件渲染）──
+    // 用 Rectangle + 全屏 dismiss TouchArea 模拟 PopupWindow，避免 PopupWindow 在 for/if 内的限制。
+    // 点击外部 dismiss-area 关闭；点击列表项 selected 关闭。
+    if root.export-popup-open: Rectangle {
+        x: 0; y: 0;
+        width: parent.width;
+        height: parent.height;
+        // 全屏 dismiss 区域（位于下拉之下）
+        TouchArea {
+            clicked => { root.export-popup-open = false; }
+        }
+        ExportDropdown {
+            x: root.export-popup-x;
+            y: root.export-popup-y;
+            current-index: root.editing-export-index;
+            selected(idx) => {
+                if (root.export-target-is-header) {
+                    root.header-export-selected(root.export-target-col, idx);
+                } else {
+                    root.cell-export-selected(root.export-target-row, root.export-target-col, idx);
+                }
+                root.export-popup-open = false;
             }
         }
     }

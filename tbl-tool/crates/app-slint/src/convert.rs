@@ -184,6 +184,8 @@ pub struct GridSnapshot {
     pub data_rows: Vec<DataRow>,
     /// 当前节点每列的可编辑性，由 main.rs 同步写回 AppState
     pub column_kinds: Vec<ColumnKind>,
+    /// 当前节点表头每个 cell 的可编辑性（按 [hrow][col] 索引）
+    pub header_kinds: Vec<Vec<ColumnKind>>,
     pub data_count: usize,
     pub coord: String,
     /// 非编辑态公式栏显示的展示值
@@ -207,6 +209,7 @@ impl GridSnapshot {
             header_rows: Vec::new(),
             data_rows: Vec::new(),
             column_kinds: Vec::new(),
+            header_kinds: Vec::new(),
             data_count: 0,
             coord: String::new(),
             formula_display: String::new(),
@@ -239,11 +242,12 @@ fn enrich_selection(snap: &mut GridSnapshot, state: &AppState) {
             snap.selected_cell_row = r as i32;
             snap.selected_cell_col = c as i32;
             snap.coord = format!("{}{}", col_letter(c), r + 1);
-            let raw = raw_cell(state, r, c);
             let kind = snap.column_kinds.get(c);
             snap.formula_editable = matches!(kind, Some(ColumnKind::Text));
-            snap.formula_display = if !raw.is_empty() {
-                cell_display(state, snap, r, c, &raw)
+            // 公式栏只展示 Text 列内容；Export/Type/Ref/ReadOnly 列以下拉/弹窗操作，公式栏留空。
+            snap.formula_display = if matches!(kind, Some(ColumnKind::Text)) {
+                let raw = raw_cell(state, r, c);
+                if !raw.is_empty() { cell_display(state, snap, r, c, &raw) } else { String::new() }
             } else {
                 String::new()
             };
@@ -364,12 +368,25 @@ fn build_table_grid(state: &AppState, group: &str, name: &str) -> GridSnapshot {
         .map(|f| f.tbl_type.strip_prefix('@').map(|s| s.trim().to_string()))
         .collect();
     let column_kinds: Vec<ColumnKind> = ref_targets.iter().enumerate().map(|(i, t)| {
-        if i == 0 { return ColumnKind::Text; } // id 列：可编辑（但实际写入由 set_cell 控制）
+        if i == 0 { return ColumnKind::Text; } // id 列：数据行可编辑（与 egui 一致）；表头才是 ReadOnly
         match t {
             Some(name) => ColumnKind::Ref { target: name.clone() },
             None => ColumnKind::Text,
         }
     }).collect();
+
+    // 表头四行的 ColumnKind：与 egui 对齐——desc 行整行 Text；export/type/field 三行 id 列固定 ReadOnly。
+    let mk_header_kinds_id_ro = |non_id: ColumnKind| -> Vec<ColumnKind> {
+        fields.iter().enumerate().map(|(i, _)| {
+            if i == 0 { ColumnKind::ReadOnly } else { non_id.clone() }
+        }).collect()
+    };
+    let header_kinds: Vec<Vec<ColumnKind>> = vec![
+        fields.iter().map(|_| ColumnKind::Text).collect(),  // desc：整行可编辑
+        mk_header_kinds_id_ro(ColumnKind::ExportEnumCol),    // export
+        mk_header_kinds_id_ro(ColumnKind::TypeEnumCol),      // type
+        mk_header_kinds_id_ro(ColumnKind::Text),             // field
+    ];
 
     let display_rows = valid_count + EXTRA_ROWS;
     let mut data_rows = Vec::with_capacity(display_rows);
@@ -401,6 +418,7 @@ fn build_table_grid(state: &AppState, group: &str, name: &str) -> GridSnapshot {
         header_rows: vec![desc_row, export_row, type_row, field_row],
         data_rows,
         column_kinds,
+        header_kinds,
         data_count: valid_count,
         ..GridSnapshot::empty()
     }
@@ -459,6 +477,7 @@ fn build_constant_grid(state: &AppState, group: &str, name: &str) -> GridSnapsho
             ColumnKind::ExportEnumCol,
             ColumnKind::Text,
         ],
+        header_kinds: vec![vec![ColumnKind::ReadOnly; 5]],
         data_count: valid_count,
         ..GridSnapshot::empty()
     }
@@ -506,6 +525,7 @@ fn build_enum_grid(state: &AppState, group: &str, name: &str) -> GridSnapshot {
         header_rows: vec![header_row],
         data_rows,
         column_kinds: vec![ColumnKind::Text, ColumnKind::Text, ColumnKind::Text],
+        header_kinds: vec![vec![ColumnKind::ReadOnly; 3]],
         data_count: valid_count,
         ..GridSnapshot::empty()
     }

@@ -37,6 +37,7 @@ export component GridSection inherits Rectangle {
     // ── 表格 ──
     in property <[[HeaderCell]]> header-rows;
     in property <[DataRow]> data-rows;
+    in property <[CellKind]> column-kinds;
     in property <int> col-count;
     in property <int> selected-col: -1;
     in property <int> selected-row: -1;
@@ -44,7 +45,11 @@ export component GridSection inherits Rectangle {
     in property <int> selected-cell-col: -1;
     in property <int> editing-row: -1;
     in property <int> editing-col: -1;
+    in property <int> editing-header-row: -1;
+    in property <int> editing-header-col: -1;
+    in property <int> editing-export-index: 0;
     callback header-clicked(int, int);
+    callback header-double-clicked(int, int);
     callback cell-clicked(int, int);
     callback cell-double-clicked(int, int);
     callback row-num-clicked(int);
@@ -55,6 +60,8 @@ export component GridSection inherits Rectangle {
     callback cell-edit-committed();
     callback cell-edit-canceled();
     callback blank-clicked();
+    callback cell-export-selected(int, int, int);
+    callback header-export-selected(int, int);
 
     // ── 状态栏 ──
     in property <string> selection-info;
@@ -87,6 +94,7 @@ export component GridSection inherits Rectangle {
             vertical-stretch: 1;
             header-rows: root.header-rows;
             data-rows: root.data-rows;
+            column-kinds: root.column-kinds;
             col-count: root.col-count;
             selected-col: root.selected-col;
             selected-row: root.selected-row;
@@ -94,8 +102,12 @@ export component GridSection inherits Rectangle {
             selected-cell-col: root.selected-cell-col;
             editing-row: root.editing-row;
             editing-col: root.editing-col;
+            editing-header-row: root.editing-header-row;
+            editing-header-col: root.editing-header-col;
+            editing-export-index: root.editing-export-index;
             editing-buffer <=> root.editing-buffer;
             header-clicked(hi, ci) => { root.header-clicked(hi, ci); }
+            header-double-clicked(hi, ci) => { root.header-double-clicked(hi, ci); }
             cell-clicked(r, c) => { root.cell-clicked(r, c); }
             cell-double-clicked(r, c) => { root.cell-double-clicked(r, c); }
             row-num-clicked(r) => { root.row-num-clicked(r); }
@@ -106,6 +118,8 @@ export component GridSection inherits Rectangle {
             cell-edit-committed() => { root.cell-edit-committed(); }
             cell-edit-canceled() => { root.cell-edit-canceled(); }
             blank-clicked() => { root.blank-clicked(); }
+            cell-export-selected(r, c, i) => { root.cell-export-selected(r, c, i); }
+            header-export-selected(c, i) => { root.header-export-selected(c, i); }
         }
         StatusBar {
             selection-info: root.selection-info;
