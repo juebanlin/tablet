@@ -364,14 +364,6 @@ impl eframe::App for TblApp {
             self.apply_theme(ctx);
             self.theme_applied = true;
         }
-        egui::SidePanel::left("tree_panel")
-            .default_width(200.0)
-            .min_width(80.0)
-            .resizable(true)
-            .show(ctx, |ui| {
-                ui::tree::render(ui, self);
-            });
-
         egui::TopBottomPanel::top("toolbar_panel").show(ctx, |ui| {
             ui.horizontal(|ui| {
                 if ui.button("生成测试数据").clicked() {
@@ -408,15 +400,19 @@ impl eframe::App for TblApp {
             });
         });
 
-        egui::TopBottomPanel::top("view_bar_panel").show(ctx, |ui| {
-            ui.horizontal(|ui| {
-                ui.checkbox(&mut self.view_show_enum_name, "枚举显示名字")
-                    .on_hover_text("引用枚举（@EnumName）的单元格只读渲染时显示 name 而非 id\n（编辑时仍是 id，表引用不受此开关影响）");
-            });
-        });
+        // 注：「枚举显示名字」开关属于 GridSection 的 GridRibbon 子区域，
+        // 由 ui::detail::render 在 CentralPanel 内画，宽度跟随 GridSection（不横跨 TreeSection）。
+        // 见 docs/02-UI设计.md §1.2、§1.3。
+        //
+        // 4 大区域布局（自外而内声明，外层优先占空间）：
+        //   1. TopBottomPanel::top    — Toolbar（跨全宽）
+        //   2. TopBottomPanel::bottom — LogPanel（跨全宽）
+        //   3. SidePanel::left        — TreeSection（仅占中间纵向带）
+        //   4. CentralPanel           — GridSection（中间剩余；StatusBar 是 GridSection 子区域，不跨 TreeSection）
 
         egui::TopBottomPanel::bottom("log_panel")
             .default_height(120.0)
+            .min_height(40.0)
             .resizable(true)
             .show(ctx, |ui| {
                 ui.label("日志");
@@ -431,13 +427,12 @@ impl eframe::App for TblApp {
                     });
             });
 
-        egui::TopBottomPanel::bottom("status_panel")
-            .exact_height(20.0)
+        egui::SidePanel::left("tree_panel")
+            .default_width(220.0)
+            .min_width(200.0)
+            .resizable(true)
             .show(ctx, |ui| {
-                ui.horizontal(|ui| {
-                    let text = ui::grid::format_selection(&self.edit_state.selected, self.edit_state.hover_cell);
-                    ui.label(egui::RichText::new(text).size(11.0));
-                });
+                ui::tree::render(ui, self);
             });
 
         egui::CentralPanel::default().show(ctx, |ui| {

@@ -18,42 +18,76 @@ pub fn render(ui: &mut egui::Ui, app: &mut TblApp) {
         app.context_row = None;
     }
 
+    // GridSection 内部子区域顺序（对应 02-UI 设计 §1.3）：
+    //   1. GridHeaderBar  ─ 详情标题
+    //   2. GridRibbon     ─ 表级功能 bar（枚举显示名字…）
+    //   3. FormulaBar     ─ 公式栏
+    //   4. GridArea       ─ 表格本体（占用剩余空间）
+    //   5. StatusBar      ─ 选区/光标信息（GridSection 底部，不跨越 TreeSection）
     let selected = app.selected.clone();
+    let avail = ui.available_rect_before_wrap();
+    let status_h = 20.0;
+    let grid_max_y = avail.max.y - status_h;
+    let mut grid_ui = ui.child_ui(
+        egui::Rect::from_min_max(avail.min, egui::pos2(avail.max.x, grid_max_y)),
+        *ui.layout(),
+        None,
+    );
     match &selected {
-        None => { ui.centered_and_justified(|ui| { ui.label("选择左侧节点查看详情"); }); }
+        None => { grid_ui.centered_and_justified(|ui| { ui.label("选择左侧节点查看详情"); }); }
         Some(SelectedNode::Table { group, name }) => {
             let grid_data = build_table_grid(app, group, name);
             if let Some(gd) = grid_data {
-                let heading_resp = ui.heading(format!("📊 {} ({}条)", name, gd.data_count));
+                let heading_resp = grid_ui.heading(format!("📊 {} ({}条)", name, gd.data_count));
                 if heading_resp.clicked() { app.edit_state.selected = Selection::None; app.edit_state.editing = None; }
-                render_formula_bar(ui, app, group, name, &gd);
-                grid::render_grid(ui, app, group, name, &gd);
+                render_grid_ribbon(&mut grid_ui, app);
+                render_formula_bar(&mut grid_ui, app, group, name, &gd);
+                grid::render_grid(&mut grid_ui, app, group, name, &gd);
             }
         }
         Some(SelectedNode::Constant { group, name }) => {
             let grid_data = build_constant_grid(app, group, name);
             if let Some(gd) = grid_data {
-                let heading_resp = ui.heading(format!("📋 {} ({}项)", name, gd.data_count));
+                let heading_resp = grid_ui.heading(format!("📋 {} ({}项)", name, gd.data_count));
                 if heading_resp.clicked() { app.edit_state.selected = Selection::None; app.edit_state.editing = None; }
-                render_formula_bar(ui, app, group, name, &gd);
-                grid::render_grid(ui, app, group, name, &gd);
+                render_grid_ribbon(&mut grid_ui, app);
+                render_formula_bar(&mut grid_ui, app, group, name, &gd);
+                grid::render_grid(&mut grid_ui, app, group, name, &gd);
             }
         }
         Some(SelectedNode::Enum { group, name }) => {
             let grid_data = build_enum_grid(app, group, name);
             if let Some(gd) = grid_data {
-                let heading_resp = ui.heading(format!("🔢 {} ({}项)", name, gd.data_count));
+                let heading_resp = grid_ui.heading(format!("🔢 {} ({}项)", name, gd.data_count));
                 if heading_resp.clicked() { app.edit_state.selected = Selection::None; app.edit_state.editing = None; }
-                render_formula_bar(ui, app, group, name, &gd);
-                grid::render_grid(ui, app, group, name, &gd);
+                render_grid_ribbon(&mut grid_ui, app);
+                render_formula_bar(&mut grid_ui, app, group, name, &gd);
+                grid::render_grid(&mut grid_ui, app, group, name, &gd);
             }
         }
     }
+
+    // ─── StatusBar：GridSection 子区域，仅占 GridSection 宽度 ───
+    let status_rect = egui::Rect::from_min_max(
+        egui::pos2(avail.min.x, grid_max_y),
+        egui::pos2(avail.max.x, avail.max.y),
+    );
+    let mut status_ui = ui.child_ui(status_rect, egui::Layout::left_to_right(egui::Align::Center), None);
+    let text = grid::format_selection(&app.edit_state.selected, app.edit_state.hover_cell);
+    status_ui.label(egui::RichText::new(text).size(11.0));
 
     // Right-click context menus
     render_col_context(ui, app);
     render_row_context(ui, app);
     render_cell_context(ui, app);
+}
+
+fn render_grid_ribbon(ui: &mut egui::Ui, app: &mut TblApp) {
+    // GridRibbon：表级功能 bar（02-UI §1.3）。当前只有「枚举显示名字」开关。
+    let is_table = matches!(&app.selected, Some(SelectedNode::Table { .. }));
+    ui.horizontal(|ui| {
+        ui.add_enabled(is_table, egui::Checkbox::new(&mut app.view_show_enum_name, "枚举显示名字"));
+    });
 }
 
 fn render_formula_bar(ui: &mut egui::Ui, app: &mut TblApp, group: &str, name: &str, grid: &GridData) {
