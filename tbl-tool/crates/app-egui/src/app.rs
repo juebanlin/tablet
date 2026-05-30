@@ -135,6 +135,15 @@ impl TblApp {
     }
 
     fn apply_theme(&self, ctx: &egui::Context) {
+        // 切换主题：注释/取消注释下面任一行。
+        // Self::apply_default_theme(ctx);
+        Self::apply_flat_theme(ctx);
+        // Self::apply_material_theme(ctx);
+    }
+
+    /// 当前线上主题：light + 全直角 + 无阴影 + 紧凑间距。
+    /// 按钮带浅灰底（egui Visuals::light 默认行为），与右键菜单 item 高亮一致。
+    fn apply_default_theme(ctx: &egui::Context) {
         let mut visuals = egui::Visuals::light();
         visuals.window_rounding = egui::Rounding::ZERO;
         visuals.window_shadow = egui::epaint::Shadow::NONE;
@@ -151,6 +160,153 @@ impl TblApp {
         style.spacing.button_padding = egui::vec2(4.0, 2.0);
         style.spacing.item_spacing = egui::vec2(6.0, 4.0);
         ctx.set_style(style);
+    }
+
+    /// 测试主题：模仿 slint Fluent 风格——按钮 4px 圆角、inactive 无底色但带 1px 浅灰边框，
+    /// 仅在 hover / pressed 时才有浅灰底；边框颜色随交互态略微加深。
+    /// 窗口/弹窗仍保留直角避免视觉碎片化。
+    #[allow(dead_code)]
+    fn apply_flat_theme(ctx: &egui::Context) {
+        use egui::{Color32, Rounding, Stroke};
+        let mut v = egui::Visuals::light();
+
+        // 窗口 / 弹窗：直角 + 无阴影（与默认主题保持一致）
+        v.window_rounding = Rounding::ZERO;
+        v.menu_rounding = Rounding::ZERO;
+        v.window_shadow = egui::epaint::Shadow::NONE;
+        v.popup_shadow = egui::epaint::Shadow::NONE;
+
+        // 按钮 / LineEdit / Checkbox 等所有交互控件
+        let btn_round = Rounding::same(4.0);
+        let border_idle = Stroke::new(1.0, Color32::from_gray(200));
+        let border_hover = Stroke::new(1.0, Color32::from_gray(160));
+        let border_active = Stroke::new(1.0, Color32::from_gray(120));
+
+        // inactive：透明底（仅 weak_bg_fill，按钮才走这条；bg_fill 留默认给 ScrollBar thumb）
+        v.widgets.inactive.weak_bg_fill = Color32::TRANSPARENT;
+        v.widgets.inactive.bg_stroke = border_idle;
+        v.widgets.inactive.rounding = btn_round;
+        v.widgets.inactive.expansion = 0.0;
+
+        // hover：浅灰底 + 略深边
+        v.widgets.hovered.bg_fill = Color32::from_gray(235);
+        v.widgets.hovered.weak_bg_fill = Color32::from_gray(235);
+        v.widgets.hovered.bg_stroke = border_hover;
+        v.widgets.hovered.rounding = btn_round;
+        v.widgets.hovered.expansion = 0.0;
+
+        // pressed / 选中：略深灰底 + 深边
+        v.widgets.active.bg_fill = Color32::from_gray(218);
+        v.widgets.active.weak_bg_fill = Color32::from_gray(218);
+        v.widgets.active.bg_stroke = border_active;
+        v.widgets.active.rounding = btn_round;
+        v.widgets.active.expansion = 0.0;
+
+        // 下拉打开态
+        v.widgets.open.bg_fill = Color32::from_gray(218);
+        v.widgets.open.weak_bg_fill = Color32::from_gray(218);
+        v.widgets.open.bg_stroke = border_active;
+        v.widgets.open.rounding = btn_round;
+        v.widgets.open.expansion = 0.0;
+
+        // noninteractive 保留 Visuals::light() 默认：
+        //   bg_stroke 是 SidePanel/TopBottomPanel 拉伸分割线 + ui.separator() + 面板边界
+        //   一旦覆盖（哪怕设 NONE）这些都会消失。所以这里完全不动。
+
+        // 选择高亮蓝（cell 选中、textfield 选区）
+        v.selection.bg_fill = Color32::from_rgb(180, 215, 255);
+        v.selection.stroke = Stroke::new(1.0, Color32::from_rgb(50, 120, 200));
+
+        ctx.set_visuals(v);
+
+        let mut s = (*ctx.style()).clone();
+        s.spacing.button_padding = egui::vec2(8.0, 3.0); // Windows 按钮内边距更宽松
+        s.spacing.item_spacing = egui::vec2(6.0, 4.0);
+        ctx.set_style(s);
+    }
+
+    /// 测试主题：Material Design 风格——按钮无底色 + Material Blue 文本，
+    /// hover 加 8% 不透明度 overlay，pressed 加 12% overlay；选区/聚焦走 Material Primary 蓝。
+    /// 圆角 4px（Material 规范是 4px / 文本按钮，FAB 才用大圆角）。
+    #[allow(dead_code)]
+    fn apply_material_theme(ctx: &egui::Context) {
+        use egui::{Color32, Rounding, Stroke};
+        let mut v = egui::Visuals::light();
+
+        // Material 调色板（参考 Material 3 light scheme）
+        let primary = Color32::from_rgb(0x19, 0x76, 0xD2); // Blue 700
+        let surface = Color32::from_rgb(0xFA, 0xFA, 0xFA); // Grey 50
+        let on_surface = Color32::from_rgb(0x21, 0x21, 0x21); // Grey 900
+        let outline = Color32::from_rgb(0xE0, 0xE0, 0xE0); // Grey 300
+        let hover_overlay = Color32::from_rgba_unmultiplied(0x19, 0x76, 0xD2, 20); // primary @ 8%
+        let pressed_overlay = Color32::from_rgba_unmultiplied(0x19, 0x76, 0xD2, 30); // primary @ 12%
+
+        // 全局背景
+        v.window_fill = surface;
+        v.panel_fill = surface;
+        v.faint_bg_color = Color32::from_rgb(0xF5, 0xF5, 0xF5);
+        v.extreme_bg_color = Color32::WHITE;
+        v.override_text_color = Some(on_surface);
+
+        // 圆角：按钮/控件 4px；窗口/弹窗保持 0（避免 Material 卡片浮于直角面板上的违和）
+        let r = Rounding::same(4.0);
+        v.window_rounding = Rounding::ZERO;
+        v.menu_rounding = Rounding::ZERO;
+        v.window_shadow = egui::epaint::Shadow::NONE;
+        v.popup_shadow = egui::epaint::Shadow::NONE;
+
+        // inactive：透明底 + primary 文本色（Material text button）
+        v.widgets.inactive.bg_fill = Color32::TRANSPARENT;
+        v.widgets.inactive.weak_bg_fill = Color32::TRANSPARENT;
+        v.widgets.inactive.bg_stroke = Stroke::NONE;
+        v.widgets.inactive.fg_stroke = Stroke::new(1.0, primary);
+        v.widgets.inactive.rounding = r;
+        v.widgets.inactive.expansion = 0.0;
+
+        // hover：primary @ 8% overlay
+        v.widgets.hovered.bg_fill = hover_overlay;
+        v.widgets.hovered.weak_bg_fill = hover_overlay;
+        v.widgets.hovered.bg_stroke = Stroke::NONE;
+        v.widgets.hovered.fg_stroke = Stroke::new(1.0, primary);
+        v.widgets.hovered.rounding = r;
+        v.widgets.hovered.expansion = 0.0;
+
+        // pressed：primary @ 12% overlay
+        v.widgets.active.bg_fill = pressed_overlay;
+        v.widgets.active.weak_bg_fill = pressed_overlay;
+        v.widgets.active.bg_stroke = Stroke::NONE;
+        v.widgets.active.fg_stroke = Stroke::new(1.0, primary);
+        v.widgets.active.rounding = r;
+        v.widgets.active.expansion = 0.0;
+
+        // 下拉打开态
+        v.widgets.open.bg_fill = pressed_overlay;
+        v.widgets.open.weak_bg_fill = pressed_overlay;
+        v.widgets.open.bg_stroke = Stroke::NONE;
+        v.widgets.open.fg_stroke = Stroke::new(1.0, primary);
+        v.widgets.open.rounding = r;
+
+        // 不可交互（label / 分隔线）
+        v.widgets.noninteractive.bg_stroke = Stroke::new(1.0, outline);
+        v.widgets.noninteractive.fg_stroke = Stroke::new(1.0, on_surface);
+        v.widgets.noninteractive.rounding = Rounding::ZERO;
+
+        // 选区：primary @ 24%
+        v.selection.bg_fill = Color32::from_rgba_unmultiplied(0x19, 0x76, 0xD2, 60);
+        v.selection.stroke = Stroke::new(1.5, primary);
+
+        ctx.set_visuals(v);
+
+        let mut s = (*ctx.style()).clone();
+        s.spacing.button_padding = egui::vec2(12.0, 6.0); // Material 36px 触控目标
+        s.spacing.item_spacing = egui::vec2(8.0, 6.0);
+        // Material 字号：body-medium 14sp
+        for (_, font_id) in s.text_styles.iter_mut() {
+            if font_id.size < 14.0 {
+                font_id.size = 14.0;
+            }
+        }
+        ctx.set_style(s);
     }
 
     // --- Delegated accessors ---
