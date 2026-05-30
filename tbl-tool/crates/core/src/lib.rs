@@ -6,7 +6,10 @@ pub mod project;
 pub mod validate;
 pub mod ops;
 pub mod export;
+pub mod search;
 pub mod test_util;
+
+pub use search::name_matches;
 
 pub const CONFIG_FILE: &str = "tbl-tool.toml";
 pub const LOCK_FILE: &str = ".tbl-tool.lock";
