@@ -702,6 +702,8 @@ impl ProjectEngine {
                 self.log(format!("已标记删除 Group: {}", group_name));
             }
         }
+        // 删除/标删后，该 group 下所有节点的 validation_errors 不应再被 UI 聚合
+        self.validation_errors.retain(|(g, _, _, _)| g != group_name);
     }
 
     pub fn delete_node(&mut self, group_name: &str, node_name: &str) {
@@ -716,12 +718,13 @@ impl ProjectEngine {
                 e.deleted = true;
             }
         }
+        self.validation_errors.retain(|(g, n, _, _)| !(g == group_name && n == node_name));
         self.log(format!("已标记删除: {}/{}", group_name, node_name));
     }
 
     pub fn copy_node(&mut self, group_name: &str, node_name: &str, kind: NodeKind) {
+        let new_name = format!("{}_copy", node_name);
         if let Some(g) = self.project.groups.iter_mut().find(|g| g.name == group_name) {
-            let new_name = format!("{}_copy", node_name);
             let dst = g.dir.join(format!("{}.tbl", new_name));
             match kind {
                 NodeKind::Table => {
@@ -757,6 +760,8 @@ impl ProjectEngine {
             }
             self.log(format!("已复制: {}/{} → {}", group_name, node_name, new_name));
         }
+        // 拷贝出的节点是项目结构变化，无论 realtime_validate 开关如何，都需要建立 errors 索引
+        self.revalidate(group_name, &new_name);
     }
 
     // --- PLACEHOLDER_ACTIONS ---
@@ -834,6 +839,14 @@ impl ProjectEngine {
                     g.name = new_name.clone();
                     g.dir = new_dir;
                 }
+                // 旧 group 名下的 errors 索引 key 已失效，按 (old → new) 平移
+                let migrated: Vec<_> = self.validation_errors.iter()
+                    .filter(|(g, _, _, _)| g == old_name)
+                    .cloned().collect();
+                for entry in &migrated { self.validation_errors.remove(entry); }
+                for (_, n, r, c) in migrated {
+                    self.validation_errors.insert((new_name.clone(), n, r, c));
+                }
                 self.log(format!("重命名 Group: {} → {}", old_name, new_name));
             }
             ProjectAction::RenameNode { group, old_name, new_name } => {
@@ -854,8 +867,29 @@ impl ProjectEngine {
                         e.path = new_path;
                     }
                 }
+                // 同上：把 errors 索引从 (group, old_name) 平移到 (group, new_name)
+                let migrated: Vec<_> = self.validation_errors.iter()
+                    .filter(|(g, n, _, _)| g == group && n == old_name)
+                    .cloned().collect();
+                for entry in &migrated { self.validation_errors.remove(entry); }
+                for (g, _, r, c) in migrated {
+                    self.validation_errors.insert((g, new_name.clone(), r, c));
+                }
                 self.log(format!("重命名: {}/{} → {}", group, old_name, new_name));
             }
+        }
+        // 项目结构变化（新建 / 重命名）：
+        // 必须更新 validation_errors 索引，与 realtime_validate 开关无关。
+        // 新建节点：建立索引（新 enum 立刻报"至少需要一个条目"，新 table 主键 id 列符合规则故无错）。
+        // 重命名分支已在 match 内部完成 key 平移；新建分支在此统一 revalidate。
+        match action {
+            ProjectAction::NewGroup { .. } => {}  // 空 group 无节点，无需 revalidate
+            ProjectAction::NewTable { group, name }
+            | ProjectAction::NewConstant { group, name }
+            | ProjectAction::NewEnum { group, name } => {
+                self.revalidate(group, name);
+            }
+            _ => {}
         }
     }
 

@@ -623,7 +623,24 @@ RefIndex {
 }
 ```
 
-### A.4 日志格式
+### A.4 validation_errors 索引维护
+
+`ProjectEngine.validation_errors: HashSet<(group, name, row, col)>` 是 UI 红框 / 树节点 `!` 的数据源。维护时机：
+
+| 操作 | 索引变化 |
+|------|----------|
+| 加载 / reload / generate_test / clear | `revalidate_all` 重建全量 |
+| 单元格 / 表头编辑提交 | `revalidate(group, name)`，仅当 `realtime_validate=true` |
+| 保存 (`save_all`) | 内部 `revalidate_all`，与开关无关 |
+| 新建节点（NewTable / NewConstant / NewEnum） | `revalidate(group, name)`，与开关无关 |
+| 重命名 group / 节点 | (old_key) → (new_key) 平移 |
+| 拷贝节点 (`copy_node`) | `revalidate(group, new_name)` |
+| 删除节点 / 删除 group | 按 key retain 清除残留 entries |
+| 行/列结构操作（insert/delete row+col、粘贴、清空） | `revalidate(group, name)`，仅当 `realtime_validate=true` |
+
+`realtime_validate` 开关行为详见 @07.4.10.1。
+
+### A.5 日志格式
 
 项目级验证（`ProjectEngine::validate`）输出统一格式 `位置:[内容] -> 原因`：
 
