@@ -196,6 +196,11 @@ pub struct GridSnapshot {
     pub selected_cell_col: i32,
     pub selected_row: i32,
     pub selected_col: i32,
+    /// 矩形选区边界（含端）；-1 = 非区域选区。供 slint 端按 cell (ri,ci) 判断 in-range 高亮。
+    pub range_row_min: i32,
+    pub range_row_max: i32,
+    pub range_col_min: i32,
+    pub range_col_max: i32,
     pub selection_info: String,
     pub hover_info: String,
 }
@@ -218,6 +223,10 @@ impl GridSnapshot {
             selected_cell_col: -1,
             selected_row: -1,
             selected_col: -1,
+            range_row_min: -1,
+            range_row_max: -1,
+            range_col_min: -1,
+            range_col_max: -1,
             selection_info: String::new(),
             hover_info: String::new(),
         }
@@ -252,6 +261,29 @@ fn enrich_selection(snap: &mut GridSnapshot, state: &AppState) {
                 String::new()
             };
             snap.selection_info = snap.coord.clone();
+        }
+        GridSelection::CellRange { r1, c1, r2, c2 } => {
+            let rmin = r1.min(r2);
+            let rmax = r1.max(r2);
+            let cmin = c1.min(c2).min((snap.col_count.max(1) as usize) - 1);
+            let cmax = c1.max(c2).min((snap.col_count.max(1) as usize) - 1);
+            snap.range_row_min = rmin as i32;
+            snap.range_row_max = rmax as i32;
+            snap.range_col_min = cmin as i32;
+            snap.range_col_max = cmax as i32;
+            // anchor 仍当成"主选中"，让公式栏和 coord 跟着 anchor
+            snap.selected_cell_row = r1 as i32;
+            snap.selected_cell_col = c1.min((snap.col_count.max(1) as usize) - 1) as i32;
+            snap.coord = format!("{}{}:{}{}", col_letter(cmin), rmin + 1, col_letter(cmax), rmax + 1);
+            snap.formula_editable = false;
+            snap.formula_display = String::new();
+            snap.selection_info = format!(
+                "{}{}:{}{} ({}行×{}列, 共{}格)",
+                col_letter(cmin), rmin + 1,
+                col_letter(cmax), rmax + 1,
+                rmax - rmin + 1, cmax - cmin + 1,
+                (rmax - rmin + 1) * (cmax - cmin + 1),
+            );
         }
         GridSelection::Row(r) => {
             snap.selected_row = r as i32;

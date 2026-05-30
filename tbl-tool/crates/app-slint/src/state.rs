@@ -72,14 +72,33 @@ impl ColumnKind {
     }
 }
 
-/// grid 当前选区。step 4 仅支持 Cell；CellRange / Row / Col 留给后续 step。
+/// grid 当前选区。支持单格 / 矩形区域 / 整行 / 整列。
 #[derive(Clone, Debug, Default, PartialEq)]
 pub enum GridSelection {
     #[default]
     None,
     Cell(usize, usize),
+    /// 矩形区域：(r1,c1) 是 anchor（首格），(r2,c2) 是当前 shift+click 终点。
+    /// 渲染/复制/粘贴时按 min..=max 取范围。
+    CellRange { r1: usize, c1: usize, r2: usize, c2: usize },
     Row(usize),
     Col(usize),
+}
+
+impl GridSelection {
+    /// 返回选区覆盖的 (row_min, row_max, col_min, col_max)；None=未选择。
+    /// 整行/整列时 row/col 边界返回 usize::MAX 表示"无界"——调用方按 grid 实际尺寸截断。
+    pub fn bounds(&self) -> Option<(usize, usize, usize, usize)> {
+        match self {
+            Self::None => None,
+            Self::Cell(r, c) => Some((*r, *r, *c, *c)),
+            Self::CellRange { r1, c1, r2, c2 } => {
+                Some((*r1.min(r2), *r1.max(r2), *c1.min(c2), *c1.max(c2)))
+            }
+            Self::Row(r) => Some((*r, *r, 0, usize::MAX)),
+            Self::Col(c) => Some((0, usize::MAX, *c, *c)),
+        }
+    }
 }
 
 /// 类型选择器当前编辑的 cell 位置。

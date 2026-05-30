@@ -79,6 +79,11 @@ export component GridArea inherits Rectangle {
     in property <int> selected-row: -1;           // 整行选中
     in property <int> selected-cell-row: -1;
     in property <int> selected-cell-col: -1;
+    // 矩形选区边界（含端）；-1 = 非区域选区。Rust 端按 GridSelection::CellRange 计算。
+    in property <int> range-row-min: -1;
+    in property <int> range-row-max: -1;
+    in property <int> range-col-min: -1;
+    in property <int> range-col-max: -1;
     in property <string> empty-hint: "选择左侧节点查看详情";
     // inline 编辑（数据格）：editing-row/col 命中时覆盖 LineEdit。-1 = 不编辑。
     in property <int> editing-row: -1;
@@ -94,7 +99,11 @@ export component GridArea inherits Rectangle {
     callback header-clicked(int /* hrow */, int /* col */);
     callback header-double-clicked(int /* hrow */, int /* col */);
     callback cell-clicked(int /* row */, int /* col */);
+    callback cell-shift-clicked(int /* row */, int /* col */);
     callback cell-double-clicked(int /* row */, int /* col */);
+    /// 鼠标拖选：按下后拖动时持续触发。pi/cj = 起手 cell；mx/my = 相对该 cell 的鼠标偏移。
+    /// Rust 端按 col-w / row-h 推算终点 cell。
+    callback cell-drag(int /* anchor_row */, int /* anchor_col */, length /* mouse_x */, length /* mouse_y */);
     callback row-num-clicked(int);
     callback col-letter-clicked(int);
     callback col-context-menu(int, length, length);
@@ -299,10 +308,14 @@ export component GridArea inherits Rectangle {
                         property <bool> is-editing: ri == root.editing-row && ci == root.editing-col;
                         property <CellKind> col-kind: ci < root.column-kinds.length ? root.column-kinds[ci] : CellKind.text;
                         property <bool> is-export: col-kind == CellKind.export-enum-col || col-kind == CellKind.export-enum;
+                        property <bool> in-range: root.range-row-min >= 0
+                            && ri >= root.range-row-min && ri <= root.range-row-max
+                            && ci >= root.range-col-min && ci <= root.range-col-max;
                         width: Theme.col-w;
                         height: Theme.row-h;
                         background:
                             (ri == root.selected-cell-row && ci == root.selected-cell-col) ? Theme.bg-cell-selected
+                            : in-range ? Theme.bg-row-selected
                             : (ri == root.selected-row || ci == root.selected-col) ? Theme.bg-row-selected
                             : (row.row-color.alpha > 0 ? row.row-color : (mod(ri, 2) == 0 ? Theme.bg-panel : Theme.bg-row-alt));
                         border-color: cell.has-error ? Theme.border-error : Theme.border-light;
@@ -327,11 +340,24 @@ export component GridArea inherits Rectangle {
                             color: Theme.text-secondary;
                             vertical-alignment: center;
                         }
-                        // 普通 cell（非 Export）：单 TouchArea 处理 click / 双击 / 右键
+                        // 普通 cell（非 Export）：单 TouchArea 处理 click / 双击 / 右键 / 拖选
                         if !is-editing && !is-export: TouchArea {
-                            clicked => { root.cell-clicked(ri, ci); }
+                            // 记录最近一次按下时的 shift 修饰键状态；clicked 时分发 shift-clicked
+                            // vs cell-clicked。slint 的 clicked 信号不暴露 modifiers，故用 pointer-event 兜底。
+                            property <bool> last-shift: false;
+                            clicked => {
+                                if (self.last-shift) { root.cell-shift-clicked(ri, ci); }
+                                else { root.cell-clicked(ri, ci); }
+                            }
                             double-clicked => { root.cell-double-clicked(ri, ci); }
+                            // 按下后拖动：持续把鼠标位置发给 Rust，Rust 推算终点 cell 并扩 GridSelection
+                            moved => {
+                                root.cell-drag(ri, ci, self.mouse-x, self.mouse-y);
+                            }
                             pointer-event(e) => {
+                                if e.kind == PointerEventKind.down {
+                                    self.last-shift = e.modifiers.shift;
+                                }
                                 if e.button == PointerEventButton.right && e.kind == PointerEventKind.up {
                                     root.cell-context-menu(ri, ci,
                                         self.absolute-position.x + self.mouse-x,

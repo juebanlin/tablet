@@ -51,8 +51,11 @@ export component LogPanel inherits Rectangle {
                         color: Theme.text-secondary;
                         vertical-alignment: center;
                     }
-                    Text {
+                    // read-only TextInput：用户可选中/Ctrl+C 复制，不能编辑
+                    TextInput {
                         text: log.msg;
+                        read-only: true;
+                        single-line: true;
                         font-size: Theme.fs-tiny;
                         color: root.level-color(log.level);
                         vertical-alignment: center;

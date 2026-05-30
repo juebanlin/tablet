@@ -43,6 +43,10 @@ export component GridSection inherits Rectangle {
     in property <int> selected-row: -1;
     in property <int> selected-cell-row: -1;
     in property <int> selected-cell-col: -1;
+    in property <int> range-row-min: -1;
+    in property <int> range-row-max: -1;
+    in property <int> range-col-min: -1;
+    in property <int> range-col-max: -1;
     in property <int> editing-row: -1;
     in property <int> editing-col: -1;
     in property <int> editing-header-row: -1;
@@ -51,7 +55,9 @@ export component GridSection inherits Rectangle {
     callback header-clicked(int, int);
     callback header-double-clicked(int, int);
     callback cell-clicked(int, int);
+    callback cell-shift-clicked(int, int);
     callback cell-double-clicked(int, int);
+    callback cell-drag(int, int, length, length);
     callback row-num-clicked(int);
     callback col-letter-clicked(int);
     callback col-context-menu(int, length, length);
@@ -100,6 +106,10 @@ export component GridSection inherits Rectangle {
             selected-row: root.selected-row;
             selected-cell-row: root.selected-cell-row;
             selected-cell-col: root.selected-cell-col;
+            range-row-min: root.range-row-min;
+            range-row-max: root.range-row-max;
+            range-col-min: root.range-col-min;
+            range-col-max: root.range-col-max;
             editing-row: root.editing-row;
             editing-col: root.editing-col;
             editing-header-row: root.editing-header-row;
@@ -109,7 +119,9 @@ export component GridSection inherits Rectangle {
             header-clicked(hi, ci) => { root.header-clicked(hi, ci); }
             header-double-clicked(hi, ci) => { root.header-double-clicked(hi, ci); }
             cell-clicked(r, c) => { root.cell-clicked(r, c); }
+            cell-shift-clicked(r, c) => { root.cell-shift-clicked(r, c); }
             cell-double-clicked(r, c) => { root.cell-double-clicked(r, c); }
+            cell-drag(r, c, mx, my) => { root.cell-drag(r, c, mx, my); }
             row-num-clicked(r) => { root.row-num-clicked(r); }
             col-letter-clicked(c) => { root.col-letter-clicked(c); }
             col-context-menu(c, x, y) => { root.col-context-menu(c, x, y); }

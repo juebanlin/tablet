@@ -152,6 +152,10 @@ fn push_grid(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
     ui.set_grid_selected_row(snap.selected_row);
     ui.set_grid_selected_cell_row(snap.selected_cell_row);
     ui.set_grid_selected_cell_col(snap.selected_cell_col);
+    ui.set_grid_range_row_min(snap.range_row_min);
+    ui.set_grid_range_row_max(snap.range_row_max);
+    ui.set_grid_range_col_min(snap.range_col_min);
+    ui.set_grid_range_col_max(snap.range_col_max);
     // 单元格内 LineEdit 仅在 inline 编辑数据格（非公式栏 + 非表头编辑）时显示
     let editing_data_cell = editing_r >= 0 && !editing_in_formula && editing_header_row < 0;
     ui.set_grid_editing_row(if editing_data_cell { editing_r } else { -1 });
@@ -220,6 +224,10 @@ fn push_selection_only(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
     ui.set_grid_selected_row(snap.selected_row);
     ui.set_grid_selected_cell_row(snap.selected_cell_row);
     ui.set_grid_selected_cell_col(snap.selected_cell_col);
+    ui.set_grid_range_row_min(snap.range_row_min);
+    ui.set_grid_range_row_max(snap.range_row_max);
+    ui.set_grid_range_col_min(snap.range_col_min);
+    ui.set_grid_range_col_max(snap.range_col_max);
     ui.set_coord(snap.coord.into());
     ui.set_formula_display(snap.formula_display.into());
     ui.set_formula_editable(snap.formula_editable);
@@ -432,6 +440,44 @@ fn wire_grid(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
                 if open_ref_dlg { push_ref_picker(&ui, &s); }
             }
         });
+    }
+    // shift+click：扩展矩形选区到 (r,c)。anchor=当前选中单元格（无则取自身）。
+    {
+        let s = state.clone();
+        let weak = ui.as_weak();
+        let ui_for_buf = ui.as_weak();
+        ui.on_grid_cell_shift_clicked(move |r, c| {
+            let was_editing = {
+                let st = s.borrow();
+                st.editing.is_some() || st.editing_header_row >= 0
+            };
+            if was_editing { commit_editing(&ui_for_buf, &s); }
+            {
+                let mut st = s.borrow_mut();
+                let r = r as usize;
+                let c = c as usize;
+                let anchor = match st.grid_selection {
+                    GridSelection::Cell(ar, ac) => Some((ar, ac)),
+                    GridSelection::CellRange { r1, c1, .. } => Some((r1, c1)),
+                    GridSelection::Row(ar) => Some((ar, 0)),
+                    GridSelection::Col(ac) => Some((0, ac)),
+                    GridSelection::None => None,
+                };
+                let (r1, c1) = anchor.unwrap_or((r, c));
+                st.grid_selection = if r1 == r && c1 == c {
+                    GridSelection::Cell(r, c)
+                } else {
+                    GridSelection::CellRange { r1, c1, r2: r, c2: c }
+                };
+            }
+            if let Some(ui) = weak.upgrade() {
+                if was_editing { push_grid(&ui, &s); } else { push_selection_only(&ui, &s); }
+            }
+        });
+    }
+    // 鼠标拖选：暂时禁用，先把单格选中/复制粘贴做稳。多格选区后续步骤再启。
+    {
+        ui.on_grid_cell_drag(move |_anchor_r, _anchor_c, _mx, _my| {});
     }
     // Table 表头点击 → 按 grid_header_kinds[hi][ci] 分发：
     //   ExportEnumCol ：选中 + 同步 editing-export-index（slint popup.show 自动弹）
@@ -709,9 +755,23 @@ fn wire_grid(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
     {
         let s = state.clone();
         let weak = ui.as_weak();
+        let ui_for_buf = ui.as_weak();
         ui.on_grid_cell_context_menu(move |r, c, x, y| {
-            s.borrow_mut().ctx_menu.open_at(CtxMenuKind::GridCell { row: r as usize, col: c as usize }, x as f32, y as f32);
-            if let Some(ui) = weak.upgrade() { push_context_menu(&ui, &s); }
+            // 先 commit 任何在编辑的 cell；右键命中的格设为单格选区（与 Excel 一致：右键先选中再开菜单）。
+            let was_editing = {
+                let st = s.borrow();
+                st.editing.is_some() || st.editing_header_row >= 0
+            };
+            if was_editing { commit_editing(&ui_for_buf, &s); }
+            {
+                let mut st = s.borrow_mut();
+                st.grid_selection = GridSelection::Cell(r as usize, c as usize);
+                st.ctx_menu.open_at(CtxMenuKind::GridCell { row: r as usize, col: c as usize }, x as f32, y as f32);
+            }
+            if let Some(ui) = weak.upgrade() {
+                push_grid(&ui, &s);
+                push_context_menu(&ui, &s);
+            }
         });
     }
 }
@@ -823,6 +883,77 @@ fn wire_focus(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
         commit_editing(&ui_for_buf, &s);
         if let Some(ui) = weak.upgrade() { push_grid(&ui, &s); }
     });
+
+    // 键盘快捷键：复制/粘贴/删除。anchor 来自当前 GridSelection；无选区时 no-op。
+    {
+        let s = state.clone();
+        let weak = ui.as_weak();
+        ui.on_grid_shortcut_copy(move || {
+            let anchor = grid_selection_anchor(&s);
+            if let Some((r, c)) = anchor {
+                perform_grid_cell_action(&s, r, c, "grid.cell-copy", "Ctrl+C");
+                if let Some(ui) = weak.upgrade() {
+                    push_grid(&ui, &s);
+                    push_logs(&ui, &s);
+                }
+            }
+        });
+    }
+    {
+        let s = state.clone();
+        let weak = ui.as_weak();
+        ui.on_grid_shortcut_paste(move || {
+            let anchor = grid_selection_anchor(&s);
+            if let Some((r, c)) = anchor {
+                perform_grid_cell_action(&s, r, c, "grid.cell-paste", "Ctrl+V");
+                if let Some(ui) = weak.upgrade() {
+                    push_grid(&ui, &s);
+                    push_logs(&ui, &s);
+                }
+            }
+        });
+    }
+    {
+        let s = state.clone();
+        let weak = ui.as_weak();
+        ui.on_grid_shortcut_delete(move || {
+            let anchor = grid_selection_anchor(&s);
+            if let Some((r, c)) = anchor {
+                perform_grid_cell_action(&s, r, c, "grid.cell-clear", "Delete");
+                if let Some(ui) = weak.upgrade() {
+                    push_grid(&ui, &s);
+                    push_logs(&ui, &s);
+                }
+            }
+        });
+    }
+    // 调试键盘事件（仅落到 log 文件，不进 UI 日志框）：
+    // 用于排查 Ctrl 修饰键的字符映射问题，UI 不需要。
+    {
+        let s = state.clone();
+        ui.on_debug_key(move |text, ctrl| {
+            // 单按可见字符（如直接按 c）不记录，避免噪音
+            let is_plain_visible = !ctrl && text.chars().count() == 1
+                && text.chars().next().map_or(false, |c| !c.is_control());
+            if is_plain_visible { return; }
+            let bytes: Vec<String> = text.as_bytes().iter().map(|b| format!("{:02x}", b)).collect();
+            log::debug!("[键盘] text={:?} bytes=[{}] ctrl={}", text.as_str(), bytes.join(" "), ctrl);
+            // 占位：让 borrow 链路保持非空，避免编译器警告
+            let _ = s.borrow();
+        });
+    }
+}
+
+/// 取当前 GridSelection 的 anchor (左上角)；None=无选区。
+fn grid_selection_anchor(state: &Rc<RefCell<AppState>>) -> Option<(usize, usize)> {
+    let st = state.borrow();
+    match st.grid_selection {
+        GridSelection::Cell(r, c) => Some((r, c)),
+        GridSelection::CellRange { r1, c1, r2, c2 } => Some((r1.min(r2), c1.min(c2))),
+        GridSelection::Row(r) => Some((r, 0)),
+        GridSelection::Col(c) => Some((0, c)),
+        GridSelection::None => None,
+    }
 }
 
 /// Constant ExportEnumCol popup 选项被选中：写回 entries[r].export。
@@ -1642,34 +1773,51 @@ fn perform_grid_row_action(state: &Rc<RefCell<AppState>>, row: usize, action: &s
     if st.realtime_validate { st.engine.revalidate(&group, &name); }
 }
 
-/// 单元格右键 → 复制/粘贴/删除内容。复制/粘贴使用系统剪贴板（TSV 单格）。
-fn perform_grid_cell_action(state: &Rc<RefCell<AppState>>, r: usize, c: usize, action: &str) {
+/// 单元格右键 → 复制/粘贴/删除内容（**单格**）。
+/// (r,c) 来自右键命中的格 / 快捷键时的 anchor cell。
+/// 不依赖 GridSelection；多格区域逻辑后续再加。
+/// 单元格 copy/paste/clear。`tag` 决定日志前缀：右键传中文动词（复制/粘贴/清空），
+/// 键盘传按键组合（Ctrl+C/Ctrl+V/Delete）。
+fn perform_grid_cell_action(state: &Rc<RefCell<AppState>>, r: usize, c: usize, action: &str, tag: &str) {
     use arboard::Clipboard;
+    let coord = format!("{}{}", convert::col_letter(c), r + 1);
     match action {
         "grid.cell-copy" => {
             let raw = {
                 let st = state.borrow();
                 convert::raw_cell_for(&st, r, c)
             };
-            if let Ok(mut cb) = Clipboard::new() {
-                let _ = cb.set_text(raw);
+            match Clipboard::new().and_then(|mut cb| cb.set_text(raw.clone())) {
+                Ok(()) => state.borrow_mut().engine.log(format!("[{}] {} = \"{}\"", tag, coord, raw)),
+                Err(e) => state.borrow_mut().engine.log(format!("[{}] {} 失败: {}", tag, coord, e)),
             }
-            state.borrow_mut().engine.log("[右键] 已复制".to_string());
         }
         "grid.cell-paste" => {
             let text = match Clipboard::new().and_then(|mut cb| cb.get_text()) {
                 Ok(t) => t,
-                Err(_) => return,
+                Err(e) => {
+                    state.borrow_mut().engine.log(format!("[{}] {} 读剪贴板失败: {}", tag, coord, e));
+                    return;
+                }
             };
-            // 单格粘贴：取首行首格内容
+            // 单格粘贴：取首行首格
             let single = text.lines().next().and_then(|l| l.split('\t').next()).unwrap_or("").to_string();
+            let before = {
+                let st = state.borrow();
+                convert::raw_cell_for(&st, r, c)
+            };
             let mut st = state.borrow_mut();
             st.set_cell(r, c, &single);
-            st.engine.log("[右键] 已粘贴".to_string());
+            st.engine.log(format!("[{}] {} \"{}\" → \"{}\"", tag, coord, before, single));
         }
         "grid.cell-clear" => {
+            let before = {
+                let st = state.borrow();
+                convert::raw_cell_for(&st, r, c)
+            };
             let mut st = state.borrow_mut();
             st.set_cell(r, c, "");
+            st.engine.log(format!("[{}] {} \"{}\" → \"\"", tag, coord, before));
         }
         _ => {}
     }
@@ -1747,7 +1895,13 @@ fn wire_context_menu(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
                 // ── grid 单元格 ──
                 (Some(CtxMenuKind::GridCell { row, col }), action @ ("grid.cell-copy"
                     | "grid.cell-paste" | "grid.cell-clear")) => {
-                    perform_grid_cell_action(&s, row, col, action);
+                    let tag = match action {
+                        "grid.cell-copy" => "复制",
+                        "grid.cell-paste" => "粘贴",
+                        "grid.cell-clear" => "清空",
+                        _ => "操作",
+                    };
+                    perform_grid_cell_action(&s, row, col, action, tag);
                 }
                 _ => {}
             }

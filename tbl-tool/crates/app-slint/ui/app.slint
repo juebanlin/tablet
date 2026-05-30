@@ -75,6 +75,10 @@ export component AppWindow inherits Window {
     in property <int> grid-selected-row: -1;
     in property <int> grid-selected-cell-row: -1;
     in property <int> grid-selected-cell-col: -1;
+    in property <int> grid-range-row-min: -1;
+    in property <int> grid-range-row-max: -1;
+    in property <int> grid-range-col-min: -1;
+    in property <int> grid-range-col-max: -1;
     in property <int> grid-editing-row: -1;
     in property <int> grid-editing-col: -1;
     in property <int> grid-editing-header-row: -1;
@@ -83,7 +87,9 @@ export component AppWindow inherits Window {
     callback grid-header-clicked(int, int);
     callback grid-header-double-clicked(int, int);
     callback grid-cell-clicked(int, int);
+    callback grid-cell-shift-clicked(int, int);
     callback grid-cell-double-clicked(int, int);
+    callback grid-cell-drag(int, int, length, length);
     callback grid-row-num-clicked(int);
     callback grid-col-letter-clicked(int);
     callback grid-col-context-menu(int, length, length);
@@ -197,6 +203,13 @@ export component AppWindow inherits Window {
     callback cf-confirm();
     callback cf-cancel();
 
+    // ── 键盘快捷键 ──────────────────────────────────────────
+    // grid 区获得焦点时（focus-sink 抢焦后）触发：复制/粘贴/删除走与右键菜单同一路径
+    callback grid-shortcut-copy();
+    callback grid-shortcut-paste();
+    callback grid-shortcut-delete();
+    callback debug-key(string, bool);  // (text, ctrl) 调试用
+
     // ── 全局焦点抽屉 ────────────────────────────────────────
     // 用来在点击 tree/cell/toolbar 等区域时抢走 LineEdit/TextInput 的焦点，
     // 配合 Rust 端 commit_editing 让搜索框 / 公式栏 / cell 编辑都"点其它就退出"
@@ -207,8 +220,29 @@ export component AppWindow inherits Window {
         root.commit-pending-edit();
     }
     focus-sink := FocusScope {
-        x: -1px; y: -1px;
+        x: 0px; y: 0px;
         width: 0px; height: 0px;
+        // grid 区点击后焦点会落在这里（drop-focus 调 self.focus()）。
+        // 监听 Ctrl+C/V 和 Delete/Backspace；TextEdit/LineEdit 拥有焦点时这里收不到事件，所以编辑态不冲突。
+        key-pressed(e) => {
+            // 调试：把每个键事件汇报给 Rust
+            root.debug-key(e.text, e.modifiers.control);
+            // Windows winit：Ctrl+letter 时 e.text 可能是控制字符（\u{3}=Ctrl+C, \u{16}=Ctrl+V），
+            // 也可能仍是 "c"/"v"（取决于键盘布局/IME），两种都接住。
+            if (e.modifiers.control && (e.text == "c" || e.text == "C" || e.text == "\u{3}")) {
+                root.grid-shortcut-copy();
+                return accept;
+            }
+            if (e.modifiers.control && (e.text == "v" || e.text == "V" || e.text == "\u{16}")) {
+                root.grid-shortcut-paste();
+                return accept;
+            }
+            if (e.text == Key.Delete || e.text == Key.Backspace) {
+                root.grid-shortcut-delete();
+                return accept;
+            }
+            return reject;
+        }
     }
     // 全屏底层 fallback：点击到任何"无人认领的空白"都触发 drop-focus
     // z-order 在所有内容之前，前景的 TouchArea（按钮、cell、节点）会优先吃掉点击；
@@ -275,6 +309,10 @@ export component AppWindow inherits Window {
                 selected-row: root.grid-selected-row;
                 selected-cell-row: root.grid-selected-cell-row;
                 selected-cell-col: root.grid-selected-cell-col;
+                range-row-min: root.grid-range-row-min;
+                range-row-max: root.grid-range-row-max;
+                range-col-min: root.grid-range-col-min;
+                range-col-max: root.grid-range-col-max;
                 editing-row: root.grid-editing-row;
                 editing-col: root.grid-editing-col;
                 editing-header-row: root.grid-editing-header-row;
@@ -284,7 +322,9 @@ export component AppWindow inherits Window {
                 header-clicked(hi, ci) => { root.drop-focus(); root.grid-header-clicked(hi, ci); }
                 header-double-clicked(hi, ci) => { root.drop-focus(); root.grid-header-double-clicked(hi, ci); }
                 cell-clicked(r, c) => { root.drop-focus(); root.grid-cell-clicked(r, c); }
+                cell-shift-clicked(r, c) => { root.drop-focus(); root.grid-cell-shift-clicked(r, c); }
                 cell-double-clicked(r, c) => { root.drop-focus(); root.grid-cell-double-clicked(r, c); }
+                cell-drag(r, c, mx, my) => { root.grid-cell-drag(r, c, mx, my); }
                 row-num-clicked(r) => { root.drop-focus(); root.grid-row-num-clicked(r); }
                 col-letter-clicked(c) => { root.drop-focus(); root.grid-col-letter-clicked(c); }
                 col-context-menu(c, x, y) => { root.grid-col-context-menu(c, x, y); }
