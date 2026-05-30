@@ -37,33 +37,41 @@ export component ContextMenu inherits Rectangle {
     if root.open: Rectangle {
         x: root.menu-x;
         y: root.menu-y;
-        width: 160px;
-        height: root.items.length * 26px + 4px;
+        // 宽度由内容驱动：取 VerticalLayout 自然 preferred-width（其内最长 Text + padding 决定），
+        // 再 clamp 到 [140, 280] 防止过窄/过宽。Rectangle 默认占满父容器，所以必须显式绑。
+        width: max(140px, min(280px, vlayout.preferred-width));
+        height: vlayout.preferred-height;
         background: Theme.bg-panel;
         border-color: Theme.border;
         border-width: 1px;
         drop-shadow-blur: 6px;
         drop-shadow-color: #00000040;
-        VerticalLayout {
-            padding: 2px;
+        vlayout := VerticalLayout {
+            padding-top: 4px;
+            padding-bottom: 4px;
             spacing: 0;
             for item[i] in root.items: Rectangle {
-                height: item.is-separator ? 5px : 24px;
+                height: item.is-separator ? 7px : 28px;
                 background: hover-area.has-hover && !item.is-separator && !item.disabled
                     ? Theme.bg-row-selected : transparent;
                 if item.is-separator: Rectangle {
                     x: 4px;
-                    y: 2px;
+                    y: 3px;
                     width: parent.width - 8px;
                     height: 1px;
                     background: Theme.border-light;
                 }
-                if !item.is-separator: Text {
-                    x: Theme.sp-3;
-                    text: item.label;
-                    font-size: Theme.fs-small;
-                    color: item.disabled ? Theme.text-disabled : Theme.text-primary;
-                    vertical-alignment: center;
+                if !item.is-separator: HorizontalLayout {
+                    padding-left: 14px;
+                    padding-right: 14px;
+                    Text {
+                        text: item.label;
+                        font-size: Theme.fs-small;
+                        color: item.disabled ? Theme.text-disabled : Theme.text-primary;
+                        vertical-alignment: center;
+                        horizontal-alignment: left;
+                        overflow: elide;
+                    }
                 }
                 hover-area := TouchArea {
                     enabled: !item.is-separator && !item.disabled;
