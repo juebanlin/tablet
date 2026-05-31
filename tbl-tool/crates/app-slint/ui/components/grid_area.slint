@@ -129,6 +129,15 @@ export component GridArea inherits Rectangle {
     property <length> export-popup-y: 0px;
     property <bool> export-popup-open: false;
 
+    // 表头与数据共享的水平滚动量。data ScrollView 的 viewport-x 双向绑这里，
+    // 表头列字母行 + 各表头行用 x: scroll-x 跟随；行号列不参与水平滚动。
+    in-out property <length> scroll-x: 0px;
+    // 数据区与行号列共享的垂直滚动量。data ScrollView 的 viewport-y 双向绑这里，
+    // 行号列用 y: scroll-y 跟随；表头不参与垂直滚动。
+    in-out property <length> scroll-y: 0px;
+    property <length> total-col-w: Theme.col-w * root.col-count;
+    property <length> total-rows-h: Theme.row-h * root.data-rows.length;
+
     // 字母列函数：A..Z（>26 暂不支持，显示 "?"）。
     // Slint 1.x 不支持 string 下标，因此用一长串三元展开。
     pure function col-letter(c: int) -> string {
@@ -155,115 +164,121 @@ export component GridArea inherits Rectangle {
     if root.col-count > 0 && root.header-rows.length > 0: VerticalLayout {
         spacing: 0;
 
-        // ───── 固定表头 ─────
+        // ───── 固定表头（垂直固定；水平随 scroll-x 跟随数据）─────
         Rectangle {
             height: Theme.row-h * (1 + root.header-rows.length);
             background: Theme.bg-header;
 
-            VerticalLayout {
+            HorizontalLayout {
                 spacing: 0;
 
-                // 列字母行
-                HorizontalLayout {
-                    spacing: 0;
-                    Rectangle {
-                        width: Theme.row-num-w;
-                        background: Theme.bg-header;
-                        border-color: Theme.border;
-                        border-width: 0.5px;
-                    }
-                    for c in root.col-count: Rectangle {
-                        width: Theme.col-w;
-                        height: Theme.row-h;
-                        background: c == root.selected-col ? Theme.bg-cell-selected : Theme.bg-header;
-                        border-color: Theme.border;
-                        border-width: 0.5px;
-                        Text {
-                            text: root.col-letter(c);
-                            font-size: Theme.fs-tiny;
-                            color: Theme.text-secondary;
-                            horizontal-alignment: center;
-                            vertical-alignment: center;
-                        }
-                        TouchArea {
-                            clicked => { root.col-letter-clicked(c); }
-                            pointer-event(e) => {
-                                if e.button == PointerEventButton.right && e.kind == PointerEventKind.up {
-                                    root.col-context-menu(c,
-                                        self.absolute-position.x + self.mouse-x,
-                                        self.absolute-position.y + self.mouse-y);
-                                }
-                            }
-                        }
-                    }
+                // 行号列 gutter：始终固定，不参与水平滚动
+                Rectangle {
+                    width: Theme.row-num-w;
+                    background: Theme.bg-header;
+                    border-color: Theme.border;
+                    border-width: 0.5px;
                 }
 
-                // 表头各行（desc/type/export/field）
-                for hrow[hi] in root.header-rows: HorizontalLayout {
-                    spacing: 0;
+                // 列字母行 + 各表头行：用 clip 裁剪，内容按 scroll-x 平移
+                Rectangle {
+                    horizontal-stretch: 1;
+                    clip: true;
                     Rectangle {
-                        width: Theme.row-num-w;
-                        background: Theme.bg-header;
-                        border-color: Theme.border;
-                        border-width: 0.5px;
-                    }
-                    for cell[ci] in hrow: Rectangle {
-                        property <bool> is-editing: hi == root.editing-header-row && ci == root.editing-header-col;
-                        property <bool> is-export: cell.kind == CellKind.export-enum || cell.kind == CellKind.export-enum-col;
-                        width: Theme.col-w;
-                        height: Theme.row-h;
-                        background: cell.kind == CellKind.read-only
-                            ? Theme.bg-header-readonly
-                            : (ci == root.selected-col ? Theme.bg-cell-selected : Theme.bg-header);
-                        border-color: cell.has-error ? Theme.border-error : Theme.border;
-                        border-width: cell.has-error ? 1.5px : 0.5px;
-                        // 非编辑态：纯 Text（编辑态时不渲染）
-                        if !is-editing: Text {
-                            text: cell.text;
-                            font-size: Theme.fs-tiny;
-                            color: cell.kind == CellKind.read-only ? Theme.text-readonly : cell.color;
-                            horizontal-alignment: center;
-                            vertical-alignment: center;
-                        }
-                        // 下拉箭头（type/export 类）
-                        if !is-editing && (cell.kind == CellKind.type-enum
-                          || cell.kind == CellKind.export-enum
-                          || cell.kind == CellKind.type-enum-col
-                          || cell.kind == CellKind.export-enum-col): Text {
-                            x: parent.width - 12px;
-                            text: "▼";
-                            font-size: 8px;
-                            color: Theme.text-secondary;
-                            vertical-alignment: center;
-                        }
-                        // 编辑态：表头 desc / field 等 Text 类——LineEdit 占满 cell
-                        if is-editing: LineEdit {
-                            x: 0;
-                            y: 0;
-                            width: parent.width;
-                            height: parent.height;
-                            text <=> root.editing-buffer;
-                            init => {
-                                self.focus();
-                                self.select-all();
+                        x: root.scroll-x;
+                        y: 0;
+                        width: root.total-col-w;
+                        height: parent.height;
+                        VerticalLayout {
+                            spacing: 0;
+
+                            // 列字母行
+                            HorizontalLayout {
+                                spacing: 0;
+                                for c in root.col-count: Rectangle {
+                                    width: Theme.col-w;
+                                    height: Theme.row-h;
+                                    background: c == root.selected-col ? Theme.bg-cell-selected : Theme.bg-header;
+                                    border-color: Theme.border;
+                                    border-width: 0.5px;
+                                    Text {
+                                        text: root.col-letter(c);
+                                        font-size: Theme.fs-tiny;
+                                        color: Theme.text-secondary;
+                                        horizontal-alignment: center;
+                                        vertical-alignment: center;
+                                    }
+                                    TouchArea {
+                                        clicked => { root.col-letter-clicked(c); }
+                                        pointer-event(e) => {
+                                            if e.button == PointerEventButton.right && e.kind == PointerEventKind.up {
+                                                root.col-context-menu(c,
+                                                    self.absolute-position.x + self.mouse-x,
+                                                    self.absolute-position.y + self.mouse-y);
+                                            }
+                                        }
+                                    }
+                                }
                             }
-                            accepted(s) => { root.cell-edit-committed(); }
-                        }
-                        // 普通可编辑（非 Export）的 TouchArea：单击选中 / 双击编辑
-                        if cell.kind != CellKind.read-only && !is-editing && !is-export: TouchArea {
-                            clicked => { root.header-clicked(hi, ci); }
-                            double-clicked => { root.header-double-clicked(hi, ci); }
-                        }
-                        // Export 单元格：先设 popup 状态（保证 TouchArea 销毁前 root 状态写完），再调 root callback
-                        if is-export && !is-editing: TouchArea {
-                            clicked => {
-                                root.export-target-is-header = true;
-                                root.export-target-row = hi;
-                                root.export-target-col = ci;
-                                root.export-popup-x = self.absolute-position.x - root.absolute-position.x;
-                                root.export-popup-y = self.absolute-position.y - root.absolute-position.y + parent.height;
-                                root.export-popup-open = true;
-                                root.header-clicked(hi, ci);  // 让 Rust 同步 editing-export-index（最后调，避免 TouchArea 因 push_grid 销毁后丢状态）
+
+                            // 表头各行（desc/type/export/field）
+                            for hrow[hi] in root.header-rows: HorizontalLayout {
+                                spacing: 0;
+                                for cell[ci] in hrow: Rectangle {
+                                    property <bool> is-editing: hi == root.editing-header-row && ci == root.editing-header-col;
+                                    property <bool> is-export: cell.kind == CellKind.export-enum || cell.kind == CellKind.export-enum-col;
+                                    width: Theme.col-w;
+                                    height: Theme.row-h;
+                                    background: cell.kind == CellKind.read-only
+                                        ? Theme.bg-header-readonly
+                                        : (ci == root.selected-col ? Theme.bg-cell-selected : Theme.bg-header);
+                                    border-color: cell.has-error ? Theme.border-error : Theme.border;
+                                    border-width: cell.has-error ? 1.5px : 0.5px;
+                                    if !is-editing: Text {
+                                        text: cell.text;
+                                        font-size: Theme.fs-tiny;
+                                        color: cell.kind == CellKind.read-only ? Theme.text-readonly : cell.color;
+                                        horizontal-alignment: center;
+                                        vertical-alignment: center;
+                                    }
+                                    if !is-editing && (cell.kind == CellKind.type-enum
+                                      || cell.kind == CellKind.export-enum
+                                      || cell.kind == CellKind.type-enum-col
+                                      || cell.kind == CellKind.export-enum-col): Text {
+                                        x: parent.width - 12px;
+                                        text: "▼";
+                                        font-size: 8px;
+                                        color: Theme.text-secondary;
+                                        vertical-alignment: center;
+                                    }
+                                    if is-editing: LineEdit {
+                                        x: 0;
+                                        y: 0;
+                                        width: parent.width;
+                                        height: parent.height;
+                                        text <=> root.editing-buffer;
+                                        init => {
+                                            self.focus();
+                                            self.select-all();
+                                        }
+                                        accepted(s) => { root.cell-edit-committed(); }
+                                    }
+                                    if cell.kind != CellKind.read-only && !is-editing && !is-export: TouchArea {
+                                        clicked => { root.header-clicked(hi, ci); }
+                                        double-clicked => { root.header-double-clicked(hi, ci); }
+                                    }
+                                    if is-export && !is-editing: TouchArea {
+                                        clicked => {
+                                            root.export-target-is-header = true;
+                                            root.export-target-row = hi;
+                                            root.export-target-col = ci;
+                                            root.export-popup-x = self.absolute-position.x - root.absolute-position.x;
+                                            root.export-popup-y = self.absolute-position.y - root.absolute-position.y + parent.height;
+                                            root.export-popup-open = true;
+                                            root.header-clicked(hi, ci);
+                                        }
+                                    }
+                                }
                             }
                         }
                     }
@@ -271,146 +286,173 @@ export component GridArea inherits Rectangle {
             }
         }
 
-        // ───── 数据区（可滚动）─────
-        ScrollView {
-            // 背景兜底 TouchArea：点击数据区空白处 → blank-clicked（用于 Excel 风格 commit）
-            // 在 cell 之前声明，cell 的 TouchArea 会盖住它，只有点到空白才触发
-            TouchArea {
-                clicked => { root.blank-clicked(); }
-            }
-            VerticalLayout {
+        // ───── 数据区 ─────
+        // 拆成左侧行号列（固定水平、跟随 scroll-y 垂直滚）+ 右侧数据 ScrollView（h+v 滚）
+        Rectangle {
+            vertical-stretch: 1;
+            HorizontalLayout {
                 spacing: 0;
-                for row[ri] in root.data-rows: HorizontalLayout {
-                    spacing: 0;
-                    // 行号
+
+                // 行号列：clip + 内层 y: scroll-y 跟随数据 ScrollView 的垂直偏移
+                Rectangle {
+                    width: Theme.row-num-w;
+                    clip: true;
+                    background: Theme.bg-header;
                     Rectangle {
-                        width: Theme.row-num-w;
-                        height: Theme.row-h;
-                        background: ri == root.selected-row ? Theme.bg-row-selected : Theme.bg-header;
-                        border-color: Theme.border;
-                        border-width: 0.5px;
-                        Text {
-                            text: ri + 1;
-                            font-size: Theme.fs-tiny;
-                            color: Theme.text-secondary;
-                            horizontal-alignment: center;
-                            vertical-alignment: center;
-                        }
-                        TouchArea {
-                            clicked => { root.row-num-clicked(ri); }
-                            pointer-event(e) => {
-                                if e.button == PointerEventButton.right && e.kind == PointerEventKind.up {
-                                    root.row-context-menu(ri,
-                                        self.absolute-position.x + self.mouse-x,
-                                        self.absolute-position.y + self.mouse-y);
+                        x: 0;
+                        y: root.scroll-y;
+                        width: parent.width;
+                        height: root.total-rows-h;
+                        VerticalLayout {
+                            spacing: 0;
+                            for row[ri] in root.data-rows: Rectangle {
+                                width: parent.width;
+                                height: Theme.row-h;
+                                background: ri == root.selected-row ? Theme.bg-row-selected : Theme.bg-header;
+                                border-color: Theme.border;
+                                border-width: 0.5px;
+                                Text {
+                                    text: ri + 1;
+                                    font-size: Theme.fs-tiny;
+                                    color: Theme.text-secondary;
+                                    horizontal-alignment: center;
+                                    vertical-alignment: center;
+                                }
+                                TouchArea {
+                                    clicked => { root.row-num-clicked(ri); }
+                                    pointer-event(e) => {
+                                        if e.button == PointerEventButton.right && e.kind == PointerEventKind.up {
+                                            root.row-context-menu(ri,
+                                                self.absolute-position.x + self.mouse-x,
+                                                self.absolute-position.y + self.mouse-y);
+                                        }
+                                    }
                                 }
                             }
                         }
                     }
-                    for cell[ci] in row.cells: Rectangle {
-                        property <bool> is-editing: ri == root.editing-row && ci == root.editing-col;
-                        property <CellKind> col-kind: ci < root.column-kinds.length ? root.column-kinds[ci] : CellKind.text;
-                        property <bool> is-export: col-kind == CellKind.export-enum-col || col-kind == CellKind.export-enum;
-                        property <bool> in-range: root.range-row-min >= 0
-                            && ri >= root.range-row-min && ri <= root.range-row-max
-                            && ci >= root.range-col-min && ci <= root.range-col-max;
-                        width: Theme.col-w;
-                        height: Theme.row-h;
-                        background:
-                            (ri == root.selected-cell-row && ci == root.selected-cell-col) ? Theme.bg-cell-selected
-                            : in-range ? Theme.bg-row-selected
-                            : (ri == root.selected-row || ci == root.selected-col) ? Theme.bg-row-selected
-                            : (row.row-color.alpha > 0 ? row.row-color : (mod(ri, 2) == 0 ? Theme.bg-panel : Theme.bg-row-alt));
-                        border-color: cell.has-error ? Theme.border-error : Theme.border-light;
-                        border-width: cell.has-error ? 1.5px : 0.5px;
-                        // 非编辑态显示文字
-                        if !is-editing: Text {
-                            text: cell.text;
-                            font-size: Theme.fs-small;
-                            color: cell.is-empty-ref ? Theme.text-disabled : Theme.text-primary;
-                            horizontal-alignment: left;
-                            vertical-alignment: center;
-                            x: 4px;
-                        }
-                        // 下拉箭头（ExportEnumCol / TypeEnumCol / Ref 列）
-                        if !is-editing && (is-export
-                          || col-kind == CellKind.type-enum-col
-                          || col-kind == CellKind.type-enum
-                          || col-kind == CellKind.ref): Text {
-                            x: parent.width - 12px;
-                            text: "▼";
-                            font-size: 8px;
-                            color: Theme.text-secondary;
-                            vertical-alignment: center;
-                        }
-                        // 普通 cell（非 Export）：单 TouchArea 处理 click / 双击 / 右键 / 拖选
-                        if !is-editing && !is-export: TouchArea {
-                            // 记录最近一次按下时的 shift 修饰键状态；clicked 时分发 shift-clicked
-                            // vs cell-clicked。slint 的 clicked 信号不暴露 modifiers，故用 pointer-event 兜底。
-                            property <bool> last-shift: false;
-                            // 记录从按下后是否产生过位移（dr/dc 任一非零）。仅在产生位移时通知 Rust 扩选区，
-                            // 避免单击释放前的微小抖动把单格强制扩成 CellRange。
-                            property <bool> dragged: false;
-                            clicked => {
-                                if (self.last-shift) { root.cell-shift-clicked(ri, ci); }
-                                else { root.cell-clicked(ri, ci); }
-                            }
-                            double-clicked => { root.cell-double-clicked(ri, ci); }
-                            // 按下后拖动：持续把鼠标位置发给 Rust，Rust 推算终点 cell 并扩 GridSelection
-                            moved => {
-                                self.dragged = true;
-                                root.cell-drag(ri, ci, self.mouse-x, self.mouse-y);
-                            }
-                            pointer-event(e) => {
-                                if e.kind == PointerEventKind.down {
-                                    self.last-shift = e.modifiers.shift;
-                                    self.dragged = false;
-                                    // 左键按下立刻通知 Rust 重置 anchor 到本 cell，旧选区清掉。
-                                    // shift+down 不重置（让 shift+click 能从旧 anchor 扩展）。
-                                    if e.button == PointerEventButton.left && !e.modifiers.shift {
-                                        root.cell-pressed(ri, ci);
+                }
+
+                // 数据 ScrollView：水平 + 垂直滚动；viewport-x / viewport-y 与 root 双向绑
+                ScrollView {
+                    horizontal-stretch: 1;
+                    viewport-x <=> root.scroll-x;
+                    viewport-y <=> root.scroll-y;
+                    // 背景兜底 TouchArea：点击数据区空白处 → blank-clicked（用于 Excel 风格 commit）
+                    // 在 cell 之前声明，cell 的 TouchArea 会盖住它，只有点到空白才触发
+                    TouchArea {
+                        clicked => { root.blank-clicked(); }
+                    }
+                    VerticalLayout {
+                        spacing: 0;
+                        for row[ri] in root.data-rows: HorizontalLayout {
+                            spacing: 0;
+                            for cell[ci] in row.cells: Rectangle {
+                                property <bool> is-editing: ri == root.editing-row && ci == root.editing-col;
+                                property <CellKind> col-kind: ci < root.column-kinds.length ? root.column-kinds[ci] : CellKind.text;
+                                property <bool> is-export: col-kind == CellKind.export-enum-col || col-kind == CellKind.export-enum;
+                                property <bool> in-range: root.range-row-min >= 0
+                                    && ri >= root.range-row-min && ri <= root.range-row-max
+                                    && ci >= root.range-col-min && ci <= root.range-col-max;
+                                width: Theme.col-w;
+                                height: Theme.row-h;
+                                background:
+                                    (ri == root.selected-cell-row && ci == root.selected-cell-col) ? Theme.bg-cell-selected
+                                    : in-range ? Theme.bg-row-selected
+                                    : (ri == root.selected-row || ci == root.selected-col) ? Theme.bg-row-selected
+                                    : (row.row-color.alpha > 0 ? row.row-color : (mod(ri, 2) == 0 ? Theme.bg-panel : Theme.bg-row-alt));
+                                border-color: cell.has-error ? Theme.border-error : Theme.border-light;
+                                border-width: cell.has-error ? 1.5px : 0.5px;
+                                // 非编辑态显示文字
+                                if !is-editing: Text {
+                                    text: cell.text;
+                                    font-size: Theme.fs-small;
+                                    color: cell.is-empty-ref ? Theme.text-disabled : Theme.text-primary;
+                                    horizontal-alignment: left;
+                                    vertical-alignment: center;
+                                    x: 4px;
+                                }
+                                // 下拉箭头（ExportEnumCol / TypeEnumCol / Ref 列）
+                                if !is-editing && (is-export
+                                  || col-kind == CellKind.type-enum-col
+                                  || col-kind == CellKind.type-enum
+                                  || col-kind == CellKind.ref): Text {
+                                    x: parent.width - 12px;
+                                    text: "▼";
+                                    font-size: 8px;
+                                    color: Theme.text-secondary;
+                                    vertical-alignment: center;
+                                }
+                                // 普通 cell（非 Export）：单 TouchArea 处理 click / 双击 / 右键 / 拖选
+                                if !is-editing && !is-export: TouchArea {
+                                    // 记录最近一次按下时的 shift 修饰键状态；clicked 时分发 shift-clicked
+                                    // vs cell-clicked。slint 的 clicked 信号不暴露 modifiers，故用 pointer-event 兜底。
+                                    property <bool> last-shift: false;
+                                    // 记录从按下后是否产生过位移（dr/dc 任一非零）。仅在产生位移时通知 Rust 扩选区，
+                                    // 避免单击释放前的微小抖动把单格强制扩成 CellRange。
+                                    property <bool> dragged: false;
+                                    clicked => {
+                                        if (self.last-shift) { root.cell-shift-clicked(ri, ci); }
+                                        else { root.cell-clicked(ri, ci); }
+                                    }
+                                    double-clicked => { root.cell-double-clicked(ri, ci); }
+                                    // 按下后拖动：持续把鼠标位置发给 Rust，Rust 推算终点 cell 并扩 GridSelection
+                                    moved => {
+                                        self.dragged = true;
+                                        root.cell-drag(ri, ci, self.mouse-x, self.mouse-y);
+                                    }
+                                    pointer-event(e) => {
+                                        if e.kind == PointerEventKind.down {
+                                            self.last-shift = e.modifiers.shift;
+                                            self.dragged = false;
+                                            // 左键按下立刻通知 Rust 重置 anchor 到本 cell，旧选区清掉。
+                                            // shift+down 不重置（让 shift+click 能从旧 anchor 扩展）。
+                                            if e.button == PointerEventButton.left && !e.modifiers.shift {
+                                                root.cell-pressed(ri, ci);
+                                            }
+                                        }
+                                        if e.button == PointerEventButton.right && e.kind == PointerEventKind.up {
+                                            root.cell-context-menu(ri, ci,
+                                                self.absolute-position.x + self.mouse-x,
+                                                self.absolute-position.y + self.mouse-y);
+                                        }
                                     }
                                 }
-                                if e.button == PointerEventButton.right && e.kind == PointerEventKind.up {
-                                    root.cell-context-menu(ri, ci,
-                                        self.absolute-position.x + self.mouse-x,
-                                        self.absolute-position.y + self.mouse-y);
+                                // ExportEnumCol cell：先设 popup 状态再调 root callback
+                                if !is-editing && is-export: TouchArea {
+                                    clicked => {
+                                        root.export-target-is-header = false;
+                                        root.export-target-row = ri;
+                                        root.export-target-col = ci;
+                                        root.export-popup-x = self.absolute-position.x - root.absolute-position.x;
+                                        root.export-popup-y = self.absolute-position.y - root.absolute-position.y + parent.height;
+                                        root.export-popup-open = true;
+                                        root.cell-clicked(ri, ci);
+                                    }
+                                    pointer-event(e) => {
+                                        if e.button == PointerEventButton.right && e.kind == PointerEventKind.up {
+                                            root.cell-context-menu(ri, ci,
+                                                self.absolute-position.x + self.mouse-x,
+                                                self.absolute-position.y + self.mouse-y);
+                                        }
+                                    }
+                                }
+                                // 编辑态：LineEdit 占满 cell
+                                // 失焦 commit 不通过 changed has-focus（实测重入崩溃），
+                                // 由 Rust 在 cell-clicked / 切节点 等场景主动 commit
+                                if is-editing: LineEdit {
+                                    x: 0;
+                                    y: 0;
+                                    width: parent.width;
+                                    height: parent.height;
+                                    text <=> root.editing-buffer;
+                                    init => {
+                                        self.focus();
+                                        self.select-all();
+                                    }
+                                    accepted(s) => { root.cell-edit-committed(); }
                                 }
                             }
-                        }
-                        // ExportEnumCol cell：先设 popup 状态再调 root callback
-                        if !is-editing && is-export: TouchArea {
-                            clicked => {
-                                root.export-target-is-header = false;
-                                root.export-target-row = ri;
-                                root.export-target-col = ci;
-                                root.export-popup-x = self.absolute-position.x - root.absolute-position.x;
-                                root.export-popup-y = self.absolute-position.y - root.absolute-position.y + parent.height;
-                                root.export-popup-open = true;
-                                root.cell-clicked(ri, ci);
-                            }
-                            pointer-event(e) => {
-                                if e.button == PointerEventButton.right && e.kind == PointerEventKind.up {
-                                    root.cell-context-menu(ri, ci,
-                                        self.absolute-position.x + self.mouse-x,
-                                        self.absolute-position.y + self.mouse-y);
-                                }
-                            }
-                        }
-                        // 编辑态：LineEdit 占满 cell
-                        // 失焦 commit 不通过 changed has-focus（实测重入崩溃），
-                        // 由 Rust 在 cell-clicked / 切节点 等场景主动 commit
-                        if is-editing: LineEdit {
-                            x: 0;
-                            y: 0;
-                            width: parent.width;
-                            height: parent.height;
-                            text <=> root.editing-buffer;
-                            init => {
-                                self.focus();
-                                self.select-all();
-                            }
-                            accepted(s) => { root.cell-edit-committed(); }
                         }
                     }
                 }
