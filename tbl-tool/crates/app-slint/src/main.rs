@@ -423,27 +423,13 @@ fn wire_grid(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
             // 切到别的 cell：先 commit 当前编辑（用 slint 端 editing-buffer 真值）
             if was_editing { commit_editing(&ui_for_buf, &s); }
             let kind = s.borrow().grid_column_kinds.get(c as usize).cloned();
-            // ExportEnumCol：先把 selection + editing_export_index 推到 slint，popup 由 slint 端 .show()
-            // 弹起。需要 push_grid 才能让 editing-export-index 是最新值。
-            // TypeEnumCol：弹 TypeSelector
-            // Ref：弹 RefPicker
-            // ReadOnly / Text 默认走选中
+            // 统一规则（@04.4.2）：单击只选中、不弹 picker。
+            // ExportEnumCol cell 在 slint 端 TouchArea 双击时直接设 popup-open，
+            // 这里仍可能需要 push_grid 让 editing-export-index 能跟上选区切换。
             s.borrow_mut().grid_selection = GridSelection::Cell(r as usize, c as usize);
-            let open_type_dlg = matches!(kind, Some(state::ColumnKind::TypeEnumCol));
-            let open_ref_dlg = matches!(kind, Some(state::ColumnKind::Ref { .. }));
-            if open_type_dlg {
-                open_type_selector_for_cell(&s, r as usize, c as usize);
-            }
-            if open_ref_dlg {
-                if let Some(state::ColumnKind::Ref { ref target }) = kind {
-                    open_ref_picker_for_cell(&s, r as usize, c as usize, target);
-                }
-            }
             if let Some(ui) = weak.upgrade() {
                 let need_full = was_editing || matches!(kind, Some(state::ColumnKind::ExportEnumCol));
                 if need_full { push_grid(&ui, &s); } else { push_selection_only(&ui, &s); }
-                if open_type_dlg { push_type_selector(&ui, &s); }
-                if open_ref_dlg { push_ref_picker(&ui, &s); }
             }
         });
     }
@@ -566,49 +552,56 @@ fn wire_grid(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
                 st.editing.is_some() || st.editing_header_row >= 0
             };
             if was_editing { commit_editing(&ui_for_buf, &s); }
+            // 统一规则（@04.4.2）：表头 picker cell 单击只选中 / 切 editing-export-index，
+            // picker 弹窗交给 header_double_clicked。
             let kind = s.borrow().grid_header_kinds
                 .get(hi as usize)
                 .and_then(|row| row.get(ci as usize))
                 .cloned();
-            match kind {
-                Some(state::ColumnKind::ExportEnumCol) => {
-                    // 把 editing_header_col 设为当前列，方便 push_grid 计算 editing-export-index；
-                    // 不进 inline 编辑（editing_header_row 仍为 -1）
-                    {
-                        let mut st = s.borrow_mut();
-                        st.editing_header_row = -1;
-                        st.editing_header_col = ci;
-                    }
-                    if let Some(ui) = weak.upgrade() { push_grid(&ui, &s); }
-                }
-                Some(state::ColumnKind::TypeEnumCol) => {
-                    open_type_selector_for_header(&s, ci as usize);
-                    if let Some(ui) = weak.upgrade() {
-                        if was_editing { push_grid(&ui, &s); }
-                        push_type_selector(&ui, &s);
-                    }
-                }
-                _ => {
-                    if was_editing {
-                        if let Some(ui) = weak.upgrade() { push_grid(&ui, &s); }
-                    }
+            if matches!(kind, Some(state::ColumnKind::ExportEnumCol)) {
+                let mut st = s.borrow_mut();
+                st.editing_header_row = -1;
+                st.editing_header_col = ci;
+            }
+            if let Some(ui) = weak.upgrade() {
+                if was_editing || matches!(kind, Some(state::ColumnKind::ExportEnumCol)) {
+                    push_grid(&ui, &s);
                 }
             }
         });
     }
-    // 表头双击 → desc/field 行（hi=0/3）非 ReadOnly 列进 inline LineEdit 编辑
+    // 表头双击 → desc/field 行进 inline LineEdit；picker 类弹 TypeSelector / popup
     {
         let s = state.clone();
         let weak = ui.as_weak();
         ui.on_grid_header_double_clicked(move |hi, ci| {
-            let allow = {
+            let kind = {
                 let st = s.borrow();
                 st.grid_header_kinds.get(hi as usize)
                     .and_then(|row| row.get(ci as usize))
-                    .map_or(false, |k| k.double_click_to_edit())
+                    .cloned()
             };
+            let allow = kind.as_ref().map_or(false, |k| k.double_click_to_edit());
             if !allow { return; }
-            // 读当前 header cell 的存储值作为初始 buffer
+            // picker 类：弹 TypeSelector（ExportEnumCol 的 popup 由 slint 端 TouchArea 直接处理）
+            if matches!(kind, Some(state::ColumnKind::TypeEnumCol)) {
+                open_type_selector_for_header(&s, ci as usize);
+                if let Some(ui) = weak.upgrade() {
+                    push_grid(&ui, &s);
+                    push_type_selector(&ui, &s);
+                }
+                return;
+            }
+            if matches!(kind, Some(state::ColumnKind::ExportEnumCol)) {
+                // editing_header_col 设上即可，popup 已在 slint 端打开
+                let mut st = s.borrow_mut();
+                st.editing_header_row = -1;
+                st.editing_header_col = ci;
+                drop(st);
+                if let Some(ui) = weak.upgrade() { push_grid(&ui, &s); }
+                return;
+            }
+            // 读当前 header cell 的存储值作为初始 buffer（Text 类：desc / field）
             let raw = {
                 let st = s.borrow();
                 if let Some(SelectedNode::Table { group, name }) = &st.selected {
@@ -641,12 +634,29 @@ fn wire_grid(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
         let s = state.clone();
         let weak = ui.as_weak();
         ui.on_grid_cell_double_clicked(move |r, c| {
-            let allow = {
-                let st = s.borrow();
-                st.grid_column_kinds.get(c as usize)
-                    .map_or(false, |k| k.double_click_to_edit())
-            };
+            let kind = s.borrow().grid_column_kinds.get(c as usize).cloned();
+            let allow = kind.as_ref().map_or(false, |k| k.double_click_to_edit());
             if !allow { return; }
+            // picker 类：弹 TypeSelector / RefPicker（ExportEnumCol 的 popup 由 slint 端 TouchArea 直接处理）
+            let open_type_dlg = matches!(kind, Some(state::ColumnKind::TypeEnumCol));
+            let open_ref_dlg = matches!(kind, Some(state::ColumnKind::Ref { .. }));
+            if open_type_dlg {
+                open_type_selector_for_cell(&s, r as usize, c as usize);
+                if let Some(ui) = weak.upgrade() {
+                    push_type_selector(&ui, &s);
+                }
+                return;
+            }
+            if open_ref_dlg {
+                if let Some(state::ColumnKind::Ref { ref target }) = kind {
+                    open_ref_picker_for_cell(&s, r as usize, c as usize, target);
+                }
+                if let Some(ui) = weak.upgrade() {
+                    push_ref_picker(&ui, &s);
+                }
+                return;
+            }
+            // Text：进 inline LineEdit
             let raw = convert::raw_cell_for(&s.borrow(), r as usize, c as usize);
             {
                 let mut st = s.borrow_mut();
@@ -1777,7 +1787,7 @@ fn sync_rp_search(state: &Rc<RefCell<AppState>>, ui_weak: &slint::Weak<AppWindow
 
 /// 计算当前 ctx_menu.kind 应展示的菜单项列表。
 /// action-id 形如 "tree.new-group" / "grid.col-insert-left" 等，由 wire_context_menu 分发。
-fn ctx_menu_items_for(kind: &CtxMenuKind) -> Vec<CtxMenuItem> {
+fn ctx_menu_items_for(kind: &CtxMenuKind, state: &AppState) -> Vec<CtxMenuItem> {
     let sep = || CtxMenuItem {
         label: slint::SharedString::new(),
         action_id: slint::SharedString::new(),
@@ -1817,12 +1827,27 @@ fn ctx_menu_items_for(kind: &CtxMenuKind) -> Vec<CtxMenuItem> {
             item("下方插入行", "grid.row-insert-below", false),
             item("删除行", "grid.row-delete", false),
         ],
-        CtxMenuKind::GridCell { .. } => vec![
-            item("复制", "grid.cell-copy", false),
-            item("剪切", "grid.cell-cut", false),
-            item("粘贴", "grid.cell-paste", false),
-            item("删除内容", "grid.cell-clear", false),
-        ],
+        CtxMenuKind::GridCell { row: _, col } => {
+            let mut items = Vec::new();
+            // picker 类首项：差异化文案；多选状态下不显示首项（避免误以为支持批量）
+            let single_cell = matches!(state.grid_selection, GridSelection::Cell(_, _));
+            if single_cell {
+                if let Some(label) = state.grid_column_kinds
+                    .get(*col)
+                    .and_then(|k| k.picker_action_label())
+                {
+                    items.push(item(label, "grid.cell-pick", false));
+                    items.push(sep());
+                }
+            }
+            items.extend([
+                item("复制", "grid.cell-copy", false),
+                item("剪切", "grid.cell-cut", false),
+                item("粘贴", "grid.cell-paste", false),
+                item("删除内容", "grid.cell-clear", false),
+            ]);
+            items
+        }
     }
 }
 
@@ -1838,7 +1863,7 @@ fn push_context_menu(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
     // slint length 属性的 setter 接受 Coord（f32）
     ui.set_ctx_menu_x(cm.x);
     ui.set_ctx_menu_y(cm.y);
-    ui.set_ctx_menu_items(slint::ModelRc::new(slint::VecModel::from(ctx_menu_items_for(kind))));
+    ui.set_ctx_menu_items(slint::ModelRc::new(slint::VecModel::from(ctx_menu_items_for(kind, &st))));
 }
 
 fn push_input_dialog(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
@@ -2252,6 +2277,23 @@ fn wire_context_menu(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
                     perform_grid_row_action(&s, row, action);
                 }
                 // ── grid 单元格 ──
+                (Some(CtxMenuKind::GridCell { row, col }), "grid.cell-pick") => {
+                    // 等价于双击 picker cell：弹 RefPicker / TypeSelector
+                    // ExportEnumCol cell 的 popup 是 slint 端 component-internal property，
+                    // 没暴露到 Rust 端，只能由用户双击/单击 cell 触发；右键菜单不接管。
+                    let kind = s.borrow().grid_column_kinds.get(col).cloned();
+                    match kind {
+                        Some(state::ColumnKind::Ref { ref target }) => {
+                            open_ref_picker_for_cell(&s, row, col, target);
+                            if let Some(ui) = weak.upgrade() { push_ref_picker(&ui, &s); }
+                        }
+                        Some(state::ColumnKind::TypeEnumCol) => {
+                            open_type_selector_for_cell(&s, row, col);
+                            if let Some(ui) = weak.upgrade() { push_type_selector(&ui, &s); }
+                        }
+                        _ => {}
+                    }
+                }
                 (Some(CtxMenuKind::GridCell { row: _, col: _ }), action @ ("grid.cell-copy"
                     | "grid.cell-cut" | "grid.cell-paste" | "grid.cell-clear")) => {
                     let tag = match action {

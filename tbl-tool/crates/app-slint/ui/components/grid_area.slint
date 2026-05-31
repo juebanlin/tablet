@@ -268,14 +268,15 @@ export component GridArea inherits Rectangle {
                                         double-clicked => { root.header-double-clicked(hi, ci); }
                                     }
                                     if is-export && !is-editing: TouchArea {
-                                        clicked => {
+                                        clicked => { root.header-clicked(hi, ci); }
+                                        double-clicked => {
                                             root.export-target-is-header = true;
                                             root.export-target-row = hi;
                                             root.export-target-col = ci;
                                             root.export-popup-x = self.absolute-position.x - root.absolute-position.x;
                                             root.export-popup-y = self.absolute-position.y - root.absolute-position.y + parent.height;
                                             root.export-popup-open = true;
-                                            root.header-clicked(hi, ci);
+                                            root.header-double-clicked(hi, ci);
                                         }
                                     }
                                 }
@@ -418,16 +419,17 @@ export component GridArea inherits Rectangle {
                                         }
                                     }
                                 }
-                                // ExportEnumCol cell：先设 popup 状态再调 root callback
+                                // ExportEnumCol cell：单击只选中，双击才开 popup（与 picker 类统一）
                                 if !is-editing && is-export: TouchArea {
-                                    clicked => {
+                                    clicked => { root.cell-clicked(ri, ci); }
+                                    double-clicked => {
                                         root.export-target-is-header = false;
                                         root.export-target-row = ri;
                                         root.export-target-col = ci;
                                         root.export-popup-x = self.absolute-position.x - root.absolute-position.x;
                                         root.export-popup-y = self.absolute-position.y - root.absolute-position.y + parent.height;
                                         root.export-popup-open = true;
-                                        root.cell-clicked(ri, ci);
+                                        root.cell-double-clicked(ri, ci);
                                     }
                                     pointer-event(e) => {
                                         if e.button == PointerEventButton.right && e.kind == PointerEventKind.up {

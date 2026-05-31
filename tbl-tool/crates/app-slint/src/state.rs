@@ -61,14 +61,22 @@ pub enum ColumnKind {
 }
 
 impl ColumnKind {
-    /// 是否双击进 LineEdit 编辑（仅 Text）
+    /// 是否双击进 LineEdit 编辑或弹窗/下拉
     pub fn double_click_to_edit(&self) -> bool {
-        matches!(self, Self::Text)
+        matches!(self,
+            Self::Text
+            | Self::Ref { .. }
+            | Self::TypeEnumCol
+            | Self::ExportEnumCol)
     }
-    /// 是否单击进入弹窗/下拉
-    #[allow(dead_code)]
-    pub fn single_click_to_pick(&self) -> bool {
-        matches!(self, Self::Ref { .. } | Self::TypeEnumCol | Self::ExportEnumCol)
+    /// 右键菜单首项的差异化文案。Text / ReadOnly 返回 None。
+    pub fn picker_action_label(&self) -> Option<&'static str> {
+        match self {
+            Self::Ref { .. } => Some("选择引用..."),
+            Self::TypeEnumCol => Some("选择类型..."),
+            Self::ExportEnumCol => Some("选择导出标记..."),
+            _ => None,
+        }
     }
 }
 
