@@ -194,19 +194,27 @@ fn column_kind_to_slint(k: &state::ColumnKind) -> CellKind {
 /// popup 列表顺序：["前后端","客户端","服务器","不导出"]。
 fn compute_editing_export_index(state: &Rc<RefCell<AppState>>, editing_r: i32, editing_c: i32, editing_header_col: i32) -> i32 {
     let st = state.borrow();
-    let code: Option<String> = if editing_header_col >= 0 {
+    // 优先级：editing_header_col（双击编辑表头）> editing_r/c（双击编辑数据格）> 当前 GridSelection（单击选中态）。
+    // 双击 ExportEnum cell 的瞬间不再走 editing，所以必须用 selection 兜底，否则 popup 显示的勾选项是上一次的旧值。
+    let (sel_header_col, sel_r, sel_c): (i32, i32, i32) = match st.grid_selection {
+        GridSelection::Cell(r, c) => (-1, r as i32, c as i32),
+        _ => (-1, -1, -1),
+    };
+    let header_col = if editing_header_col >= 0 { editing_header_col } else { sel_header_col };
+    let (data_r, data_c) = if editing_r >= 0 && editing_c >= 0 { (editing_r, editing_c) } else { (sel_r, sel_c) };
+    let code: Option<String> = if header_col >= 0 {
         // Table 表头 export 行
         if let Some(SelectedNode::Table { group, name }) = &st.selected {
             st.engine.find_table(group, name)
-                .and_then(|t| t.schema.fields.get(editing_header_col as usize))
+                .and_then(|t| t.schema.fields.get(header_col as usize))
                 .map(|f| f.export.code().to_string())
         } else { None }
-    } else if editing_r >= 0 && editing_c >= 0 {
+    } else if data_r >= 0 && data_c >= 0 {
         // Constant 数据行的 export 列
         match &st.selected {
             Some(SelectedNode::Constant { group, name }) => {
                 st.engine.find_constant(group, name)
-                    .and_then(|c| c.entries.get(editing_r as usize))
+                    .and_then(|c| c.entries.get(data_r as usize))
                     .map(|e| e.export.code().to_string())
             }
             _ => None,
@@ -234,6 +242,8 @@ fn push_selection_only(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
     ui.set_grid_range_row_max(snap.range_row_max);
     ui.set_grid_range_col_min(snap.range_col_min);
     ui.set_grid_range_col_max(snap.range_col_max);
+    // editing-export-index 跟随选区变化（Constant ExportEnumCol 单击切换 row 时，popup 当前勾选项要换）
+    ui.set_grid_editing_export_index(compute_editing_export_index(state, -1, -1, -1));
     ui.set_coord(snap.coord.into());
     ui.set_formula_display(snap.formula_display.into());
     ui.set_formula_editable(snap.formula_editable);
@@ -422,14 +432,14 @@ fn wire_grid(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
             };
             // 切到别的 cell：先 commit 当前编辑（用 slint 端 editing-buffer 真值）
             if was_editing { commit_editing(&ui_for_buf, &s); }
-            let kind = s.borrow().grid_column_kinds.get(c as usize).cloned();
             // 统一规则（@04.4.2）：单击只选中、不弹 picker。
-            // ExportEnumCol cell 在 slint 端 TouchArea 双击时直接设 popup-open，
-            // 这里仍可能需要 push_grid 让 editing-export-index 能跟上选区切换。
+            // 关键：ExportEnumCol 单击千万不能 push_grid，否则 data/header model 重建
+            // 会销毁 TouchArea 实例，slint 双击事件需要同一个 TouchArea 接连两次 clicked，
+            // 第二次落到新实例上只会再次触发 clicked、永远不会变成 double-clicked。
+            // editing-export-index 单击时跟随选区切到新行，由 push_selection_only 推送。
             s.borrow_mut().grid_selection = GridSelection::Cell(r as usize, c as usize);
             if let Some(ui) = weak.upgrade() {
-                let need_full = was_editing || matches!(kind, Some(state::ColumnKind::ExportEnumCol));
-                if need_full { push_grid(&ui, &s); } else { push_selection_only(&ui, &s); }
+                if was_editing { push_grid(&ui, &s); } else { push_selection_only(&ui, &s); }
             }
         });
     }
@@ -537,36 +547,21 @@ fn wire_grid(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
             }
         });
     }
-    // Table 表头点击 → 按 grid_header_kinds[hi][ci] 分发：
-    //   ExportEnumCol ：选中 + 同步 editing-export-index（slint popup.show 自动弹）
-    //   TypeEnumCol   ：弹 TypeSelector 弹窗
-    //   Text          ：仅作用于双击（commit 当前编辑保持不变）
-    //   ReadOnly      ：忽略
+    // Table 表头单击：只 commit 上次编辑，不弹 picker，不设 editing_header_col
+    // （那是双击的事）。关键：单击不能 push_grid，否则 model 重建 → TouchArea 销毁 →
+    // slint 双击事件需要的同一 TouchArea 实例没了 → 双击退化为两次单击。
     {
         let s = state.clone();
         let weak = ui.as_weak();
         let ui_for_buf = ui.as_weak();
-        ui.on_grid_header_clicked(move |hi, ci| {
+        ui.on_grid_header_clicked(move |_hi, _ci| {
             let was_editing = {
                 let st = s.borrow();
                 st.editing.is_some() || st.editing_header_row >= 0
             };
-            if was_editing { commit_editing(&ui_for_buf, &s); }
-            // 统一规则（@04.4.2）：表头 picker cell 单击只选中 / 切 editing-export-index，
-            // picker 弹窗交给 header_double_clicked。
-            let kind = s.borrow().grid_header_kinds
-                .get(hi as usize)
-                .and_then(|row| row.get(ci as usize))
-                .cloned();
-            if matches!(kind, Some(state::ColumnKind::ExportEnumCol)) {
-                let mut st = s.borrow_mut();
-                st.editing_header_row = -1;
-                st.editing_header_col = ci;
-            }
-            if let Some(ui) = weak.upgrade() {
-                if was_editing || matches!(kind, Some(state::ColumnKind::ExportEnumCol)) {
-                    push_grid(&ui, &s);
-                }
+            if was_editing {
+                commit_editing(&ui_for_buf, &s);
+                if let Some(ui) = weak.upgrade() { push_grid(&ui, &s); }
             }
         });
     }
@@ -593,12 +588,12 @@ fn wire_grid(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
                 return;
             }
             if matches!(kind, Some(state::ColumnKind::ExportEnumCol)) {
-                // editing_header_col 设上即可，popup 已在 slint 端打开
-                let mut st = s.borrow_mut();
-                st.editing_header_row = -1;
-                st.editing_header_col = ci;
-                drop(st);
-                if let Some(ui) = weak.upgrade() { push_grid(&ui, &s); }
+                // popup 已在 slint 端打开（TouchArea.double-clicked 设了 export-popup-open）。
+                // Rust 这里只同步 editing-export-index，让 popup 的 current-index 是当前 cell 的值。
+                // 不设 editing_header_col：那会让 is-editing 为 true → 表头 cell 出现 LineEdit 盖住下拉。
+                if let Some(ui) = weak.upgrade() {
+                    ui.set_grid_editing_export_index(compute_editing_export_index(&s, -1, -1, ci));
+                }
                 return;
             }
             // 读当前 header cell 的存储值作为初始 buffer（Text 类：desc / field）
@@ -629,7 +624,7 @@ fn wire_grid(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
             if let Some(ui) = weak.upgrade() { push_grid(&ui, &s); }
         });
     }
-    // 单元格双击 → 进入 inline LineEdit 编辑（仅 Text 列）
+    // 单元格双击 → 进入 inline LineEdit 编辑 / 弹 picker
     {
         let s = state.clone();
         let weak = ui.as_weak();
@@ -637,7 +632,21 @@ fn wire_grid(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
             let kind = s.borrow().grid_column_kinds.get(c as usize).cloned();
             let allow = kind.as_ref().map_or(false, |k| k.double_click_to_edit());
             if !allow { return; }
-            // picker 类：弹 TypeSelector / RefPicker（ExportEnumCol 的 popup 由 slint 端 TouchArea 直接处理）
+            // ExportEnumCol：popup 由 slint 端 TouchArea 已经设上 export-popup-open，
+            // Rust 这里不能进 inline LineEdit（会盖在 popup 上）。只把选区 + editing-export-index
+            // 同步推一次即可。
+            if matches!(kind, Some(state::ColumnKind::ExportEnumCol)) {
+                {
+                    let mut st = s.borrow_mut();
+                    st.grid_selection = GridSelection::Cell(r as usize, c as usize);
+                }
+                if let Some(ui) = weak.upgrade() {
+                    ui.set_grid_editing_export_index(compute_editing_export_index(&s, -1, -1, -1));
+                    push_selection_only(&ui, &s);
+                }
+                return;
+            }
+            // picker 类：弹 TypeSelector / RefPicker
             let open_type_dlg = matches!(kind, Some(state::ColumnKind::TypeEnumCol));
             let open_ref_dlg = matches!(kind, Some(state::ColumnKind::Ref { .. }));
             if open_type_dlg {
