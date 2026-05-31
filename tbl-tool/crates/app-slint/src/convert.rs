@@ -268,13 +268,14 @@ fn enrich_selection(snap: &mut GridSnapshot, state: &AppState) {
             snap.selected_cell_col = c as i32;
             snap.coord = format!("{}{}", col_letter(c), r + 1);
             let kind = snap.column_kinds.get(c);
+            // 公式栏只允许 Text 列编辑；picker / ReadOnly 列只读 + 显示原始存储值（@04.5.3）
             snap.formula_editable = matches!(kind, Some(ColumnKind::Text));
-            // 公式栏只展示 Text 列内容；Export/Type/Ref/ReadOnly 列以下拉/弹窗操作，公式栏留空。
             snap.formula_display = if matches!(kind, Some(ColumnKind::Text)) {
                 let raw = raw_cell(state, r, c);
                 if !raw.is_empty() { cell_display(state, snap, r, c, &raw) } else { String::new() }
             } else {
-                String::new()
+                // picker / ReadOnly：显示底层 raw（"1001" / "cs"），不走 cell_display 翻译
+                raw_cell(state, r, c)
             };
             // 单格选中时，若该格有验证错误，状态栏在坐标后追加错误信息（实时验证 UX）。
             snap.selection_info = match cell_validation_message(state, r, c) {

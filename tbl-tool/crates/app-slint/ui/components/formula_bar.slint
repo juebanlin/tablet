@@ -63,12 +63,20 @@ export component FormulaBar inherits Rectangle {
                 }
                 accepted(s) => { root.commit(); }
             }
-            // idle 态：纯 Text 显示
+            // idle 态：纯 Text 显示。picker / ReadOnly 列只读 + 显示底层 raw（@04.5.3），
+            // 文字弱化 + 右侧追个 🔒 暗示"不可编辑"
             if !root.editing: Text {
                 x: Theme.sp-2;
                 text: root.display-text;
                 font-size: Theme.fs-tiny;
-                color: Theme.text-secondary;
+                color: root.editable ? Theme.text-secondary : Theme.text-disabled;
+                vertical-alignment: center;
+            }
+            if !root.editing && !root.editable && root.coord != "": Text {
+                x: parent.width - Theme.sp-3 - self.width;
+                text: "🔒";
+                font-size: Theme.fs-tiny;
+                color: Theme.text-disabled;
                 vertical-alignment: center;
             }
             // 顶层永久 TouchArea：enabled 决定是否响应

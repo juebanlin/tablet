@@ -100,8 +100,15 @@ fn render_formula_bar(ui: &mut egui::Ui, app: &mut TblApp, group: &str, name: &s
                 &CellKind::Text
             };
             let raw = grid.data.get(*r).and_then(|row| row.get(*c)).cloned().unwrap_or_default();
-            let display = grid::display_for_cell(app, grid, *c, &raw);
-            (coord, kind.double_click_to_edit(), raw, display)
+            // 公式栏：仅 Text 列可编辑；picker / ReadOnly 列只读 + 显示底层 raw（@04.5.3）。
+            // 这条规则同时关掉了"打字绕过 picker 校验"的旁路。
+            let editable = matches!(kind, CellKind::Text);
+            let display = if editable {
+                grid::display_for_cell(app, grid, *c, &raw)
+            } else {
+                raw.clone()
+            };
+            (coord, editable, raw, display)
         }
         _ => (String::new(), false, String::new(), String::new()),
     };
@@ -127,7 +134,17 @@ fn render_formula_bar(ui: &mut egui::Ui, app: &mut TblApp, group: &str, name: &s
                 }
             }
         } else {
-            ui.label(egui::RichText::new(&display_val).size(11.0).weak());
+            // 只读：弱化文字 + 右侧 🔒 暗示
+            let avail = ui.available_width();
+            ui.allocate_ui_with_layout(egui::vec2(avail, 22.0), egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                ui.label(egui::RichText::new(&display_val).size(11.0).weak());
+                if !label.is_empty() {
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        ui.add_space(4.0);
+                        ui.label(egui::RichText::new("🔒").size(11.0).weak());
+                    });
+                }
+            });
         }
     });
 
