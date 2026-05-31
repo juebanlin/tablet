@@ -3,6 +3,7 @@ mod java;
 mod xml;
 mod lua;
 mod go;
+pub(crate) mod sep_meta;
 
 pub use json::export_all_json;
 pub use java::export_all_java;

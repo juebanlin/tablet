@@ -3,6 +3,7 @@ use serde_json::{Value, Map, json};
 use crate::model::*;
 use crate::types::*;
 use super::{EmptyStrategy, LineEnding, to_camel_case, parse_base_value};
+use super::sep_meta::{collect_used_sep_keys_constant, collect_used_sep_keys_table, sep_kv_pairs};
 
 fn value_to_json(raw: &str, tbl_type: &TblType) -> Value {
     match tbl_type.paradigm {
@@ -17,34 +18,18 @@ fn is_server_export(export: &Export) -> bool {
     matches!(export, Export::ClientServer | Export::ServerOnly)
 }
 
-fn build_sep_meta(sep: &SeparatorsSection) -> Value {
-    json!({
-        "list": sep.list,
-        "set": sep.set,
-        "tuple2": sep.tuple2,
-        "tuple3": sep.tuple3,
-        "tuple4": sep.tuple4,
-        "map_kv": sep.map.kv,
-        "map_entry": sep.map.entry,
-        "list_tuple2_tuple": sep.list_tuple2.tuple,
-        "list_tuple2_list": sep.list_tuple2.list,
-        "list_tuple3_tuple": sep.list_tuple3.tuple,
-        "list_tuple3_list": sep.list_tuple3.list,
-        "list_tuple4_tuple": sep.list_tuple4.tuple,
-        "list_tuple4_list": sep.list_tuple4.list,
-        "map_tuple2_kv": sep.map_tuple2.kv,
-        "map_tuple2_tuple": sep.map_tuple2.tuple,
-        "map_tuple2_entry": sep.map_tuple2.entry,
-        "map_tuple3_kv": sep.map_tuple3.kv,
-        "map_tuple3_tuple": sep.map_tuple3.tuple,
-        "map_tuple3_entry": sep.map_tuple3.entry,
-        "map_tuple4_kv": sep.map_tuple4.kv,
-        "map_tuple4_tuple": sep.map_tuple4.tuple,
-        "map_tuple4_entry": sep.map_tuple4.entry,
-        "map_list_kv": sep.map_list.kv,
-        "map_list_item": sep.map_list.item,
-        "map_list_entry": sep.map_list.entry
-    })
+/// 按 `used_keys` 裁剪输出 _sep 对象。空集返回 None —— 调用方据此决定是否插入 _sep wrapper。
+fn build_sep_meta(sep: &SeparatorsSection, used_keys: &std::collections::BTreeSet<&'static str>) -> Option<Value> {
+    if used_keys.is_empty() {
+        return None;
+    }
+    let mut obj = Map::new();
+    for (k, v) in sep_kv_pairs(sep) {
+        if used_keys.contains(k) {
+            obj.insert(k.to_string(), json!(v));
+        }
+    }
+    Some(Value::Object(obj))
 }
 
 pub fn export_table(table: &Table, strategy: &EmptyStrategy) -> Value {
@@ -127,7 +112,7 @@ pub fn export_all_json(project: &Project) -> Result<super::ExportResult> {
         .unwrap_or("utf-8").to_string();
     let opts = super::ExportOptions { line_ending, encoding };
 
-    let sep_meta = build_sep_meta(&project.config.separators);
+    let sep = &project.config.separators;
     let output_dir = project.workdir.join(data_output).join("json");
     let mut collected = Vec::new();
 
@@ -135,8 +120,11 @@ pub fn export_all_json(project: &Project) -> Result<super::ExportResult> {
         for table in &group.tables {
             if table.deleted { continue; }
             let data = export_table(table, &strategy);
+            let used = collect_used_sep_keys_table(table);
             let mut wrapper = Map::new();
-            wrapper.insert("_sep".to_string(), sep_meta.clone());
+            if let Some(meta) = build_sep_meta(sep, &used) {
+                wrapper.insert("_sep".to_string(), meta);
+            }
             wrapper.insert("data".to_string(), data);
             let file_path = output_dir.join(format!("{}.json", &table.name));
             let content = serde_json::to_string_pretty(&Value::Object(wrapper))?;
@@ -146,8 +134,11 @@ pub fn export_all_json(project: &Project) -> Result<super::ExportResult> {
         for constant in &group.constants {
             if constant.deleted { continue; }
             let data = export_constant(constant, &strategy);
+            let used = collect_used_sep_keys_constant(constant);
             let mut wrapper = Map::new();
-            wrapper.insert("_sep".to_string(), sep_meta.clone());
+            if let Some(meta) = build_sep_meta(sep, &used) {
+                wrapper.insert("_sep".to_string(), meta);
+            }
             wrapper.insert("data".to_string(), data);
             let file_path = output_dir.join(format!("{}.json", &constant.name));
             let content = serde_json::to_string_pretty(&Value::Object(wrapper))?;

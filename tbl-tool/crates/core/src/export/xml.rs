@@ -1,8 +1,10 @@
+use std::collections::BTreeSet;
 use std::fmt::Write;
 use anyhow::Result;
 use crate::model::*;
 use crate::types::SeparatorsSection;
 use super::{EmptyStrategy, LineEnding, to_camel_case};
+use super::sep_meta::{collect_used_sep_keys_constant, collect_used_sep_keys_table, sep_kv_pairs};
 
 fn xml_escape(s: &str) -> String {
     s.replace('&', "&amp;")
@@ -20,15 +22,14 @@ fn is_server_export(export: &Export) -> bool {
     matches!(export, Export::ClientServer | Export::ServerOnly)
 }
 
-fn sep_attrs(sep: &SeparatorsSection) -> String {
+/// 仅按 `used_keys` 输出 sep_* attrs。空集返回空串 —— 根元素不带任何 sep_ attr。
+fn sep_attrs(sep: &SeparatorsSection, used_keys: &BTreeSet<&'static str>) -> String {
     let mut s = String::new();
-    write!(s, " sep_list=\"{}\"", attr_escape(&sep.list)).unwrap();
-    write!(s, " sep_set=\"{}\"", attr_escape(&sep.set)).unwrap();
-    write!(s, " sep_tuple2=\"{}\"", attr_escape(&sep.tuple2)).unwrap();
-    write!(s, " sep_tuple3=\"{}\"", attr_escape(&sep.tuple3)).unwrap();
-    write!(s, " sep_tuple4=\"{}\"", attr_escape(&sep.tuple4)).unwrap();
-    write!(s, " sep_map_kv=\"{}\"", attr_escape(&sep.map.kv)).unwrap();
-    write!(s, " sep_map_entry=\"{}\"", attr_escape(&sep.map.entry)).unwrap();
+    for (k, v) in sep_kv_pairs(sep) {
+        if used_keys.contains(k) {
+            write!(s, " sep_{}=\"{}\"", k, attr_escape(v)).unwrap();
+        }
+    }
     s
 }
 
@@ -38,9 +39,11 @@ pub fn export_table_xml(table: &Table, strategy: &EmptyStrategy, sep: &Separator
         .filter(|(_, f)| is_server_export(&f.export))
         .collect();
 
+    let used = collect_used_sep_keys_table(table);
+
     let mut s = String::new();
     writeln!(s, "<?xml version=\"1.0\" encoding=\"UTF-8\"?>").unwrap();
-    writeln!(s, "<list{}>", sep_attrs(sep)).unwrap();
+    writeln!(s, "<list{}>", sep_attrs(sep, &used)).unwrap();
 
     for record in &table.records {
         writeln!(s, "  <item>").unwrap();
@@ -65,9 +68,11 @@ pub fn export_table_xml(table: &Table, strategy: &EmptyStrategy, sep: &Separator
 }
 
 pub fn export_constant_xml(constant: &Constant, strategy: &EmptyStrategy, sep: &SeparatorsSection) -> String {
+    let used = collect_used_sep_keys_constant(constant);
+
     let mut s = String::new();
     writeln!(s, "<?xml version=\"1.0\" encoding=\"UTF-8\"?>").unwrap();
-    writeln!(s, "<const{}>", sep_attrs(sep)).unwrap();
+    writeln!(s, "<const{}>", sep_attrs(sep, &used)).unwrap();
 
     for entry in &constant.entries {
         if !is_server_export(&entry.export) { continue; }
