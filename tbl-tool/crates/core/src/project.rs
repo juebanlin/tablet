@@ -45,6 +45,12 @@ realtime_validate = false
 # 日志文件级别: debug, info, warn, error
 log_level = "debug"
 
+[ui.ref_picker]
+# 引用选择弹窗对 Table 的列展示策略：
+#   "auto" - id + 最多 2 个 export=cs 且类型为字符串的辅助列（默认）
+#   "full" - schema 全部字段（除了 export=- 不导出列）
+default_strategy = "auto"
+
 [separators]
 # 类型分隔符配置（按范式），默认值覆盖绝大多数场景
 Tuple2 = ","

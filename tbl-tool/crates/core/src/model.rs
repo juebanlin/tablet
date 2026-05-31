@@ -88,7 +88,20 @@ pub struct UiConfig {
     #[serde(default)]
     pub realtime_validate: bool,
     pub log_level: Option<String>,
+    #[serde(default)]
+    pub ref_picker: RefPickerConfig,
 }
+
+#[derive(Debug, Clone, Default, serde::Deserialize)]
+pub struct RefPickerConfig {
+    /// 引用选择弹窗对 Table 的列展示策略：
+    /// - "auto"（默认）：id + 最多 2 个 export=cs 且类型为字符串的辅助列
+    /// - "full"：schema 全部字段（除了 export=- 不导出列）
+    #[serde(default = "default_ref_strategy")]
+    pub default_strategy: String,
+}
+
+fn default_ref_strategy() -> String { "auto".to_string() }
 
 fn default_true() -> bool { true }
 
