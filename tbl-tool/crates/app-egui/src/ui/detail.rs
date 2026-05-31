@@ -1,5 +1,5 @@
 use eframe::egui;
-use crate::app::{TblApp, SelectedNode, Selection};
+use crate::app::{TblApp, SelectedNode, Selection, CellPos};
 use super::grid_model::*;
 use super::grid;
 
@@ -337,11 +337,31 @@ fn render_cell_context(ui: &mut egui::Ui, app: &mut TblApp) {
     }
 
     if show {
+        // 决定首项："选择..."（picker cell + 单选时启用）。多选 / 非 picker / 表头行外不显示。
+        // selected 指向数据区的 Selection::Cell(r, c)；CellRange 视为多选灰掉。
+        let picker_label: Option<&'static str> = if let Selection::Cell(_, c) = app.edit_state.selected {
+            build_grid_for_selected(app)
+                .as_ref()
+                .and_then(|gd| gd.col_defs.get(c))
+                .and_then(|cd| cd.kind.picker_action_label())
+        } else {
+            None
+        };
+
         egui::Area::new(egui::Id::new("cell_ctx_area"))
             .fixed_pos(app.context_pos)
             .order(egui::Order::Foreground)
             .show(ui.ctx(), |ui| {
                 egui::Frame::popup(ui.style()).show(ui, |ui| {
+                    if let Some(label) = picker_label {
+                        if ui.button(label).clicked() {
+                            if let Selection::Cell(row, col) = app.edit_state.selected {
+                                trigger_picker(app, row, col);
+                            }
+                            ui.memory_mut(|m| m.data.insert_temp(id, false));
+                        }
+                        ui.separator();
+                    }
                     if ui.button("复制").clicked() {
                         if let Some(gd) = build_grid_for_selected(app) {
                             let text = super::grid::copy_selected_text(app, &gd);
@@ -394,6 +414,20 @@ fn build_grid_for_selected(app: &TblApp) -> Option<GridData> {
         Some(SelectedNode::Enum { group, name }) => build_enum_grid(app, group, name),
         _ => None,
     }
+}
+
+/// 从右键菜单触发数据区 picker：等价于双击 picker cell。弹窗位置用右键点击点，
+/// 跟系统级右键菜单"在鼠标处展开下拉"的行为一致。
+fn trigger_picker(app: &mut TblApp, row: usize, col: usize) {
+    let Some(gd) = build_grid_for_selected(app) else { return };
+    if row >= gd.data_count { return; }
+    let Some(cd) = gd.col_defs.get(col) else { return };
+    if !cd.kind.is_picker() { return; }
+    let val = gd.data.get(row).and_then(|r| r.get(col)).cloned().unwrap_or_default();
+    app.edit_state.editing = Some(CellPos { row, col, header_row: None });
+    app.edit_state.edit_buffer = val;
+    app.edit_state.edit_pos = Some(app.context_pos);
+    app.edit_state.selected = Selection::Cell(row, col);
 }
 
 impl Selection {

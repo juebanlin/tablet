@@ -195,19 +195,6 @@ fn handle_header_click(app: &mut TblApp, resp: &egui::Response, ho: egui::Pos2, 
             if rel.y < ROW_H && rel.x > ROW_NUM_W {
                 let col = ((rel.x - ROW_NUM_W) / COL_W) as usize;
                 if col < col_count { app.edit_state.selected = Selection::Col(col); }
-            } else if rel.y >= ROW_H && rel.x > ROW_NUM_W {
-                let hrow = ((rel.y - ROW_H) / ROW_H) as usize;
-                let col = ((rel.x - ROW_NUM_W) / COL_W) as usize;
-                if hrow < grid.header_rows.len() && col < col_count {
-                    let kind = &grid.header_rows[hrow][col].kind;
-                    if kind.click_to_edit() {
-                        let cell_x = ho.x + ROW_NUM_W + col as f32 * COL_W;
-                        let cell_y = ho.y + (1 + hrow) as f32 * ROW_H + ROW_H;
-                        app.edit_state.editing = Some(CellPos { row: usize::MAX, col, header_row: Some(hrow) });
-                        app.edit_state.edit_buffer = grid.header_rows[hrow][col].text.clone();
-                        app.edit_state.edit_pos = Some(egui::pos2(cell_x, cell_y));
-                    }
-                }
             }
         }
     }
@@ -221,7 +208,9 @@ fn handle_header_click(app: &mut TblApp, resp: &egui::Response, ho: egui::Pos2, 
                     let kind = &grid.header_rows[hrow][col].kind;
                     if kind.double_click_to_edit() {
                         let cell_x = ho.x + ROW_NUM_W + col as f32 * COL_W;
-                        let cell_y = ho.y + (1 + hrow) as f32 * ROW_H;
+                        // picker 类弹窗从 cell 下方展开，文本编辑则盖在 cell 上
+                        let cell_y = ho.y + (1 + hrow) as f32 * ROW_H
+                            + if kind.is_picker() { ROW_H } else { 0.0 };
                         app.edit_state.editing = Some(CellPos { row: usize::MAX, col, header_row: Some(hrow) });
                         app.edit_state.edit_buffer = grid.header_rows[hrow][col].text.clone();
                         app.edit_state.edit_pos = Some(egui::pos2(cell_x, cell_y));
@@ -258,15 +247,6 @@ fn handle_data_interaction(app: &mut TblApp, resp: &egui::Response, o: egui::Pos
                 let row = (rel.y / ROW_H) as usize;
                 if col < col_count && row < display_rows {
                     app.edit_state.selected = Selection::Cell(row, col);
-                    let kind = &grid.col_defs[col].kind;
-                    let is_valid_row = row < grid.data_count;
-                    if kind.click_to_edit() && is_valid_row {
-                        let cell_x = o.x + ROW_NUM_W + col as f32 * COL_W;
-                        let cell_y = o.y + row as f32 * ROW_H + ROW_H;
-                        app.edit_state.editing = Some(CellPos { row, col, header_row: None });
-                        app.edit_state.edit_buffer = grid.data.get(row).and_then(|r| r.get(col)).cloned().unwrap_or_default();
-                        app.edit_state.edit_pos = Some(egui::pos2(cell_x, cell_y));
-                    }
                 } else {
                     app.edit_state.selected = Selection::None;
                 }
@@ -282,10 +262,15 @@ fn handle_data_interaction(app: &mut TblApp, resp: &egui::Response, o: egui::Pos
                 let row = (rel.y / ROW_H) as usize;
                 if col < col_count && row < display_rows {
                     let kind = &grid.col_defs[col].kind;
-                    if kind.double_click_to_edit() {
+                    let is_valid_row = row < grid.data_count;
+                    let allow = kind.double_click_to_edit()
+                        && (!kind.is_picker() || is_valid_row);
+                    if allow {
                         let val = grid.data.get(row).and_then(|r| r.get(col)).cloned().unwrap_or_default();
                         let cell_x = o.x + ROW_NUM_W + col as f32 * COL_W;
-                        let cell_y = o.y + row as f32 * ROW_H;
+                        // picker 类弹窗从 cell 下方展开，文本编辑则盖在 cell 上
+                        let cell_y = o.y + row as f32 * ROW_H
+                            + if kind.is_picker() { ROW_H } else { 0.0 };
                         app.edit_state.editing = Some(CellPos { row, col, header_row: None });
                         app.edit_state.edit_buffer = val;
                         app.edit_state.edit_pos = Some(egui::pos2(cell_x, cell_y));
@@ -360,14 +345,12 @@ fn handle_data_interaction(app: &mut TblApp, resp: &egui::Response, o: egui::Pos
 }
 
 fn handle_keys(ui: &mut egui::Ui, app: &mut TblApp, group: &str, name: &str, grid: &GridData) {
-    // Allow copy even during enum editing (enum doesn't use keyboard)
-    let is_text_editing = app.edit_state.editing.as_ref().map_or(false, |e| {
-        let kind = resolve_edit_kind(e, grid);
-        kind.double_click_to_edit() // only text edits block keyboard
-    });
+    // 任何 editing（文本 inline 或 picker 弹窗）都把 grid 快捷键全屏蔽，
+    // 避免 picker/编辑器内部按键被 grid 抢去触发复制/粘贴/删除。
+    let is_editing = app.edit_state.editing.is_some();
 
-    // Ctrl+C (always allowed unless text editing)
-    if !is_text_editing {
+    // Ctrl+C
+    if !is_editing {
         let ctrl_c = ui.input(|i| {
             i.events.iter().any(|e| matches!(e, egui::Event::Copy)) || (i.modifiers.ctrl && i.key_pressed(egui::Key::C))
         });
@@ -380,7 +363,7 @@ fn handle_keys(ui: &mut egui::Ui, app: &mut TblApp, group: &str, name: &str, gri
         }
     }
 
-    if is_text_editing { return; }
+    if is_editing { return; }
 
     // Ctrl+V
     let ctrl_v = ui.input(|i| {

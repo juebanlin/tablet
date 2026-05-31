@@ -23,18 +23,33 @@ impl CellKind {
         !matches!(self, Self::ReadOnly)
     }
 
-    pub fn click_to_edit(&self) -> bool {
-        matches!(self, Self::TypeEnum | Self::ExportEnum
+    pub fn double_click_to_edit(&self) -> bool {
+        matches!(self,
+            Self::Text
+            | Self::TypeEnum | Self::ExportEnum
             | Self::TypeEnumCol | Self::ExportEnumCol
             | Self::Ref { .. })
     }
 
-    pub fn double_click_to_edit(&self) -> bool {
-        matches!(self, Self::Text)
+    pub fn show_dropdown_arrow(&self) -> bool {
+        matches!(self,
+            Self::TypeEnum | Self::ExportEnum
+            | Self::TypeEnumCol | Self::ExportEnumCol
+            | Self::Ref { .. })
     }
 
-    pub fn show_dropdown_arrow(&self) -> bool {
-        self.click_to_edit()
+    pub fn is_picker(&self) -> bool {
+        self.show_dropdown_arrow()
+    }
+
+    /// 右键菜单首项的差异化文案。Text 不显示该项。
+    pub fn picker_action_label(&self) -> Option<&'static str> {
+        match self {
+            Self::Ref { .. } => Some("选择引用..."),
+            Self::TypeEnum | Self::TypeEnumCol => Some("选择类型..."),
+            Self::ExportEnum | Self::ExportEnumCol => Some("选择导出标记..."),
+            _ => None,
+        }
     }
 
     pub fn copyable(&self) -> bool {
