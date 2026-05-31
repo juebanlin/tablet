@@ -538,6 +538,10 @@ pub struct AppState {
     pub grid_data_count: usize,
     /// 写回单元格后是否立即 revalidate。来自 [ui] realtime_validate。
     pub realtime_validate: bool,
+    /// 表头 picker 单元格呼出方式：true = 单击呼出，false = 双击呼出（[ui] picker_trigger_header）
+    pub picker_trigger_header_single: bool,
+    /// 数据区 picker 单元格呼出方式：true = 单击呼出，false = 双击呼出（[ui] picker_trigger_data）
+    pub picker_trigger_data_single: bool,
     /// 当前正在 inline 编辑的单元格位置。仅 Text 列允许进入。
     pub editing: Option<(usize, usize)>,
     /// 编辑 buffer。inline LineEdit / 公式栏 LineEdit 共享同一份（slint 端 editing-buffer property）。
@@ -570,6 +574,10 @@ impl AppState {
         let project = load_project(workdir)?;
         let group_count = project.groups.len();
         let rt_validate = project.config.ui.as_ref().map_or(false, |u| u.realtime_validate);
+        let header_single = project.config.ui.as_ref()
+            .map_or(true, |u| u.picker_trigger_header == "single");
+        let data_single = project.config.ui.as_ref()
+            .map_or(false, |u| u.picker_trigger_data == "single");
         let expanded: HashSet<String> = project.groups.iter().map(|g| g.name.clone()).collect();
         let mut engine = ProjectEngine::new(project);
         engine.log(format!("已加载 {} 个 Group", group_count));
@@ -593,6 +601,8 @@ impl AppState {
             grid_header_kinds: Vec::new(),
             grid_data_count: 0,
             realtime_validate: rt_validate,
+            picker_trigger_header_single: header_single,
+            picker_trigger_data_single: data_single,
             editing: None,
             editing_buffer: String::new(),
             editing_in_formula: false,

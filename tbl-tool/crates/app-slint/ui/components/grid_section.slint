@@ -53,6 +53,8 @@ export component GridSection inherits Rectangle {
     in property <int> editing-header-row: -1;
     in property <int> editing-header-col: -1;
     in property <int> editing-export-index: 0;
+    in property <bool> picker-trigger-header-single: false;
+    in property <bool> picker-trigger-data-single: false;
     callback header-clicked(int, int);
     callback header-double-clicked(int, int);
     callback cell-clicked(int, int);
@@ -118,6 +120,8 @@ export component GridSection inherits Rectangle {
             editing-header-row: root.editing-header-row;
             editing-header-col: root.editing-header-col;
             editing-export-index: root.editing-export-index;
+            picker-trigger-header-single: root.picker-trigger-header-single;
+            picker-trigger-data-single: root.picker-trigger-data-single;
             editing-buffer <=> root.editing-buffer;
             header-clicked(hi, ci) => { root.header-clicked(hi, ci); }
             header-double-clicked(hi, ci) => { root.header-double-clicked(hi, ci); }

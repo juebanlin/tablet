@@ -44,6 +44,15 @@ auto_commit_on_blur = true
 realtime_validate = false
 # 日志文件级别: debug, info, warn, error
 log_level = "debug"
+# 表头 picker 单元格（Table type/export 行）的呼出方式：
+#   "single" - 单击直接弹选择器（默认；表头每列一格，几乎不批量改）
+#   "double" - 单击仅选中、双击才弹
+picker_trigger_header = "single"
+# 数据区 picker 单元格（Ref 列 / Constant type / export 列）的呼出方式：
+#   "double" - 单击仅选中、双击才弹（默认；保留单击作为"瞄准选中"，
+#              是 Ctrl+C/V 批量复制 ref id / enum 值的前提）
+#   "single" - 单击直接弹选择器
+picker_trigger_data = "double"
 
 [ui.ref_picker]
 # 引用选择弹窗对 Table 的列展示策略：

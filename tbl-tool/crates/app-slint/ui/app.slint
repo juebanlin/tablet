@@ -85,6 +85,9 @@ export component AppWindow inherits Window {
     in property <int> grid-editing-header-row: -1;
     in property <int> grid-editing-header-col: -1;
     in property <int> grid-editing-export-index: 0;
+    // picker 类单元格呼出方式：true = 单击呼出，false = 双击呼出（来自 [ui] 配置）
+    in property <bool> picker-trigger-header-single: false;
+    in property <bool> picker-trigger-data-single: false;
     callback grid-header-clicked(int, int);
     callback grid-header-double-clicked(int, int);
     callback grid-cell-clicked(int, int);
@@ -358,6 +361,8 @@ export component AppWindow inherits Window {
                 editing-header-row: root.grid-editing-header-row;
                 editing-header-col: root.grid-editing-header-col;
                 editing-export-index: root.grid-editing-export-index;
+                picker-trigger-header-single: root.picker-trigger-header-single;
+                picker-trigger-data-single: root.picker-trigger-data-single;
                 column-kinds: root.grid-column-kinds;
                 header-clicked(hi, ci) => { root.drop-focus(); root.grid-header-clicked(hi, ci); }
                 header-double-clicked(hi, ci) => { root.drop-focus(); root.grid-header-double-clicked(hi, ci); }

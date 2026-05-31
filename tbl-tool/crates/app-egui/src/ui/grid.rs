@@ -185,6 +185,7 @@ fn resolve_edit_kind(editing: &CellPos, grid: &GridData) -> CellKind {
 }
 
 fn handle_header_click(app: &mut TblApp, resp: &egui::Response, ho: egui::Pos2, grid: &GridData, group: &str, name: &str, col_count: usize) {
+    let header_single = app.picker_trigger_header_single;
     if resp.clicked() {
         if let Some(pos) = resp.interact_pointer_pos() {
             let rel = pos - ho;
@@ -196,6 +197,17 @@ fn handle_header_click(app: &mut TblApp, resp: &egui::Response, ho: egui::Pos2, 
                 let col = ((rel.x - ROW_NUM_W) / COL_W) as usize;
                 if col < col_count { app.edit_state.selected = Selection::Col(col); }
             }
+            // 表头 picker 行单元格：单击模式下直接弹（picker_trigger_header = "single"）
+            if header_single && rel.y >= ROW_H && rel.x > ROW_NUM_W {
+                let hrow = ((rel.y - ROW_H) / ROW_H) as usize;
+                let col = ((rel.x - ROW_NUM_W) / COL_W) as usize;
+                if hrow < grid.header_rows.len() && col < col_count {
+                    let kind = &grid.header_rows[hrow][col].kind;
+                    if kind.is_picker() {
+                        open_header_picker(app, grid, ho, hrow, col);
+                    }
+                }
+            }
         }
     }
     if resp.double_clicked() {
@@ -206,9 +218,14 @@ fn handle_header_click(app: &mut TblApp, resp: &egui::Response, ho: egui::Pos2, 
                 let col = ((rel.x - ROW_NUM_W) / COL_W) as usize;
                 if hrow < grid.header_rows.len() && col < col_count {
                     let kind = &grid.header_rows[hrow][col].kind;
-                    if kind.double_click_to_edit() {
+                    // Text 总是双击编辑；picker 类只在 double 模式下双击弹
+                    let allow = if kind.is_picker() {
+                        !header_single
+                    } else {
+                        kind.double_click_to_edit()
+                    };
+                    if allow {
                         let cell_x = ho.x + ROW_NUM_W + col as f32 * COL_W;
-                        // picker 类弹窗从 cell 下方展开，文本编辑则盖在 cell 上
                         let cell_y = ho.y + (1 + hrow) as f32 * ROW_H
                             + if kind.is_picker() { ROW_H } else { 0.0 };
                         app.edit_state.editing = Some(CellPos { row: usize::MAX, col, header_row: Some(hrow) });
@@ -231,7 +248,17 @@ fn handle_header_click(app: &mut TblApp, resp: &egui::Response, ho: egui::Pos2, 
     }
 }
 
+/// 打开 picker 类表头单元格的弹窗（egui 端用 editing+edit_pos 驱动 popup）
+fn open_header_picker(app: &mut TblApp, grid: &GridData, ho: egui::Pos2, hrow: usize, col: usize) {
+    let cell_x = ho.x + ROW_NUM_W + col as f32 * COL_W;
+    let cell_y = ho.y + (1 + hrow) as f32 * ROW_H + ROW_H; // picker 从 cell 下方展开
+    app.edit_state.editing = Some(CellPos { row: usize::MAX, col, header_row: Some(hrow) });
+    app.edit_state.edit_buffer = grid.header_rows[hrow][col].text.clone();
+    app.edit_state.edit_pos = Some(egui::pos2(cell_x, cell_y));
+}
+
 fn handle_data_interaction(app: &mut TblApp, resp: &egui::Response, o: egui::Pos2, grid: &GridData, group: &str, name: &str, col_count: usize, display_rows: usize) {
+    let data_single = app.picker_trigger_data_single;
     if resp.clicked() {
         if let Some(pos) = resp.interact_pointer_pos() {
             let rel = pos - o;
@@ -247,6 +274,13 @@ fn handle_data_interaction(app: &mut TblApp, resp: &egui::Response, o: egui::Pos
                 let row = (rel.y / ROW_H) as usize;
                 if col < col_count && row < display_rows {
                     app.edit_state.selected = Selection::Cell(row, col);
+                    // 数据区 picker cell 单击模式：单击直接弹（picker_trigger_data = "single"）
+                    if data_single && row < grid.data_count {
+                        let kind = &grid.col_defs[col].kind;
+                        if kind.is_picker() {
+                            open_data_picker(app, grid, o, row, col);
+                        }
+                    }
                 } else {
                     app.edit_state.selected = Selection::None;
                 }
@@ -263,12 +297,15 @@ fn handle_data_interaction(app: &mut TblApp, resp: &egui::Response, o: egui::Pos
                 if col < col_count && row < display_rows {
                     let kind = &grid.col_defs[col].kind;
                     let is_valid_row = row < grid.data_count;
-                    let allow = kind.double_click_to_edit()
-                        && (!kind.is_picker() || is_valid_row);
+                    // Text 总是双击编辑；picker 类只在 double 模式下双击弹
+                    let allow = if kind.is_picker() {
+                        !data_single && is_valid_row
+                    } else {
+                        kind.double_click_to_edit()
+                    };
                     if allow {
                         let val = grid.data.get(row).and_then(|r| r.get(col)).cloned().unwrap_or_default();
                         let cell_x = o.x + ROW_NUM_W + col as f32 * COL_W;
-                        // picker 类弹窗从 cell 下方展开，文本编辑则盖在 cell 上
                         let cell_y = o.y + row as f32 * ROW_H
                             + if kind.is_picker() { ROW_H } else { 0.0 };
                         app.edit_state.editing = Some(CellPos { row, col, header_row: None });
@@ -388,6 +425,16 @@ fn handle_keys(ui: &mut egui::Ui, app: &mut TblApp, group: &str, name: &str, gri
     if ui.input(|i| i.key_pressed(egui::Key::Delete) || i.key_pressed(egui::Key::Backspace)) {
         app.delete_selected(group, name, grid);
     }
+}
+
+/// 打开 picker 类数据格的弹窗（egui 端用 editing+edit_pos 驱动 popup）
+fn open_data_picker(app: &mut TblApp, grid: &GridData, o: egui::Pos2, row: usize, col: usize) {
+    let val = grid.data.get(row).and_then(|r| r.get(col)).cloned().unwrap_or_default();
+    let cell_x = o.x + ROW_NUM_W + col as f32 * COL_W;
+    let cell_y = o.y + row as f32 * ROW_H + ROW_H; // picker 从 cell 下方展开
+    app.edit_state.editing = Some(CellPos { row, col, header_row: None });
+    app.edit_state.edit_buffer = val;
+    app.edit_state.edit_pos = Some(egui::pos2(cell_x, cell_y));
 }
 
 fn commit_current_edit(app: &mut TblApp, group: &str, name: &str, grid: &GridData) {

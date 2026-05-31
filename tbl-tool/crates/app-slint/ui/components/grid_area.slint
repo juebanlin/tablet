@@ -96,6 +96,9 @@ export component GridArea inherits Rectangle {
     in-out property <string> editing-buffer: "";
     // 当前 cell / 表头 cell 的 export 当前索引（0..3）。Rust 端选中后 push 进来。
     in property <int> editing-export-index: 0;
+    // picker 类单元格呼出方式：true = 单击呼出，false = 双击呼出（来自 [ui] 配置）
+    in property <bool> picker-trigger-header-single: false;
+    in property <bool> picker-trigger-data-single: false;
 
     callback header-clicked(int /* hrow */, int /* col */);
     callback header-double-clicked(int /* hrow */, int /* col */);
@@ -268,14 +271,28 @@ export component GridArea inherits Rectangle {
                                         double-clicked => { root.header-double-clicked(hi, ci); }
                                     }
                                     if is-export && !is-editing: TouchArea {
-                                        clicked => { root.header-clicked(hi, ci); }
+                                        // picker_trigger_header = "single"：单击直接弹 popup
+                                        // picker_trigger_header = "double"：单击只通知选区，双击才弹 popup
+                                        clicked => {
+                                            if (root.picker-trigger-header-single) {
+                                                root.export-target-is-header = true;
+                                                root.export-target-row = hi;
+                                                root.export-target-col = ci;
+                                                root.export-popup-x = self.absolute-position.x - root.absolute-position.x;
+                                                root.export-popup-y = self.absolute-position.y - root.absolute-position.y + parent.height;
+                                                root.export-popup-open = true;
+                                            }
+                                            root.header-clicked(hi, ci);
+                                        }
                                         double-clicked => {
-                                            root.export-target-is-header = true;
-                                            root.export-target-row = hi;
-                                            root.export-target-col = ci;
-                                            root.export-popup-x = self.absolute-position.x - root.absolute-position.x;
-                                            root.export-popup-y = self.absolute-position.y - root.absolute-position.y + parent.height;
-                                            root.export-popup-open = true;
+                                            if (!root.picker-trigger-header-single) {
+                                                root.export-target-is-header = true;
+                                                root.export-target-row = hi;
+                                                root.export-target-col = ci;
+                                                root.export-popup-x = self.absolute-position.x - root.absolute-position.x;
+                                                root.export-popup-y = self.absolute-position.y - root.absolute-position.y + parent.height;
+                                                root.export-popup-open = true;
+                                            }
                                             root.header-double-clicked(hi, ci);
                                         }
                                     }
@@ -419,16 +436,28 @@ export component GridArea inherits Rectangle {
                                         }
                                     }
                                 }
-                                // ExportEnumCol cell：单击只选中，双击才开 popup（与 picker 类统一）
+                                // ExportEnumCol cell：呼出方式按 picker_trigger_data 配置
                                 if !is-editing && is-export: TouchArea {
-                                    clicked => { root.cell-clicked(ri, ci); }
+                                    clicked => {
+                                        if (root.picker-trigger-data-single) {
+                                            root.export-target-is-header = false;
+                                            root.export-target-row = ri;
+                                            root.export-target-col = ci;
+                                            root.export-popup-x = self.absolute-position.x - root.absolute-position.x;
+                                            root.export-popup-y = self.absolute-position.y - root.absolute-position.y + parent.height;
+                                            root.export-popup-open = true;
+                                        }
+                                        root.cell-clicked(ri, ci);
+                                    }
                                     double-clicked => {
-                                        root.export-target-is-header = false;
-                                        root.export-target-row = ri;
-                                        root.export-target-col = ci;
-                                        root.export-popup-x = self.absolute-position.x - root.absolute-position.x;
-                                        root.export-popup-y = self.absolute-position.y - root.absolute-position.y + parent.height;
-                                        root.export-popup-open = true;
+                                        if (!root.picker-trigger-data-single) {
+                                            root.export-target-is-header = false;
+                                            root.export-target-row = ri;
+                                            root.export-target-col = ci;
+                                            root.export-popup-x = self.absolute-position.x - root.absolute-position.x;
+                                            root.export-popup-y = self.absolute-position.y - root.absolute-position.y + parent.height;
+                                            root.export-popup-open = true;
+                                        }
                                         root.cell-double-clicked(ri, ci);
                                     }
                                     pointer-event(e) => {

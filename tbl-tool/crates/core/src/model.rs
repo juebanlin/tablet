@@ -90,6 +90,14 @@ pub struct UiConfig {
     pub log_level: Option<String>,
     #[serde(default)]
     pub ref_picker: RefPickerConfig,
+    /// 表头 picker 单元格（Table type/export 行）的呼出方式："single" | "double"
+    /// 默认 single：表头每列一格、几乎不批量改，单击直出选择器更顺手。
+    #[serde(default = "default_picker_trigger_header")]
+    pub picker_trigger_header: String,
+    /// 数据区 picker 单元格（Ref / Constant type / export 列）的呼出方式："single" | "double"
+    /// 默认 double：让单击保留为"瞄准选中"，是 Ctrl+C/V 批量复制 ref id / enum 值的前提。
+    #[serde(default = "default_picker_trigger_data")]
+    pub picker_trigger_data: String,
 }
 
 #[derive(Debug, Clone, Default, serde::Deserialize)]
@@ -102,6 +110,9 @@ pub struct RefPickerConfig {
 }
 
 fn default_ref_strategy() -> String { "auto".to_string() }
+
+fn default_picker_trigger_header() -> String { "single".to_string() }
+fn default_picker_trigger_data() -> String { "double".to_string() }
 
 fn default_true() -> bool { true }
 

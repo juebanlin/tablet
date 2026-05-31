@@ -72,6 +72,11 @@ fn main() -> anyhow::Result<()> {
     info!("loaded {} groups", app_state.borrow().engine.project.groups.len());
 
     let ui = AppWindow::new()?;
+    {
+        let st = app_state.borrow();
+        ui.set_picker_trigger_header_single(st.picker_trigger_header_single);
+        ui.set_picker_trigger_data_single(st.picker_trigger_data_single);
+    }
     push_tree(&ui, &app_state);
     push_grid(&ui, &app_state);
     push_logs(&ui, &app_state);
@@ -415,12 +420,11 @@ fn wire_grid(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
             if let Some(ui) = weak.upgrade() { push_grid(&ui, &s); }
         });
     }
-    // 单元格点击 → 行为按 ColumnKind 分发：
-    //   ReadOnly      ：选中（不编辑）
-    //   Text          ：选中（双击才进 inline 编辑）
-    //   ExportEnumCol ：选中 + 同步 editing-export-index（slint 端 popup.show 弹自制下拉）
-    //   TypeEnumCol   ：弹 TypeSelector 弹窗
-    //   Ref           ：弹 RefPicker 弹窗
+    // 单元格点击 → 行为按 ColumnKind + picker_trigger_data 配置分发：
+    //   ReadOnly / Text          ：选中（双击才进 inline 编辑）
+    //   ExportEnumCol            ：popup 由 slint 端 TouchArea 直接控制（按 picker_trigger_data 决定单击/双击），
+    //                             Rust 这边只更新选区 + editing-export-index
+    //   Ref / TypeEnumCol        ：picker_trigger_data = "single" 时单击弹；否则只选中（双击才弹）
     {
         let s = state.clone();
         let weak = ui.as_weak();
@@ -432,12 +436,33 @@ fn wire_grid(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
             };
             // 切到别的 cell：先 commit 当前编辑（用 slint 端 editing-buffer 真值）
             if was_editing { commit_editing(&ui_for_buf, &s); }
-            // 统一规则（@04.4.2）：单击只选中、不弹 picker。
-            // 关键：ExportEnumCol 单击千万不能 push_grid，否则 data/header model 重建
+            // 关键：单击千万不能对 picker cell push_grid，否则 data/header model 重建
             // 会销毁 TouchArea 实例，slint 双击事件需要同一个 TouchArea 接连两次 clicked，
             // 第二次落到新实例上只会再次触发 clicked、永远不会变成 double-clicked。
-            // editing-export-index 单击时跟随选区切到新行，由 push_selection_only 推送。
+            let (kind, data_single) = {
+                let st = s.borrow();
+                (st.grid_column_kinds.get(c as usize).cloned(), st.picker_trigger_data_single)
+            };
             s.borrow_mut().grid_selection = GridSelection::Cell(r as usize, c as usize);
+            // single 模式下：Ref / TypeEnumCol 单击直接弹（ExportEnumCol 由 slint 端 TouchArea 自己处理 popup）
+            if data_single {
+                if matches!(kind, Some(state::ColumnKind::TypeEnumCol)) {
+                    open_type_selector_for_cell(&s, r as usize, c as usize);
+                    if let Some(ui) = weak.upgrade() {
+                        push_selection_only(&ui, &s);
+                        push_type_selector(&ui, &s);
+                    }
+                    return;
+                }
+                if let Some(state::ColumnKind::Ref { ref target }) = kind {
+                    open_ref_picker_for_cell(&s, r as usize, c as usize, target);
+                    if let Some(ui) = weak.upgrade() {
+                        push_selection_only(&ui, &s);
+                        push_ref_picker(&ui, &s);
+                    }
+                    return;
+                }
+            }
             if let Some(ui) = weak.upgrade() {
                 if was_editing { push_grid(&ui, &s); } else { push_selection_only(&ui, &s); }
             }
@@ -547,14 +572,15 @@ fn wire_grid(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
             }
         });
     }
-    // Table 表头单击：只 commit 上次编辑，不弹 picker，不设 editing_header_col
-    // （那是双击的事）。关键：单击不能 push_grid，否则 model 重建 → TouchArea 销毁 →
-    // slint 双击事件需要的同一 TouchArea 实例没了 → 双击退化为两次单击。
+    // Table 表头单击：commit 上次编辑；picker_trigger_header = "single" 时 picker 类弹窗
+    // （TypeEnumCol；ExportEnumCol 由 slint 端 TouchArea 自行控制 popup）。
+    // 关键：单击不能对 picker cell 做 push_grid，否则 model 重建会销毁 TouchArea 实例，
+    //       slint 双击事件需要同一 TouchArea 实例。
     {
         let s = state.clone();
         let weak = ui.as_weak();
         let ui_for_buf = ui.as_weak();
-        ui.on_grid_header_clicked(move |_hi, _ci| {
+        ui.on_grid_header_clicked(move |hi, ci| {
             let was_editing = {
                 let st = s.borrow();
                 st.editing.is_some() || st.editing_header_row >= 0
@@ -563,6 +589,21 @@ fn wire_grid(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
                 commit_editing(&ui_for_buf, &s);
                 if let Some(ui) = weak.upgrade() { push_grid(&ui, &s); }
             }
+            let (kind, header_single) = {
+                let st = s.borrow();
+                let kind = st.grid_header_kinds
+                    .get(hi as usize)
+                    .and_then(|row| row.get(ci as usize))
+                    .cloned();
+                (kind, st.picker_trigger_header_single)
+            };
+            if header_single && matches!(kind, Some(state::ColumnKind::TypeEnumCol)) {
+                open_type_selector_for_header(&s, ci as usize);
+                if let Some(ui) = weak.upgrade() {
+                    push_grid(&ui, &s);
+                    push_type_selector(&ui, &s);
+                }
+            }
         });
     }
     // 表头双击 → desc/field 行进 inline LineEdit；picker 类弹 TypeSelector / popup
@@ -570,25 +611,29 @@ fn wire_grid(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
         let s = state.clone();
         let weak = ui.as_weak();
         ui.on_grid_header_double_clicked(move |hi, ci| {
-            let kind = {
+            let (kind, header_single) = {
                 let st = s.borrow();
-                st.grid_header_kinds.get(hi as usize)
+                let kind = st.grid_header_kinds.get(hi as usize)
                     .and_then(|row| row.get(ci as usize))
-                    .cloned()
+                    .cloned();
+                (kind, st.picker_trigger_header_single)
             };
             let allow = kind.as_ref().map_or(false, |k| k.double_click_to_edit());
             if !allow { return; }
-            // picker 类：弹 TypeSelector（ExportEnumCol 的 popup 由 slint 端 TouchArea 直接处理）
+            // picker 类（TypeEnumCol）：仅在 picker_trigger_header = "double" 时双击弹
+            // single 模式下已在 header-clicked 处理
             if matches!(kind, Some(state::ColumnKind::TypeEnumCol)) {
-                open_type_selector_for_header(&s, ci as usize);
-                if let Some(ui) = weak.upgrade() {
-                    push_grid(&ui, &s);
-                    push_type_selector(&ui, &s);
+                if !header_single {
+                    open_type_selector_for_header(&s, ci as usize);
+                    if let Some(ui) = weak.upgrade() {
+                        push_grid(&ui, &s);
+                        push_type_selector(&ui, &s);
+                    }
                 }
                 return;
             }
             if matches!(kind, Some(state::ColumnKind::ExportEnumCol)) {
-                // popup 已在 slint 端打开（TouchArea.double-clicked 设了 export-popup-open）。
+                // popup 已在 slint 端打开（TouchArea 按 picker_trigger_header 决定单击/双击）。
                 // Rust 这里只同步 editing-export-index，让 popup 的 current-index 是当前 cell 的值。
                 // 不设 editing_header_col：那会让 is-editing 为 true → 表头 cell 出现 LineEdit 盖住下拉。
                 if let Some(ui) = weak.upgrade() {
@@ -629,12 +674,14 @@ fn wire_grid(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
         let s = state.clone();
         let weak = ui.as_weak();
         ui.on_grid_cell_double_clicked(move |r, c| {
-            let kind = s.borrow().grid_column_kinds.get(c as usize).cloned();
+            let (kind, data_single) = {
+                let st = s.borrow();
+                (st.grid_column_kinds.get(c as usize).cloned(), st.picker_trigger_data_single)
+            };
             let allow = kind.as_ref().map_or(false, |k| k.double_click_to_edit());
             if !allow { return; }
-            // ExportEnumCol：popup 由 slint 端 TouchArea 已经设上 export-popup-open，
-            // Rust 这里不能进 inline LineEdit（会盖在 popup 上）。只把选区 + editing-export-index
-            // 同步推一次即可。
+            // ExportEnumCol：popup 由 slint 端 TouchArea 直接控制（按 picker_trigger_data 决定单击/双击），
+            // Rust 这里不能进 inline LineEdit（会盖在 popup 上）。只把选区 + editing-export-index 同步一次。
             if matches!(kind, Some(state::ColumnKind::ExportEnumCol)) {
                 {
                     let mut st = s.borrow_mut();
@@ -646,17 +693,18 @@ fn wire_grid(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
                 }
                 return;
             }
-            // picker 类：弹 TypeSelector / RefPicker
+            // picker 类（Ref / TypeEnumCol）：仅在 picker_trigger_data = "double" 时双击弹
+            // single 模式下已在 cell-clicked 处理，双击不再二次弹（避免 picker 弹两次）
             let open_type_dlg = matches!(kind, Some(state::ColumnKind::TypeEnumCol));
             let open_ref_dlg = matches!(kind, Some(state::ColumnKind::Ref { .. }));
-            if open_type_dlg {
+            if open_type_dlg && !data_single {
                 open_type_selector_for_cell(&s, r as usize, c as usize);
                 if let Some(ui) = weak.upgrade() {
                     push_type_selector(&ui, &s);
                 }
                 return;
             }
-            if open_ref_dlg {
+            if open_ref_dlg && !data_single {
                 if let Some(state::ColumnKind::Ref { ref target }) = kind {
                     open_ref_picker_for_cell(&s, r as usize, c as usize, target);
                 }
@@ -665,6 +713,7 @@ fn wire_grid(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
                 }
                 return;
             }
+            if open_type_dlg || open_ref_dlg { return; }  // single 模式：不进 inline 编辑
             // Text：进 inline LineEdit
             let raw = convert::raw_cell_for(&s.borrow(), r as usize, c as usize);
             {

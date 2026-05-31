@@ -18,6 +18,10 @@ pub struct TblApp {
     pub context_pos: egui::Pos2,
     pub auto_commit_on_blur: bool,
     pub realtime_validate: bool,
+    /// 表头 picker 单元格呼出方式：true = 单击呼出，false = 双击呼出（默认 true）
+    pub picker_trigger_header_single: bool,
+    /// 数据区 picker 单元格呼出方式：true = 单击呼出，false = 双击呼出（默认 false）
+    pub picker_trigger_data_single: bool,
     pub tree_filter: TreeFilter,
     pub tree_filter_show_full_group: bool,
     pub tree_search: String,
@@ -105,6 +109,10 @@ impl TblApp {
         let group_count = project.groups.len();
         let auto_commit = project.config.ui.as_ref().map_or(true, |u| u.auto_commit_on_blur);
         let rt_validate = project.config.ui.as_ref().map_or(false, |u| u.realtime_validate);
+        let header_single = project.config.ui.as_ref()
+            .map_or(true, |u| u.picker_trigger_header == "single");
+        let data_single = project.config.ui.as_ref()
+            .map_or(false, |u| u.picker_trigger_data == "single");
         let expanded: HashSet<String> = project.groups.iter().map(|g| g.name.clone()).collect();
         let mut engine = ProjectEngine::new(project);
         engine.log(format!("已加载 {} 个 Group", group_count));
@@ -119,6 +127,8 @@ impl TblApp {
             context_pos: egui::Pos2::ZERO,
             auto_commit_on_blur: auto_commit,
             realtime_validate: rt_validate,
+            picker_trigger_header_single: header_single,
+            picker_trigger_data_single: data_single,
             tree_filter: TreeFilter::All,
             tree_filter_show_full_group: false,
             tree_search: String::new(),
