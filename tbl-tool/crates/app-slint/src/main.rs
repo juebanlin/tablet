@@ -18,7 +18,7 @@ use simplelog::*;
 
 slint::include_modules!();
 
-use state::{AppState, CtxMenuKind, GridSelection, PendingAction, SelectedNode, TreeFilter, TreeTarget, TsRefFilter, TsTab, TypeEditTarget};
+use state::{AppState, CtxMenuKind, GridSelection, PendingAction, RefDisplayStrategy, SelectedNode, TreeFilter, TreeTarget, TsRefFilter, TsTab, TypeEditTarget};
 
 #[derive(Parser)]
 #[command(name = "tbl-tool", version = "0.1.0")]
@@ -1416,32 +1416,96 @@ fn wire_type_selector(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
 
 // ──────── RefPicker ────────
 
-/// 收集被引用项 (table or enum) 的所有可选条目，返回 (is_table, [(id, name, desc)])。
-/// None = 未找到该 ref_name 对应的项。
-fn collect_ref_rows(state: &AppState, ref_name: &str) -> Option<(bool, Vec<(String, String, String)>)> {
+/// 被引用项（Table 或 Enum）的可选条目集合，含表头与每行 (id, extras)。
+/// extras 与 headers 等长，不含 id 列；id 始终是第一列。
+struct RefTargetData {
+    is_table: bool,
+    /// 辅助列表头：(field, desc)；不含 id 列
+    headers: Vec<(String, String)>,
+    /// id 列自身的 (field, desc)
+    id_header: (String, String),
+    rows: Vec<(String, Vec<String>)>,
+}
+
+/// auto 策略：跳过 id / export=- / 类型以 @ 开头的引用列 / 类型含 < 的复合列；最多取 2 个辅助列。
+fn pick_auto_extras(table: &tbl_core::model::Table) -> Vec<usize> {
+    use tbl_core::model::Export;
+    const MAX_EXTRAS: usize = 2;
+    let mut picked = Vec::new();
+    for (idx, f) in table.schema.fields.iter().enumerate() {
+        if f.name == "id" { continue; }
+        if matches!(f.export, Export::None) { continue; }
+        let t = f.tbl_type.trim();
+        if t.starts_with('@') { continue; }
+        if t.contains('<') { continue; }
+        picked.push(idx);
+        if picked.len() >= MAX_EXTRAS { break; }
+    }
+    picked
+}
+
+/// full 策略：除 id 外所有 export != "-" 的列。
+fn pick_full_extras(table: &tbl_core::model::Table) -> Vec<usize> {
+    use tbl_core::model::Export;
+    table.schema.fields.iter().enumerate()
+        .filter(|(_, f)| f.name != "id" && !matches!(f.export, Export::None))
+        .map(|(idx, _)| idx)
+        .collect()
+}
+
+/// 收集被引用项 (table or enum) 的所有可选条目；返回 None 表示该 ref_name 不存在。
+fn collect_ref_rows(state: &AppState, ref_name: &str, strategy: RefDisplayStrategy) -> Option<RefTargetData> {
     for g in &state.engine.project.groups {
         for t in &g.tables {
             if t.deleted || t.name != ref_name { continue; }
-            let id_idx = t.schema.fields.iter().position(|f| f.name == "id");
-            let name_idx = t.schema.fields.iter().position(|f| f.name == "name");
-            let mut rows = Vec::new();
-            if let Some(idx) = id_idx {
-                for row in &t.records {
-                    let id = row.get(idx).cloned().unwrap_or_default();
-                    if id.is_empty() { continue; }
-                    let nm = name_idx.and_then(|i| row.get(i).cloned()).unwrap_or_default();
-                    rows.push((id, nm, String::new()));
-                }
-            }
-            return Some((true, rows));
+            let id_idx = match t.schema.fields.iter().position(|f| f.name == "id") {
+                Some(i) => i,
+                None => return Some(RefTargetData {
+                    is_table: true,
+                    headers: vec![],
+                    id_header: ("id".to_string(), String::new()),
+                    rows: vec![],
+                }),
+            };
+            let id_header = (
+                t.schema.fields[id_idx].name.clone(),
+                t.schema.fields[id_idx].desc.clone(),
+            );
+            let extras_idx = match strategy {
+                RefDisplayStrategy::Auto => pick_auto_extras(t),
+                RefDisplayStrategy::Full => pick_full_extras(t),
+            };
+            let headers: Vec<(String, String)> = extras_idx.iter()
+                .map(|&i| (t.schema.fields[i].name.clone(), t.schema.fields[i].desc.clone()))
+                .collect();
+            let rows: Vec<(String, Vec<String>)> = t.records.iter()
+                .filter_map(|row| {
+                    let id = row.get(id_idx).cloned().unwrap_or_default();
+                    if id.is_empty() { return None; }
+                    let extras: Vec<String> = extras_idx.iter()
+                        .map(|&i| row.get(i).cloned().unwrap_or_default())
+                        .collect();
+                    Some((id, extras))
+                })
+                .collect();
+            return Some(RefTargetData { is_table: true, headers, id_header, rows });
         }
         for e in &g.enums {
             if e.deleted || e.name != ref_name { continue; }
-            let rows: Vec<(String, String, String)> = e.entries.iter()
+            let rows: Vec<(String, Vec<String>)> = e.entries.iter()
                 .filter(|en| !en.id.is_empty())
-                .map(|en| (en.id.clone(), en.name.clone(), en.desc.clone()))
+                .map(|en| (en.id.clone(), vec![en.name.clone(), en.desc.clone()]))
                 .collect();
-            return Some((false, rows));
+            // Enum 表头固定 id|name|desc，无 schema desc，desc 列硬编码中文说明
+            return Some(RefTargetData {
+                is_table: false,
+                headers: vec![
+                    ("name".to_string(), "名称".to_string()),
+                    ("desc".to_string(), "描述".to_string()),
+                ],
+                id_header: ("id".to_string(), "ID".to_string()),
+                rows,
+            });
         }
     }
     None
@@ -1450,6 +1514,10 @@ fn collect_ref_rows(state: &AppState, ref_name: &str) -> Option<(bool, Vec<(Stri
 /// Ref 列单击 → 打开 RefPicker。current_value 取自该 cell 的真实存储值。
 fn open_ref_picker_for_cell(state: &Rc<RefCell<AppState>>, r: usize, c: usize, ref_target: &str) {
     let mut st = state.borrow_mut();
+    let default_strategy = RefDisplayStrategy::from_config(
+        st.engine.project.config.ui.as_ref()
+            .map(|u| u.ref_picker.default_strategy.as_str())
+            .unwrap_or("auto"));
     let (group, name, is_table, current) = match &st.selected {
         Some(SelectedNode::Table { group, name }) => {
             let cur = st.engine.find_table(group, name)
@@ -1463,7 +1531,7 @@ fn open_ref_picker_for_cell(state: &Rc<RefCell<AppState>>, r: usize, c: usize, r
         }
         _ => return,
     };
-    st.ref_picker.open_with(ref_target, &current, r, c, &group, &name, is_table);
+    st.ref_picker.open_with(ref_target, &current, r, c, &group, &name, is_table, default_strategy);
 }
 
 /// 把 RefPickerState 派生成 slint 端属性并 push。
@@ -1475,36 +1543,61 @@ fn push_ref_picker(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
 
     ui.set_rp_ref_name(rp.ref_name.clone().into());
     ui.set_rp_search(rp.search.clone().into());
+    ui.set_rp_manual_value(rp.manual_value.clone().into());
+    ui.set_rp_strategy_index(rp.strategy.to_index());
 
-    let target = collect_ref_rows(&st, &rp.ref_name);
-    let (kind_label, target_missing, show_desc, rows): (&str, bool, bool, Vec<(String, String, String)>) = match target {
-        Some((true, rows))  => ("📊 表引用", false, false, rows),
-        Some((false, rows)) => ("🔢 枚举引用", false, true, rows),
-        None => ("⚠️ 引用不存在", true, true, Vec::new()),
+    let target = collect_ref_rows(&st, &rp.ref_name, rp.strategy);
+    let (kind_label, target_missing, is_table, id_header, headers, rows): (&str, bool, bool, (String, String), Vec<(String, String)>, Vec<(String, Vec<String>)>) = match target {
+        Some(t) => (
+            if t.is_table { "📊 表引用" } else { "🔢 枚举引用" },
+            false,
+            t.is_table,
+            t.id_header,
+            t.headers,
+            t.rows,
+        ),
+        None => ("⚠️ 引用不存在", true, true, ("id".to_string(), String::new()), Vec::new(), Vec::new()),
     };
     ui.set_rp_kind_label(kind_label.into());
     ui.set_rp_target_missing(target_missing);
-    ui.set_rp_show_desc(show_desc);
+    ui.set_rp_is_table(is_table);
+
+    // desc 行渲染条件：id 或任一辅助列 desc 非空
+    let has_desc = !id_header.1.is_empty() || headers.iter().any(|(_, d)| !d.is_empty());
+    ui.set_rp_has_desc(has_desc);
+    ui.set_rp_id_header(RefHeader {
+        field: id_header.0.into(),
+        desc: id_header.1.into(),
+    });
+    let header_items: Vec<RefHeader> = headers.iter().map(|(f, d)| RefHeader {
+        field: f.clone().into(),
+        desc: d.clone().into(),
+    }).collect();
+    ui.set_rp_headers(slint::ModelRc::new(slint::VecModel::from(header_items)));
 
     let search = rp.search.to_lowercase();
-    let filtered: Vec<RefRow> = rows.iter().filter(|(id, name, desc)| {
+    let filtered: Vec<RefRow> = rows.iter().filter(|(id, extras)| {
         if search.is_empty() { return true; }
-        id.to_lowercase().contains(&search)
-            || name.to_lowercase().contains(&search)
-            || desc.to_lowercase().contains(&search)
-    }).map(|(id, name, desc)| RefRow {
-        id: id.clone().into(),
-        name: name.clone().into(),
-        desc: if show_desc { desc.clone().into() } else { slint::SharedString::new() },
-        selected: rp.selected_id == *id,
+        if id.to_lowercase().contains(&search) { return true; }
+        extras.iter().any(|e| e.to_lowercase().contains(&search))
+    }).map(|(id, extras)| {
+        let extras_shared: Vec<slint::SharedString> = extras.iter().map(|e| e.clone().into()).collect();
+        RefRow {
+            id: id.clone().into(),
+            extras: slint::ModelRc::new(slint::VecModel::from(extras_shared)),
+            selected: rp.selected_id == *id,
+        }
     }).collect();
     ui.set_rp_rows(slint::ModelRc::new(slint::VecModel::from(filtered)));
 
     let preview = if rp.selected_id.is_empty() {
         String::from("（未选择）")
     } else {
-        rows.iter().find(|(id, _, _)| id == &rp.selected_id)
-            .map(|(id, n, _)| if n.is_empty() { id.clone() } else { format!("{} ({})", id, n) })
+        rows.iter().find(|(id, _)| id == &rp.selected_id)
+            .map(|(id, ex)| {
+                let nm = ex.first().cloned().unwrap_or_default();
+                if nm.is_empty() { id.clone() } else { format!("{} ({})", id, nm) }
+            })
             .unwrap_or_else(|| format!("{} ⚠️ 不存在", rp.selected_id))
     };
     ui.set_rp_selection_preview(preview.into());
@@ -1530,24 +1623,6 @@ fn commit_ref_picker(state: &Rc<RefCell<AppState>>, value: String) {
 }
 
 fn wire_ref_picker(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
-    // rp-set-search → 已在 app.slint 内：set-search(s) => { root.rp-search = s; }
-    // 但 rp-search 改了不会自动触发 push；hook 一个外部 callback 让 Rust 重 push。
-    // 当前 app.slint 用 in-out + LineEdit edited(s) => set-search(s) → root.rp-search = s。
-    // 没有专门的 callback。简化：直接用 in-out 让 slint 自己保持 text；过滤逻辑由 push 时取
-    // ui.get_rp_search() 兜底。但 RefPickerState.search 在 Rust 侧是真值，
-    // 必须监听到 rp-search 变化。最简洁：让 select-row 时把 ui.get_rp_search() 同步过来。
-    // 同样地，我们也给搜索建一个 callback。先在 set-search 里调用一个 Rust 侧 hook。
-
-    // 当前 app.slint 的 RefPicker.set-search(s) 处理方式只把 rp-search 写回 root，没调用 Rust。
-    // 这里通过 ui.on_<...> 监听 rp callbacks（select/double/confirm/clear/cancel）拿到状态：
-    // - select-row(i)：以 push 之后过滤后的索引 i 拿到 id，写入 selected_id 并重 push
-    // - row-double-clicked(i)：select + 直接 confirm
-    // - confirm：写回 selected_id
-    // - clear：写回空字符串
-    // - cancel：仅关闭
-
-    // 取 rp-search 的快照：每次回调用 ui.get_rp_search() 同步到 Rust state.search
-    // 这样不必为搜索单独建 callback。
     {
         let s = state.clone();
         let weak = ui.as_weak();
@@ -1556,22 +1631,25 @@ fn wire_ref_picker(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
             let chosen: Option<String> = {
                 let st = s.borrow();
                 let rp = &st.ref_picker;
-                let target = collect_ref_rows(&st, &rp.ref_name);
-                let rows: Vec<(String, String, String)> = match target {
-                    Some((_, rows)) => rows,
+                let target = collect_ref_rows(&st, &rp.ref_name, rp.strategy);
+                let rows: Vec<(String, Vec<String>)> = match target {
+                    Some(t) => t.rows,
                     None => Vec::new(),
                 };
                 let search = rp.search.to_lowercase();
-                let filtered: Vec<&(String, String, String)> = rows.iter().filter(|(id, name, desc)| {
+                let filtered: Vec<&(String, Vec<String>)> = rows.iter().filter(|(id, extras)| {
                     if search.is_empty() { return true; }
-                    id.to_lowercase().contains(&search)
-                        || name.to_lowercase().contains(&search)
-                        || desc.to_lowercase().contains(&search)
+                    if id.to_lowercase().contains(&search) { return true; }
+                    extras.iter().any(|e| e.to_lowercase().contains(&search))
                 }).collect();
-                filtered.get(i as usize).map(|(id, _, _)| id.clone())
+                filtered.get(i as usize).map(|(id, _)| id.clone())
             };
             if let Some(id) = chosen {
-                s.borrow_mut().ref_picker.selected_id = id;
+                {
+                    let mut st = s.borrow_mut();
+                    st.ref_picker.selected_id = id.clone();
+                    st.ref_picker.manual_value = id;
+                }
                 if let Some(ui) = weak.upgrade() { push_ref_picker(&ui, &s); }
             }
         });
@@ -1584,22 +1662,25 @@ fn wire_ref_picker(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
             let chosen: Option<String> = {
                 let st = s.borrow();
                 let rp = &st.ref_picker;
-                let target = collect_ref_rows(&st, &rp.ref_name);
-                let rows: Vec<(String, String, String)> = match target {
-                    Some((_, rows)) => rows,
+                let target = collect_ref_rows(&st, &rp.ref_name, rp.strategy);
+                let rows: Vec<(String, Vec<String>)> = match target {
+                    Some(t) => t.rows,
                     None => Vec::new(),
                 };
                 let search = rp.search.to_lowercase();
-                let filtered: Vec<&(String, String, String)> = rows.iter().filter(|(id, name, desc)| {
+                let filtered: Vec<&(String, Vec<String>)> = rows.iter().filter(|(id, extras)| {
                     if search.is_empty() { return true; }
-                    id.to_lowercase().contains(&search)
-                        || name.to_lowercase().contains(&search)
-                        || desc.to_lowercase().contains(&search)
+                    if id.to_lowercase().contains(&search) { return true; }
+                    extras.iter().any(|e| e.to_lowercase().contains(&search))
                 }).collect();
-                filtered.get(i as usize).map(|(id, _, _)| id.clone())
+                filtered.get(i as usize).map(|(id, _)| id.clone())
             };
             if let Some(id) = chosen {
-                s.borrow_mut().ref_picker.selected_id = id.clone();
+                {
+                    let mut st = s.borrow_mut();
+                    st.ref_picker.selected_id = id.clone();
+                    st.ref_picker.manual_value = id.clone();
+                }
                 commit_ref_picker(&s, id);
                 if let Some(ui) = weak.upgrade() {
                     push_grid(&ui, &s);
@@ -1614,8 +1695,16 @@ fn wire_ref_picker(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
         let weak = ui.as_weak();
         ui.on_rp_confirm(move || {
             sync_rp_search(&s, &weak);
-            let id = s.borrow().ref_picker.selected_id.clone();
-            commit_ref_picker(&s, id);
+            // 优先以手动输入框为准，落空时回退到 selected_id
+            let val = {
+                let st = s.borrow();
+                if !st.ref_picker.manual_value.is_empty() {
+                    st.ref_picker.manual_value.clone()
+                } else {
+                    st.ref_picker.selected_id.clone()
+                }
+            };
+            commit_ref_picker(&s, val);
             if let Some(ui) = weak.upgrade() {
                 push_grid(&ui, &s);
                 push_tree(&ui, &s);
@@ -1640,6 +1729,37 @@ fn wire_ref_picker(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
         let weak = ui.as_weak();
         ui.on_rp_cancel(move || {
             s.borrow_mut().ref_picker.close();
+            if let Some(ui) = weak.upgrade() { push_ref_picker(&ui, &s); }
+        });
+    }
+    {
+        // 搜索框编辑：把文本写入 state 并立即重 push，否则列表过滤永远不刷新。
+        let s = state.clone();
+        let weak = ui.as_weak();
+        ui.on_rp_search_edited(move |q| {
+            s.borrow_mut().ref_picker.search = q.to_string();
+            if let Some(ui) = weak.upgrade() { push_ref_picker(&ui, &s); }
+        });
+    }
+    {
+        // 列展示策略临时切换：写入 state 并重 push 让 headers/extras 跟着变。
+        let s = state.clone();
+        let weak = ui.as_weak();
+        ui.on_rp_strategy_changed(move |i| {
+            s.borrow_mut().ref_picker.strategy = RefDisplayStrategy::from_index(i);
+            if let Some(ui) = weak.upgrade() { push_ref_picker(&ui, &s); }
+        });
+    }
+    {
+        // 手动输入：与列表选中同步；命中列表项时一并更新 selected_id 触发高亮。
+        let s = state.clone();
+        let weak = ui.as_weak();
+        ui.on_rp_manual_edited(move |q| {
+            {
+                let mut st = s.borrow_mut();
+                st.ref_picker.manual_value = q.to_string();
+                st.ref_picker.selected_id = q.to_string();
+            }
             if let Some(ui) = weak.upgrade() { push_ref_picker(&ui, &s); }
         });
     }

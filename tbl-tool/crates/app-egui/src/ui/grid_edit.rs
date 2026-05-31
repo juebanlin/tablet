@@ -19,7 +19,11 @@ pub fn render_edit(ui: &mut egui::Ui, app: &mut TblApp, kind: &CellKind, pos: eg
             if !app.ref_picker.open {
                 if let Some(cell) = app.edit_state.editing.clone() {
                     app.type_selector.open = false;
-                    app.ref_picker.open_with(ref_name, &app.edit_state.edit_buffer, cell, group, name, source);
+                    let strategy = super::ref_picker::RefDisplayStrategy::from_config(
+                        app.engine.project.config.ui.as_ref()
+                            .map(|u| u.ref_picker.default_strategy.as_str())
+                            .unwrap_or("auto"));
+                    app.ref_picker.open_with(ref_name, &app.edit_state.edit_buffer, cell, group, name, source, strategy);
                     app.edit_state.editing = None;
                 }
             }

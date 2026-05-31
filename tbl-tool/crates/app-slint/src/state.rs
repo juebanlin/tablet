@@ -242,6 +242,10 @@ pub struct RefPickerState {
     pub ref_name: String,
     pub search: String,
     pub selected_id: String,
+    /// 手动输入框的当前值（与 selected_id 双向同步；确认时优先以此为准）
+    pub manual_value: String,
+    /// 列展示策略：每次打开重置回项目配置默认；本次会话内可临时切换
+    pub strategy: RefDisplayStrategy,
     /// 编辑上下文：cell 位置（仅数据格使用 Ref；表头不会是 Ref）
     pub editing_row: Option<usize>,
     pub editing_col: Option<usize>,
@@ -251,6 +255,35 @@ pub struct RefPickerState {
     pub editing_source_table: bool,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RefDisplayStrategy {
+    /// id + 最多 2 个非引用、非复合、export != "-" 的辅助列
+    Auto,
+    /// schema 全部字段（除 export = "-" 不导出列）
+    Full,
+}
+
+impl RefDisplayStrategy {
+    pub fn from_config(s: &str) -> Self {
+        match s {
+            "full" => Self::Full,
+            _ => Self::Auto,
+        }
+    }
+    pub fn to_index(&self) -> i32 {
+        match self {
+            Self::Auto => 0,
+            Self::Full => 1,
+        }
+    }
+    pub fn from_index(i: i32) -> Self {
+        match i {
+            1 => Self::Full,
+            _ => Self::Auto,
+        }
+    }
+}
+
 impl RefPickerState {
     pub fn new() -> Self {
         Self {
@@ -258,6 +291,8 @@ impl RefPickerState {
             ref_name: String::new(),
             search: String::new(),
             selected_id: String::new(),
+            manual_value: String::new(),
+            strategy: RefDisplayStrategy::Auto,
             editing_row: None,
             editing_col: None,
             editing_group: String::new(),
@@ -275,10 +310,13 @@ impl RefPickerState {
         group: &str,
         name: &str,
         is_table: bool,
+        default_strategy: RefDisplayStrategy,
     ) {
         self.open = true;
         self.ref_name = ref_name.to_string();
         self.selected_id = current_value.to_string();
+        self.manual_value = current_value.to_string();
+        self.strategy = default_strategy;
         self.search.clear();
         self.editing_row = Some(row);
         self.editing_col = Some(col);
@@ -296,6 +334,7 @@ impl RefPickerState {
         self.search.clear();
         self.ref_name.clear();
         self.selected_id.clear();
+        self.manual_value.clear();
     }
 }
 

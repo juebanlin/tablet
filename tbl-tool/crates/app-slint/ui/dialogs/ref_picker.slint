@@ -1,6 +1,10 @@
 // 引用值选择器：单元格类型为 @Xxx 时弹出，列出被引用项的条目供选择。
 // 对应 docs/02-UI设计.md §6.3。
 // 整行可点击、双击确认；底部按钮 [清空] [确定] [取消]。
+//
+// Table 引用列展示由 strategy 控制（智能 / 全部）；Enum 引用始终是 id/name/desc 固定 3 列。
+// 每行的 extras 与 headers 等长（不含 id 列），双方由 Rust 端协调。
+// 表头分两行：上 desc（中文说明），下 field（英文字段）；任一 desc 全空时只展示 field 行。
 
 import { Theme } from "../theme.slint";
 import { DialogChrome } from "dialog_chrome.slint";
@@ -8,9 +12,13 @@ import { LineEdit, ScrollView } from "std-widgets.slint";
 
 export struct RefRow {
     id: string,
-    name: string,
-    desc: string,
+    extras: [string],            // 与 RefPicker.headers 等长
     selected: bool,
+}
+
+export struct RefHeader {
+    field: string,               // 英文字段名（id/name/...）
+    desc: string,                // 中文说明（可为空）
 }
 
 export component RefPicker inherits Rectangle {
@@ -18,17 +26,33 @@ export component RefPicker inherits Rectangle {
     in property <string> ref-name;                  // 例：HeroBase / HeroType
     in property <string> kind-label: "📊 表引用";    // 或 "🔢 枚举引用"
     in property <bool> target-missing: false;       // 引用项不存在 → 显示警告并禁用确定
-    in property <bool> show-desc: true;             // 表引用时通常隐藏 desc 列
+    in property <bool> is-table: true;              // Table 才显示列展示切换
+    in property <int> strategy-index: 0;            // 0=智能 1=全部
+    in property <RefHeader> id-header: { field: "id", desc: "" };
+    in property <[RefHeader]> headers;              // 不含 id 的辅助列表头（id 永远第一列）
+    in property <bool> has-desc: false;             // 任一 desc 非空 → 表头双行
     in property <string> search;
+    in-out property <string> manual-value: "";      // 顶部手动输入框
     in property <[RefRow]> rows;
     in property <string> selection-preview: "（未选择）";
 
     callback set-search(string);
+    callback set-strategy(int);
+    callback set-manual(string);
     callback select-row(int);
     callback row-double-clicked(int);
     callback confirm();
     callback clear();
     callback cancel();
+
+    // header / data 共享的水平滚动量。data ScrollView 的 viewport-x 双向绑这里，
+    // header 内层用 x: scroll-x 让列跟上滚动；外层 clip: true 裁剪溢出。
+    in-out property <length> scroll-x: 0px;
+    // 列宽常量
+    property <length> id-col-w: 80px;
+    property <length> extra-col-w: 140px;
+    property <length> total-col-w: root.id-col-w + root.extra-col-w * root.headers.length;
+    property <length> header-h: root.has-desc ? Theme.row-h * 2 : Theme.row-h;
 
     visible: root.open;
     width: 100%;
@@ -36,10 +60,10 @@ export component RefPicker inherits Rectangle {
 
     DialogChrome {
         title: "选择引用：@" + root.ref-name;
-        dialog-w: 540px;
-        dialog-h: 460px;
+        dialog-w: 640px;
+        dialog-h: 520px;
         primary-text: "确定";
-        primary-enabled: !root.target-missing;
+        primary-enabled: true;       // 手动输入也允许提交，不要求一定命中列表
         show-secondary: true;
         secondary-text: "清空";
         primary-clicked => { root.confirm(); }
@@ -51,11 +75,66 @@ export component RefPicker inherits Rectangle {
             padding: Theme.sp-4;
             spacing: Theme.sp-3;
 
-            // 标头：引用类型徽章
-            Text {
-                text: root.kind-label;
-                font-size: Theme.fs-tiny;
-                color: Theme.text-secondary;
+            // 顶部手动输入：与列表选中行双向同步，确认时优先以此为准
+            HorizontalLayout {
+                spacing: Theme.sp-2;
+                Text {
+                    text: "当前值:";
+                    font-size: Theme.fs-small;
+                    vertical-alignment: center;
+                    width: 56px;
+                }
+                LineEdit {
+                    text <=> root.manual-value;
+                    placeholder-text: "可直接输入，或在下方列表选择";
+                    edited(s) => { root.set-manual(s); }
+                }
+            }
+
+            // 标头：引用类型徽章 + 列展示切换
+            HorizontalLayout {
+                spacing: Theme.sp-3;
+                Text {
+                    text: root.kind-label;
+                    font-size: Theme.fs-tiny;
+                    color: Theme.text-secondary;
+                    vertical-alignment: center;
+                }
+                if root.is-table: Rectangle {
+                    width: 1px; background: Theme.border-light;
+                }
+                if root.is-table: Text {
+                    text: "列展示:";
+                    font-size: Theme.fs-tiny;
+                    color: Theme.text-secondary;
+                    vertical-alignment: center;
+                }
+                if root.is-table: Rectangle {
+                    width: 56px; height: 22px;
+                    background: root.strategy-index == 0 ? Theme.bg-row-selected : transparent;
+                    border-color: Theme.border-light;
+                    border-width: 1px;
+                    Text {
+                        text: "智能";
+                        font-size: Theme.fs-tiny;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+                    TouchArea { clicked => { root.set-strategy(0); } }
+                }
+                if root.is-table: Rectangle {
+                    width: 56px; height: 22px;
+                    background: root.strategy-index == 1 ? Theme.bg-row-selected : transparent;
+                    border-color: Theme.border-light;
+                    border-width: 1px;
+                    Text {
+                        text: "全部";
+                        font-size: Theme.fs-tiny;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+                    TouchArea { clicked => { root.set-strategy(1); } }
+                }
             }
 
             if root.target-missing: Rectangle {
@@ -87,60 +166,94 @@ export component RefPicker inherits Rectangle {
                 }
             }
 
-            // 表头
+            // 表头：clip 裁剪，内层用 x = scroll-x 跟随数据 ScrollView 水平偏移
+            // 双行：上 desc（has-desc=true 时）+ 下 field
             Rectangle {
-                height: Theme.row-h;
+                height: root.header-h;
                 background: Theme.bg-header;
                 border-color: Theme.border;
                 border-width: 0.5px;
-                HorizontalLayout {
-                    spacing: 0;
-                    Rectangle {
-                        width: 80px;
-                        border-color: Theme.border;
-                        border-width: 0.5px;
-                        Text {
-                            x: Theme.sp-2;
-                            text: "id";
-                            font-size: Theme.fs-tiny;
-                            color: Theme.text-secondary;
-                            vertical-alignment: center;
+                clip: true;
+                Rectangle {
+                    x: root.scroll-x;
+                    y: 0;
+                    width: root.total-col-w;
+                    height: parent.height;
+                    VerticalLayout {
+                        spacing: 0;
+                        // desc 行（中文说明）
+                        if root.has-desc: HorizontalLayout {
+                            spacing: 0;
+                            Rectangle {
+                                width: root.id-col-w;
+                                height: Theme.row-h;
+                                border-color: Theme.border;
+                                border-width: 0.5px;
+                                Text {
+                                    x: Theme.sp-2;
+                                    text: root.id-header.desc;
+                                    font-size: Theme.fs-tiny;
+                                    color: Theme.text-secondary;
+                                    vertical-alignment: center;
+                                }
+                            }
+                            for h in root.headers: Rectangle {
+                                width: root.extra-col-w;
+                                height: Theme.row-h;
+                                border-color: Theme.border;
+                                border-width: 0.5px;
+                                Text {
+                                    x: Theme.sp-2;
+                                    text: h.desc;
+                                    font-size: Theme.fs-tiny;
+                                    color: Theme.text-secondary;
+                                    vertical-alignment: center;
+                                }
+                            }
                         }
-                    }
-                    Rectangle {
-                        width: 140px;
-                        border-color: Theme.border;
-                        border-width: 0.5px;
-                        Text {
-                            x: Theme.sp-2;
-                            text: "name";
-                            font-size: Theme.fs-tiny;
-                            color: Theme.text-secondary;
-                            vertical-alignment: center;
-                        }
-                    }
-                    Rectangle {
-                        horizontal-stretch: 1;
-                        border-color: Theme.border;
-                        border-width: 0.5px;
-                        Text {
-                            x: Theme.sp-2;
-                            text: root.show-desc ? "desc" : "";
-                            font-size: Theme.fs-tiny;
-                            color: Theme.text-secondary;
-                            vertical-alignment: center;
+                        // field 行（英文字段名）
+                        HorizontalLayout {
+                            spacing: 0;
+                            Rectangle {
+                                width: root.id-col-w;
+                                height: Theme.row-h;
+                                border-color: Theme.border;
+                                border-width: 0.5px;
+                                Text {
+                                    x: Theme.sp-2;
+                                    text: root.id-header.field;
+                                    font-size: Theme.fs-tiny;
+                                    color: Theme.text-secondary;
+                                    vertical-alignment: center;
+                                }
+                            }
+                            for h in root.headers: Rectangle {
+                                width: root.extra-col-w;
+                                height: Theme.row-h;
+                                border-color: Theme.border;
+                                border-width: 0.5px;
+                                Text {
+                                    x: Theme.sp-2;
+                                    text: h.field;
+                                    font-size: Theme.fs-tiny;
+                                    color: Theme.text-secondary;
+                                    vertical-alignment: center;
+                                }
+                            }
                         }
                     }
                 }
             }
 
-            // 数据列表
+            // 数据列表：水平 + 垂直 ScrollView；viewport-x 与 root.scroll-x 双向绑定
             Rectangle {
                 vertical-stretch: 1;
                 background: Theme.bg-panel;
                 border-color: Theme.border-light;
                 border-width: 1px;
                 ScrollView {
+                    viewport-x <=> root.scroll-x;
+                    viewport-width: root.total-col-w;
                     VerticalLayout {
                         spacing: 0;
                         if root.rows.length == 0: Rectangle {
@@ -161,7 +274,7 @@ export component RefPicker inherits Rectangle {
                             HorizontalLayout {
                                 spacing: 0;
                                 Rectangle {
-                                    width: 80px;
+                                    width: root.id-col-w;
                                     border-color: Theme.border-light;
                                     border-width: 0.5px;
                                     Text {
@@ -172,27 +285,15 @@ export component RefPicker inherits Rectangle {
                                         vertical-alignment: center;
                                     }
                                 }
-                                Rectangle {
-                                    width: 140px;
+                                for ex in row.extras: Rectangle {
+                                    width: root.extra-col-w;
                                     border-color: Theme.border-light;
                                     border-width: 0.5px;
                                     Text {
                                         x: Theme.sp-2;
-                                        text: row.name;
+                                        text: ex;
                                         font-size: Theme.fs-small;
                                         color: Theme.text-primary;
-                                        vertical-alignment: center;
-                                    }
-                                }
-                                Rectangle {
-                                    horizontal-stretch: 1;
-                                    border-color: Theme.border-light;
-                                    border-width: 0.5px;
-                                    Text {
-                                        x: Theme.sp-2;
-                                        text: row.desc;
-                                        font-size: Theme.fs-small;
-                                        color: Theme.text-secondary;
                                         vertical-alignment: center;
                                     }
                                 }
@@ -226,13 +327,20 @@ export component RefPickerPreview inherits Window {
         open: true;
         ref-name: "HeroType";
         kind-label: "🔢 枚举引用";
-        show-desc: true;
+        is-table: false;
+        id-header: { field: "id", desc: "ID" };
+        headers: [
+            { field: "name", desc: "名称" },
+            { field: "desc", desc: "描述" },
+        ];
+        has-desc: true;
+        manual-value: "2";
         selection-preview: "2 (MAGE)";
         rows: [
-            { id: "1", name: "WARRIOR", desc: "近战战士", selected: false },
-            { id: "2", name: "MAGE", desc: "远程法师", selected: true },
-            { id: "3", name: "ARCHER", desc: "弓箭手", selected: false },
-            { id: "4", name: "ROGUE", desc: "盗贼", selected: false },
+            { id: "1", extras: ["WARRIOR", "近战战士"], selected: false },
+            { id: "2", extras: ["MAGE", "远程法师"], selected: true },
+            { id: "3", extras: ["ARCHER", "弓箭手"], selected: false },
+            { id: "4", extras: ["ROGUE", "盗贼"], selected: false },
         ];
     }
 }

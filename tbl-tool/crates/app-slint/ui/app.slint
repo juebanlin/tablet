@@ -20,14 +20,14 @@ import { GridSection } from "components/grid_section.slint";
 import { GridArea, HeaderCell, DataCell, DataRow, CellKind } from "components/grid_area.slint";
 import { LogPanel, LogEntry } from "components/log_panel.slint";
 import { TypeSelector, RefItem, TsParamSlot } from "dialogs/type_selector.slint";
-import { RefPicker, RefRow } from "dialogs/ref_picker.slint";
+import { RefPicker, RefRow, RefHeader } from "dialogs/ref_picker.slint";
 import { ExportDialog } from "dialogs/export_dialog.slint";
 import { SchemaExportDialog, SchemaImportDialog, SchemaItem } from "dialogs/schema_dialog.slint";
 import { ContextMenu, CtxMenuItem } from "dialogs/context_menu.slint";
 import { InputDialog } from "dialogs/input_dialog.slint";
 import { ConfirmDialog } from "dialogs/confirm_dialog.slint";
 
-export { TreeNode, HeaderCell, DataCell, DataRow, CellKind, LogEntry, RefItem, TsParamSlot, RefRow, SchemaItem, CtxMenuItem }
+export { TreeNode, HeaderCell, DataCell, DataRow, CellKind, LogEntry, RefItem, TsParamSlot, RefRow, RefHeader, SchemaItem, CtxMenuItem }
 
 export component AppWindow inherits Window {
     title: "tbl-tool";
@@ -139,8 +139,13 @@ export component AppWindow inherits Window {
     in property <string> rp-ref-name;
     in property <string> rp-kind-label: "📊 表引用";
     in property <bool> rp-target-missing: false;
-    in property <bool> rp-show-desc: true;
+    in property <bool> rp-is-table: true;
+    in-out property <int> rp-strategy-index: 0;
+    in property <RefHeader> rp-id-header: { field: "id", desc: "" };
+    in property <[RefHeader]> rp-headers;
+    in property <bool> rp-has-desc: false;
     in-out property <string> rp-search;
+    in-out property <string> rp-manual-value;
     in property <[RefRow]> rp-rows;
     in property <string> rp-selection-preview: "（未选择）";
     callback rp-select-row(int);
@@ -148,6 +153,9 @@ export component AppWindow inherits Window {
     callback rp-confirm();
     callback rp-clear();
     callback rp-cancel();
+    callback rp-search-edited(string);
+    callback rp-strategy-changed(int);
+    callback rp-manual-edited(string);
 
     // ── Dialog: 数据导出 ────────────────────────────────────
     in-out property <bool> dlg-export-open: false;
@@ -426,11 +434,18 @@ export component AppWindow inherits Window {
         ref-name: root.rp-ref-name;
         kind-label: root.rp-kind-label;
         target-missing: root.rp-target-missing;
-        show-desc: root.rp-show-desc;
+        is-table: root.rp-is-table;
+        strategy-index: root.rp-strategy-index;
+        id-header: root.rp-id-header;
+        headers: root.rp-headers;
+        has-desc: root.rp-has-desc;
         search: root.rp-search;
+        manual-value <=> root.rp-manual-value;
         rows: root.rp-rows;
         selection-preview: root.rp-selection-preview;
-        set-search(s) => { root.rp-search = s; }
+        set-search(s) => { root.rp-search = s; root.rp-search-edited(s); }
+        set-strategy(i) => { root.rp-strategy-index = i; root.rp-strategy-changed(i); }
+        set-manual(s) => { root.rp-manual-edited(s); }
         select-row(i) => { root.rp-select-row(i); }
         row-double-clicked(i) => { root.rp-row-double-clicked(i); }
         confirm => { root.rp-confirm(); root.dlg-ref-open = false; }
