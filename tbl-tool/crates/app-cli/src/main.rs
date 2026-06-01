@@ -318,8 +318,7 @@ fn run_new_project(
             let _ = load_project(workdir);
         }
         let original = std::fs::read_to_string(&config_path)?;
-        let mut project_cfg = tbl_core::model::ProjectConfig {
-            name: "my-game".to_string(),
+        let project_cfg = tbl_core::model::ProjectConfig {
             last_project: project_id.to_string(),
             opened_projects: Vec::new(),
             project_sort: String::new(),
@@ -327,10 +326,6 @@ fn run_new_project(
             config_dir: "config".to_string(),
             cache_dir: ".tbl-cache".to_string(),
         };
-        // 保留原有 [project].name（如有）
-        if let Ok(parsed) = toml::from_str::<tbl_core::model::WorkspaceConfig>(&original) {
-            project_cfg.name = parsed.project.name;
-        }
         let updated = tbl_core::project::upsert_project_config_section(&original, &project_cfg);
         std::fs::write(&config_path, updated)?;
     }
@@ -348,7 +343,6 @@ fn apply_overrides(engine: &mut ProjectEngine, overrides: &[String]) {
         };
         match key.trim() {
             // 历史 key（兼容老脚本/test fixture）：app.* 与 project.* 等价
-            "project.name" | "app.name" => project.config.project.name = value.to_string(),
             "project.config_dir" | "app.config_dir" => project.config.project.config_dir = value.to_string(),
             "project.cache_dir" | "app.cache_dir" => project.config.project.cache_dir = value.to_string(),
             "app.last_project" | "project.last_project" => project.config.project.last_project = value.to_string(),

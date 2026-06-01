@@ -3717,13 +3717,12 @@ fn run_new_project(state: &Rc<RefCell<AppState>>) -> bool {
     let template_source = st.new_project.template_source.clone();
     let switch_after = st.new_project.switch_after;
     // 全关时 active = None，不能调 engine.project()。优先 active → opened[0] → 默认。
-    // 这条路径只读 [project] 段：name / config_dir / cache_dir + opened/sort/order，
+    // 这条路径只读 [project] 段：config_dir / cache_dir + opened/sort/order，
     // 缺时回落到 hardcoded 默认即可（用户可在 tbl-tool.toml 里手改）。
     let cur_project_cfg: ProjectConfig = st.engine.active()
         .or_else(|| st.engine.projects.first())
         .map(|p| p.config.project.clone())
         .unwrap_or_else(|| ProjectConfig {
-            name: "my-game".to_string(),
             last_project: String::new(),
             opened_projects: Vec::new(),
             project_sort: "id".to_string(),
@@ -3731,7 +3730,6 @@ fn run_new_project(state: &Rc<RefCell<AppState>>) -> bool {
             config_dir: "config".to_string(),
             cache_dir: ".tbl-cache".to_string(),
         });
-    let workspace_name = cur_project_cfg.name.clone();
     let workspace_config_dir = cur_project_cfg.config_dir.clone();
     let workspace_cache_dir = cur_project_cfg.cache_dir.clone();
 
@@ -3781,7 +3779,6 @@ fn run_new_project(state: &Rc<RefCell<AppState>>) -> bool {
         let original = std::fs::read_to_string(&config_path).unwrap_or_default();
         let cur = cur_project_cfg.clone();
         let new_project_cfg = ProjectConfig {
-            name: workspace_name,
             last_project: project_id.clone(),
             opened_projects: cur.opened_projects,
             project_sort: cur.project_sort,

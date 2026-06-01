@@ -44,8 +44,6 @@ const LEGACY_PROJECT_META_FILE: &str = ".project-meta.toml";
 const LEGACY_SCHEMA_FILE: &str = "schema.tblschema";
 
 const DEFAULT_CONFIG: &str = r#"[project]
-# 仓库展示名
-name = "my-game"
 # 启动时进入的 Project id；为空 = 扫到的第一个
 last_project = ""
 # 启动时自动打开的 Project id 列表；为空 = 仅打开 last_project
@@ -194,10 +192,9 @@ pub fn load_project(workdir: &Path) -> Result<Project> {
         (root, meta, proj_text)
     } else {
         // 老布局：workdir 自身就是 project_root，<config_dir> 即数据目录
-        let temp_cfg: WorkspaceConfig = toml::from_str(&global_text)?;
         let meta = ProjectInstanceMeta {
             id: "default".to_string(),
-            name: temp_cfg.project.name.clone(),
+            name: "default".to_string(),
             ..Default::default()
         };
         (workdir.to_path_buf(), meta, None)
@@ -406,28 +403,24 @@ pub fn persist_workspace_state(
 ) -> Result<()> {
     let path = engine.workdir.join(crate::CONFIG_FILE);
     let original = std::fs::read_to_string(&path).unwrap_or_default();
-    // 取仓库展示 name / config_dir / cache_dir：从已加载 project 的 config 拿；全关时反序列化 toml
-    let (name, config_dir, cache_dir) = if let Some(p) = engine.active() {
+    // 取 config_dir / cache_dir：优先从已加载 project 的 config 拿，全关时反序列化原 toml
+    let (config_dir, cache_dir) = if let Some(p) = engine.active() {
         (
-            p.config.project.name.clone(),
             p.config.project.config_dir.clone(),
             p.config.project.cache_dir.clone(),
         )
     } else if let Some(p) = engine.projects.first() {
         (
-            p.config.project.name.clone(),
             p.config.project.config_dir.clone(),
             p.config.project.cache_dir.clone(),
         )
     } else {
-        // 全关：从原 toml 解析
         match toml::from_str::<WorkspaceConfig>(&original) {
-            Ok(c) => (c.project.name, c.project.config_dir, c.project.cache_dir),
-            Err(_) => ("my-game".to_string(), "config".to_string(), ".tbl-cache".to_string()),
+            Ok(c) => (c.project.config_dir, c.project.cache_dir),
+            Err(_) => ("config".to_string(), ".tbl-cache".to_string()),
         }
     };
     let project_cfg = ProjectConfig {
-        name,
         last_project: engine.active_project_id().unwrap_or("").to_string(),
         opened_projects: engine.opened_ids(),
         project_sort: project_sort.to_string(),
@@ -793,7 +786,6 @@ pub fn upsert_project_config_section(original: &str, project: &ProjectConfig) ->
         // 完全没有 [project] 段：在头部插一段
         let mut head = vec![
             "[project]".to_string(),
-            format!("name = \"{}\"", escape_toml_string(&project.name)),
         ];
         for key in field_keys.iter() {
             if let Some(line) = app_lines.get(*key) {
@@ -908,12 +900,12 @@ mod tests {
         std::fs::create_dir_all(dir.join("config")).unwrap();
         std::fs::write(
             dir.join("tbl-tool.toml"),
-            "[project]\nname = \"x\"\nconfig_dir = \"config\"\ncache_dir = \".tbl-cache\"\n",
+            "[project]\nconfig_dir = \"config\"\ncache_dir = \".tbl-cache\"\n",
         )
         .unwrap();
         let proj = load_project(&dir).expect("load");
-        assert_eq!(proj.config.project.name, "x");
         assert_eq!(proj.config.project.config_dir, "config");
+        assert_eq!(proj.config.project.cache_dir, ".tbl-cache");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -1019,7 +1011,6 @@ mod tests {
     fn upsert_project_config_keeps_section_header() {
         let original = "[project]\nname = \"x\"\n\n[ui]\nlog_level = \"debug\"\n";
         let project = ProjectConfig {
-            name: "x".to_string(),
             last_project: "p1".to_string(),
             opened_projects: Vec::new(),
             project_sort: String::new(),
@@ -1038,7 +1029,6 @@ mod tests {
     fn upsert_project_config_replaces_existing_last_project() {
         let original = "[project]\nname = \"x\"\nlast_project = \"old\"\n";
         let project = ProjectConfig {
-            name: "x".to_string(),
             last_project: "new".to_string(),
             opened_projects: Vec::new(),
             project_sort: String::new(),
@@ -1055,7 +1045,6 @@ mod tests {
     fn upsert_project_config_inserts_when_missing() {
         let original = "[ui]\nlog_level = \"debug\"\n";
         let project = ProjectConfig {
-            name: "x".to_string(),
             last_project: "p1".to_string(),
             opened_projects: Vec::new(),
             project_sort: String::new(),
@@ -1073,7 +1062,6 @@ mod tests {
     fn upsert_project_config_persists_opened_and_order() {
         let original = "[project]\nname = \"x\"\nlast_project = \"\"\n";
         let project = ProjectConfig {
-            name: "x".to_string(),
             last_project: "p1".to_string(),
             opened_projects: vec!["p1".to_string(), "p2".to_string()],
             project_sort: "manual".to_string(),

@@ -69,7 +69,6 @@ pub struct WorkspaceConfig {
 
 fn default_project_section() -> ProjectConfig {
     ProjectConfig {
-        name: default_app_name(),
         last_project: String::new(),
         opened_projects: Vec::new(),
         project_sort: String::new(),
@@ -183,13 +182,9 @@ fn default_true() -> bool { true }
 
 /// `[project]` toml 段：仓库级配置，不随 Project 切换。
 ///
-/// 持有仓库展示名 + Project 列表管理状态（启动 last_project / 已打开列表 / 排序）。
-/// 注意这里的"项目"指仓库自身（workspace），具体 Project 元数据落在 `<project_root>/project.toml` 的 `[project]` 段（[`ProjectInstanceMeta`]）。
+/// 持有 Project 列表管理状态（启动 last_project / 已打开列表 / 排序）。
 #[derive(Debug, Clone, serde::Deserialize)]
 pub struct ProjectConfig {
-    /// 仓库展示名（默认 "my-game"）。
-    #[serde(default = "default_app_name")]
-    pub name: String,
     /// 启动时进入的 Project id；为空 = 扫到的第一个。
     #[serde(default)]
     pub last_project: String,
@@ -212,7 +207,6 @@ pub struct ProjectConfig {
     pub cache_dir: String,
 }
 
-fn default_app_name() -> String { "my-game".to_string() }
 fn default_config_dir() -> String { "config".to_string() }
 
 /// `project.toml` 的 `[project]` 段：Project 自身元数据，落在 `<project_root>/project.toml`。

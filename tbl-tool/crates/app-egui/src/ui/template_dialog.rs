@@ -413,7 +413,6 @@ fn do_create_project(app: &mut TblApp) {
             &p.config.project
         } else {
             fallback_cfg = ProjectConfig {
-                name: "my-game".to_string(),
                 last_project: String::new(),
                 opened_projects: Vec::new(),
                 project_sort: String::new(),
@@ -424,7 +423,6 @@ fn do_create_project(app: &mut TblApp) {
             &fallback_cfg
         };
         let new_project_cfg = ProjectConfig {
-            name: cur.name.clone(),
             last_project: project_id.clone(),
             opened_projects: cur.opened_projects.clone(),
             project_sort: cur.project_sort.clone(),
