@@ -126,7 +126,6 @@ pub enum PendingAction {
     DeleteNode { project_id: String, group: String, name: String },
     RenameGroup { project_id: String, old_name: String },
     RenameNode { project_id: String, group: String, old_name: String },
-    CopyNode { project_id: String, group: String, name: String, kind: tbl_core::ops::NodeKind },
     /// 重命名 project：弹两次输入框（id / name）；这里仅记录第一阶段（id），第二阶段由 input_name 收集
     RenameProject { old_id: String, stage: RenameProjectStage },
     /// 删除 project：单步 ConfirmDialog
@@ -835,13 +834,6 @@ impl TblApp {
                         });
                     });
                 if !open { self.pending_action = None; }
-                return;
-            }
-            PendingAction::CopyNode { project_id, group, name, kind } => {
-                let pid = project_id.clone();
-                let (group, name, kind) = (group.clone(), name.clone(), kind.clone());
-                self.engine.with_active(&pid, |e| e.copy_node(&group, &name, kind));
-                self.pending_action = None;
                 return;
             }
             _ => {}

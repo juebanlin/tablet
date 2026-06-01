@@ -2070,6 +2070,26 @@ fn ctx_menu_items_for(kind: &CtxMenuKind, state: &AppState) -> Vec<CtxMenuItem> 
         is_separator: false,
         disabled,
     };
+    let item_owned = |label: String, id: &str, disabled: bool| CtxMenuItem {
+        label: label.into(),
+        action_id: id.into(),
+        is_separator: false,
+        disabled,
+    };
+    let cb = state.engine.node_clipboard.as_ref();
+    let cb_label = cb.map(tbl_core::ops::NodeClipboard::label).unwrap_or_default();
+    let has_node_cb = cb.map_or(false, tbl_core::ops::NodeClipboard::is_node);
+    let has_group_cb = cb.map_or(false, tbl_core::ops::NodeClipboard::is_group);
+    let paste_node_label = if has_node_cb {
+        format!("粘贴节点（{}）", cb_label)
+    } else {
+        "粘贴节点".to_string()
+    };
+    let paste_group_label = if has_group_cb {
+        format!("粘贴 Group（{}）", cb_label)
+    } else {
+        "粘贴 Group".to_string()
+    };
     match kind {
         CtxMenuKind::TreeBlank => vec![
             item("新建 Group", "tree.new-group", false),
@@ -2082,6 +2102,7 @@ fn ctx_menu_items_for(kind: &CtxMenuKind, state: &AppState) -> Vec<CtxMenuItem> 
                     item("导出此 Project (XML)", "tree.proj-export-xml", false),
                     sep(),
                     item("新建 Group", "tree.proj-new-group", false),
+                    item_owned(paste_group_label.clone(), "tree.paste-group", !has_group_cb),
                     item("重命名 Project...", "tree.proj-rename", false),
                     item("删除 Project...", "tree.proj-delete", false),
                     sep(),
@@ -2104,11 +2125,17 @@ fn ctx_menu_items_for(kind: &CtxMenuKind, state: &AppState) -> Vec<CtxMenuItem> 
             item("新建 Constant", "tree.new-constant", false),
             item("新建 Enum", "tree.new-enum", false),
             sep(),
+            item("复制 Group（含全部内容）", "tree.copy-group", false),
+            item_owned(paste_node_label.clone(), "tree.paste-node", !has_node_cb),
+            item_owned(paste_group_label, "tree.paste-group", !has_group_cb),
+            sep(),
             item("重命名", "tree.rename-group", false),
             item("删除", "tree.delete-group", false),
         ],
         CtxMenuKind::TreeNode { .. } => vec![
             item("复制", "tree.copy-node", false),
+            item_owned(paste_node_label, "tree.paste-node", !has_node_cb),
+            sep(),
             item("重命名", "tree.rename-node", false),
             item("删除", "tree.delete-node", false),
         ],
@@ -2664,6 +2691,14 @@ fn handle_project_root_action(state: &Rc<RefCell<AppState>>, project_id: &str, a
                 let _ = open::that(&ap.root);
             }
         }
+        "tree.paste-group" => {
+            let new_group = state.borrow_mut().engine.paste_group_to(project_id);
+            if let Some(new_group) = new_group {
+                let mut st = state.borrow_mut();
+                st.project_expanded.insert(project_id.to_string());
+                st.tree_expanded.insert((project_id.to_string(), new_group));
+            }
+        }
         _ => {}
     }
 }
@@ -2724,10 +2759,32 @@ fn wire_context_menu(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
                 (Some(CtxMenuKind::TreeGroup { project_id, name }), "tree.delete-group") => {
                     s.borrow_mut().pending.open(PendingAction::DeleteGroup { project_id, group: name });
                 }
-                // ── 树节点 ──
-                (Some(CtxMenuKind::TreeNode { project_id: _, group, name, kind }), "tree.copy-node") => {
+                (Some(CtxMenuKind::TreeGroup { project_id, name }), "tree.copy-group") => {
+                    s.borrow_mut().engine.clipboard_copy_group(&project_id, &name);
+                }
+                (Some(CtxMenuKind::TreeGroup { project_id, name }), "tree.paste-node") => {
                     let mut st = s.borrow_mut();
-                    st.engine.copy_node(&group, &name, kind);
+                    if st.engine.paste_node_to(&project_id, &name).is_some() {
+                        st.tree_expanded.insert((project_id, name));
+                    }
+                }
+                (Some(CtxMenuKind::TreeGroup { project_id, .. }), "tree.paste-group") => {
+                    let new_group = s.borrow_mut().engine.paste_group_to(&project_id);
+                    if let Some(new_group) = new_group {
+                        let mut st = s.borrow_mut();
+                        st.project_expanded.insert(project_id.clone());
+                        st.tree_expanded.insert((project_id, new_group));
+                    }
+                }
+                // ── 树节点 ──
+                (Some(CtxMenuKind::TreeNode { project_id, group, name, kind }), "tree.copy-node") => {
+                    s.borrow_mut().engine.clipboard_copy_node(&project_id, &group, &name, kind);
+                }
+                (Some(CtxMenuKind::TreeNode { project_id, group, .. }), "tree.paste-node") => {
+                    let mut st = s.borrow_mut();
+                    if st.engine.paste_node_to(&project_id, &group).is_some() {
+                        st.tree_expanded.insert((project_id, group));
+                    }
                 }
                 (Some(CtxMenuKind::TreeNode { project_id, group, name, .. }), "tree.rename-node") => {
                     let mut st = s.borrow_mut();

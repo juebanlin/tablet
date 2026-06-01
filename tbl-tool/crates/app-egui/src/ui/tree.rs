@@ -1,7 +1,7 @@
 use eframe::egui;
 use std::collections::HashSet;
 use crate::app::{TblApp, SelectedNode, PendingAction, RenameProjectStage, TreeFilter, TreeContext};
-use tbl_core::ops::{AvailableProject, NodeKind};
+use tbl_core::ops::{AvailableProject, NodeClipboard, NodeKind};
 use tbl_core::name_matches;
 
 /// TreeSection 大区渲染：4 段子区域（标题 / 顶部功能区 / 搜索过滤区 / 节点列表）。
@@ -497,6 +497,24 @@ fn render_tree_context(ui: &mut egui::Ui, app: &mut TblApp) {
                                 app.pending_action = Some(PendingAction::NewGroup { project_id: pid.clone() });
                                 app.tree_context = None;
                             }
+                            {
+                                let cb = app.engine.node_clipboard.as_ref();
+                                let cb_label = cb.map(NodeClipboard::label).unwrap_or_default();
+                                let has_group_cb = cb.map_or(false, NodeClipboard::is_group);
+                                let paste_group_label = if has_group_cb {
+                                    format!("粘贴 Group（{}）", cb_label)
+                                } else {
+                                    "粘贴 Group".to_string()
+                                };
+                                if ui.add_enabled(has_group_cb, egui::Button::new(paste_group_label)).clicked() {
+                                    let pid_owned = pid.clone();
+                                    if let Some(new_group) = app.engine.paste_group_to(&pid_owned) {
+                                        app.project_expanded.insert(pid_owned.clone());
+                                        app.tree_expanded.insert((pid_owned, new_group));
+                                    }
+                                    app.tree_context = None;
+                                }
+                            }
                             if ui.button("重命名 Project...").clicked() {
                                 app.pending_action = Some(PendingAction::RenameProject {
                                     old_id: pid.clone(),
@@ -551,6 +569,40 @@ fn render_tree_context(ui: &mut egui::Ui, app: &mut TblApp) {
                             app.tree_context = None;
                         }
                         ui.separator();
+                        let cb = app.engine.node_clipboard.as_ref();
+                        let cb_label = cb.map(NodeClipboard::label).unwrap_or_default();
+                        let has_node_cb = cb.map_or(false, NodeClipboard::is_node);
+                        let has_group_cb = cb.map_or(false, NodeClipboard::is_group);
+                        if ui.button("复制 Group（含全部内容）").clicked() {
+                            app.engine.clipboard_copy_group(project_id, name);
+                            app.tree_context = None;
+                        }
+                        let paste_node_label = if has_node_cb {
+                            format!("粘贴节点（{}）", cb_label)
+                        } else {
+                            "粘贴节点".to_string()
+                        };
+                        if ui.add_enabled(has_node_cb, egui::Button::new(paste_node_label)).clicked() {
+                            let pid_owned = project_id.clone();
+                            let group_owned = name.clone();
+                            app.engine.paste_node_to(&pid_owned, &group_owned);
+                            app.tree_expanded.insert((pid_owned, group_owned));
+                            app.tree_context = None;
+                        }
+                        let paste_group_label = if has_group_cb {
+                            format!("粘贴 Group（{}）", cb_label)
+                        } else {
+                            "粘贴 Group".to_string()
+                        };
+                        if ui.add_enabled(has_group_cb, egui::Button::new(paste_group_label)).clicked() {
+                            let pid_owned = project_id.clone();
+                            if let Some(new_group) = app.engine.paste_group_to(&pid_owned) {
+                                app.project_expanded.insert(pid_owned.clone());
+                                app.tree_expanded.insert((pid_owned, new_group));
+                            }
+                            app.tree_context = None;
+                        }
+                        ui.separator();
                         if ui.button("重命名").clicked() {
                             app.pending_action = Some(PendingAction::RenameGroup {
                                 project_id: project_id.clone(), old_name: name.clone(),
@@ -566,13 +618,26 @@ fn render_tree_context(ui: &mut egui::Ui, app: &mut TblApp) {
                         }
                     }
                     TreeContext::Node { project_id, group, name, kind } => {
+                        let cb = app.engine.node_clipboard.as_ref();
+                        let cb_label = cb.map(NodeClipboard::label).unwrap_or_default();
+                        let has_node_cb = cb.map_or(false, NodeClipboard::is_node);
                         if ui.button("复制").clicked() {
-                            app.pending_action = Some(PendingAction::CopyNode {
-                                project_id: project_id.clone(), group: group.clone(),
-                                name: name.clone(), kind: kind.clone(),
-                            });
+                            app.engine.clipboard_copy_node(project_id, group, name, *kind);
                             app.tree_context = None;
                         }
+                        let paste_label = if has_node_cb {
+                            format!("粘贴节点（{}）", cb_label)
+                        } else {
+                            "粘贴节点".to_string()
+                        };
+                        if ui.add_enabled(has_node_cb, egui::Button::new(paste_label)).clicked() {
+                            let pid_owned = project_id.clone();
+                            let group_owned = group.clone();
+                            app.engine.paste_node_to(&pid_owned, &group_owned);
+                            app.tree_expanded.insert((pid_owned, group_owned));
+                            app.tree_context = None;
+                        }
+                        ui.separator();
                         if ui.button("重命名").clicked() {
                             app.pending_action = Some(PendingAction::RenameNode {
                                 project_id: project_id.clone(), group: group.clone(), old_name: name.clone(),
@@ -580,7 +645,6 @@ fn render_tree_context(ui: &mut egui::Ui, app: &mut TblApp) {
                             app.input_name = name.clone();
                             app.tree_context = None;
                         }
-                        ui.separator();
                         if ui.button("删除").clicked() {
                             app.pending_action = Some(PendingAction::DeleteNode {
                                 project_id: project_id.clone(), group: group.clone(), name: name.clone(),

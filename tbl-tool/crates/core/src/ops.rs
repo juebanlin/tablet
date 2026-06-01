@@ -37,6 +37,19 @@ fn truncate_display(s: &str, max: usize) -> String {
     out
 }
 
+/// 在 existing 集合里找一个不冲突的名字：先试 `<base>_copy`，再 `_copy2`、`_copy3` …
+/// 直到 1000 次还没找到就返回 `<base>_copy_<timestamp_ms>` 兜底。
+fn dedupe_name<'a, I: IntoIterator<Item = &'a str>>(base: &str, existing: I) -> String {
+    let set: std::collections::HashSet<&str> = existing.into_iter().collect();
+    let first = format!("{}_copy", base);
+    if !set.contains(first.as_str()) { return first; }
+    for n in 2..1000 {
+        let candidate = format!("{}_copy{}", base, n);
+        if !set.contains(candidate.as_str()) { return candidate; }
+    }
+    format!("{}_copy_{}", base, chrono::Local::now().timestamp_millis())
+}
+
 /// 保存单个 Project 的所有 dirty / deleted 节点；返回 (保存数, 删除数)。
 /// 抽出来给 save_all（active 一份）和 save_all_projects（遍历）共用。
 fn save_project_files(project: &mut Project) -> (usize, usize) {
@@ -117,6 +130,8 @@ pub struct ProjectEngine {
     /// 全部 Project 的验证错误集，key=(project_id, group, name, row, col)。
     /// `revalidate_all` 扫描所有 Project 重建；UI 在树上做 `!` 聚合时按 project_id 过滤。
     pub validation_errors: HashSet<(String, String, String, usize, usize)>,
+    /// 进程内剪贴板：tree 面板复制粘贴的载体。不持久化，关闭/退出随 engine drop。
+    pub node_clipboard: Option<NodeClipboard>,
     pub logs: Vec<String>,
 }
 
@@ -167,6 +182,57 @@ pub enum NodeKind {
     Enum,
 }
 
+/// 跨 project 复制粘贴的节点载荷（深拷贝）。
+#[derive(Clone, Debug)]
+pub enum NodeBody {
+    Table(Table),
+    Constant(Constant),
+    Enum(EnumDef),
+}
+
+/// 进程内剪贴板：tree 面板的复制粘贴载体（与 OS 剪贴板互不干扰）。
+/// Grid 单元格 TSV 复制走 arboard，二者完全隔离。
+#[derive(Clone, Debug)]
+pub enum NodeClipboard {
+    /// 单节点（Table/Constant/Enum），含完整 schema/records/entries。
+    Node {
+        source_project: String,
+        source_group: String,
+        body: NodeBody,
+    },
+    /// 整组：组内全部 table/constant/enum 都已深拷贝。
+    Group {
+        source_project: String,
+        snapshot: Group,
+    },
+}
+
+impl NodeClipboard {
+    pub fn label(&self) -> String {
+        match self {
+            NodeClipboard::Node { source_project, source_group, body } => {
+                let (kind, name) = match body {
+                    NodeBody::Table(t) => ("Table", t.name.as_str()),
+                    NodeBody::Constant(c) => ("Constant", c.name.as_str()),
+                    NodeBody::Enum(e) => ("Enum", e.name.as_str()),
+                };
+                format!("{} {}（{}/{}）", kind, name, source_project, source_group)
+            }
+            NodeClipboard::Group { source_project, snapshot } => format!(
+                "Group {}（{}，T{}+C{}+E{}）",
+                snapshot.name,
+                source_project,
+                snapshot.tables.len(),
+                snapshot.constants.len(),
+                snapshot.enums.len(),
+            ),
+        }
+    }
+
+    pub fn is_node(&self) -> bool { matches!(self, NodeClipboard::Node { .. }) }
+    pub fn is_group(&self) -> bool { matches!(self, NodeClipboard::Group { .. }) }
+}
+
 #[derive(Clone, Debug)]
 pub enum ProjectAction {
     NewGroup    { project_id: String, name: String },
@@ -194,6 +260,7 @@ impl ProjectEngine {
             projects: vec![project],
             active_idx: Some(0),
             validation_errors: HashSet::new(),
+            node_clipboard: None,
             logs: Vec::new(),
         }
     }
@@ -213,6 +280,7 @@ impl ProjectEngine {
             projects,
             active_idx,
             validation_errors: HashSet::new(),
+            node_clipboard: None,
             logs: Vec::new(),
         }
     }
@@ -239,6 +307,7 @@ impl ProjectEngine {
             projects: opened,
             active_idx,
             validation_errors: HashSet::new(),
+            node_clipboard: None,
             logs: Vec::new(),
         }
     }
@@ -1095,46 +1164,194 @@ impl ProjectEngine {
         self.log(format!("已标记删除: {}/{}", group_name, node_name));
     }
 
-    pub fn copy_node(&mut self, group_name: &str, node_name: &str, kind: NodeKind) {
-        let new_name = format!("{}_copy", node_name);
-        if let Some(g) = self.project_mut().groups.iter_mut().find(|g| g.name == group_name) {
-            let dst = g.dir.join(format!("{}.tbl", new_name));
-            match kind {
-                NodeKind::Table => {
-                    if let Some(t) = g.tables.iter().find(|t| t.name == node_name).cloned() {
-                        let mut copy = t;
-                        copy.name = new_name.clone();
-                        copy.path = dst;
-                        copy.dirty = true;
-                        copy.original = String::new();
-                        g.tables.push(copy);
-                    }
-                }
-                NodeKind::Constant => {
-                    if let Some(c) = g.constants.iter().find(|c| c.name == node_name).cloned() {
-                        let mut copy = c;
-                        copy.name = new_name.clone();
-                        copy.path = dst;
-                        copy.dirty = true;
-                        copy.original = String::new();
-                        g.constants.push(copy);
-                    }
-                }
-                NodeKind::Enum => {
-                    if let Some(e) = g.enums.iter().find(|e| e.name == node_name).cloned() {
-                        let mut copy = e;
-                        copy.name = new_name.clone();
-                        copy.path = dst;
-                        copy.dirty = true;
-                        copy.original = String::new();
-                        g.enums.push(copy);
-                    }
-                }
+    /// 把指定节点深拷贝到剪贴板（不改源数据，不动 dirty 标）。
+    /// 找不到节点 → 仅 log warn，剪贴板不变。
+    pub fn clipboard_copy_node(
+        &mut self,
+        project_id: &str,
+        group: &str,
+        node_name: &str,
+        kind: NodeKind,
+    ) {
+        let Some(p) = self.find_project(project_id) else {
+            self.log(format!("Project 不存在: {}", project_id));
+            return;
+        };
+        let Some(g) = p.groups.iter().find(|g| g.name == group) else {
+            self.log(format!("Group 不存在: {}/{}", project_id, group));
+            return;
+        };
+        let body = match kind {
+            NodeKind::Table => g.tables.iter().find(|t| t.name == node_name).cloned().map(NodeBody::Table),
+            NodeKind::Constant => g.constants.iter().find(|c| c.name == node_name).cloned().map(NodeBody::Constant),
+            NodeKind::Enum => g.enums.iter().find(|e| e.name == node_name).cloned().map(NodeBody::Enum),
+        };
+        let Some(body) = body else {
+            self.log(format!("节点不存在: {}/{}/{}", project_id, group, node_name));
+            return;
+        };
+        let kind_label = match &body {
+            NodeBody::Table(_) => "Table",
+            NodeBody::Constant(_) => "Constant",
+            NodeBody::Enum(_) => "Enum",
+        };
+        self.node_clipboard = Some(NodeClipboard::Node {
+            source_project: project_id.to_string(),
+            source_group: group.to_string(),
+            body,
+        });
+        self.log(format!("已复制 {} 到剪贴板: {}/{}/{}", kind_label, project_id, group, node_name));
+    }
+
+    /// 整组深拷贝到剪贴板（含组内全部 table/constant/enum）。
+    pub fn clipboard_copy_group(&mut self, project_id: &str, group: &str) {
+        let Some(p) = self.find_project(project_id) else {
+            self.log(format!("Project 不存在: {}", project_id));
+            return;
+        };
+        let Some(g) = p.groups.iter().find(|g| g.name == group) else {
+            self.log(format!("Group 不存在: {}/{}", project_id, group));
+            return;
+        };
+        let snapshot = g.clone();
+        let summary = format!(
+            "T{}+C{}+E{}",
+            snapshot.tables.len(),
+            snapshot.constants.len(),
+            snapshot.enums.len(),
+        );
+        self.node_clipboard = Some(NodeClipboard::Group {
+            source_project: project_id.to_string(),
+            snapshot,
+        });
+        self.log(format!("已复制 Group 到剪贴板: {}/{}（{}）", project_id, group, summary));
+    }
+
+    /// 粘贴单节点到目标 (project, group)。
+    /// - 名字冲突走 `_copy` / `_copy2` …
+    /// - path 重写到 `<target_group.dir>/<final_name>.tbl`
+    /// - dirty=true，original=""，is_new 在 Group 层面已独立标识，节点本身不需要
+    /// - 末尾对该节点跑一次 revalidate（active 状态下生效；非 active 暂不需要红框）
+    /// 返回新节点名（成功时）。
+    pub fn paste_node_to(&mut self, target_project: &str, target_group: &str) -> Option<String> {
+        let Some(NodeClipboard::Node { body, .. }) = self.node_clipboard.clone() else {
+            self.log("剪贴板为空或类型不匹配（需要节点剪贴板）".to_string());
+            return None;
+        };
+        let project = self.find_project_mut(target_project)?;
+        let g = project.groups.iter_mut().find(|g| g.name == target_group)?;
+        let mut existing: Vec<String> = Vec::new();
+        existing.extend(g.tables.iter().map(|t| t.name.clone()));
+        existing.extend(g.constants.iter().map(|c| c.name.clone()));
+        existing.extend(g.enums.iter().map(|e| e.name.clone()));
+        let base = match &body {
+            NodeBody::Table(t) => t.name.clone(),
+            NodeBody::Constant(c) => c.name.clone(),
+            NodeBody::Enum(e) => e.name.clone(),
+        };
+        let final_name = if existing.iter().any(|n| n == &base) {
+            dedupe_name(&base, existing.iter().map(String::as_str))
+        } else {
+            base.clone()
+        };
+        let new_path = g.dir.join(format!("{}.tbl", final_name));
+        let kind_label = match body {
+            NodeBody::Table(mut t) => {
+                t.name = final_name.clone();
+                t.path = new_path;
+                t.dirty = true;
+                t.original = String::new();
+                g.tables.push(t);
+                "Table"
             }
-            self.log(format!("已复制: {}/{} → {}", group_name, node_name, new_name));
+            NodeBody::Constant(mut c) => {
+                c.name = final_name.clone();
+                c.path = new_path;
+                c.dirty = true;
+                c.original = String::new();
+                g.constants.push(c);
+                "Constant"
+            }
+            NodeBody::Enum(mut e) => {
+                e.name = final_name.clone();
+                e.path = new_path;
+                e.dirty = true;
+                e.original = String::new();
+                g.enums.push(e);
+                "Enum"
+            }
+        };
+        self.log(format!(
+            "已粘贴 {} 到 {}/{}/{}",
+            kind_label, target_project, target_group, final_name
+        ));
+        let prev = self.active_idx;
+        if let Some(idx) = self.projects.iter().position(|p| p.instance_meta.id == target_project) {
+            self.active_idx = Some(idx);
+            self.revalidate(target_group, &final_name);
+            self.active_idx = prev;
         }
-        // 拷贝出的节点是项目结构变化，无论 realtime_validate 开关如何，都需要建立 errors 索引
-        self.revalidate(group_name, &new_name);
+        Some(final_name)
+    }
+
+    /// 粘贴整组到目标 project，作为兄弟 Group。
+    /// - group 名字冲突走 `_copy` / `_copy2`
+    /// - group.dir 重写到 `<project.data_dir()>/<final_name>`，is_new=true（save 时建目录）
+    /// - 每个 child path 重写到新 dir 下，dirty=true，original=""
+    /// - 末尾整 project revalidate
+    /// 返回新 group 名。
+    pub fn paste_group_to(&mut self, target_project: &str) -> Option<String> {
+        let Some(NodeClipboard::Group { snapshot, .. }) = self.node_clipboard.clone() else {
+            self.log("剪贴板为空或类型不匹配（需要 Group 剪贴板）".to_string());
+            return None;
+        };
+        let project = self.find_project_mut(target_project)?;
+        let existing: Vec<String> = project.groups.iter().map(|g| g.name.clone()).collect();
+        let final_name = if existing.iter().any(|n| n == &snapshot.name) {
+            dedupe_name(&snapshot.name, existing.iter().map(String::as_str))
+        } else {
+            snapshot.name.clone()
+        };
+        let new_dir = project.data_dir().join(&final_name);
+        let mut new_group = snapshot;
+        new_group.name = final_name.clone();
+        new_group.dir = new_dir.clone();
+        new_group.is_new = true;
+        for t in &mut new_group.tables {
+            t.path = new_dir.join(format!("{}.tbl", t.name));
+            t.dirty = true;
+            t.original = String::new();
+        }
+        for c in &mut new_group.constants {
+            c.path = new_dir.join(format!("{}.tbl", c.name));
+            c.dirty = true;
+            c.original = String::new();
+        }
+        for e in &mut new_group.enums {
+            e.path = new_dir.join(format!("{}.tbl", e.name));
+            e.dirty = true;
+            e.original = String::new();
+        }
+        let summary = format!(
+            "T{}+C{}+E{}",
+            new_group.tables.len(),
+            new_group.constants.len(),
+            new_group.enums.len(),
+        );
+        project.groups.push(new_group);
+        self.log(format!("已粘贴 Group 到 {}/{}（{}）", target_project, final_name, summary));
+        let prev = self.active_idx;
+        if let Some(idx) = self.projects.iter().position(|p| p.instance_meta.id == target_project) {
+            self.active_idx = Some(idx);
+            self.revalidate_all();
+            self.active_idx = prev;
+        }
+        Some(final_name)
+    }
+
+    /// 清空剪贴板（关闭/退出由 drop 自动处理；本接口供未来"清空剪贴板"按钮用）。
+    pub fn clipboard_clear(&mut self) {
+        self.node_clipboard = None;
     }
 
     // --- PLACEHOLDER_ACTIONS ---
