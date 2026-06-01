@@ -501,10 +501,14 @@ fn render_tree_context(ui: &mut egui::Ui, app: &mut TblApp) {
                                 app.tree_context = None;
                             }
                             if ui.button("复制(克隆)...").clicked() {
-                                let display = app.engine.find_project(pid)
-                                    .map(|p| p.schema.meta.name.clone())
-                                    .unwrap_or_else(|| pid.clone());
-                                app.new_project.open_clone(pid, &display);
+                                let (display, category, version) = app.engine.find_project(pid)
+                                    .map(|p| (
+                                        p.schema.meta.name.clone(),
+                                        p.schema.meta.category.clone(),
+                                        p.schema.meta.version.clone(),
+                                    ))
+                                    .unwrap_or_else(|| (pid.clone(), String::new(), String::new()));
+                                app.new_project.open_clone(pid, &display, &category, &version);
                                 app.tree_context = None;
                             }
                             {

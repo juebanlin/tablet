@@ -603,6 +603,8 @@ pub struct NewProjectState {
     pub mode: NewProjectMode,
     pub project_id: String,
     pub project_name: String,
+    pub project_category: String,
+    pub project_version: String,
     /// 「立即打开新项目」勾选项；默认 true（克隆模式置 false，且 UI 灰态）
     pub open_after: bool,
     /// 标记是否已经按 mode 默认值预填过 project id（避免覆盖用户手输）
@@ -615,6 +617,8 @@ impl NewProjectState {
         self.mode = NewProjectMode::Empty;
         self.project_id.clear();
         self.project_name.clear();
+        self.project_category.clear();
+        self.project_version = "1.0.0".to_string();
         self.open_after = true;
         self.id_prefilled = true;
     }
@@ -632,11 +636,23 @@ impl NewProjectState {
         };
         self.project_id.clear();
         self.project_name.clear();
+        self.project_category = meta.category.clone();
+        self.project_version = if meta.version.is_empty() {
+            "1.0.0".to_string()
+        } else {
+            meta.version.clone()
+        };
         self.open_after = true;
         self.id_prefilled = false;
     }
 
-    pub fn open_clone(&mut self, source_id: &str, source_display: &str) {
+    pub fn open_clone(
+        &mut self,
+        source_id: &str,
+        source_display: &str,
+        source_category: &str,
+        source_version: &str,
+    ) {
         self.open = true;
         self.mode = NewProjectMode::Clone {
             source_project_id: source_id.to_string(),
@@ -644,6 +660,12 @@ impl NewProjectState {
         };
         self.project_id = format!("{}_copy", source_id);
         self.project_name = format!("{}_copy", source_display);
+        self.project_category = source_category.to_string();
+        self.project_version = if source_version.is_empty() {
+            "1.0.0".to_string()
+        } else {
+            source_version.to_string()
+        };
         self.open_after = false;
         self.id_prefilled = true;
     }
@@ -653,6 +675,8 @@ impl NewProjectState {
         self.mode = NewProjectMode::Empty;
         self.project_id.clear();
         self.project_name.clear();
+        self.project_category.clear();
+        self.project_version.clear();
         self.id_prefilled = false;
     }
 }

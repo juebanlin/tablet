@@ -218,6 +218,8 @@ export component AppWindow inherits Window {
     in property <string> np-intro-line;
     in-out property <string> np-project-id;
     in-out property <string> np-project-name;
+    in-out property <string> np-project-category;
+    in-out property <string> np-project-version;
     in-out property <bool> np-open-after: true;
     in property <bool> np-allow-open-after: true;
     in property <string> np-id-error;
@@ -225,6 +227,8 @@ export component AppWindow inherits Window {
     in property <bool> np-can-confirm: false;
     callback np-id-edited(string);
     callback np-name-edited(string);
+    callback np-category-edited(string);
+    callback np-version-edited(string);
     callback np-confirm();
     callback np-cancel();
     callback np-new-project-clicked();
@@ -566,6 +570,8 @@ export component AppWindow inherits Window {
         intro-line: root.np-intro-line;
         project-id <=> root.np-project-id;
         project-name <=> root.np-project-name;
+        project-category <=> root.np-project-category;
+        project-version <=> root.np-project-version;
         open-after <=> root.np-open-after;
         allow-open-after: root.np-allow-open-after;
         id-error: root.np-id-error;
@@ -573,6 +579,8 @@ export component AppWindow inherits Window {
         can-confirm: root.np-can-confirm;
         id-edited(s) => { root.np-id-edited(s); }
         name-edited(s) => { root.np-name-edited(s); }
+        category-edited(s) => { root.np-category-edited(s); }
+        version-edited(s) => { root.np-version-edited(s); }
         confirm => { root.np-confirm(); }
         cancel => { root.np-cancel(); root.dlg-new-project-open = false; }
     }

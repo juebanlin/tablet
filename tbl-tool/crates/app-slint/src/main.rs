@@ -2640,13 +2640,17 @@ fn handle_project_root_action(state: &Rc<RefCell<AppState>>, project_id: &str, a
             });
         }
         "tree.proj-clone" => {
-            let display = {
+            let (display, category, version) = {
                 let st = state.borrow();
                 st.engine.find_project(project_id)
-                    .map(|p| p.schema.meta.name.clone())
-                    .unwrap_or_else(|| project_id.to_string())
+                    .map(|p| (
+                        p.schema.meta.name.clone(),
+                        p.schema.meta.category.clone(),
+                        p.schema.meta.version.clone(),
+                    ))
+                    .unwrap_or_else(|| (project_id.to_string(), String::new(), String::new()))
             };
-            state.borrow_mut().new_project.open_clone(project_id, &display);
+            state.borrow_mut().new_project.open_clone(project_id, &display, &category, &version);
         }
         "tree.proj-open" => {
             // 右键 closed project → 打开 + 设 active + 默认展开
@@ -3370,6 +3374,22 @@ fn wire_dialogs(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
     {
         let s = state.clone();
         let weak = ui.as_weak();
+        ui.on_np_category_edited(move |v| {
+            s.borrow_mut().new_project.project_category = v.to_string();
+            if let Some(ui) = weak.upgrade() { push_new_project(&ui, &s); }
+        });
+    }
+    {
+        let s = state.clone();
+        let weak = ui.as_weak();
+        ui.on_np_version_edited(move |v| {
+            s.borrow_mut().new_project.project_version = v.to_string();
+            if let Some(ui) = weak.upgrade() { push_new_project(&ui, &s); }
+        });
+    }
+    {
+        let s = state.clone();
+        let weak = ui.as_weak();
         ui.on_np_confirm(move || {
             // 同步 in-out checkbox 当前值
             if let Some(ui) = weak.upgrade() {
@@ -3745,6 +3765,8 @@ fn push_new_project(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
     ui.set_np_intro_line(intro_line.into());
     ui.set_np_project_id(st.new_project.project_id.clone().into());
     ui.set_np_project_name(st.new_project.project_name.clone().into());
+    ui.set_np_project_category(st.new_project.project_category.clone().into());
+    ui.set_np_project_version(st.new_project.project_version.clone().into());
     ui.set_np_open_after(st.new_project.open_after);
     ui.set_np_allow_open_after(allow_open_after);
     ui.set_np_id_error(id_err.into());
@@ -3766,6 +3788,8 @@ fn run_new_project(state: &Rc<RefCell<AppState>>) -> bool {
     let mode = st.new_project.mode.clone();
     let project_id = st.new_project.project_id.clone();
     let display_name = st.new_project.project_name.clone();
+    let category = st.new_project.project_category.clone();
+    let version = st.new_project.project_version.clone();
     let open_after = st.new_project.open_after;
     let now = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
 
@@ -3787,6 +3811,8 @@ fn run_new_project(state: &Rc<RefCell<AppState>>) -> bool {
             let mut schema = TblSchema::default();
             schema.meta.id = project_id.clone();
             schema.meta.name = display_name.clone();
+            schema.meta.category = category.clone();
+            schema.meta.version = version.clone();
             schema.meta.created_at = now.clone();
             st.engine.create_project_from_schema(schema)
         }
@@ -3805,15 +3831,24 @@ fn run_new_project(state: &Rc<RefCell<AppState>>) -> bool {
             let mut schema = content.schema;
             schema.meta.id = project_id.clone();
             schema.meta.name = display_name.clone();
+            schema.meta.category = category.clone();
+            schema.meta.version = version.clone();
             schema.meta.created_at = now.clone();
             schema.meta.source_template = content.meta.id.clone();
             schema.meta.source_template_version = content.meta.version.clone();
             st.engine.create_project_from_schema(schema)
         }
         NewProjectMode::Clone { source_project_id, .. } => {
-            st.engine
-                .clone_project_in_memory(source_project_id, &project_id, &display_name)
-                .ok_or_else(|| format!("克隆失败: 源项目未打开 {}", source_project_id))
+            let res = st.engine
+                .clone_project_in_memory(source_project_id, &project_id, &display_name);
+            if let Some(ref new_id) = res {
+                if let Some(p) = st.engine.find_project_mut(new_id) {
+                    p.schema.meta.category = category.clone();
+                    p.schema.meta.version = version.clone();
+                    p.schema_dirty = true;
+                }
+            }
+            res.ok_or_else(|| format!("克隆失败: 源项目未打开 {}", source_project_id))
         }
     };
 

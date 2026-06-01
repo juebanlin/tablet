@@ -181,6 +181,8 @@ export component NewProjectDialog inherits Rectangle {
     in property <string> intro-line;
     in-out property <string> project-id;
     in-out property <string> project-name;
+    in-out property <string> project-category;
+    in-out property <string> project-version;
     in-out property <bool> open-after: true;
     /// 克隆模式置 false：禁用 open-after 复选框
     in property <bool> allow-open-after: true;
@@ -190,6 +192,8 @@ export component NewProjectDialog inherits Rectangle {
 
     callback id-edited(string);
     callback name-edited(string);
+    callback category-edited(string);
+    callback version-edited(string);
     callback confirm();
     callback cancel();
 
@@ -258,6 +262,36 @@ export component NewProjectDialog inherits Rectangle {
                 color: Theme.text-error;
             }
 
+            HorizontalLayout {
+                spacing: Theme.sp-2;
+                Text {
+                    text: "分类:";
+                    font-size: Theme.fs-small;
+                    width: 64px;
+                    vertical-alignment: center;
+                }
+                LineEdit {
+                    text: root.project-category;
+                    placeholder-text: "test / slg / rpg / ...";
+                    edited(s) => { root.category-edited(s); }
+                }
+            }
+
+            HorizontalLayout {
+                spacing: Theme.sp-2;
+                Text {
+                    text: "版本:";
+                    font-size: Theme.fs-small;
+                    width: 64px;
+                    vertical-alignment: center;
+                }
+                LineEdit {
+                    text: root.project-version;
+                    placeholder-text: "1.0.0";
+                    edited(s) => { root.version-edited(s); }
+                }
+            }
+
             Text {
                 text: "目录预览：projects/" + root.project-id + "/";
                 font-size: Theme.fs-tiny;
@@ -312,6 +346,8 @@ export component NewProjectDialogPreview inherits Window {
         intro-line: "基于模板：完整测试模板 (builtin)";
         project-id: "my-slg";
         project-name: "我的 SLG 项目";
+        project-category: "slg";
+        project-version: "1.0.0";
         open-after: true;
         allow-open-after: true;
         can-confirm: true;

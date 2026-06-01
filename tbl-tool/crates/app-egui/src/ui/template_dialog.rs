@@ -69,6 +69,8 @@ pub struct NewProjectState {
     pub mode: NewProjectMode,
     pub project_id: String,
     pub project_name: String,
+    pub project_category: String,
+    pub project_version: String,
     /// 「立即打开新项目」勾选项；默认 true。
     pub open_after: bool,
     /// 是否已经按 mode 默认值预填过 id（避免覆盖用户手输）
@@ -81,6 +83,8 @@ impl NewProjectState {
         self.mode = NewProjectMode::Empty;
         self.project_id.clear();
         self.project_name.clear();
+        self.project_category.clear();
+        self.project_version = "1.0.0".to_string();
         self.open_after = true;
         self.id_prefilled = true; // 空项目不 prefill id
     }
@@ -98,11 +102,23 @@ impl NewProjectState {
         };
         self.project_id.clear();
         self.project_name.clear();
+        self.project_category = meta.category.clone();
+        self.project_version = if meta.version.is_empty() {
+            "1.0.0".to_string()
+        } else {
+            meta.version.clone()
+        };
         self.open_after = true;
         self.id_prefilled = false;
     }
 
-    pub fn open_clone(&mut self, source_id: &str, source_display: &str) {
+    pub fn open_clone(
+        &mut self,
+        source_id: &str,
+        source_display: &str,
+        source_category: &str,
+        source_version: &str,
+    ) {
         self.open = true;
         self.mode = NewProjectMode::Clone {
             source_project_id: source_id.to_string(),
@@ -110,6 +126,12 @@ impl NewProjectState {
         };
         self.project_id = format!("{}_copy", source_id);
         self.project_name = format!("{}_copy", source_display);
+        self.project_category = source_category.to_string();
+        self.project_version = if source_version.is_empty() {
+            "1.0.0".to_string()
+        } else {
+            source_version.to_string()
+        };
         // Clone 模式必须保存才落盘，"立即打开"无意义 → 默认 false
         self.open_after = false;
         self.id_prefilled = true;
@@ -120,6 +142,8 @@ impl NewProjectState {
         self.mode = NewProjectMode::Empty;
         self.project_id.clear();
         self.project_name.clear();
+        self.project_category.clear();
+        self.project_version.clear();
         self.id_prefilled = false;
     }
 }
@@ -385,6 +409,24 @@ pub fn render_new_project_dialog(ctx: &egui::Context, app: &mut TblApp) {
                 );
             }
 
+            ui.horizontal(|ui| {
+                ui.label("分类:");
+                ui.add(
+                    egui::TextEdit::singleline(&mut app.new_project.project_category)
+                        .desired_width(180.0)
+                        .hint_text("test / slg / rpg / ..."),
+                );
+            });
+
+            ui.horizontal(|ui| {
+                ui.label("版本:");
+                ui.add(
+                    egui::TextEdit::singleline(&mut app.new_project.project_version)
+                        .desired_width(120.0)
+                        .hint_text("1.0.0"),
+                );
+            });
+
             ui.separator();
             ui.label(format!("目录预览: projects/{}/", app.new_project.project_id));
             ui.add_enabled_ui(allow_open_after, |ui| {
@@ -440,6 +482,8 @@ fn do_create_project(app: &mut TblApp) {
     let mode = app.new_project.mode.clone();
     let project_id = app.new_project.project_id.clone();
     let display_name = app.new_project.project_name.clone();
+    let category = app.new_project.project_category.clone();
+    let version = app.new_project.project_version.clone();
     let open_after = app.new_project.open_after;
     let now = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
 
@@ -448,6 +492,8 @@ fn do_create_project(app: &mut TblApp) {
             let mut schema = TblSchema::default();
             schema.meta.id = project_id.clone();
             schema.meta.name = display_name.clone();
+            schema.meta.category = category.clone();
+            schema.meta.version = version.clone();
             schema.meta.created_at = now.clone();
             app.engine.create_project_from_schema(schema)
         }
@@ -462,15 +508,25 @@ fn do_create_project(app: &mut TblApp) {
             let mut schema = content.schema;
             schema.meta.id = project_id.clone();
             schema.meta.name = display_name.clone();
+            schema.meta.category = category.clone();
+            schema.meta.version = version.clone();
             schema.meta.created_at = now.clone();
             schema.meta.source_template = content.meta.id.clone();
             schema.meta.source_template_version = content.meta.version.clone();
             app.engine.create_project_from_schema(schema)
         }
         NewProjectMode::Clone { source_project_id, .. } => {
-            app.engine
-                .clone_project_in_memory(source_project_id, &project_id, &display_name)
-                .ok_or_else(|| format!("克隆失败: 源项目未打开 {}", source_project_id))
+            let res = app.engine
+                .clone_project_in_memory(source_project_id, &project_id, &display_name);
+            if let Some(ref new_id) = res {
+                // 把对话框里编辑过的 category / version 写回新 project 的 schema.meta
+                if let Some(p) = app.engine.find_project_mut(new_id) {
+                    p.schema.meta.category = category.clone();
+                    p.schema.meta.version = version.clone();
+                    p.schema_dirty = true;
+                }
+            }
+            res.ok_or_else(|| format!("克隆失败: 源项目未打开 {}", source_project_id))
         }
     };
 
