@@ -9,11 +9,14 @@ use tbl_core::name_matches;
 /// 对应 docs/04-UI设计.md §2。
 pub fn render(ui: &mut egui::Ui, app: &mut TblApp) {
     // ─── 1. 标题栏 ───
-    ui.heading("配置树");
+    ui.heading("项目列表");
     ui.separator();
 
-    // ─── 2. 顶部功能区：模板库 + 项目排序 ───
+    // ─── 2. 顶部功能区：新建项目 + 模板库 + 项目排序 ───
     ui.horizontal(|ui| {
+        if ui.button("新建项目").clicked() {
+            app.new_project.open_empty();
+        }
         if ui.button("模板库").clicked() {
             app.template_lib.open = true;
         }
@@ -87,8 +90,8 @@ pub fn render(ui: &mut egui::Ui, app: &mut TblApp) {
         // 已打开 project 的 (id, name, groups) snapshot；用于三层渲染（避免 borrow 冲突）
         let opened_snap: std::collections::HashMap<String, (String, Vec<tbl_core::model::Group>)> =
             app.engine.projects.iter()
-                .map(|p| (p.instance_meta.id.clone(),
-                          (p.instance_meta.name.clone(), p.groups.clone())))
+                .map(|p| (p.schema.meta.id.clone(),
+                          (p.schema.meta.name.clone(), p.groups.clone())))
                 .collect();
         let filter = app.tree_filter.clone();
         let full_group = app.tree_filter_show_full_group;
@@ -495,6 +498,13 @@ fn render_tree_context(ui: &mut egui::Ui, app: &mut TblApp) {
                             ui.separator();
                             if ui.button("新建 Group").clicked() {
                                 app.pending_action = Some(PendingAction::NewGroup { project_id: pid.clone() });
+                                app.tree_context = None;
+                            }
+                            if ui.button("复制(克隆)...").clicked() {
+                                let display = app.engine.find_project(pid)
+                                    .map(|p| p.schema.meta.name.clone())
+                                    .unwrap_or_else(|| pid.clone());
+                                app.new_project.open_clone(pid, &display);
                                 app.tree_context = None;
                             }
                             {

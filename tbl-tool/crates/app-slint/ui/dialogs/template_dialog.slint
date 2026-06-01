@@ -173,13 +173,17 @@ export component TemplateLibraryDialog inherits Rectangle {
     }
 }
 
-// ── 新建项目 ─────────────────────────────────────────────
+// ── 新建项目（统一 3 模式：空 / 模板 / 克隆） ─────────────────────────────────────────────
 export component NewProjectDialog inherits Rectangle {
     in property <bool> open: false;
-    in property <string> template-display;     // "name (source)"
+    in property <string> dialog-title: "新建项目";
+    /// 介绍行：模板模式 = "基于模板：xxx (source)"；克隆 = "源项目：xxx"；空项目 = ""
+    in property <string> intro-line;
     in-out property <string> project-id;
     in-out property <string> project-name;
-    in-out property <bool> switch-after: true;
+    in-out property <bool> open-after: true;
+    /// 克隆模式置 false：禁用 open-after 复选框
+    in property <bool> allow-open-after: true;
     in property <string> id-error;
     in property <string> name-error;
     in property <bool> can-confirm: false;
@@ -194,7 +198,7 @@ export component NewProjectDialog inherits Rectangle {
     height: 100%;
 
     DialogChrome {
-        title: "新建项目";
+        title: root.dialog-title;
         dialog-w: 460px;
         dialog-h: 320px;
         primary-text: "创建";
@@ -207,13 +211,12 @@ export component NewProjectDialog inherits Rectangle {
             padding: Theme.sp-4;
             spacing: Theme.sp-3;
 
-            Text {
-                text: "基于模板：" + root.template-display;
+            if root.intro-line != "": Text {
+                text: root.intro-line;
                 font-size: Theme.fs-small;
                 color: Theme.text-primary;
             }
-
-            Rectangle { height: 1px; background: Theme.border-light; }
+            if root.intro-line != "": Rectangle { height: 1px; background: Theme.border-light; }
 
             HorizontalLayout {
                 spacing: Theme.sp-2;
@@ -262,8 +265,14 @@ export component NewProjectDialog inherits Rectangle {
             }
 
             CheckBox {
-                text: "立即切换到新项目";
-                checked <=> root.switch-after;
+                text: "立即打开新项目";
+                checked <=> root.open-after;
+                enabled: root.allow-open-after;
+            }
+            if !root.allow-open-after: Text {
+                text: "（克隆项目需保存后才能打开）";
+                font-size: Theme.fs-tiny;
+                color: Theme.text-secondary;
             }
 
             Rectangle { vertical-stretch: 1; }
@@ -299,10 +308,12 @@ export component NewProjectDialogPreview inherits Window {
 
     NewProjectDialog {
         open: true;
-        template-display: "完整测试模板 (builtin)";
+        dialog-title: "从模板新建项目";
+        intro-line: "基于模板：完整测试模板 (builtin)";
         project-id: "my-slg";
         project-name: "我的 SLG 项目";
-        switch-after: true;
+        open-after: true;
+        allow-open-after: true;
         can-confirm: true;
     }
 }

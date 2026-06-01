@@ -42,6 +42,7 @@ export component TreeSection inherits Rectangle {
     callback search-edited(string);
     callback full-group-toggled(bool);
     callback template-library-clicked();
+    callback new-project-clicked();
     callback sort-changed(int);
 
     background: Theme.bg-panel;
@@ -60,7 +61,7 @@ export component TreeSection inherits Rectangle {
             border-width: 1px;
             Text {
                 x: Theme.sp-3;
-                text: "配置树";
+                text: "项目列表";
                 font-size: Theme.fs-small;
                 color: Theme.text-primary;
                 vertical-alignment: center;
@@ -77,6 +78,10 @@ export component TreeSection inherits Rectangle {
                 padding: Theme.sp-3;
                 spacing: Theme.sp-2;
                 alignment: stretch;
+                Button {
+                    text: "新建项目";
+                    clicked => { root.new-project-clicked(); }
+                }
                 Button {
                     text: "模板库";
                     clicked => { root.template-library-clicked(); }

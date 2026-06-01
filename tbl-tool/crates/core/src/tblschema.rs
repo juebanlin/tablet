@@ -8,6 +8,12 @@ pub struct SchemaMetadata {
     pub name: String,       // 显示文本（含中文）；缺省时 = id
     pub category: String,   // 分类筛选（test / slg / rpg / ...）
     pub version: String,    // semver
+    /// 项目身份：创建时间。模板侧通常为空。
+    pub created_at: String,
+    /// 项目身份：来源模板 id。手动新建 / 模板自身为空。
+    pub source_template: String,
+    /// 项目身份：来源模板版本。
+    pub source_template_version: String,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -85,6 +91,9 @@ pub fn parse_tblschema(content: &str) -> Result<TblSchema> {
                         "name" => meta.name = value,
                         "category" => meta.category = value,
                         "version" => meta.version = value,
+                        "created_at" => meta.created_at = value,
+                        "source_template" => meta.source_template = value,
+                        "source_template_version" => meta.source_template_version = value,
                         _ => { /* 未知 key：忽略，前向兼容 */ }
                     }
                 }
@@ -233,6 +242,15 @@ pub fn serialize_tblschema(schema: &TblSchema) -> String {
     }
     if !schema.meta.version.is_empty() {
         writeln!(s, "# @meta version: {}", schema.meta.version).unwrap();
+    }
+    if !schema.meta.created_at.is_empty() {
+        writeln!(s, "# @meta created_at: {}", schema.meta.created_at).unwrap();
+    }
+    if !schema.meta.source_template.is_empty() {
+        writeln!(s, "# @meta source_template: {}", schema.meta.source_template).unwrap();
+    }
+    if !schema.meta.source_template_version.is_empty() {
+        writeln!(s, "# @meta source_template_version: {}", schema.meta.source_template_version).unwrap();
     }
 
     for sec in &schema.sections {

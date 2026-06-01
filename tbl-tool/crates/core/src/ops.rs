@@ -50,9 +50,37 @@ fn dedupe_name<'a, I: IntoIterator<Item = &'a str>>(base: &str, existing: I) -> 
     format!("{}_copy_{}", base, chrono::Local::now().timestamp_millis())
 }
 
+/// 同步 schema.sections 与 groups 的结构（仅结构骨架，不动 schema.meta）。
+/// 任何 NewGroup / RenameGroup / DeleteGroup / NewTable / RenameNode / DeleteNode
+/// / paste_node_to / paste_group_to 后都要调一次，保证 save 时 project.tblschema
+/// 与磁盘 .tbl 一致。
+fn sync_schema_from_groups(project: &mut Project) {
+    let mut s = crate::tblschema::schema_from_project(&project.groups);
+    s.meta = project.schema.meta.clone();
+    project.schema = s;
+    project.schema_dirty = true;
+}
+
 /// 保存单个 Project 的所有 dirty / deleted 节点；返回 (保存数, 删除数)。
 /// 抽出来给 save_all（active 一份）和 save_all_projects（遍历）共用。
 fn save_project_files(project: &mut Project) -> (usize, usize) {
+    // 第一步：克隆出来但未落盘的项目，先建 root 目录 + 让 schema 一并落地
+    if project.root_pending_create {
+        if let Err(e) = std::fs::create_dir_all(&project.project_root) {
+            eprintln!("warn: create project root failed: {} ({})", project.project_root.display(), e);
+            return (0, 0);
+        }
+        project.root_pending_create = false;
+        project.schema_dirty = true;
+    }
+    if project.schema_dirty {
+        let txt = crate::tblschema::serialize_tblschema(&project.schema);
+        let path = project.project_root.join(crate::project::PROJECT_SCHEMA_FILE);
+        if std::fs::write(&path, txt).is_ok() {
+            project.schema_dirty = false;
+        }
+    }
+
     let mut count = 0;
     let mut deleted = 0;
     for group in &mut project.groups {
@@ -143,22 +171,22 @@ pub struct AvailableProject {
     pub name: String,
     /// `<workdir>/projects/<id>/`
     pub root: PathBuf,
-    /// 取自 `project.toml` 的 `[project].created_at`；用于 sort=created。
+    /// 取自 `project.tblschema` 的 `# @meta created_at`；用于 sort=created。
     pub created_at: String,
 }
 
 impl AvailableProject {
-    /// 从 `Project` 的 instance_meta 派生（已加载场景）。
+    /// 从 `Project` 的 schema.meta 派生（已加载场景）。
     pub fn from_project(p: &Project) -> Self {
         Self {
-            id: p.instance_meta.id.clone(),
-            name: if p.instance_meta.name.is_empty() {
-                p.instance_meta.id.clone()
+            id: p.schema.meta.id.clone(),
+            name: if p.schema.meta.name.is_empty() {
+                p.schema.meta.id.clone()
             } else {
-                p.instance_meta.name.clone()
+                p.schema.meta.name.clone()
             },
             root: p.project_root.clone(),
-            created_at: p.instance_meta.created_at.clone(),
+            created_at: p.schema.meta.created_at.clone(),
         }
     }
 
@@ -272,7 +300,7 @@ impl ProjectEngine {
         let workdir = projects[0].workdir.clone();
         let available = projects.iter().map(AvailableProject::from_project).collect();
         let active_idx = last_id
-            .and_then(|id| projects.iter().position(|p| p.instance_meta.id == id))
+            .and_then(|id| projects.iter().position(|p| p.schema.meta.id == id))
             .or(Some(0));
         Self {
             workdir,
@@ -298,7 +326,7 @@ impl ProjectEngine {
             None
         } else {
             active_id
-                .and_then(|id| opened.iter().position(|p| p.instance_meta.id == id))
+                .and_then(|id| opened.iter().position(|p| p.schema.meta.id == id))
                 .or(Some(0))
         };
         Self {
@@ -335,13 +363,13 @@ impl ProjectEngine {
 
     /// active project 的 id；全部关闭时返回 None。
     pub fn active_project_id(&self) -> Option<&str> {
-        self.active_idx.map(|i| self.projects[i].instance_meta.id.as_str())
+        self.active_idx.map(|i| self.projects[i].schema.meta.id.as_str())
     }
 
     /// 把 active 切到指定 id；找不到则不动。返回是否切换成功。
     /// 切换不动 validation_errors —— errors 现在按 project_id 维度索引，所有 Project 的错误都常驻。
     pub fn set_active_by_id(&mut self, id: &str) -> bool {
-        if let Some(idx) = self.projects.iter().position(|p| p.instance_meta.id == id) {
+        if let Some(idx) = self.projects.iter().position(|p| p.schema.meta.id == id) {
             self.active_idx = Some(idx);
             true
         } else {
@@ -356,12 +384,12 @@ impl ProjectEngine {
 
     /// 是否已打开（在 self.projects 里）。
     pub fn is_opened(&self, project_id: &str) -> bool {
-        self.projects.iter().any(|p| p.instance_meta.id == project_id)
+        self.projects.iter().any(|p| p.schema.meta.id == project_id)
     }
 
     /// 当前已打开 project ids（按 self.projects 顺序）。
     pub fn opened_ids(&self) -> Vec<String> {
-        self.projects.iter().map(|p| p.instance_meta.id.clone()).collect()
+        self.projects.iter().map(|p| p.schema.meta.id.clone()).collect()
     }
 
     /// 当前 available（顺序保持扫描时的字典序，rename / delete 时维护）。
@@ -399,7 +427,7 @@ impl ProjectEngine {
     /// 若是 active，active_idx 切到 None。返回是否真关了一个。
     /// 不动 available_projects（关闭 ≠ 删除）。同时清掉该 pid 的 validation_errors。
     pub fn close_project(&mut self, project_id: &str) -> bool {
-        let Some(idx) = self.projects.iter().position(|p| p.instance_meta.id == project_id) else {
+        let Some(idx) = self.projects.iter().position(|p| p.schema.meta.id == project_id) else {
             self.log(format!("Project 未打开: {}", project_id));
             return false;
         };
@@ -421,14 +449,117 @@ impl ProjectEngine {
         true
     }
 
+    /// 用一个完整 schema（含项目身份 meta + sections 骨架）落地一个新 Project：
+    /// `<workdir>/projects/<schema.meta.id>/` 目录下立即写 schema + config/<group>/<name>.tbl 空骨架，
+    /// 然后加载到 self.projects 末尾，并加进 available_projects。返回新 project id 或错误信息。
+    pub fn create_project_from_schema(
+        &mut self,
+        schema: crate::tblschema::TblSchema,
+    ) -> Result<String, String> {
+        if !crate::tblschema::is_valid_metadata_id(&schema.meta.id) {
+            return Err(format!("project id 不合法: {}", schema.meta.id));
+        }
+        if self.available_projects.iter().any(|a| a.id == schema.meta.id) {
+            return Err(format!("project id 已存在: {}", schema.meta.id));
+        }
+        let project_id = schema.meta.id.clone();
+        let projects_dir = self.workdir.join(crate::project::PROJECTS_DIR);
+        if let Err(e) = std::fs::create_dir_all(&projects_dir) {
+            return Err(format!("创建 projects/ 失败: {}", e));
+        }
+        let project_root = projects_dir.join(&project_id);
+        if project_root.exists() {
+            return Err(format!("目录已存在: {}", project_root.display()));
+        }
+        if let Err(e) = crate::template::instantiate_template(&schema, &project_root) {
+            let _ = std::fs::remove_dir_all(&project_root);
+            return Err(format!("实例化失败: {}", e));
+        }
+        // 加载到 self.projects + available
+        match crate::project::load_specific_project(&self.workdir, &project_id) {
+            Ok(p) => {
+                self.available_projects.push(AvailableProject::from_project(&p));
+                self.available_projects.sort_by(|a, b| a.id.cmp(&b.id));
+                self.projects.push(p);
+                Ok(project_id)
+            }
+            Err(e) => Err(format!("加载新项目失败: {}", e)),
+        }
+    }
+
+    /// 内存深拷贝克隆：把 source_project_id 的当前状态（含未保存改动）整体复制为新 project，
+    /// 加进 self.projects 但**不立即落盘**（root_pending_create=true，schema_dirty=true，
+    /// 全部 group is_new=true，所有节点 dirty=true / original=""）。用户保存时才会落盘。
+    /// - source 必须是 opened（在 self.projects 里）
+    /// - 同时把新 project 加进 available_projects（未保存前目录还不存在，但 UI 树要展示）
+    /// 返回 new_id 或 None（id 冲突 / source 不存在）。
+    pub fn clone_project_in_memory(
+        &mut self,
+        source_project_id: &str,
+        new_id: &str,
+        new_name: &str,
+    ) -> Option<String> {
+        if !crate::tblschema::is_valid_metadata_id(new_id) {
+            self.log(format!("project id 不合法: {}", new_id));
+            return None;
+        }
+        if self.available_projects.iter().any(|a| a.id == new_id) {
+            self.log(format!("project id 已存在: {}", new_id));
+            return None;
+        }
+        let source = self.find_project(source_project_id)?.clone();
+        let new_root = self.workdir.join(crate::project::PROJECTS_DIR).join(new_id);
+        let mut new_project = source;
+        new_project.project_root = new_root.clone();
+        new_project.schema.meta.id = new_id.to_string();
+        new_project.schema.meta.name = new_name.to_string();
+        new_project.schema.meta.created_at =
+            chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
+        // source_template* 沿用源（克隆来源最早还是那个 template）
+        new_project.schema_dirty = true;
+        new_project.root_pending_create = true;
+
+        let new_data_dir = new_project.data_dir();
+        for g in &mut new_project.groups {
+            g.dir = new_data_dir.join(&g.name);
+            g.is_new = true;
+            for t in &mut g.tables {
+                t.path = g.dir.join(format!("{}.tbl", t.name));
+                t.dirty = true;
+                t.original = String::new();
+            }
+            for c in &mut g.constants {
+                c.path = g.dir.join(format!("{}.tbl", c.name));
+                c.dirty = true;
+                c.original = String::new();
+            }
+            for e in &mut g.enums {
+                e.path = g.dir.join(format!("{}.tbl", e.name));
+                e.dirty = true;
+                e.original = String::new();
+            }
+        }
+        // 同步 schema.sections 与 groups（克隆下来的 sections 已经一致，但保险起见走一次）
+        sync_schema_from_groups(&mut new_project);
+        let avail = AvailableProject::from_project(&new_project);
+        self.available_projects.push(avail);
+        self.available_projects.sort_by(|a, b| a.id.cmp(&b.id));
+        self.projects.push(new_project);
+        self.log(format!(
+            "已克隆 {} → {}（内存中，需保存才落地）",
+            source_project_id, new_id
+        ));
+        Some(new_id.to_string())
+    }
+
     /// 按 id 查 project（不可变）。
     pub fn find_project(&self, id: &str) -> Option<&Project> {
-        self.projects.iter().find(|p| p.instance_meta.id == id)
+        self.projects.iter().find(|p| p.schema.meta.id == id)
     }
 
     /// 按 id 查 project（可变）。
     pub fn find_project_mut(&mut self, id: &str) -> Option<&mut Project> {
-        self.projects.iter_mut().find(|p| p.instance_meta.id == id)
+        self.projects.iter_mut().find(|p| p.schema.meta.id == id)
     }
 
     /// 当前 active Project 在指定 (group, name) 上是否有验证错误。
@@ -1142,6 +1273,7 @@ impl ProjectEngine {
                 self.log(format!("已标记删除 Group: {}", group_name));
             }
         }
+        sync_schema_from_groups(self.project_mut());
         // 删除/标删后，该 group 下所有节点的 validation_errors 不应再被 UI 聚合
         let Some(pid) = self.active_project_id().map(str::to_string) else { return; };
         self.validation_errors.retain(|(p, g, _, _, _)| !(p == &pid && g == group_name));
@@ -1159,6 +1291,7 @@ impl ProjectEngine {
                 e.deleted = true;
             }
         }
+        sync_schema_from_groups(self.project_mut());
         let Some(pid) = self.active_project_id().map(str::to_string) else { return; };
         self.validation_errors.retain(|(p, g, n, _, _)| !(p == &pid && g == group_name && n == node_name));
         self.log(format!("已标记删除: {}/{}", group_name, node_name));
@@ -1285,8 +1418,11 @@ impl ProjectEngine {
             "已粘贴 {} 到 {}/{}/{}",
             kind_label, target_project, target_group, final_name
         ));
+        if let Some(p) = self.find_project_mut(target_project) {
+            sync_schema_from_groups(p);
+        }
         let prev = self.active_idx;
-        if let Some(idx) = self.projects.iter().position(|p| p.instance_meta.id == target_project) {
+        if let Some(idx) = self.projects.iter().position(|p| p.schema.meta.id == target_project) {
             self.active_idx = Some(idx);
             self.revalidate(target_group, &final_name);
             self.active_idx = prev;
@@ -1339,9 +1475,10 @@ impl ProjectEngine {
             new_group.enums.len(),
         );
         project.groups.push(new_group);
+        sync_schema_from_groups(project);
         self.log(format!("已粘贴 Group 到 {}/{}（{}）", target_project, final_name, summary));
         let prev = self.active_idx;
-        if let Some(idx) = self.projects.iter().position(|p| p.instance_meta.id == target_project) {
+        if let Some(idx) = self.projects.iter().position(|p| p.schema.meta.id == target_project) {
             self.active_idx = Some(idx);
             self.revalidate_all();
             self.active_idx = prev;
@@ -1372,9 +1509,11 @@ impl ProjectEngine {
                     enums: Vec::new(),
                     is_new: true,
                 });
+                sync_schema_from_groups(project);
                 self.log(format!("[{}] 新建 Group: {}", project_id, name));
             }
             ProjectAction::NewTable { project_id, group, name } => {
+                let mut ok = false;
                 if let Some(project) = self.find_project_mut(project_id) {
                     if let Some(g) = project.groups.iter_mut().find(|g| g.name == *group) {
                         let path = g.dir.join(format!("{}.tbl", name));
@@ -1394,11 +1533,16 @@ impl ProjectEngine {
                             deleted: false,
                             original: String::new(),
                         });
-                        self.log(format!("[{}] 新建 Table: {}/{}", project_id, group, name));
+                        ok = true;
                     }
+                    sync_schema_from_groups(project);
+                }
+                if ok {
+                    self.log(format!("[{}] 新建 Table: {}/{}", project_id, group, name));
                 }
             }
             ProjectAction::NewConstant { project_id, group, name } => {
+                let mut ok = false;
                 if let Some(project) = self.find_project_mut(project_id) {
                     if let Some(g) = project.groups.iter_mut().find(|g| g.name == *group) {
                         let path = g.dir.join(format!("{}.tbl", name));
@@ -1410,11 +1554,16 @@ impl ProjectEngine {
                             deleted: false,
                             original: String::new(),
                         });
-                        self.log(format!("[{}] 新建 Constant: {}/{}", project_id, group, name));
+                        ok = true;
                     }
+                    sync_schema_from_groups(project);
+                }
+                if ok {
+                    self.log(format!("[{}] 新建 Constant: {}/{}", project_id, group, name));
                 }
             }
             ProjectAction::NewEnum { project_id, group, name } => {
+                let mut ok = false;
                 if let Some(project) = self.find_project_mut(project_id) {
                     if let Some(g) = project.groups.iter_mut().find(|g| g.name == *group) {
                         let path = g.dir.join(format!("{}.tbl", name));
@@ -1426,8 +1575,12 @@ impl ProjectEngine {
                             deleted: false,
                             original: String::new(),
                         });
-                        self.log(format!("[{}] 新建 Enum: {}/{}", project_id, group, name));
+                        ok = true;
                     }
+                    sync_schema_from_groups(project);
+                }
+                if ok {
+                    self.log(format!("[{}] 新建 Enum: {}/{}", project_id, group, name));
                 }
             }
             ProjectAction::RenameGroup { project_id, old_name, new_name } => {
@@ -1445,6 +1598,7 @@ impl ProjectEngine {
                         for c in &mut g.constants { c.path = new_dir.join(format!("{}.tbl", c.name)); }
                         for e in &mut g.enums { e.path = new_dir.join(format!("{}.tbl", e.name)); }
                     }
+                    sync_schema_from_groups(project);
                 }
                 // (pid, old_name, *) → (pid, new_name, *)
                 let migrated: Vec<_> = self.validation_errors.iter()
@@ -1475,6 +1629,7 @@ impl ProjectEngine {
                             e.path = new_path;
                         }
                     }
+                    sync_schema_from_groups(project);
                 }
                 let migrated: Vec<_> = self.validation_errors.iter()
                     .filter(|(p, g, n, _, _)| p == project_id && g == group && n == old_name)
@@ -1512,10 +1667,10 @@ impl ProjectEngine {
 
     /// `RenameProject` 的实际逻辑（拆出便于阅读）。
     fn execute_rename_project(&mut self, old_id: &str, new_id: &str, new_name: &str) {
-        if old_id == new_id && new_name == self.find_project(old_id).map(|p| p.instance_meta.name.as_str()).unwrap_or("") {
+        if old_id == new_id && new_name == self.find_project(old_id).map(|p| p.schema.meta.name.as_str()).unwrap_or("") {
             return;
         }
-        let Some(idx) = self.projects.iter().position(|p| p.instance_meta.id == old_id) else {
+        let Some(idx) = self.projects.iter().position(|p| p.schema.meta.id == old_id) else {
             self.log(format!("Project 不存在: {}", old_id));
             return;
         };
@@ -1535,8 +1690,8 @@ impl ProjectEngine {
                 return;
             }
             project.project_root = new_root.clone();
-            project.instance_meta.id = new_id.to_string();
-            project.instance_meta.name = new_name.to_string();
+            project.schema.meta.id = new_id.to_string();
+            project.schema.meta.name = new_name.to_string();
             // 同步所有 group dir + 节点 path
             let new_data_dir = project.data_dir();
             for g in &mut project.groups {
@@ -1547,12 +1702,17 @@ impl ProjectEngine {
                 for e in &mut g.enums { e.path = g.dir.join(format!("{}.tbl", e.name)); }
             }
         } else {
-            project.instance_meta.name = new_name.to_string();
+            project.schema.meta.name = new_name.to_string();
         }
-        // 写 project.toml
-        let project = &self.projects[idx];
-        if let Err(e) = crate::project::write_project_meta(&project.project_root, &project.instance_meta) {
-            self.log(format!("写 project.toml 失败: {}", e));
+        // 写 project.tblschema：项目身份归 schema.meta
+        let project = &mut self.projects[idx];
+        project.schema_dirty = true;
+        let schema_path = project.project_root.join(crate::project::PROJECT_SCHEMA_FILE);
+        let txt = crate::tblschema::serialize_tblschema(&project.schema);
+        if let Err(e) = std::fs::write(&schema_path, txt) {
+            self.log(format!("写 project.tblschema 失败: {}", e));
+        } else {
+            project.schema_dirty = false;
         }
         // 同步 available_projects（id / name / root）
         if let Some(ap) = self.available_projects.iter_mut().find(|a| a.id == old_id) {
@@ -1576,7 +1736,7 @@ impl ProjectEngine {
     /// 用户允许删到 0 个 project（DBeaver-style 全部关闭）。
     fn execute_delete_project(&mut self, project_id: &str) {
         // 找到要删的盘上根（即使没 opened 也要找 available 里的 root）
-        let project_root = if let Some(idx) = self.projects.iter().position(|p| p.instance_meta.id == project_id) {
+        let project_root = if let Some(idx) = self.projects.iter().position(|p| p.schema.meta.id == project_id) {
             self.projects[idx].project_root.clone()
         } else if let Some(ap) = self.available_projects.iter().find(|a| a.id == project_id) {
             ap.root.clone()
@@ -1591,7 +1751,7 @@ impl ProjectEngine {
         }
 
         // 从 opened 移除（如果在）
-        if let Some(idx) = self.projects.iter().position(|p| p.instance_meta.id == project_id) {
+        if let Some(idx) = self.projects.iter().position(|p| p.schema.meta.id == project_id) {
             self.projects.remove(idx);
             // active_idx Option 维护
             match self.active_idx {
@@ -1810,7 +1970,7 @@ impl ProjectEngine {
     /// 给"导出全部 project / 保存全部 project"这类需要遍历所有 project 但
     /// 现有 export_* 接口已绑定 active 的场景用。
     pub fn with_active<R>(&mut self, project_id: &str, f: impl FnOnce(&mut Self) -> R) -> Option<R> {
-        let idx = self.projects.iter().position(|p| p.instance_meta.id == project_id)?;
+        let idx = self.projects.iter().position(|p| p.schema.meta.id == project_id)?;
         let prev = self.active_idx;
         self.active_idx = Some(idx);
         let r = f(self);

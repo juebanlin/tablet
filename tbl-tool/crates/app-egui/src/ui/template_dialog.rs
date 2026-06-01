@@ -1,8 +1,11 @@
 // 模板库 + 新建项目对话框（@docs/04-UI设计.md §6.6 / §6.7、@08 S15-E2）。
 //
 // - 模板库：浏览 BuiltinTemplates / LocalTemplates，列表选中后点击"使用此模板"
-//   关此弹窗 → 弹"新建项目"。
-// - 新建项目：复用 CLI run_new_project 的 5 步落地逻辑（实例化 + 写 meta + 可选切换）。
+//   关此弹窗 → 弹"新建项目"对话框（mode = FromTemplate）。
+// - NewProject 对话框统一 3 模式（Empty / FromTemplate / Clone）：
+//   - Empty：树面板「新建项目」按钮触发，落地一个空 schema 项目
+//   - FromTemplate：模板库「使用此模板」触发，按模板 schema 落地
+//   - Clone：opened project 右键「复制(克隆)…」触发，内存深拷贝 + 标 dirty 待保存
 
 use eframe::egui;
 use tbl_core::template::{
@@ -36,40 +39,85 @@ impl Default for TemplateLibraryState {
     }
 }
 
+/// NewProject 对话框的 3 种模式。决定标题、介绍行、id/name 默认值与落地路径。
+#[derive(Clone, Debug)]
+pub enum NewProjectMode {
+    /// 空项目（来自树面板「新建项目」按钮）
+    Empty,
+    /// 从模板（来自「模板库」对话框）
+    FromTemplate {
+        template_id: String,
+        template_source: String, // "builtin" / "local"
+        template_display: String, // 顶部 "基于模板：xxx" 行
+    },
+    /// 克隆已有 project（来自 opened project 右键菜单）
+    Clone {
+        source_project_id: String,
+        source_display: String,
+    },
+}
+
+impl Default for NewProjectMode {
+    fn default() -> Self {
+        NewProjectMode::Empty
+    }
+}
+
 #[derive(Default)]
 pub struct NewProjectState {
     pub open: bool,
-    pub template_id: String,
-    pub template_source: String, // "builtin" / "local"，仅展示
-    pub template_display: String, // 顶部 "基于模板：xxx" 行
+    pub mode: NewProjectMode,
     pub project_id: String,
     pub project_name: String,
-    pub switch_after: bool,
-    /// 是否已经按 template 自动填过 id 默认值（避免覆盖用户手输）
+    /// 「立即打开新项目」勾选项；默认 true。
+    pub open_after: bool,
+    /// 是否已经按 mode 默认值预填过 id（避免覆盖用户手输）
     pub id_prefilled: bool,
 }
 
 impl NewProjectState {
-    pub fn open_with(&mut self, meta: &TemplateMeta) {
+    pub fn open_empty(&mut self) {
         self.open = true;
-        self.template_id = meta.id.clone();
-        self.template_source = meta.source.to_string();
-        self.template_display = if meta.name.is_empty() {
-            meta.id.clone()
-        } else {
-            meta.name.clone()
+        self.mode = NewProjectMode::Empty;
+        self.project_id.clear();
+        self.project_name.clear();
+        self.open_after = true;
+        self.id_prefilled = true; // 空项目不 prefill id
+    }
+
+    pub fn open_from_template(&mut self, meta: &TemplateMeta) {
+        self.open = true;
+        self.mode = NewProjectMode::FromTemplate {
+            template_id: meta.id.clone(),
+            template_source: meta.source.to_string(),
+            template_display: if meta.name.is_empty() {
+                meta.id.clone()
+            } else {
+                meta.name.clone()
+            },
         };
         self.project_id.clear();
         self.project_name.clear();
-        self.switch_after = true;
+        self.open_after = true;
         self.id_prefilled = false;
+    }
+
+    pub fn open_clone(&mut self, source_id: &str, source_display: &str) {
+        self.open = true;
+        self.mode = NewProjectMode::Clone {
+            source_project_id: source_id.to_string(),
+            source_display: source_display.to_string(),
+        };
+        self.project_id = format!("{}_copy", source_id);
+        self.project_name = format!("{}_copy", source_display);
+        // Clone 模式必须保存才落盘，"立即打开"无意义 → 默认 false
+        self.open_after = false;
+        self.id_prefilled = true;
     }
 
     pub fn close(&mut self) {
         self.open = false;
-        self.template_id.clear();
-        self.template_source.clear();
-        self.template_display.clear();
+        self.mode = NewProjectMode::Empty;
         self.project_id.clear();
         self.project_name.clear();
         self.id_prefilled = false;
@@ -204,7 +252,7 @@ pub fn render_library_dialog(ctx: &egui::Context, app: &mut TblApp) {
     if want_use {
         if let Some(meta) = pick_meta(&app.template_lib.selected_id, &builtin_list, &local_list) {
             app.template_lib.open = false;
-            app.new_project.open_with(&meta);
+            app.new_project.open_from_template(&meta);
         }
     }
 }
@@ -244,19 +292,48 @@ pub fn render_new_project_dialog(ctx: &egui::Context, app: &mut TblApp) {
     let mut open = true;
     let mut do_create = false;
 
-    // 自动用 template id 预填 project id（首次进入时），方便顺手回车创建
+    // 按 mode 取窗口标题 + 介绍行 + id/name 默认值
+    let (title, intro_line, default_id, default_name, allow_open_after) = match &app.new_project.mode {
+        NewProjectMode::Empty => (
+            "新建空项目",
+            String::new(),
+            String::new(),
+            String::new(),
+            true,
+        ),
+        NewProjectMode::FromTemplate { template_id, template_source, template_display } => (
+            "从模板新建项目",
+            format!("基于模板：{} ({})", template_display, template_source),
+            template_id.clone(),
+            template_display.clone(),
+            true,
+        ),
+        NewProjectMode::Clone { source_project_id, source_display } => (
+            "复制项目",
+            format!("源项目：{}", source_display),
+            format!("{}_copy", source_project_id),
+            format!("{}_copy", source_display),
+            false, // 克隆模式：必须保存才落地，"立即打开"灰态
+        ),
+    };
+
+    // 自动预填 id（首次进入时），方便顺手回车创建
     if !app.new_project.id_prefilled && app.new_project.project_id.is_empty() {
-        app.new_project.project_id = app.new_project.template_id.clone();
+        app.new_project.project_id = default_id.clone();
         app.new_project.id_prefilled = true;
     }
     if app.new_project.project_name.is_empty() {
-        app.new_project.project_name = app.new_project.template_display.clone();
+        app.new_project.project_name = default_name.clone();
     }
 
-    let existing_ids: Vec<String> = tbl_core::project::list_projects(&app.engine.workdir)
-        .into_iter()
-        .map(|p| p.id)
-        .collect();
+    // 列表中已存在的 project id（含 closed 的，避免重复）
+    let mut existing_ids: Vec<String> = app.engine.available_projects.iter()
+        .map(|a| a.id.clone()).collect();
+    for p in tbl_core::project::list_projects(&app.engine.workdir) {
+        if !existing_ids.iter().any(|id| id == &p.id) {
+            existing_ids.push(p.id);
+        }
+    }
 
     let id_err = validate_project_id(&app.new_project.project_id, &existing_ids);
     let name_err = if app.new_project.project_name.trim().is_empty() {
@@ -265,17 +342,16 @@ pub fn render_new_project_dialog(ctx: &egui::Context, app: &mut TblApp) {
         None
     };
 
-    egui::Window::new("新建项目")
+    egui::Window::new(title)
         .collapsible(false)
         .resizable(false)
         .default_width(420.0)
         .open(&mut open)
         .show(ctx, |ui| {
-            ui.label(format!(
-                "基于模板：{}  ({})",
-                app.new_project.template_display, app.new_project.template_source
-            ));
-            ui.separator();
+            if !intro_line.is_empty() {
+                ui.label(intro_line);
+                ui.separator();
+            }
 
             ui.horizontal(|ui| {
                 ui.label("项目 ID:");
@@ -311,7 +387,16 @@ pub fn render_new_project_dialog(ctx: &egui::Context, app: &mut TblApp) {
 
             ui.separator();
             ui.label(format!("目录预览: projects/{}/", app.new_project.project_id));
-            ui.checkbox(&mut app.new_project.switch_after, "立即切换到新项目");
+            ui.add_enabled_ui(allow_open_after, |ui| {
+                ui.checkbox(&mut app.new_project.open_after, "立即打开新项目");
+            });
+            if !allow_open_after {
+                ui.label(
+                    egui::RichText::new("（克隆项目需保存后才能打开）")
+                        .weak()
+                        .size(11.0),
+                );
+            }
 
             ui.separator();
             super::modal::dialog_buttons(ui, |ui| {
@@ -348,64 +433,72 @@ fn validate_project_id(id: &str, existing: &[String]) -> Option<String> {
 }
 
 fn do_create_project(app: &mut TblApp) {
-    use tbl_core::model::{ProjectConfig, ProjectInstanceMeta};
-    use tbl_core::project::{
-        upsert_project_config_section, write_project_meta, PROJECTS_DIR,
-    };
-    use tbl_core::template::instantiate_template;
+    use tbl_core::model::ProjectConfig;
+    use tbl_core::project::upsert_project_config_section;
+    use tbl_core::tblschema::TblSchema;
 
-    let workdir = app.engine.workdir.clone();
+    let mode = app.new_project.mode.clone();
     let project_id = app.new_project.project_id.clone();
     let display_name = app.new_project.project_name.clone();
-    let template_id = app.new_project.template_id.clone();
-    let template_source = app.new_project.template_source.clone();
-    let switch_after = app.new_project.switch_after;
+    let open_after = app.new_project.open_after;
+    let now = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
 
-    let content = match template_source.as_str() {
-        "local" => LocalTemplates::new(default_local_dir()).load_by_id(&template_id),
-        _ => BuiltinTemplates::new().load_by_id(&template_id),
+    let result: Result<String, String> = match &mode {
+        NewProjectMode::Empty => {
+            let mut schema = TblSchema::default();
+            schema.meta.id = project_id.clone();
+            schema.meta.name = display_name.clone();
+            schema.meta.created_at = now.clone();
+            app.engine.create_project_from_schema(schema)
+        }
+        NewProjectMode::FromTemplate { template_id, template_source, .. } => {
+            let content = match load_template_content(template_id, template_source) {
+                Some(c) => c,
+                None => {
+                    app.log(format!("[新建项目] 模板未找到: {}", template_id));
+                    return;
+                }
+            };
+            let mut schema = content.schema;
+            schema.meta.id = project_id.clone();
+            schema.meta.name = display_name.clone();
+            schema.meta.created_at = now.clone();
+            schema.meta.source_template = content.meta.id.clone();
+            schema.meta.source_template_version = content.meta.version.clone();
+            app.engine.create_project_from_schema(schema)
+        }
+        NewProjectMode::Clone { source_project_id, .. } => {
+            app.engine
+                .clone_project_in_memory(source_project_id, &project_id, &display_name)
+                .ok_or_else(|| format!("克隆失败: 源项目未打开 {}", source_project_id))
+        }
     };
-    let content = match content {
-        Some(c) => c,
-        None => {
-            app.log(format!("[新建项目] 模板未找到: {}", template_id));
+
+    let new_id = match result {
+        Ok(id) => id,
+        Err(e) => {
+            app.log(format!("[新建项目] 失败: {}", e));
             return;
         }
     };
 
-    let projects_dir = workdir.join(PROJECTS_DIR);
-    if let Err(e) = std::fs::create_dir_all(&projects_dir) {
-        app.log(format!("[新建项目] 创建 projects/ 失败: {}", e));
-        return;
-    }
-    let project_root = projects_dir.join(&project_id);
-    if project_root.exists() {
-        app.log(format!("[新建项目] 目录已存在: {}", project_root.display()));
+    let is_clone = matches!(mode, NewProjectMode::Clone { .. });
+
+    if is_clone {
+        // 克隆：内存中创建，set_active 让它在 UI 立刻可见，未保存不写 last_project
+        app.engine.set_active_by_id(&new_id);
+        app.log(format!(
+            "[新建项目] 已克隆 {} （内存中，需保存才落地）",
+            new_id
+        ));
+        app.new_project.close();
         return;
     }
 
-    if let Err(e) = instantiate_template(&content.schema, &project_root) {
-        app.log(format!("[新建项目] 实例化模板失败: {}", e));
-        let _ = std::fs::remove_dir_all(&project_root);
-        return;
-    }
-
-    let meta = ProjectInstanceMeta {
-        id: project_id.clone(),
-        name: display_name.clone(),
-        created_at: chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string(),
-        source_template: content.meta.id.clone(),
-        source_template_version: content.meta.version.clone(),
-    };
-    if let Err(e) = write_project_meta(&project_root, &meta) {
-        app.log(format!("[新建项目] 写入 project.toml 失败: {}", e));
-        return;
-    }
-
-    if switch_after {
+    if open_after {
+        let workdir = app.engine.workdir.clone();
         let config_path = workdir.join(tbl_core::CONFIG_FILE);
         let original = std::fs::read_to_string(&config_path).unwrap_or_default();
-        // active 缺失时回落 projects[0]，再回落硬编码默认（让"全关时新建项目"也能写出 toml）
         let fallback_cfg;
         let cur = if let Some(active) = app.engine.active() {
             &active.config.project
@@ -423,7 +516,7 @@ fn do_create_project(app: &mut TblApp) {
             &fallback_cfg
         };
         let new_project_cfg = ProjectConfig {
-            last_project: project_id.clone(),
+            last_project: new_id.clone(),
             opened_projects: cur.opened_projects.clone(),
             project_sort: cur.project_sort.clone(),
             project_order: cur.project_order.clone(),
@@ -438,13 +531,13 @@ fn do_create_project(app: &mut TblApp) {
 
     app.log(format!(
         "[新建项目] 已创建 {} ({})",
-        project_root.display(),
-        if switch_after { "切换中..." } else { "未切换" }
+        new_id,
+        if open_after { "打开中..." } else { "未打开" }
     ));
 
     app.new_project.close();
 
-    if switch_after {
+    if open_after {
         app.reload();
     }
 }

@@ -3,13 +3,11 @@
 //! 文档对应：@02 Project / @07.4 / @08 S15-D。
 //!
 //! 仓库级 `tbl-tool.toml` 是全局**默认值**（不随 Project 切换）。Project 自己的
-//! 元数据 + 可选配置覆盖落在 `<workdir>/projects/<id>/project.toml`：
+//! 身份元数据存在 `<workdir>/projects/<id>/project.tblschema` 的 `# @meta` 段里
+//! （id / name / created_at / source_template / source_template_version / category / version）。
+//! 可选的配置覆盖（[export] / [ui] / [separators]）落在同目录下的 `project.toml`：
 //!
 //! ```toml
-//! [project]                    # 必有：ProjectInstanceMeta
-//! id = "default"
-//! name = "默认项目"
-//!
 //! [export]                     # 可选：覆盖全局 [export]（field-level deep merge）
 //! [export.server.java]
 //! package = "com.foo.bar"
@@ -20,8 +18,8 @@
 //! 老仓库的根 `config/` 在 `load_project` 时**自动迁移**到 `projects/default/config/`，
 //! 不保留双结构。
 //!
-//! 历史文件名 `.project-meta.toml` / `schema.tblschema` 在 load 时一次性 rename 为
-//! `project.toml` / `project.tblschema`，保持代码路径单一。
+//! 历史文件名 `schema.tblschema` 在 load 时一次性 rename 为 `project.tblschema`，
+//! 保持代码路径单一。
 //!
 //! 测试 fixtures（`tests/<scenario>/`）保持兼容：当 `<workdir>/projects/` 不存在
 //! 但 `<workdir>/<config_dir>/` 存在时，把 workdir 自身当 project_root（"老布局模式"），
@@ -40,7 +38,6 @@ pub const PROJECTS_DIR: &str = "projects";
 pub const PROJECT_TOML_FILE: &str = "project.toml";
 pub const PROJECT_SCHEMA_FILE: &str = "project.tblschema";
 
-const LEGACY_PROJECT_META_FILE: &str = ".project-meta.toml";
 const LEGACY_SCHEMA_FILE: &str = "schema.tblschema";
 
 const DEFAULT_CONFIG: &str = r#"[project]
@@ -159,8 +156,8 @@ entry = ";"
 ///    把它视作 default project（不动盘上文件，仅在内存里把 project_root=workdir）。
 ///    GUI 端可在确认后调 [`migrate_legacy_to_default`] 真正搬目录。
 /// 3. 多 Project 模式：从 `last_project` / 扫描结果挑一个，project_root = `<workdir>/projects/<id>/`
-/// 4. 加载文件名迁移（.project-meta.toml → project.toml；schema.tblschema → project.tblschema）
-/// 5. 解析 project.toml：[project] 段 → ProjectInstanceMeta；其它段 deep-merge 到全局 config 上
+/// 4. 加载文件名迁移（schema.tblschema → project.tblschema）
+/// 5. 解析 project.tblschema：meta → 项目身份；其它段（[export]/[ui]/...）由 project.toml deep-merge 到全局 config 上
 /// 6. 扫 config/ 加载 groups
 pub fn load_project(workdir: &Path) -> Result<Project> {
     let config_path = workdir.join(crate::CONFIG_FILE);
@@ -174,7 +171,7 @@ pub fn load_project(workdir: &Path) -> Result<Project> {
 
     // 决定 project_root
     let projects_dir = workdir.join(PROJECTS_DIR);
-    let (project_root, instance_meta, project_text) = if projects_dir.is_dir() {
+    let (project_root, schema, project_text) = if projects_dir.is_dir() {
         // 多 Project 模式：从 last_project 或扫描结果挑一个
         let candidates = scan_projects_dir(&projects_dir);
         // 先解析全局，仅为读 last_project；project.toml 的 overlay 一会再做
@@ -184,20 +181,14 @@ pub fn load_project(workdir: &Path) -> Result<Project> {
         let root = projects_dir.join(&chosen.id);
         migrate_legacy_files(&root);
         let proj_text = std::fs::read_to_string(root.join(PROJECT_TOML_FILE)).ok();
-        let meta = read_project_meta_from_text(proj_text.as_deref()).unwrap_or_else(|| ProjectInstanceMeta {
-            id: chosen.id.clone(),
-            name: chosen.id.clone(),
-            ..Default::default()
-        });
-        (root, meta, proj_text)
+        let schema = read_project_schema_with_fallback(&root, &chosen.id);
+        (root, schema, proj_text)
     } else {
         // 老布局：workdir 自身就是 project_root，<config_dir> 即数据目录
-        let meta = ProjectInstanceMeta {
-            id: "default".to_string(),
-            name: "default".to_string(),
-            ..Default::default()
-        };
-        (workdir.to_path_buf(), meta, None)
+        let mut schema = crate::tblschema::TblSchema::default();
+        schema.meta.id = "default".to_string();
+        schema.meta.name = "默认项目".to_string();
+        (workdir.to_path_buf(), schema, None)
     };
 
     let config = merge_project_config(&global_text, project_text.as_deref())?;
@@ -222,8 +213,10 @@ pub fn load_project(workdir: &Path) -> Result<Project> {
         workdir: workdir.to_path_buf(),
         project_root,
         config,
-        instance_meta,
+        schema,
         groups,
+        schema_dirty: false,
+        root_pending_create: false,
     })
 }
 
@@ -239,11 +232,7 @@ pub fn load_specific_project(workdir: &Path, project_id: &str) -> Result<Project
     migrate_legacy_files(&project_root);
 
     let proj_text = std::fs::read_to_string(project_root.join(PROJECT_TOML_FILE)).ok();
-    let instance_meta = read_project_meta_from_text(proj_text.as_deref()).unwrap_or_else(|| ProjectInstanceMeta {
-        id: project_id.to_string(),
-        name: project_id.to_string(),
-        ..Default::default()
-    });
+    let schema = read_project_schema_with_fallback(&project_root, project_id);
 
     let mut config = merge_project_config(&global_text, proj_text.as_deref())?;
     config.project.last_project = project_id.to_string();
@@ -255,8 +244,10 @@ pub fn load_specific_project(workdir: &Path, project_id: &str) -> Result<Project
         workdir: workdir.to_path_buf(),
         project_root,
         config,
-        instance_meta,
+        schema,
         groups,
+        schema_dirty: false,
+        root_pending_create: false,
     })
 }
 
@@ -335,9 +326,7 @@ pub fn load_workspace(workdir: &Path) -> Result<crate::ops::ProjectEngine> {
     let available: Vec<AvailableProject> = entries.iter()
         .map(|e| {
             // 顺手读 created_at（rescan_available 直接走 list_entry，缺 created_at；这里走完整读）
-            let created_at = read_project_meta(&e.root)
-                .map(|m| m.created_at)
-                .unwrap_or_default();
+            let created_at = read_project_created_at(&e.root);
             AvailableProject {
                 id: e.id.clone(),
                 name: if e.name.is_empty() { e.id.clone() } else { e.name.clone() },
@@ -380,10 +369,10 @@ pub fn load_workspace(workdir: &Path) -> Result<crate::ops::ProjectEngine> {
         }
     }
 
-    let active_id = if !last_project.is_empty() && opened.iter().any(|p| p.instance_meta.id == last_project) {
+    let active_id = if !last_project.is_empty() && opened.iter().any(|p| p.schema.meta.id == last_project) {
         Some(last_project)
     } else {
-        opened.first().map(|p| p.instance_meta.id.clone())
+        opened.first().map(|p| p.schema.meta.id.clone())
     };
     let engine = ProjectEngine::new_workspace(
         workdir.to_path_buf(),
@@ -468,7 +457,6 @@ fn deep_merge_toml(base: &mut toml::Value, over: toml::Value) {
 /// 仅当老文件存在且新文件不存在时才动；幂等。
 fn migrate_legacy_files(project_root: &Path) {
     let pairs = [
-        (LEGACY_PROJECT_META_FILE, PROJECT_TOML_FILE),
         (LEGACY_SCHEMA_FILE, PROJECT_SCHEMA_FILE),
     ];
     for (old, new) in pairs {
@@ -516,8 +504,8 @@ fn scan_projects_dir(projects_dir: &Path) -> Vec<ProjectListEntry> {
         if id.starts_with('.') {
             continue;
         }
-        let meta = read_project_meta(&path);
-        let name = meta.map(|m| if m.name.is_empty() { id.clone() } else { m.name }).unwrap_or_else(|| id.clone());
+        let meta = read_project_meta_short(&path);
+        let name = meta.map(|(_, n)| if n.is_empty() { id.clone() } else { n }).unwrap_or_else(|| id.clone());
         out.push(ProjectListEntry { id, name, root: path });
     }
     out.sort_by(|a, b| a.id.cmp(&b.id));
@@ -533,110 +521,57 @@ fn pick_project<'a>(candidates: &'a [ProjectListEntry], preferred: &str) -> Opti
     candidates.first()
 }
 
-/// 读 project.toml（含 legacy `.project-meta.toml` 自动迁移），返回 `[project]` 段。
-fn read_project_meta(project_root: &Path) -> Option<ProjectInstanceMeta> {
-    migrate_legacy_files(project_root);
-    let path = project_root.join(PROJECT_TOML_FILE);
-    let txt = std::fs::read_to_string(&path).ok()?;
-    read_project_meta_from_text(Some(&txt))
-}
-
-/// 从已读入的 project.toml 文本里解析 `[project]` 段。文本缺失或无 `[project]` 段返回 None。
-fn read_project_meta_from_text(text: Option<&str>) -> Option<ProjectInstanceMeta> {
-    let txt = text?;
-    let parsed: ProjectMetaFile = toml::from_str(txt).ok()?;
-    Some(parsed.project)
-}
-
-#[derive(Debug, serde::Deserialize)]
-struct ProjectMetaFile {
-    project: ProjectInstanceMeta,
-}
-
-/// 写 project.toml 的 `[project]` 段，保留其它已有段（[export]/[ui]/...）。
-/// 简单方案：直接 read → upsert `[project]` 段 → write。
-pub fn write_project_meta(project_root: &Path, meta: &ProjectInstanceMeta) -> Result<()> {
-    let path = project_root.join(PROJECT_TOML_FILE);
-    let original = std::fs::read_to_string(&path).unwrap_or_default();
-    let updated = upsert_project_section(&original, meta)?;
-    std::fs::write(&path, updated)?;
-    Ok(())
-}
-
-/// 把 toml 文本里的 `[project]` 段替换为 meta 序列化结果；其它段保持原状。
-fn upsert_project_section(original: &str, meta: &ProjectInstanceMeta) -> Result<String> {
-    let wrapper = ProjectMetaFileOwned { project: meta.clone() };
-    let new_section = toml::to_string_pretty(&wrapper)?;
-
-    // 没有 [project] 段：在头部插入
-    let mut has_project = false;
-    for line in original.lines() {
-        if line.trim() == "[project]" { has_project = true; break; }
-    }
-    if !has_project {
-        let mut joined = String::new();
-        joined.push_str(&new_section);
-        if !original.is_empty() && !new_section.ends_with('\n') {
-            joined.push('\n');
-        }
-        if !original.is_empty() {
-            joined.push('\n');
-            joined.push_str(original);
-        }
-        return Ok(joined);
-    }
-
-    // 已存在 [project] 段：删除旧段（[project] 直到下一个 [...] 段头或 EOF），插入新段
-    let mut out = String::new();
-    let mut in_project_section = false;
-    let mut wrote_new = false;
-    for line in original.lines() {
-        let trimmed = line.trim();
-        if in_project_section {
-            // 遇到下一个 section 头：退出 project 段，落新段，再继续输出当前行
-            if trimmed.starts_with('[') && trimmed.ends_with(']') {
-                in_project_section = false;
-                if !wrote_new {
-                    out.push_str(&new_section);
-                    if !new_section.ends_with('\n') { out.push('\n'); }
-                    wrote_new = true;
-                }
-                out.push_str(line);
-                out.push('\n');
-                continue;
+/// 读 `<project_root>/project.tblschema` 解析出 schema；缺失或解析失败时返回带 id/name 兜底
+/// 的空 schema（id = project_id_fallback、name = project_id_fallback）。
+fn read_project_schema_with_fallback(
+    project_root: &Path,
+    project_id_fallback: &str,
+) -> crate::tblschema::TblSchema {
+    let path = project_root.join(PROJECT_SCHEMA_FILE);
+    let txt = match std::fs::read_to_string(&path) {
+        Ok(t) => t,
+        Err(_) => return fallback_schema(project_id_fallback),
+    };
+    match crate::tblschema::parse_tblschema(&txt) {
+        Ok(mut s) => {
+            if s.meta.id.is_empty() {
+                s.meta.id = project_id_fallback.to_string();
             }
-            // 仍在 [project] 段：丢弃旧行
-            continue;
-        }
-        if trimmed == "[project]" {
-            in_project_section = true;
-            if !wrote_new {
-                out.push_str(&new_section);
-                if !new_section.ends_with('\n') { out.push('\n'); }
-                wrote_new = true;
+            if s.meta.name.is_empty() {
+                s.meta.name = s.meta.id.clone();
             }
-            continue;
+            s
         }
-        out.push_str(line);
-        out.push('\n');
+        Err(_) => fallback_schema(project_id_fallback),
     }
-    if in_project_section && !wrote_new {
-        // EOF 时仍在 [project] 段，且新段没写出去 —— 兜底
-        out.push_str(&new_section);
-        if !new_section.ends_with('\n') { out.push('\n'); }
-    }
-    Ok(out)
 }
 
-#[derive(serde::Serialize)]
-struct ProjectMetaFileOwned {
-    project: ProjectInstanceMeta,
+fn fallback_schema(id: &str) -> crate::tblschema::TblSchema {
+    let mut s = crate::tblschema::TblSchema::default();
+    s.meta.id = id.to_string();
+    s.meta.name = id.to_string();
+    s
+}
+
+/// 仅读取 schema.meta 的 (id, name)，用于 scan_projects_dir 列表展示与 created_at 取值。
+/// 失败时返回 None；调用方按目录名兜底。
+fn read_project_meta_short(project_root: &Path) -> Option<(String, String)> {
+    let s = read_project_schema_with_fallback(project_root, "");
+    if s.meta.id.is_empty() {
+        return None;
+    }
+    Some((s.meta.id, s.meta.name))
+}
+
+/// 读取 schema.meta.created_at（可空）。供 load_workspace 填 AvailableProject。
+fn read_project_created_at(project_root: &Path) -> String {
+    read_project_schema_with_fallback(project_root, "").meta.created_at
 }
 
 /// 把仓库根的老 `<workdir>/<config_dir>/` 迁移到 `<workdir>/projects/default/config/`。
 ///
 /// - 仅当 `<workdir>/projects/` 不存在 **且** 老 config_dir 为非空目录时执行。
-/// - 创建 `project.toml`（id=default / name="默认项目"）。
+/// - 创建 `project.tblschema`（id=default / name="默认项目"）。
 /// - 修改 `tbl-tool.toml` 的 `[project] last_project = "default"`。
 ///
 /// 不会复制额外的 schema/缓存（不在迁移范围）。
@@ -661,15 +596,13 @@ pub fn migrate_legacy_to_default(workdir: &Path) -> Result<bool> {
     rename_dir(&legacy_data, &target_data)
         .with_context(|| format!("迁移失败: {} → {}", legacy_data.display(), target_data.display()))?;
 
-    // 写元数据
-    let meta = ProjectInstanceMeta {
-        id: "default".to_string(),
-        name: "默认项目".to_string(),
-        created_at: Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string(),
-        source_template: String::new(),
-        source_template_version: String::new(),
-    };
-    write_project_meta(&target_root, &meta)?;
+    // 写元数据：直接写 project.tblschema（meta 段，sections 留空）
+    let mut schema = crate::tblschema::TblSchema::default();
+    schema.meta.id = "default".to_string();
+    schema.meta.name = "默认项目".to_string();
+    schema.meta.created_at = Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
+    let schema_path = target_root.join(PROJECT_SCHEMA_FILE);
+    std::fs::write(&schema_path, crate::tblschema::serialize_tblschema(&schema))?;
 
     // 更新 last_project
     config.project.last_project = "default".to_string();
@@ -890,7 +823,7 @@ mod tests {
         std::fs::write(dir.join("tbl-tool.toml"), "[project]\nname = \"x\"\nlast_project = \"\"\nconfig_dir = \"config\"\ncache_dir = \".tbl-cache\"\n").unwrap();
         let proj = load_project(&dir).expect("load");
         assert_eq!(proj.project_root, dir);
-        assert_eq!(proj.instance_meta.id, "default");
+        assert_eq!(proj.schema.meta.id, "default");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -909,28 +842,27 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    fn write_schema(root: &Path, id: &str, name: &str) {
+        std::fs::write(
+            root.join(PROJECT_SCHEMA_FILE),
+            format!("#!tblschema v1\n# @meta id: {}\n# @meta name: {}\n", id, name),
+        ).unwrap();
+    }
+
     #[test]
     fn projects_dir_picks_last_project() {
         let dir = unique_tmp("multi");
         std::fs::create_dir_all(dir.join("projects/p1/config")).unwrap();
         std::fs::create_dir_all(dir.join("projects/p2/config")).unwrap();
-        std::fs::write(
-            dir.join("projects/p1/project.toml"),
-            "[project]\nid = \"p1\"\nname = \"项目1\"\n",
-        )
-        .unwrap();
-        std::fs::write(
-            dir.join("projects/p2/project.toml"),
-            "[project]\nid = \"p2\"\nname = \"项目2\"\n",
-        )
-        .unwrap();
+        write_schema(&dir.join("projects/p1"), "p1", "项目1");
+        write_schema(&dir.join("projects/p2"), "p2", "项目2");
         std::fs::write(
             dir.join("tbl-tool.toml"),
             "[project]\nname = \"x\"\nlast_project = \"p2\"\n",
         )
         .unwrap();
         let proj = load_project(&dir).expect("load");
-        assert_eq!(proj.instance_meta.id, "p2");
+        assert_eq!(proj.schema.meta.id, "p2");
         assert_eq!(proj.project_root, dir.join("projects/p2"));
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -940,23 +872,15 @@ mod tests {
         let dir = unique_tmp("fallback");
         std::fs::create_dir_all(dir.join("projects/aaa/config")).unwrap();
         std::fs::create_dir_all(dir.join("projects/bbb/config")).unwrap();
-        std::fs::write(
-            dir.join("projects/aaa/project.toml"),
-            "[project]\nid = \"aaa\"\nname = \"a\"\n",
-        )
-        .unwrap();
-        std::fs::write(
-            dir.join("projects/bbb/project.toml"),
-            "[project]\nid = \"bbb\"\nname = \"b\"\n",
-        )
-        .unwrap();
+        write_schema(&dir.join("projects/aaa"), "aaa", "a");
+        write_schema(&dir.join("projects/bbb"), "bbb", "b");
         std::fs::write(
             dir.join("tbl-tool.toml"),
             "[project]\nname = \"x\"\nlast_project = \"ghost\"\n",
         )
         .unwrap();
         let proj = load_project(&dir).expect("load");
-        assert_eq!(proj.instance_meta.id, "aaa");
+        assert_eq!(proj.schema.meta.id, "aaa");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -976,9 +900,9 @@ mod tests {
 
         // 新位置存在
         assert!(dir.join("projects/default/config/hero/HeroBase.tbl").exists());
-        // 元数据写好
-        assert!(dir.join("projects/default/project.toml").exists());
-        // 老 config 已清掉（要么不存在，要么被 rename 走）
+        // 元数据写好（schema 文件而非 toml）
+        assert!(dir.join("projects/default/project.tblschema").exists());
+        // 老 config 已清掉
         assert!(!dir.join("config").exists());
 
         // tbl-tool.toml 的 last_project 被刷新
@@ -987,7 +911,7 @@ mod tests {
 
         // 后续 load 从 projects/default 加载
         let proj = load_project(&dir).expect("load");
-        assert_eq!(proj.instance_meta.id, "default");
+        assert_eq!(proj.schema.meta.id, "default");
         assert_eq!(proj.project_root, dir.join("projects/default"));
 
         let _ = std::fs::remove_dir_all(&dir);
@@ -1088,33 +1012,13 @@ mod tests {
     }
 
     #[test]
-    fn legacy_project_meta_file_migrates_to_project_toml() {
-        let dir = unique_tmp("rename_meta");
-        std::fs::create_dir_all(dir.join("projects/p/config")).unwrap();
-        std::fs::write(
-            dir.join("projects/p/.project-meta.toml"),
-            "[project]\nid = \"p\"\nname = \"老项目\"\n",
-        ).unwrap();
-        std::fs::write(
-            dir.join("tbl-tool.toml"),
-            "[project]\nname = \"x\"\nlast_project = \"p\"\n",
-        ).unwrap();
-        let proj = load_project(&dir).expect("load");
-        assert_eq!(proj.instance_meta.id, "p");
-        assert_eq!(proj.instance_meta.name, "老项目");
-        // 老文件已被 rename
-        assert!(!dir.join("projects/p/.project-meta.toml").exists());
-        assert!(dir.join("projects/p/project.toml").exists());
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
     fn project_toml_overlay_overrides_global_export() {
         let dir = unique_tmp("overlay");
         std::fs::create_dir_all(dir.join("projects/p/config")).unwrap();
+        write_schema(&dir.join("projects/p"), "p", "P");
         std::fs::write(
             dir.join("projects/p/project.toml"),
-            "[project]\nid = \"p\"\nname = \"P\"\n\n[export.server.java]\npackage = \"com.over.ride\"\n",
+            "[export.server.java]\npackage = \"com.over.ride\"\n",
         ).unwrap();
         std::fs::write(
             dir.join("tbl-tool.toml"),
@@ -1132,10 +1036,7 @@ mod tests {
     fn write_project(dir: &Path, id: &str, name: &str) {
         let root = dir.join("projects").join(id);
         std::fs::create_dir_all(root.join("config")).unwrap();
-        std::fs::write(
-            root.join("project.toml"),
-            format!("[project]\nid = \"{}\"\nname = \"{}\"\n", id, name),
-        ).unwrap();
+        write_schema(&root, id, name);
     }
 
     #[test]
@@ -1151,7 +1052,7 @@ mod tests {
         let engine = load_workspace(&dir).expect("load_workspace");
         assert_eq!(engine.available().len(), 2);
         assert_eq!(engine.projects.len(), 1, "只打开 last_project");
-        assert_eq!(engine.projects[0].instance_meta.id, "p2");
+        assert_eq!(engine.projects[0].schema.meta.id, "p2");
         assert_eq!(engine.active_project_id(), Some("p2"));
         let _ = std::fs::remove_dir_all(&dir);
     }

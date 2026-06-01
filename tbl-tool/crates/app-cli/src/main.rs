@@ -3,7 +3,7 @@ use clap::{Parser, Subcommand};
 use anyhow::{Context, Result};
 use tbl_core::project::{
     list_projects, load_project, load_specific_project, migrate_legacy_to_default,
-    write_project_meta, PROJECTS_DIR,
+    PROJECTS_DIR,
 };
 use tbl_core::ops::ProjectEngine;
 use tbl_core::template::{instantiate_template, BuiltinTemplates, LocalTemplates, TemplateSource};
@@ -297,18 +297,15 @@ fn run_new_project(
         anyhow::bail!("Project 已存在: {}", project_root.display());
     }
 
-    instantiate_template(&content.schema, &project_root)?;
-
-    // 写 project.toml
+    // 把模板 schema 的 meta 改写为新项目身份后再实例化（项目身份直接落 project.tblschema）
     let display_name = name.unwrap_or(project_id).to_string();
-    let meta = tbl_core::model::ProjectInstanceMeta {
-        id: project_id.to_string(),
-        name: display_name,
-        created_at: chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string(),
-        source_template: content.meta.id.clone(),
-        source_template_version: content.meta.version.clone(),
-    };
-    write_project_meta(&project_root, &meta)?;
+    let mut schema = content.schema.clone();
+    schema.meta.id = project_id.to_string();
+    schema.meta.name = display_name;
+    schema.meta.created_at = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
+    schema.meta.source_template = content.meta.id.clone();
+    schema.meta.source_template_version = content.meta.version.clone();
+    instantiate_template(&schema, &project_root)?;
 
     // 更新 last_project（如启用）
     if switch_after {

@@ -172,7 +172,7 @@ impl TblApp {
         // 默认展开 active project + 它的所有 group；其它 project（含 closed）折叠
         let (expanded, project_expanded): (HashSet<(String, String)>, HashSet<String>) =
             if let Some(active) = engine.active() {
-                let active_id = active.instance_meta.id.clone();
+                let active_id = active.schema.meta.id.clone();
                 let exp = active.groups.iter()
                     .map(|g| (active_id.clone(), g.name.clone()))
                     .collect();
@@ -932,7 +932,7 @@ impl TblApp {
                 RenameProjectStage::EnterId => {
                     let new_id = self.input_name.clone();
                     let display = self.engine.find_project(old_id)
-                        .map(|p| p.instance_meta.name.clone())
+                        .map(|p| p.schema.meta.name.clone())
                         .unwrap_or_default();
                     self.pending_action = Some(PendingAction::RenameProject {
                         old_id: old_id.clone(),

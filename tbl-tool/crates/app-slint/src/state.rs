@@ -572,44 +572,85 @@ pub struct TemplateLibraryState {
     pub selected_id: String,
 }
 
-/// 新建项目对话框（@04.6.7）。模板预选 + 用户输入项目 id / name。
+/// NewProject 对话框的 3 种模式。决定标题、介绍行、id/name 默认值与落地路径。
+#[derive(Clone, Debug)]
+pub enum NewProjectMode {
+    /// 空项目（来自树面板「新建项目」按钮）
+    Empty,
+    /// 从模板（来自「模板库」对话框）
+    FromTemplate {
+        template_id: String,
+        template_source: String, // "builtin" / "local"
+        template_display: String,
+    },
+    /// 克隆已有 project（来自 opened project 右键菜单）
+    Clone {
+        source_project_id: String,
+        source_display: String,
+    },
+}
+
+impl Default for NewProjectMode {
+    fn default() -> Self {
+        NewProjectMode::Empty
+    }
+}
+
+/// 新建项目对话框（@04.6.7）。3 模式：Empty / FromTemplate / Clone。
 #[derive(Default)]
 pub struct NewProjectState {
     pub open: bool,
-    /// 选中模板的 id（落地时按 source 重新加载内容）
-    pub template_id: String,
-    /// 模板来源："builtin" / "local"
-    pub template_source: String,
-    /// "name (source)" 形式，仅显示
-    pub template_display: String,
+    pub mode: NewProjectMode,
     pub project_id: String,
     pub project_name: String,
-    pub switch_after: bool,
-    /// 标记是否已经按 template id 自动填充过 project id（避免覆盖用户手输）
+    /// 「立即打开新项目」勾选项；默认 true（克隆模式置 false，且 UI 灰态）
+    pub open_after: bool,
+    /// 标记是否已经按 mode 默认值预填过 project id（避免覆盖用户手输）
     pub id_prefilled: bool,
 }
 
 impl NewProjectState {
-    pub fn open_with(&mut self, meta: &tbl_core::template::TemplateMeta) {
+    pub fn open_empty(&mut self) {
         self.open = true;
-        self.template_id = meta.id.clone();
-        self.template_source = meta.source.to_string();
-        self.template_display = format!(
-            "{} ({})",
-            if meta.name.is_empty() { meta.id.as_str() } else { meta.name.as_str() },
-            meta.source
-        );
+        self.mode = NewProjectMode::Empty;
         self.project_id.clear();
         self.project_name.clear();
-        self.switch_after = true;
+        self.open_after = true;
+        self.id_prefilled = true;
+    }
+
+    pub fn open_from_template(&mut self, meta: &tbl_core::template::TemplateMeta) {
+        self.open = true;
+        self.mode = NewProjectMode::FromTemplate {
+            template_id: meta.id.clone(),
+            template_source: meta.source.to_string(),
+            template_display: if meta.name.is_empty() {
+                meta.id.clone()
+            } else {
+                meta.name.clone()
+            },
+        };
+        self.project_id.clear();
+        self.project_name.clear();
+        self.open_after = true;
         self.id_prefilled = false;
+    }
+
+    pub fn open_clone(&mut self, source_id: &str, source_display: &str) {
+        self.open = true;
+        self.mode = NewProjectMode::Clone {
+            source_project_id: source_id.to_string(),
+            source_display: source_display.to_string(),
+        };
+        self.project_id = format!("{}_copy", source_id);
+        self.project_name = format!("{}_copy", source_display);
+        self.open_after = false;
+        self.id_prefilled = true;
     }
 
     pub fn close(&mut self) {
         self.open = false;
-        self.template_id.clear();
-        self.template_source.clear();
-        self.template_display.clear();
+        self.mode = NewProjectMode::Empty;
         self.project_id.clear();
         self.project_name.clear();
         self.id_prefilled = false;
@@ -702,7 +743,7 @@ impl AppState {
             .map(|p| p.config.project.project_order.clone())
             .unwrap_or_default();
         let (expanded, project_expanded) = if let Some(active) = engine.active() {
-            let aid = active.instance_meta.id.clone();
+            let aid = active.schema.meta.id.clone();
             let exp: HashSet<(String, String)> = active.groups.iter()
                 .map(|g| (aid.clone(), g.name.clone()))
                 .collect();

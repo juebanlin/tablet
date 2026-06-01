@@ -214,10 +214,12 @@ export component AppWindow inherits Window {
 
     // ── Dialog: 新建项目 ────────────────────────────────────
     in-out property <bool> dlg-new-project-open: false;
-    in property <string> np-template-display;
+    in property <string> np-dialog-title: "新建项目";
+    in property <string> np-intro-line;
     in-out property <string> np-project-id;
     in-out property <string> np-project-name;
-    in-out property <bool> np-switch-after: true;
+    in-out property <bool> np-open-after: true;
+    in property <bool> np-allow-open-after: true;
     in property <string> np-id-error;
     in property <string> np-name-error;
     in property <bool> np-can-confirm: false;
@@ -225,6 +227,7 @@ export component AppWindow inherits Window {
     callback np-name-edited(string);
     callback np-confirm();
     callback np-cancel();
+    callback np-new-project-clicked();
 
     // ── ContextMenu / InputDialog / ConfirmDialog ───────────
     in property <bool> ctx-menu-open: false;
@@ -349,6 +352,7 @@ export component AppWindow inherits Window {
                     search-edited(s) => { root.tree-search-edited(s); }
                     full-group-toggled(c) => { root.tree-full-group-toggled(c); }
                     template-library-clicked() => { root.drop-focus(); root.dlg-template-open = true; root.toolbar-btn-clicked("template-library"); }
+                    new-project-clicked() => { root.drop-focus(); root.np-new-project-clicked(); }
                     sort-changed(i) => { root.tree-sort-index = i; root.tree-sort-changed(i); }
                 }
             }
@@ -558,10 +562,12 @@ export component AppWindow inherits Window {
 
     NewProjectDialog {
         open: root.dlg-new-project-open;
-        template-display: root.np-template-display;
+        dialog-title: root.np-dialog-title;
+        intro-line: root.np-intro-line;
         project-id <=> root.np-project-id;
         project-name <=> root.np-project-name;
-        switch-after <=> root.np-switch-after;
+        open-after <=> root.np-open-after;
+        allow-open-after: root.np-allow-open-after;
         id-error: root.np-id-error;
         name-error: root.np-name-error;
         can-confirm: root.np-can-confirm;

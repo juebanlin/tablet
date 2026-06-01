@@ -1,17 +1,26 @@
 use std::path::PathBuf;
 
+use crate::tblschema::TblSchema;
+
 #[derive(Debug, Clone)]
 pub struct Project {
     /// CLI 的 `-w` workdir：`tbl-tool.toml` 与 `gen/` 所在目录。仓库级，全局共享。
     pub workdir: PathBuf,
-    /// 当前 Project 的根目录：`project.tblschema` / `config/` / `project.toml` 在它下面。
+    /// 当前 Project 的根目录：`project.tblschema` / `config/` 在它下面。
     /// - 多 Project 模式：`<workdir>/projects/<id>/`
     /// - 老布局（test fixture / 历史仓库）：`<workdir>` 自身
     pub project_root: PathBuf,
     pub config: WorkspaceConfig,
-    /// `project.toml` 的 `[project]` 段解析结果。老布局下用兜底默认（id="default"）。
-    pub instance_meta: ProjectInstanceMeta,
+    /// `project.tblschema` 解析结果，承担"项目身份 + 结构骨架"双职：
+    /// - `schema.meta.id / name / created_at / source_template* / category / version` = 项目身份
+    /// - `schema.sections` = 结构骨架，由 ops 在 group/node 变动时增量同步
+    pub schema: TblSchema,
     pub groups: Vec<Group>,
+    /// schema 是否需要写盘：rename / 结构变动时置 true，save 时落 project.tblschema 后清零。
+    pub schema_dirty: bool,
+    /// project_root 是否还没在磁盘上创建（克隆出的内存项目 = true）。
+    /// save 时先 create_dir_all 再写文件，最后清零。
+    pub root_pending_create: bool,
 }
 
 impl Project {
@@ -208,23 +217,6 @@ pub struct ProjectConfig {
 }
 
 fn default_config_dir() -> String { "config".to_string() }
-
-/// `project.toml` 的 `[project]` 段：Project 自身元数据，落在 `<project_root>/project.toml`。
-/// 同一文件还可包含 `[export]` / `[ui]` / `[separators]` 等段，作为对全局 `tbl-tool.toml` 的覆盖。
-#[derive(Debug, Clone, Default, serde::Deserialize, serde::Serialize)]
-pub struct ProjectInstanceMeta {
-    #[serde(default)]
-    pub id: String,
-    #[serde(default)]
-    pub name: String,
-    #[serde(default)]
-    pub created_at: String,
-    /// 来源模板 id（手动新建可空）
-    #[serde(default)]
-    pub source_template: String,
-    #[serde(default)]
-    pub source_template_version: String,
-}
 
 fn default_cache_dir() -> String {
     ".tbl-cache".to_string()
