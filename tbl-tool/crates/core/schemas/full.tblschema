@@ -1,4 +1,8 @@
 #!tblschema v1
+# @meta id: full
+# @meta name: 完整测试模板
+# @meta category: test
+# @meta version: 1.0.0
 
 [hero/HeroBase] table index=id
 id     | int       | cs | 英雄ID

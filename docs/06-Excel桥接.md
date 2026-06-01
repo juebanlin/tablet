@@ -13,7 +13,7 @@ UI 树节点右键「用 Excel 打开」时，把当前节点所属的**整个 G
 ```
 点击「用Excel打开」
   │
-  ├─ 1. 调用 core::export_group_xlsx(group) → .tbl-cache/<group>.xlsx
+  ├─ 1. 调用 core::export_group_xlsx(group) → projects/<id>/.tbl-cache/<group>.xlsx
   ├─ 2. open::that() 调起系统默认程序（Excel / WPS）
   ├─ 3. UI 标记该 Group 为「编辑中」，禁用其它写操作
   │
@@ -27,13 +27,15 @@ UI 树节点右键「用 Excel 打开」时，把当前节点所属的**整个 G
 
 第 1、4 步是核心层调用；2、3、5、6 步是 UI 层职责。
 
+xlsx 缓存放在**该 Project 自带的** `.tbl-cache/` 子目录下（@02 Project 目录结构），多 Project 同时管理时各自隔离；`.gitignore` 有 `projects/*/.tbl-cache/` 一行兜底（@03.2）。
+
 ## 3. 容错机制
 
 | 场景 | 处理 |
 |------|------|
 | Excel 长时间未关闭 | 超时（4 小时）后提示策划手动确认 |
 | Excel/WPS 崩溃 | 提供「强制解析」按钮，手动触发从缓存 xlsx 读取 |
-| 工具启动时有残留 | 检查 `.tbl-cache/` 是否有 xlsx 或 .tbl.tmp，提示恢复或丢弃 |
+| 工具启动时有残留 | 检查当前 Project 的 `.tbl-cache/` 是否有 xlsx 或 .tbl.tmp，提示恢复或丢弃 |
 | 策划放弃修改 | 丢弃临时文件，恢复节点正常状态 |
 | 退出工具 | 自动删除所有临时文件，不保存 |
 | 解析报错 | core 返回 `ProjectErrors`，UI 在日志窗口列出位置 + 错误码（同 @01 附录 A） |

@@ -1,13 +1,16 @@
 // convert：纯函数，把 AppState 派生成 slint Model 数据。
 // 不持有引用，每次调用产出新 Vec，调用方负责 push 到 AppWindow。
 
+use std::collections::{HashMap, HashSet};
 use slint::{Color, SharedString};
 use crate::state::{AppState, ColumnKind, GridSelection, SelectedNode, TreeFilter, TreeTarget};
 use crate::{CellKind, DataCell, DataRow, HeaderCell, TreeNode};
 use tbl_core::name_matches;
+use tbl_core::ops::AvailableProject;
 
 pub const EXTRA_ROWS: usize = 5;
 
+const ICON_PROJECT: &str = "📦";
 const ICON_GROUP: &str = "📁";
 const ICON_TABLE: &str = "📊";
 const ICON_CONST: &str = "📋";
@@ -22,11 +25,14 @@ fn color_default() -> Color { Color::from_rgb_u8(0xe6, 0xe6, 0xe6) }
 /// 构建 slint TreeNode 列表，并同步 state.tree_targets。
 /// 调用方负责把返回值 push 到 AppWindow.tree-nodes。
 ///
+/// 三层结构（indent 0/1/2 = project / group / node）。
 /// 过滤语义（filter ∧ search 是 AND 关系）：
 /// - 子项级：passes_filter(child) ∧ name_matches(child.name, search)
 /// - 组级：(组内任一子项 passes_filter) ∧ name_matches(group.name, search) → 组本身命中
 /// - 组要不要展示：组本身命中 ∨ 任一子项级命中
 /// - 完整组打开后：组要不要展示 = true 时，子项忽略 filter+search 全部展开（仅过滤 deleted）
+/// - project 自身命中 = name_matches(project.name) ∨ name_matches(project.id)；filter 不作用 project 自身
+/// - project 要不要展示：自身命中 ∨ 内部任一 group/node 命中
 pub fn build_tree_nodes(state: &mut AppState) -> Vec<TreeNode> {
     state.tree_targets.clear();
     let mut nodes = Vec::new();
@@ -35,134 +41,281 @@ pub fn build_tree_nodes(state: &mut AppState) -> Vec<TreeNode> {
     let full_group_open = state.tree_full_group;
     let search = state.tree_search.clone();
 
-    let groups = state.engine.project.groups.clone();
-    for group in &groups {
-        // 子项级 AND（filter ∧ search）：先按位标记，下面统一渲染
-        let table_hits: Vec<bool> = group.tables.iter().map(|t| {
-            passes_filter(&filter, t.deleted, t.original.is_empty(), t.dirty)
-                && name_matches(&t.name, &search)
-        }).collect();
-        let const_hits: Vec<bool> = group.constants.iter().map(|c| {
-            passes_filter(&filter, c.deleted, c.original.is_empty(), c.dirty)
-                && name_matches(&c.name, &search)
-        }).collect();
-        let enum_hits: Vec<bool> = group.enums.iter().map(|e| {
-            passes_filter(&filter, e.deleted, e.original.is_empty(), e.dirty)
-                && name_matches(&e.name, &search)
-        }).collect();
-        let any_child_hit = table_hits.iter().any(|b| *b)
-            || const_hits.iter().any(|b| *b)
-            || enum_hits.iter().any(|b| *b);
+    // 已打开 project 的 (id, name, groups) snapshot；用于三层渲染（避免 borrow 冲突）
+    let opened_set: HashSet<String> = state.engine.opened_ids().into_iter().collect();
+    let opened_snap: HashMap<String, (String, Vec<tbl_core::model::Group>)> = state.engine.projects.iter()
+        .map(|p| (p.instance_meta.id.clone(),
+                  (p.instance_meta.name.clone(), p.groups.clone())))
+        .collect();
 
-        // 组本身命中：组级 filter（任一子项通过 filter，All 时恒真）∧ 组名通过 search
-        let group_filter_pass = filter == TreeFilter::All
-            || group.tables.iter().any(|t| passes_filter(&filter, t.deleted, t.original.is_empty(), t.dirty))
-            || group.constants.iter().any(|c| passes_filter(&filter, c.deleted, c.original.is_empty(), c.dirty))
-            || group.enums.iter().any(|e| passes_filter(&filter, e.deleted, e.original.is_empty(), e.dirty));
-        let group_self_hit = group_filter_pass && name_matches(&group.name, &search);
+    let sorted = sorted_available(
+        state.engine.available(),
+        &opened_set,
+        &state.project_sort,
+        &state.project_order,
+    );
 
-        // 组要不要显示：组本身命中 ∨ 任一子项命中
-        if !group_self_hit && !any_child_hit { continue; }
+    for ap in &sorted {
+        let pid = &ap.id;
+        let is_open = opened_set.contains(pid);
 
-        // 组节点的 marker 计算（与原逻辑一致）
-        let all_deleted_self =
-            !group.tables.is_empty() || !group.constants.is_empty() || !group.enums.is_empty();
-        let all_deleted = all_deleted_self
-            && group.tables.iter().all(|t| t.deleted)
-            && group.constants.iter().all(|c| c.deleted)
-            && group.enums.iter().all(|e| e.deleted);
-        let has_dirty = group.tables.iter().any(|t| t.dirty && !t.deleted)
-            || group.constants.iter().any(|c| c.dirty && !c.deleted)
-            || group.enums.iter().any(|e| e.dirty && !e.deleted);
-        let group_deleted = all_deleted && !group.is_new;
-        let group_is_new = group.is_new;
-        let group_dirty = has_dirty && !group_is_new && !group_deleted;
-        let group_has_errors = state.engine.validation_errors.iter().any(|(g, _, _, _)| g == &group.name);
+        // ── closed project：灰态根节点；不显示三角，不参与 search 过滤 ──
+        if !is_open {
+            let p_selected = matches!(&state.selected, Some(SelectedNode::Project { project_id }) if project_id == pid);
+            nodes.push(TreeNode {
+                id: state.tree_targets.len() as i32,
+                indent: 0,
+                expanded: false,
+                icon: SharedString::from(ICON_PROJECT),
+                name: SharedString::from(ap.name.clone()),
+                mark: SharedString::from(""),
+                mark_color: color_default(),
+                is_group: false, // closed 项目不显示三角，靠双击 / 单击 / 右键打开
+                selected: p_selected,
+                closed: true,
+            });
+            state.tree_targets.push(TreeTarget::Project(pid.clone()));
+            continue;
+        }
 
-        let expanded = state.tree_expanded.contains(&group.name);
-        let (group_mark, group_mark_color) = marker(group_deleted, group_is_new, group_dirty, group_has_errors);
+        // ── opened project：从 snapshot 拿 name + groups，按原三层渲染 ──
+        let (pname, groups) = match opened_snap.get(pid) {
+            Some(v) => v.clone(),
+            None => continue,
+        };
+
+        // 收集每个 group 的命中情况
+        let mut group_views: Vec<GroupView> = Vec::with_capacity(groups.len());
+        for group in &groups {
+            let table_hits: Vec<bool> = group.tables.iter().map(|t| {
+                passes_filter(&filter, t.deleted, t.original.is_empty(), t.dirty)
+                    && name_matches(&t.name, &search)
+            }).collect();
+            let const_hits: Vec<bool> = group.constants.iter().map(|c| {
+                passes_filter(&filter, c.deleted, c.original.is_empty(), c.dirty)
+                    && name_matches(&c.name, &search)
+            }).collect();
+            let enum_hits: Vec<bool> = group.enums.iter().map(|e| {
+                passes_filter(&filter, e.deleted, e.original.is_empty(), e.dirty)
+                    && name_matches(&e.name, &search)
+            }).collect();
+            let any_child_hit = table_hits.iter().any(|b| *b)
+                || const_hits.iter().any(|b| *b)
+                || enum_hits.iter().any(|b| *b);
+            let group_filter_pass = filter == TreeFilter::All
+                || group.tables.iter().any(|t| passes_filter(&filter, t.deleted, t.original.is_empty(), t.dirty))
+                || group.constants.iter().any(|c| passes_filter(&filter, c.deleted, c.original.is_empty(), c.dirty))
+                || group.enums.iter().any(|e| passes_filter(&filter, e.deleted, e.original.is_empty(), e.dirty));
+            let group_self_hit = group_filter_pass && name_matches(&group.name, &search);
+            let show = group_self_hit || any_child_hit;
+            group_views.push(GroupView { table_hits, const_hits, enum_hits, show });
+        }
+        let project_self_hit = name_matches(&pname, &search) || name_matches(pid, &search);
+        let project_show = project_self_hit || group_views.iter().any(|g| g.show);
+        if !project_show { continue; }
+
+        // 项目根节点 marker 聚合
+        let mut all_deleted_self = false;
+        let mut all_deleted = true;
+        let mut has_dirty = false;
+        let mut has_new = false;
+        for g in &groups {
+            if !g.tables.is_empty() || !g.constants.is_empty() || !g.enums.is_empty() {
+                all_deleted_self = true;
+            }
+            if g.is_new { has_new = true; }
+            for t in &g.tables {
+                if !t.deleted { all_deleted = false; }
+                if t.dirty && !t.deleted { has_dirty = true; }
+                if t.original.is_empty() && !t.deleted { has_new = true; }
+            }
+            for c in &g.constants {
+                if !c.deleted { all_deleted = false; }
+                if c.dirty && !c.deleted { has_dirty = true; }
+                if c.original.is_empty() && !c.deleted { has_new = true; }
+            }
+            for e in &g.enums {
+                if !e.deleted { all_deleted = false; }
+                if e.dirty && !e.deleted { has_dirty = true; }
+                if e.original.is_empty() && !e.deleted { has_new = true; }
+            }
+        }
+        let project_deleted = all_deleted_self && all_deleted;
+        let project_dirty = has_dirty && !project_deleted;
+        let project_new = has_new && !project_dirty && !project_deleted;
+        let project_has_errors = state.engine.has_project_error(pid);
+
+        let p_expanded = state.project_expanded.contains(pid);
+        let (p_mark, p_mark_color) = marker(project_deleted, project_new, project_dirty, project_has_errors);
+
+        let active = state.engine.active_project_id() == Some(pid.as_str());
+        let p_selected = matches!(&state.selected, Some(SelectedNode::Project { project_id }) if project_id == pid);
         nodes.push(TreeNode {
             id: state.tree_targets.len() as i32,
             indent: 0,
-            expanded,
-            icon: SharedString::from(ICON_GROUP),
-            name: SharedString::from(group.name.clone()),
-            mark: SharedString::from(group_mark),
-            mark_color: group_mark_color,
-            is_group: true,
-            selected: false, // 组本身不显示选中态，仅子节点
+            expanded: p_expanded,
+            icon: SharedString::from(ICON_PROJECT),
+            name: SharedString::from(if active { format!("{} ★", pname) } else { pname.clone() }),
+            mark: SharedString::from(p_mark),
+            mark_color: p_mark_color,
+            is_group: true, // 共享组节点的展开三角 UI
+            selected: p_selected,
+            closed: false,
         });
-        state.tree_targets.push(TreeTarget::Group(group.name.clone()));
+        state.tree_targets.push(TreeTarget::Project(pid.clone()));
 
-        if !expanded { continue; }
+        if !p_expanded { continue; }
 
-        // 完整组打开：忽略 filter+search，展示所有未删子项
-        // 否则：仅展示子项级 AND 命中的项
-        for (idx, t) in group.tables.iter().enumerate() {
-            let show = if full_group_open { !t.deleted } else { table_hits[idx] };
-            if !show { continue; }
-            let selected = matches!(&state.selected,
-                Some(SelectedNode::Table { group: g, name: n }) if g == &group.name && n == &t.name);
-            let has_err = state.engine.validation_errors.iter()
-                .any(|(g, n, _, _)| g == &group.name && n == &t.name);
-            let (mark, mc) = marker(t.deleted, t.original.is_empty(), t.dirty, has_err);
+        for (gi, group) in groups.iter().enumerate() {
+            let view = &group_views[gi];
+            if !view.show { continue; }
+
+            let all_deleted_self =
+                !group.tables.is_empty() || !group.constants.is_empty() || !group.enums.is_empty();
+            let all_deleted = all_deleted_self
+                && group.tables.iter().all(|t| t.deleted)
+                && group.constants.iter().all(|c| c.deleted)
+                && group.enums.iter().all(|e| e.deleted);
+            let has_dirty = group.tables.iter().any(|t| t.dirty && !t.deleted)
+                || group.constants.iter().any(|c| c.dirty && !c.deleted)
+                || group.enums.iter().any(|e| e.dirty && !e.deleted);
+            let group_deleted = all_deleted && !group.is_new;
+            let group_is_new = group.is_new;
+            let group_dirty = has_dirty && !group_is_new && !group_deleted;
+            let group_has_errors = state.engine.has_group_error(pid, &group.name);
+
+            let expanded = state.tree_expanded.contains(&(pid.clone(), group.name.clone()));
+            let (group_mark, group_mark_color) = marker(group_deleted, group_is_new, group_dirty, group_has_errors);
+            let g_selected = matches!(&state.selected,
+                Some(SelectedNode::Group { project_id, group: g }) if project_id == pid && g == &group.name);
             nodes.push(TreeNode {
                 id: state.tree_targets.len() as i32,
                 indent: 1,
-                expanded: false,
-                icon: SharedString::from(ICON_TABLE),
-                name: SharedString::from(t.name.clone()),
-                mark: SharedString::from(mark),
-                mark_color: mc,
-                is_group: false,
-                selected,
+                expanded,
+                icon: SharedString::from(ICON_GROUP),
+                name: SharedString::from(group.name.clone()),
+                mark: SharedString::from(group_mark),
+                mark_color: group_mark_color,
+                is_group: true,
+                selected: g_selected,
+                closed: false,
             });
-            state.tree_targets.push(TreeTarget::Table { group: group.name.clone(), name: t.name.clone() });
-        }
-        for (idx, c) in group.constants.iter().enumerate() {
-            let show = if full_group_open { !c.deleted } else { const_hits[idx] };
-            if !show { continue; }
-            let selected = matches!(&state.selected,
-                Some(SelectedNode::Constant { group: g, name: n }) if g == &group.name && n == &c.name);
-            let has_err = state.engine.validation_errors.iter()
-                .any(|(g, n, _, _)| g == &group.name && n == &c.name);
-            let (mark, mc) = marker(c.deleted, c.original.is_empty(), c.dirty, has_err);
-            nodes.push(TreeNode {
-                id: state.tree_targets.len() as i32,
-                indent: 1,
-                expanded: false,
-                icon: SharedString::from(ICON_CONST),
-                name: SharedString::from(c.name.clone()),
-                mark: SharedString::from(mark),
-                mark_color: mc,
-                is_group: false,
-                selected,
-            });
-            state.tree_targets.push(TreeTarget::Constant { group: group.name.clone(), name: c.name.clone() });
-        }
-        for (idx, e) in group.enums.iter().enumerate() {
-            let show = if full_group_open { !e.deleted } else { enum_hits[idx] };
-            if !show { continue; }
-            let selected = matches!(&state.selected,
-                Some(SelectedNode::Enum { group: g, name: n }) if g == &group.name && n == &e.name);
-            let has_err = state.engine.validation_errors.iter()
-                .any(|(g, n, _, _)| g == &group.name && n == &e.name);
-            let (mark, mc) = marker(e.deleted, e.original.is_empty(), e.dirty, has_err);
-            nodes.push(TreeNode {
-                id: state.tree_targets.len() as i32,
-                indent: 1,
-                expanded: false,
-                icon: SharedString::from(ICON_ENUM),
-                name: SharedString::from(e.name.clone()),
-                mark: SharedString::from(mark),
-                mark_color: mc,
-                is_group: false,
-                selected,
-            });
-            state.tree_targets.push(TreeTarget::Enum { group: group.name.clone(), name: e.name.clone() });
+            state.tree_targets.push(TreeTarget::Group { project_id: pid.clone(), group: group.name.clone() });
+
+            if !expanded { continue; }
+
+            for (idx, t) in group.tables.iter().enumerate() {
+                let show = if full_group_open { !t.deleted } else { view.table_hits[idx] };
+                if !show { continue; }
+                let selected = matches!(&state.selected,
+                    Some(SelectedNode::Table { project_id, group: g, name: n })
+                        if project_id == pid && g == &group.name && n == &t.name);
+                let has_err = state.engine.has_node_error(pid, &group.name, &t.name);
+                let (mark, mc) = marker(t.deleted, t.original.is_empty(), t.dirty, has_err);
+                nodes.push(TreeNode {
+                    id: state.tree_targets.len() as i32,
+                    indent: 2,
+                    expanded: false,
+                    icon: SharedString::from(ICON_TABLE),
+                    name: SharedString::from(t.name.clone()),
+                    mark: SharedString::from(mark),
+                    mark_color: mc,
+                    is_group: false,
+                    selected,
+                    closed: false,
+                });
+                state.tree_targets.push(TreeTarget::Table {
+                    project_id: pid.clone(), group: group.name.clone(), name: t.name.clone(),
+                });
+            }
+            for (idx, c) in group.constants.iter().enumerate() {
+                let show = if full_group_open { !c.deleted } else { view.const_hits[idx] };
+                if !show { continue; }
+                let selected = matches!(&state.selected,
+                    Some(SelectedNode::Constant { project_id, group: g, name: n })
+                        if project_id == pid && g == &group.name && n == &c.name);
+                let has_err = state.engine.has_node_error(pid, &group.name, &c.name);
+                let (mark, mc) = marker(c.deleted, c.original.is_empty(), c.dirty, has_err);
+                nodes.push(TreeNode {
+                    id: state.tree_targets.len() as i32,
+                    indent: 2,
+                    expanded: false,
+                    icon: SharedString::from(ICON_CONST),
+                    name: SharedString::from(c.name.clone()),
+                    mark: SharedString::from(mark),
+                    mark_color: mc,
+                    is_group: false,
+                    selected,
+                    closed: false,
+                });
+                state.tree_targets.push(TreeTarget::Constant {
+                    project_id: pid.clone(), group: group.name.clone(), name: c.name.clone(),
+                });
+            }
+            for (idx, e) in group.enums.iter().enumerate() {
+                let show = if full_group_open { !e.deleted } else { view.enum_hits[idx] };
+                if !show { continue; }
+                let selected = matches!(&state.selected,
+                    Some(SelectedNode::Enum { project_id, group: g, name: n })
+                        if project_id == pid && g == &group.name && n == &e.name);
+                let has_err = state.engine.has_node_error(pid, &group.name, &e.name);
+                let (mark, mc) = marker(e.deleted, e.original.is_empty(), e.dirty, has_err);
+                nodes.push(TreeNode {
+                    id: state.tree_targets.len() as i32,
+                    indent: 2,
+                    expanded: false,
+                    icon: SharedString::from(ICON_ENUM),
+                    name: SharedString::from(e.name.clone()),
+                    mark: SharedString::from(mark),
+                    mark_color: mc,
+                    is_group: false,
+                    selected,
+                    closed: false,
+                });
+                state.tree_targets.push(TreeTarget::Enum {
+                    project_id: pid.clone(), group: group.name.clone(), name: e.name.clone(),
+                });
+            }
         }
     }
     nodes
+}
+
+/// 把 available_projects 按当前 sort 排序；closed 与 opened 一同进入。
+/// "id"     ：字典序（默认）
+/// "name"   ：display name 字典序
+/// "open"   ：已打开优先 → id 字典序
+/// "created"：created_at 字典序
+/// "manual" ：跟随 project_order；缺席的排到末尾保持 id 序
+pub fn sorted_available(
+    available: &[AvailableProject],
+    opened: &HashSet<String>,
+    sort: &str,
+    manual: &[String],
+) -> Vec<AvailableProject> {
+    let mut v: Vec<AvailableProject> = available.to_vec();
+    match sort {
+        "name" => v.sort_by(|a, b| a.name.cmp(&b.name).then(a.id.cmp(&b.id))),
+        "open" => v.sort_by(|a, b| {
+            let ao = opened.contains(&a.id);
+            let bo = opened.contains(&b.id);
+            bo.cmp(&ao).then(a.id.cmp(&b.id))
+        }),
+        "created" => v.sort_by(|a, b| a.created_at.cmp(&b.created_at).then(a.id.cmp(&b.id))),
+        "manual" => {
+            let pos = |id: &str| manual.iter().position(|x| x == id).unwrap_or(usize::MAX);
+            v.sort_by(|a, b| pos(&a.id).cmp(&pos(&b.id)).then(a.id.cmp(&b.id)));
+        }
+        _ => v.sort_by(|a, b| a.id.cmp(&b.id)),
+    }
+    v
+}
+
+struct GroupView {
+    table_hits: Vec<bool>,
+    const_hits: Vec<bool>,
+    enum_hits: Vec<bool>,
+    show: bool,
 }
 
 fn passes_filter(filter: &TreeFilter, deleted: bool, is_new: bool, dirty: bool) -> bool {
@@ -251,10 +404,10 @@ impl GridSnapshot {
 
 pub fn build_grid(state: &AppState) -> GridSnapshot {
     let mut snap = match state.selected.clone() {
-        Some(SelectedNode::Table { group, name }) => build_table_grid(state, &group, &name),
-        Some(SelectedNode::Constant { group, name }) => build_constant_grid(state, &group, &name),
-        Some(SelectedNode::Enum { group, name }) => build_enum_grid(state, &group, &name),
-        None => GridSnapshot::empty(),
+        Some(SelectedNode::Table { group, name, .. }) => build_table_grid(state, &group, &name),
+        Some(SelectedNode::Constant { group, name, .. }) => build_constant_grid(state, &group, &name),
+        Some(SelectedNode::Enum { group, name, .. }) => build_enum_grid(state, &group, &name),
+        Some(SelectedNode::Project { .. }) | Some(SelectedNode::Group { .. }) | None => GridSnapshot::empty(),
     };
     enrich_selection(&mut snap, state);
     snap
@@ -325,10 +478,10 @@ fn raw_cell(state: &AppState, r: usize, c: usize) -> String {
 /// 读取真实存储值（不经过 display 翻译）。供 inline 编辑等取初始文本。
 pub fn raw_cell_for(state: &AppState, r: usize, c: usize) -> String {
     match &state.selected {
-        Some(SelectedNode::Table { group, name }) => state.engine.find_table(group, name)
+        Some(SelectedNode::Table { group, name, .. }) => state.engine.find_table(group, name)
             .and_then(|t| t.records.get(r).and_then(|row| row.get(c)).cloned())
             .unwrap_or_default(),
-        Some(SelectedNode::Constant { group, name }) => state.engine.find_constant(group, name)
+        Some(SelectedNode::Constant { group, name, .. }) => state.engine.find_constant(group, name)
             .and_then(|cst| cst.entries.get(r))
             .map(|e| match c {
                 0 => e.name.clone(),
@@ -339,7 +492,7 @@ pub fn raw_cell_for(state: &AppState, r: usize, c: usize) -> String {
                 _ => String::new(),
             })
             .unwrap_or_default(),
-        Some(SelectedNode::Enum { group, name }) => state.engine.find_enum(group, name)
+        Some(SelectedNode::Enum { group, name, .. }) => state.engine.find_enum(group, name)
             .and_then(|en| en.entries.get(r))
             .map(|e| match c {
                 0 => e.id.clone(),
@@ -348,7 +501,7 @@ pub fn raw_cell_for(state: &AppState, r: usize, c: usize) -> String {
                 _ => String::new(),
             })
             .unwrap_or_default(),
-        None => String::new(),
+        Some(SelectedNode::Project { .. }) | Some(SelectedNode::Group { .. }) | None => String::new(),
     }
 }
 
@@ -377,22 +530,22 @@ pub fn col_letter(idx: usize) -> String {
 /// 用于 StatusBar 在选中单格时把"红框是因为什么"展示给用户，对齐文档 §5.4 实时验证 UX。
 fn cell_validation_message(state: &AppState, r: usize, c: usize) -> Option<String> {
     use tbl_core::validate::{validate_table, validate_constant, validate_enum, RefIndex};
-    let sep = &state.engine.project.config.separators;
+    let sep = &state.engine.project().config.separators;
     let errors = match &state.selected {
-        Some(SelectedNode::Table { group, name }) => {
+        Some(SelectedNode::Table { group, name, .. }) => {
             let table = state.engine.find_table(group, name)?;
-            let refs = RefIndex::build(&state.engine.project.groups);
+            let refs = RefIndex::build(&state.engine.project().groups);
             validate_table(table, sep, Some(&refs))
         }
-        Some(SelectedNode::Constant { group, name }) => {
+        Some(SelectedNode::Constant { group, name, .. }) => {
             let constant = state.engine.find_constant(group, name)?;
             validate_constant(constant, sep)
         }
-        Some(SelectedNode::Enum { group, name }) => {
+        Some(SelectedNode::Enum { group, name, .. }) => {
             let enum_def = state.engine.find_enum(group, name)?;
             validate_enum(enum_def)
         }
-        None => return None,
+        Some(SelectedNode::Project { .. }) | Some(SelectedNode::Group { .. }) | None => return None,
     };
     errors.into_iter()
         .find(|e| !e.is_schema() && e.row == r && e.col == c)
@@ -412,8 +565,8 @@ fn build_table_grid(state: &AppState, group: &str, name: &str) -> GridSnapshot {
     let mut header_errors: std::collections::HashSet<(usize, usize)> = std::collections::HashSet::new();
     {
         use tbl_core::validate::validate_table_schema_with_refs;
-        let sep = &state.engine.project.config.separators;
-        let refs = tbl_core::validate::RefIndex::build(&state.engine.project.groups);
+        let sep = &state.engine.project().config.separators;
+        let refs = tbl_core::validate::RefIndex::build(&state.engine.project().groups);
         for err in validate_table_schema_with_refs(table, sep, Some(&refs)) {
             if !err.is_schema() { continue; }
             if let Some(hr) = err.header_row {
@@ -498,8 +651,7 @@ fn build_table_grid(state: &AppState, group: &str, name: &str) -> GridSnapshot {
         let row_data = table.records.get(r);
         let cells: Vec<DataCell> = (0..fields.len()).map(|c| {
             let raw = row_data.and_then(|row| row.get(c)).cloned().unwrap_or_default();
-            let has_error = state.engine.validation_errors
-                .contains(&(group.to_string(), name.to_string(), r, c));
+            let has_error = state.engine.has_active_cell_error(group, name, r, c);
             let is_empty_ref = ref_targets[c].is_some() && raw.is_empty();
             let display = display_for_table_cell(state, &ref_targets[c], &raw);
             DataCell {
@@ -638,8 +790,7 @@ fn build_enum_grid(state: &AppState, group: &str, name: &str) -> GridSnapshot {
 // ──────── 单元格构造辅助 ────────
 
 fn empty_cell(state: &AppState, group: &str, name: &str, r: usize, c: usize) -> DataCell {
-    let has_error = state.engine.validation_errors
-        .contains(&(group.to_string(), name.to_string(), r, c));
+    let has_error = state.engine.has_active_cell_error(group, name, r, c);
     DataCell {
         text: SharedString::new(),
         has_error,
@@ -648,8 +799,7 @@ fn empty_cell(state: &AppState, group: &str, name: &str, r: usize, c: usize) -> 
 }
 
 fn plain_cell(state: &AppState, group: &str, name: &str, r: usize, c: usize, text: &str) -> DataCell {
-    let has_error = state.engine.validation_errors
-        .contains(&(group.to_string(), name.to_string(), r, c));
+    let has_error = state.engine.has_active_cell_error(group, name, r, c);
     DataCell {
         text: SharedString::from(text),
         has_error,
@@ -662,7 +812,7 @@ fn display_for_table_cell(state: &AppState, ref_target: &Option<String>, raw: &s
     if raw.is_empty() { return String::new(); }
     if !state.view_show_enum_name { return raw.to_string(); }
     let ref_name = match ref_target { Some(n) => n, None => return raw.to_string() };
-    for g in &state.engine.project.groups {
+    for g in &state.engine.project().groups {
         for e in &g.enums {
             if e.deleted || e.name != *ref_name { continue; }
             if let Some(entry) = e.entries.iter().find(|en| en.id == raw && !en.name.is_empty()) {

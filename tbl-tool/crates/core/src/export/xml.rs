@@ -119,7 +119,7 @@ pub fn export_all_xml(project: &Project) -> Result<super::ExportResult> {
     let opts = super::ExportOptions { line_ending, encoding };
 
     let sep = &project.config.separators;
-    let output_dir = project.workdir.join(data_output).join("xml");
+    let output_dir = project.export_root().join(data_output).join("xml");
     let mut collected = Vec::new();
 
     for group in &project.groups {

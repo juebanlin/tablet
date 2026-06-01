@@ -241,7 +241,7 @@ pub fn export_all_go(project: &Project) -> Result<super::ExportResult> {
         .unwrap_or("utf-8").to_string();
     let opts = super::ExportOptions { line_ending, encoding };
 
-    let output_dir = project.workdir.join(code_output).join(pkg);
+    let output_dir = project.export_root().join(code_output).join(pkg);
     let mut collected: Vec<(std::path::PathBuf, Vec<u8>)> = Vec::new();
 
     let render = |tpl: &str| tpl.replace("{{PACKAGE}}", pkg);

@@ -113,7 +113,7 @@ pub fn export_all_json(project: &Project) -> Result<super::ExportResult> {
     let opts = super::ExportOptions { line_ending, encoding };
 
     let sep = &project.config.separators;
-    let output_dir = project.workdir.join(data_output).join("json");
+    let output_dir = project.export_root().join(data_output).join("json");
     let mut collected = Vec::new();
 
     for group in &project.groups {

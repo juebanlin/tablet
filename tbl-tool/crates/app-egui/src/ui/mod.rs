@@ -6,4 +6,5 @@ pub mod grid_edit;
 pub mod type_selector;
 pub mod ref_picker;
 pub mod schema_dialog;
+pub mod template_dialog;
 pub mod modal;

@@ -105,7 +105,7 @@ pub fn render_grid(ui: &mut egui::Ui, app: &mut TblApp, group: &str, name: &str,
                     }
                 }
 
-                if app.engine.validation_errors.contains(&(group.to_string(), name.to_string(), row, col)) {
+                if app.engine.has_active_cell_error(group, name, row, col) {
                     painter.rect_stroke(r, 0.0, egui::Stroke::new(1.5, ERROR_BORDER));
                 }
 
@@ -482,7 +482,8 @@ pub(crate) fn display_for_cell(app: &TblApp, grid: &GridData, col: usize, raw: &
             tbl_core::model::Export::from_str(raw).display().to_string()
         }
         Some(CellKind::Ref { name }) if app.view_show_enum_name => {
-            for g in &app.engine.project.groups {
+            let Some(active) = app.engine.active() else { return raw.to_string(); };
+            for g in &active.groups {
                 for e in &g.enums {
                     if e.deleted || e.name != *name { continue; }
                     if let Some(entry) = e.entries.iter().find(|en| en.id == raw && !en.name.is_empty()) {

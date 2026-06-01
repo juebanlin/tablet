@@ -7,3 +7,5 @@ edition = "2021"
 tbl-core = { path = "../core" }
 clap = { version = "4", features = ["derive"] }
 anyhow = "1"
+chrono = "0.4"
+toml = "0.8"

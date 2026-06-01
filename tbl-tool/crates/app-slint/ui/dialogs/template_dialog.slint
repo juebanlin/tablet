@@ -1,0 +1,308 @@
+// 模板库 + 新建项目对话框（@docs/04-UI设计.md §6.6 / §6.7）。
+//
+// TemplateLibraryDialog：列表浏览模板，选中后点击"使用此模板"由 Rust
+//   关闭本弹窗并打开 NewProjectDialog。
+// NewProjectDialog：填 project id / name + 立即切换勾选；Rust 端复用 core 接口落地。
+
+import { Theme } from "../theme.slint";
+import { DialogChrome } from "dialog_chrome.slint";
+import { Button, CheckBox, LineEdit, ScrollView } from "std-widgets.slint";
+
+export struct TemplateItem {
+    id: string,
+    name: string,
+    category: string,
+    version: string,
+    source: string,         // "builtin" / "local"
+    sections: int,          // section 数量
+    selected: bool,
+}
+
+// ── 模板库 ─────────────────────────────────────────────
+export component TemplateLibraryDialog inherits Rectangle {
+    in property <bool> open: false;
+    in property <int> tab-index: 0;            // 0=内置 1=本地
+    in property <int> builtin-count: 0;
+    in property <int> local-count: 0;
+    in-out property <string> search;
+    in property <[TemplateItem]> items;        // 当前 tab 已过滤后的列表
+    in property <string> detail-text;          // 已选模板的详情文本（多行）
+    in property <bool> can-use: false;
+
+    callback set-tab(int);
+    callback search-edited(string);
+    callback select-item(int);
+    callback use-template();
+    callback cancel();
+
+    visible: root.open;
+    width: 100%;
+    height: 100%;
+
+    DialogChrome {
+        title: "模板库";
+        dialog-w: 620px;
+        dialog-h: 480px;
+        primary-text: "使用此模板新建项目";
+        primary-enabled: root.can-use;
+        primary-clicked => { root.use-template(); }
+        cancel-clicked => { root.cancel(); }
+        scrim-clicked => { root.cancel(); }
+
+        VerticalLayout {
+            padding: Theme.sp-4;
+            spacing: Theme.sp-3;
+
+            // tab 行
+            HorizontalLayout {
+                spacing: Theme.sp-2;
+                alignment: start;
+                Button {
+                    text: "内置 (" + root.builtin-count + ")";
+                    primary: root.tab-index == 0;
+                    clicked => { root.set-tab(0); }
+                }
+                Button {
+                    text: "本地 (" + root.local-count + ")";
+                    primary: root.tab-index == 1;
+                    clicked => { root.set-tab(1); }
+                }
+                Button {
+                    text: "网络 (-)";
+                    enabled: false;
+                }
+            }
+
+            // 搜索行
+            HorizontalLayout {
+                spacing: Theme.sp-2;
+                alignment: stretch;
+                Text {
+                    text: "🔍";
+                    font-size: Theme.fs-small;
+                    width: 24px;
+                    vertical-alignment: center;
+                }
+                LineEdit {
+                    text <=> root.search;
+                    placeholder-text: "名称 / id 关键字";
+                    edited(s) => { root.search-edited(s); }
+                }
+            }
+
+            Rectangle { height: 1px; background: Theme.border-light; }
+
+            // 列表
+            Rectangle {
+                vertical-stretch: 1;
+                background: Theme.bg-panel;
+                border-color: Theme.border-light;
+                border-width: 1px;
+
+                ScrollView {
+                    VerticalLayout {
+                        spacing: 0;
+                        for it[i] in root.items: Rectangle {
+                            height: Theme.row-h * 2;
+                            background: it.selected ? Theme.bg-row-alt : transparent;
+                            border-color: Theme.border-light;
+                            border-width: 1px;
+                            VerticalLayout {
+                                padding-left: Theme.sp-3;
+                                padding-right: Theme.sp-3;
+                                padding-top: 4px;
+                                padding-bottom: 4px;
+                                spacing: 2px;
+
+                                HorizontalLayout {
+                                    spacing: Theme.sp-2;
+                                    Text {
+                                        text: it.name;
+                                        font-size: Theme.fs-small;
+                                        color: Theme.text-primary;
+                                        vertical-alignment: center;
+                                    }
+                                    Rectangle { horizontal-stretch: 1; }
+                                    Text {
+                                        text: it.category == "" ? "-" : it.category;
+                                        font-size: Theme.fs-tiny;
+                                        color: Theme.text-secondary;
+                                        vertical-alignment: center;
+                                    }
+                                    Text {
+                                        text: "v" + (it.version == "" ? "-" : it.version);
+                                        font-size: Theme.fs-tiny;
+                                        color: Theme.text-secondary;
+                                        vertical-alignment: center;
+                                    }
+                                }
+                                Text {
+                                    text: "ID: " + it.id + "  ·  " + it.sections + " 个 section  ·  " + it.source;
+                                    font-size: Theme.fs-tiny;
+                                    color: Theme.text-secondary;
+                                }
+                            }
+                            TouchArea {
+                                clicked => { root.select-item(i); }
+                            }
+                        }
+                    }
+                }
+            }
+
+            Rectangle { height: 1px; background: Theme.border-light; }
+
+            // 详情面板
+            Rectangle {
+                height: 88px;
+                background: Theme.bg-panel;
+                border-color: Theme.border-light;
+                border-width: 1px;
+                Text {
+                    text: root.detail-text == "" ? "（未选择）" : root.detail-text;
+                    font-size: Theme.fs-tiny;
+                    color: Theme.text-primary;
+                    x: Theme.sp-3;
+                    y: Theme.sp-2;
+                    width: parent.width - 2 * Theme.sp-3;
+                    height: parent.height - 2 * Theme.sp-2;
+                    wrap: word-wrap;
+                }
+            }
+        }
+    }
+}
+
+// ── 新建项目 ─────────────────────────────────────────────
+export component NewProjectDialog inherits Rectangle {
+    in property <bool> open: false;
+    in property <string> template-display;     // "name (source)"
+    in-out property <string> project-id;
+    in-out property <string> project-name;
+    in-out property <bool> switch-after: true;
+    in property <string> id-error;
+    in property <string> name-error;
+    in property <bool> can-confirm: false;
+
+    callback id-edited(string);
+    callback name-edited(string);
+    callback confirm();
+    callback cancel();
+
+    visible: root.open;
+    width: 100%;
+    height: 100%;
+
+    DialogChrome {
+        title: "新建项目";
+        dialog-w: 460px;
+        dialog-h: 320px;
+        primary-text: "创建";
+        primary-enabled: root.can-confirm;
+        primary-clicked => { root.confirm(); }
+        cancel-clicked => { root.cancel(); }
+        scrim-clicked => { root.cancel(); }
+
+        VerticalLayout {
+            padding: Theme.sp-4;
+            spacing: Theme.sp-3;
+
+            Text {
+                text: "基于模板：" + root.template-display;
+                font-size: Theme.fs-small;
+                color: Theme.text-primary;
+            }
+
+            Rectangle { height: 1px; background: Theme.border-light; }
+
+            HorizontalLayout {
+                spacing: Theme.sp-2;
+                Text {
+                    text: "项目 ID:";
+                    font-size: Theme.fs-small;
+                    width: 64px;
+                    vertical-alignment: center;
+                }
+                LineEdit {
+                    text: root.project-id;
+                    placeholder-text: "[a-z0-9_-]{1,32}";
+                    edited(s) => { root.id-edited(s); }
+                }
+            }
+            if root.id-error != "": Text {
+                text: root.id-error;
+                font-size: Theme.fs-tiny;
+                color: Theme.text-error;
+            }
+
+            HorizontalLayout {
+                spacing: Theme.sp-2;
+                Text {
+                    text: "项目名:";
+                    font-size: Theme.fs-small;
+                    width: 64px;
+                    vertical-alignment: center;
+                }
+                LineEdit {
+                    text: root.project-name;
+                    placeholder-text: "可中文，仅用于显示";
+                    edited(s) => { root.name-edited(s); }
+                }
+            }
+            if root.name-error != "": Text {
+                text: root.name-error;
+                font-size: Theme.fs-tiny;
+                color: Theme.text-error;
+            }
+
+            Text {
+                text: "目录预览：projects/" + root.project-id + "/";
+                font-size: Theme.fs-tiny;
+                color: Theme.text-secondary;
+            }
+
+            CheckBox {
+                text: "立即切换到新项目";
+                checked <=> root.switch-after;
+            }
+
+            Rectangle { vertical-stretch: 1; }
+        }
+    }
+}
+
+// ── 预览 ─────────────────────────────────────────────
+export component TemplateLibraryDialogPreview inherits Window {
+    title: "TemplateLibrary Preview";
+    width: 760px;
+    height: 600px;
+
+    TemplateLibraryDialog {
+        open: true;
+        tab-index: 0;
+        builtin-count: 2;
+        local-count: 1;
+        search: "";
+        items: [
+            { id: "full", name: "完整测试模板", category: "test", version: "1.0.0", source: "builtin", sections: 5, selected: true },
+            { id: "empty", name: "空模板", category: "test", version: "1.0.0", source: "builtin", sections: 0, selected: false },
+        ];
+        detail-text: "id: full\nname: 完整测试模板\ncategory: test · version: 1.0.0\nGroups: 2 · Sections: 5";
+        can-use: true;
+    }
+}
+
+export component NewProjectDialogPreview inherits Window {
+    title: "NewProject Preview";
+    width: 600px;
+    height: 480px;
+
+    NewProjectDialog {
+        open: true;
+        template-display: "完整测试模板 (builtin)";
+        project-id: "my-slg";
+        project-name: "我的 SLG 项目";
+        switch-after: true;
+        can-confirm: true;
+    }
+}

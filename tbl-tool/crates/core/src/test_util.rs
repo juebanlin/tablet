@@ -1,9 +1,7 @@
 use std::fmt::Write;
 use std::path::Path;
+use crate::template::{BuiltinTemplates, TemplateSource};
 use crate::tblschema::*;
-
-const SCHEMA_FULL: &str = include_str!("../schemas/full.tblschema");
-const SCHEMA_EMPTY: &str = include_str!("../schemas/empty.tblschema");
 
 /// 测试数据生成选项
 #[derive(Debug, Clone)]
@@ -30,26 +28,32 @@ impl TestGenOptions {
     }
 }
 
+/// 取内置模板 schema：opts.include_empty 决定走 `empty` 还是 `full`。
+fn builtin_schema(opts: &TestGenOptions) -> TblSchema {
+    let id = if opts.include_empty { "empty" } else { "full" };
+    BuiltinTemplates::new()
+        .load_by_id(id)
+        .expect("内置模板缺失（full / empty）")
+        .schema
+}
+
 // === 公开 API ===
 
 /// 使用内置 schema 生成测试数据
 pub fn generate_test_config(config_dir: &Path, opts: &TestGenOptions) {
-    let schema_str = if opts.include_empty { SCHEMA_EMPTY } else { SCHEMA_FULL };
-    let schema = parse_tblschema(schema_str).expect("内置 schema 解析失败");
+    let schema = builtin_schema(opts);
     generate_from_schema(config_dir, &schema, opts);
 }
 
 /// 使用内置 schema 生成 TestMain.java
 pub fn generate_test_main(workdir: &Path, opts: &TestGenOptions, pkg: &str, format: &str) {
-    let schema_str = if opts.include_empty { SCHEMA_EMPTY } else { SCHEMA_FULL };
-    let schema = parse_tblschema(schema_str).expect("内置 schema 解析失败");
+    let schema = builtin_schema(opts);
     generate_test_main_from_schema(workdir, &schema, pkg, format);
 }
 
 /// 使用内置 schema 生成 Go 测试 main.go + go.mod
 pub fn generate_test_main_go(workdir: &Path, opts: &TestGenOptions, pkg: &str, code_output: &str, format: &str) {
-    let schema_str = if opts.include_empty { SCHEMA_EMPTY } else { SCHEMA_FULL };
-    let schema = parse_tblschema(schema_str).expect("内置 schema 解析失败");
+    let schema = builtin_schema(opts);
     generate_test_main_go_from_schema(workdir, &schema, pkg, code_output, format);
 }
 

@@ -3,7 +3,7 @@
 
 use std::collections::HashSet;
 use tbl_core::ops::{NodeKind, ProjectEngine};
-use tbl_core::project::load_project;
+use tbl_core::project::load_workspace;
 use tbl_core::types::{BaseType, Paradigm, TblType};
 use std::path::Path;
 
@@ -30,18 +30,33 @@ impl TreeFilter {
 
 #[derive(Clone, Debug)]
 pub enum SelectedNode {
-    Table { group: String, name: String },
-    Constant { group: String, name: String },
-    Enum { group: String, name: String },
+    Project { project_id: String },
+    Group { project_id: String, group: String },
+    Table { project_id: String, group: String, name: String },
+    Constant { project_id: String, group: String, name: String },
+    Enum { project_id: String, group: String, name: String },
+}
+
+impl SelectedNode {
+    pub fn project_id(&self) -> &str {
+        match self {
+            SelectedNode::Project { project_id }
+            | SelectedNode::Group { project_id, .. }
+            | SelectedNode::Table { project_id, .. }
+            | SelectedNode::Constant { project_id, .. }
+            | SelectedNode::Enum { project_id, .. } => project_id,
+        }
+    }
 }
 
 /// slint TreeNode 行 ↔ 真实节点的映射目标。
 #[derive(Clone, Debug)]
 pub enum TreeTarget {
-    Group(String),
-    Table { group: String, name: String },
-    Constant { group: String, name: String },
-    Enum { group: String, name: String },
+    Project(String),
+    Group { project_id: String, group: String },
+    Table { project_id: String, group: String, name: String },
+    Constant { project_id: String, group: String, name: String },
+    Enum { project_id: String, group: String, name: String },
 }
 
 /// 列的可编辑性维度。决定单/双击进入哪种编辑器、公式栏是否可写。
@@ -352,8 +367,9 @@ impl RefPickerState {
 #[derive(Clone, Debug)]
 pub enum CtxMenuKind {
     TreeBlank,
-    TreeGroup { name: String },
-    TreeNode { group: String, name: String, kind: NodeKind },
+    TreeProject { project_id: String },
+    TreeGroup { project_id: String, name: String },
+    TreeNode { project_id: String, group: String, name: String, kind: NodeKind },
     GridCol { col: usize },
     GridRow { row: usize },
     GridCell {
@@ -386,36 +402,56 @@ impl ContextMenuState {
 /// 待执行的命名/确认型操作。需要走 InputDialog 或 ConfirmDialog 收集用户输入。
 #[derive(Clone, Debug)]
 pub enum PendingAction {
-    NewGroup,
-    NewTable { group: String },
-    NewConstant { group: String },
-    NewEnum { group: String },
-    DeleteGroup { group: String },
-    DeleteNode { group: String, name: String },
-    RenameGroup { old_name: String },
-    RenameNode { group: String, old_name: String },
+    NewGroup { project_id: String },
+    NewTable { project_id: String, group: String },
+    NewConstant { project_id: String, group: String },
+    NewEnum { project_id: String, group: String },
+    DeleteGroup { project_id: String, group: String },
+    DeleteNode { project_id: String, group: String, name: String },
+    RenameGroup { project_id: String, old_name: String },
+    RenameNode { project_id: String, group: String, old_name: String },
+    /// 重命名 Project：两步走 — 先收 id，再收 name；UI 端用 stage 字段切换提示
+    RenameProject { old_id: String, stage: RenameProjectStage },
+    /// 删除 Project：单步 ConfirmDialog
+    DeleteProject { project_id: String },
+    /// 关闭 dirty Project：单步 ConfirmDialog（确认放弃未保存改动）
+    CloseDirtyProject { project_id: String },
+}
+
+#[derive(Clone, Debug)]
+pub enum RenameProjectStage {
+    EnterId,
+    EnterName { new_id: String },
 }
 
 impl PendingAction {
     pub fn needs_input(&self) -> bool {
-        matches!(self, PendingAction::NewGroup
+        matches!(self, PendingAction::NewGroup { .. }
             | PendingAction::NewTable { .. }
             | PendingAction::NewConstant { .. }
             | PendingAction::NewEnum { .. }
             | PendingAction::RenameGroup { .. }
-            | PendingAction::RenameNode { .. })
+            | PendingAction::RenameNode { .. }
+            | PendingAction::RenameProject { .. })
     }
     pub fn needs_confirm(&self) -> bool {
-        matches!(self, PendingAction::DeleteGroup { .. } | PendingAction::DeleteNode { .. })
+        matches!(self, PendingAction::DeleteGroup { .. }
+            | PendingAction::DeleteNode { .. }
+            | PendingAction::DeleteProject { .. }
+            | PendingAction::CloseDirtyProject { .. })
     }
     pub fn input_title(&self) -> &'static str {
         match self {
-            PendingAction::NewGroup => "新建 Group",
+            PendingAction::NewGroup { .. } => "新建 Group",
             PendingAction::NewTable { .. } => "新建 Table",
             PendingAction::NewConstant { .. } => "新建 Constant",
             PendingAction::NewEnum { .. } => "新建 Enum",
             PendingAction::RenameGroup { .. } => "重命名 Group",
             PendingAction::RenameNode { .. } => "重命名",
+            PendingAction::RenameProject { stage, .. } => match stage {
+                RenameProjectStage::EnterId => "重命名 Project（新 id）",
+                RenameProjectStage::EnterName { .. } => "重命名 Project（新名称）",
+            },
             _ => "",
         }
     }
@@ -423,15 +459,21 @@ impl PendingAction {
         match self {
             PendingAction::DeleteGroup { .. } => "确认删除",
             PendingAction::DeleteNode { .. } => "确认删除",
+            PendingAction::DeleteProject { .. } => "确认删除 Project",
+            PendingAction::CloseDirtyProject { .. } => "未保存的修改",
             _ => "",
         }
     }
     pub fn confirm_message(&self) -> String {
         match self {
-            PendingAction::DeleteGroup { group } =>
-                format!("确定删除 Group \"{}\" 及其所有内容？", group),
-            PendingAction::DeleteNode { group, name } =>
-                format!("确定删除 \"{}/{}\"？", group, name),
+            PendingAction::DeleteGroup { project_id, group } =>
+                format!("确定删除 [{}] Group \"{}\" 及其所有内容？", project_id, group),
+            PendingAction::DeleteNode { project_id, group, name } =>
+                format!("确定删除 [{}] \"{}/{}\"？", project_id, group, name),
+            PendingAction::DeleteProject { project_id } =>
+                format!("此操作不可逆，将永久删除 projects/{}/ 目录及其全部数据。是否继续？", project_id),
+            PendingAction::CloseDirtyProject { project_id } =>
+                format!("Project \"{}\" 有未保存的修改，关闭后将丢失这些改动。继续关闭？", project_id),
             _ => String::new(),
         }
     }
@@ -516,13 +558,74 @@ pub struct SchemaImportItem {
     pub mode: tbl_core::tblschema::SchemaMode,
 }
 
+// ──────── 模板库 / 新建项目 ────────
+
+/// 模板库对话框（@04.6.6）。当前 tab + 已选模板 id + 搜索关键字。
+/// items 由 push_template_library 即时从 BuiltinTemplates / LocalTemplates 拉取，不缓存。
+#[derive(Default)]
+pub struct TemplateLibraryState {
+    pub open: bool,
+    /// 0 = 内置 / 1 = 本地
+    pub tab: i32,
+    pub search: String,
+    /// 当前选中的模板 id（在所有 tab 中唯一定位）
+    pub selected_id: String,
+}
+
+/// 新建项目对话框（@04.6.7）。模板预选 + 用户输入项目 id / name。
+#[derive(Default)]
+pub struct NewProjectState {
+    pub open: bool,
+    /// 选中模板的 id（落地时按 source 重新加载内容）
+    pub template_id: String,
+    /// 模板来源："builtin" / "local"
+    pub template_source: String,
+    /// "name (source)" 形式，仅显示
+    pub template_display: String,
+    pub project_id: String,
+    pub project_name: String,
+    pub switch_after: bool,
+    /// 标记是否已经按 template id 自动填充过 project id（避免覆盖用户手输）
+    pub id_prefilled: bool,
+}
+
+impl NewProjectState {
+    pub fn open_with(&mut self, meta: &tbl_core::template::TemplateMeta) {
+        self.open = true;
+        self.template_id = meta.id.clone();
+        self.template_source = meta.source.to_string();
+        self.template_display = format!(
+            "{} ({})",
+            if meta.name.is_empty() { meta.id.as_str() } else { meta.name.as_str() },
+            meta.source
+        );
+        self.project_id.clear();
+        self.project_name.clear();
+        self.switch_after = true;
+        self.id_prefilled = false;
+    }
+
+    pub fn close(&mut self) {
+        self.open = false;
+        self.template_id.clear();
+        self.template_source.clear();
+        self.template_display.clear();
+        self.project_id.clear();
+        self.project_name.clear();
+        self.id_prefilled = false;
+    }
+}
+
 pub struct AppState {
     pub engine: ProjectEngine,
     pub selected: Option<SelectedNode>,
     pub tree_filter: TreeFilter,
     pub tree_full_group: bool,
     pub tree_search: String,
-    pub tree_expanded: HashSet<String>,
+    /// (project_id, group_name) → 已展开的 group 行
+    pub tree_expanded: HashSet<(String, String)>,
+    /// project_id → 已展开的 project 根
+    pub project_expanded: HashSet<String>,
     /// slint TreeNode.id → TreeTarget；每次 rebuild 时同步刷新。
     pub tree_targets: Vec<TreeTarget>,
     /// 工具栏「枚举名」开关：开启时 @EnumName 列展示 entry.name，关闭时展示 id。
@@ -567,23 +670,51 @@ pub struct AppState {
     pub schema_export: SchemaExportState,
     /// Schema 导入对话框
     pub schema_import: SchemaImportState,
+    /// 模板库对话框
+    pub template_lib: TemplateLibraryState,
+    /// 新建项目对话框
+    pub new_project: NewProjectState,
+    /// "id" / "name" / "open" / "created" / "manual"。从 [project] project_sort 读初值，UI 写时持久化。
+    pub project_sort: String,
+    /// sort=manual 时使用；UI 拖拽顺序持久化到 [project] project_order。
+    pub project_order: Vec<String>,
 }
 
 impl AppState {
     pub fn load(workdir: &Path) -> anyhow::Result<Self> {
-        let project = load_project(workdir)?;
-        let group_count = project.groups.len();
-        let rt_validate = project.config.ui.as_ref().map_or(false, |u| u.realtime_validate);
-        let header_single = project.config.ui.as_ref()
+        let mut engine = load_workspace(workdir)?;
+        // active 缺失时回落到首个 opened；都没有则取 default 配置。
+        let cfg_src = engine.active().or_else(|| engine.projects.first());
+        let rt_validate = cfg_src
+            .and_then(|p| p.config.ui.as_ref())
+            .map_or(false, |u| u.realtime_validate);
+        let header_single = cfg_src
+            .and_then(|p| p.config.ui.as_ref())
             .map_or(true, |u| u.picker_trigger_header == "single");
-        let data_single = project.config.ui.as_ref()
+        let data_single = cfg_src
+            .and_then(|p| p.config.ui.as_ref())
             .map_or(false, |u| u.picker_trigger_data == "single");
-        let expanded: HashSet<String> = project.groups.iter().map(|g| g.name.clone()).collect();
-        let mut engine = ProjectEngine::new(project);
+        let project_sort = cfg_src
+            .map(|p| p.config.project.project_sort.clone())
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| "id".to_string());
+        let project_order = cfg_src
+            .map(|p| p.config.project.project_order.clone())
+            .unwrap_or_default();
+        let (expanded, project_expanded) = if let Some(active) = engine.active() {
+            let aid = active.instance_meta.id.clone();
+            let exp: HashSet<(String, String)> = active.groups.iter()
+                .map(|g| (aid.clone(), g.name.clone()))
+                .collect();
+            let proj_exp: HashSet<String> = std::iter::once(aid).collect();
+            (exp, proj_exp)
+        } else {
+            (HashSet::new(), HashSet::new())
+        };
+        let group_count = engine.active().map(|p| p.groups.len()).unwrap_or(0);
         engine.log(format!("已加载 {} 个 Group", group_count));
-        // 加载即跑一遍全表验证：让 cell 红框 / 节点 ! 标记在打开就可见，
-        // 不必等用户编辑触发 revalidate。realtime_validate 仅控制后续编辑期是否复算。
-        engine.revalidate_all();
+        // 加载即跑一遍全 Project 验证：让所有 project 的红框/`!` 标记打开就可见。
+        engine.revalidate_all_projects();
         if !engine.validation_errors.is_empty() {
             engine.log(format!("[验证] 加载后发现 {} 个错误", engine.validation_errors.len()));
         }
@@ -594,6 +725,7 @@ impl AppState {
             tree_full_group: false,
             tree_search: String::new(),
             tree_expanded: expanded,
+            project_expanded,
             tree_targets: Vec::new(),
             view_show_enum_name: false,
             grid_selection: GridSelection::None,
@@ -615,6 +747,10 @@ impl AppState {
             data_export: DataExportState::default(),
             schema_export: SchemaExportState::default(),
             schema_import: SchemaImportState::default(),
+            template_lib: TemplateLibraryState::default(),
+            new_project: NewProjectState::default(),
+            project_sort,
+            project_order,
         })
     }
 
@@ -622,10 +758,10 @@ impl AppState {
     /// realtime_validate 开启时立即重算该节点的 validation_errors。
     pub fn set_cell(&mut self, r: usize, c: usize, val: &str) {
         let (group, name, is_table, is_constant) = match &self.selected {
-            Some(SelectedNode::Table { group, name }) => (group.clone(), name.clone(), true, false),
-            Some(SelectedNode::Constant { group, name }) => (group.clone(), name.clone(), false, true),
-            Some(SelectedNode::Enum { group, name }) => (group.clone(), name.clone(), false, false),
-            None => return,
+            Some(SelectedNode::Table { group, name, .. }) => (group.clone(), name.clone(), true, false),
+            Some(SelectedNode::Constant { group, name, .. }) => (group.clone(), name.clone(), false, true),
+            Some(SelectedNode::Enum { group, name, .. }) => (group.clone(), name.clone(), false, false),
+            _ => return,
         };
         if is_table {
             self.engine.set_table_cell(&group, &name, r, c, val);
@@ -642,7 +778,7 @@ impl AppState {
     /// 写表头单元格（仅 Table）；hi: 0=desc / 1=export / 2=type / 3=field。
     pub fn set_header_cell(&mut self, hi: usize, ci: usize, val: String) {
         let (group, name) = match &self.selected {
-            Some(SelectedNode::Table { group, name }) => (group.clone(), name.clone()),
+            Some(SelectedNode::Table { group, name, .. }) => (group.clone(), name.clone()),
             _ => return,
         };
         self.engine.commit_header_edit(&group, &name, hi, ci, val);

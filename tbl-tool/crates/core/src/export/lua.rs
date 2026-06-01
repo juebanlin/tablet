@@ -304,7 +304,7 @@ pub fn export_all_lua(project: &Project) -> Result<super::ExportResult> {
     let opts = super::ExportOptions { line_ending, encoding };
 
     let sep = &project.config.separators;
-    let output_dir = project.workdir.join(output);
+    let output_dir = project.export_root().join(output);
     let mut collected = Vec::new();
 
     for group in &project.groups {

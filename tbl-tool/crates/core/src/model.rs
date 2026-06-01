@@ -2,20 +2,81 @@ use std::path::PathBuf;
 
 #[derive(Debug, Clone)]
 pub struct Project {
+    /// CLI 的 `-w` workdir：`tbl-tool.toml` 与 `gen/` 所在目录。仓库级，全局共享。
     pub workdir: PathBuf,
-    pub config: ProjectConfig,
+    /// 当前 Project 的根目录：`project.tblschema` / `config/` / `project.toml` 在它下面。
+    /// - 多 Project 模式：`<workdir>/projects/<id>/`
+    /// - 老布局（test fixture / 历史仓库）：`<workdir>` 自身
+    pub project_root: PathBuf,
+    pub config: WorkspaceConfig,
+    /// `project.toml` 的 `[project]` 段解析结果。老布局下用兜底默认（id="default"）。
+    pub instance_meta: ProjectInstanceMeta,
     pub groups: Vec<Group>,
 }
 
+impl Project {
+    /// 数据目录：当前 Project 的 .tbl 根目录。
+    /// - 多 Project 模式：`<project_root>/config/`
+    /// - 老布局：`<project_root>/<config_dir>`（即 `<workdir>/<config_dir>`）
+    pub fn data_dir(&self) -> PathBuf {
+        if self.is_multi_project_layout() {
+            self.project_root.join("config")
+        } else {
+            self.project_root.join(&self.config.project.config_dir)
+        }
+    }
+
+    /// 缓存目录：当前 Project 的 .tbl-cache。
+    pub fn cache_dir(&self) -> PathBuf {
+        if self.is_multi_project_layout() {
+            self.project_root.join(".tbl-cache")
+        } else {
+            self.project_root.join(&self.config.project.cache_dir)
+        }
+    }
+
+    /// 是否为多 Project 布局（`<workdir>/projects/<id>/`）。
+    pub fn is_multi_project_layout(&self) -> bool {
+        self.project_root != self.workdir
+    }
+
+    /// 导出根：多 Project 模式 = `<project_root>`（每个 Project 独立 gen/...，避免互相覆盖），
+    /// 老布局 = `<workdir>`（保持 fixture / 历史仓库行为）。
+    pub fn export_root(&self) -> &std::path::Path {
+        if self.is_multi_project_layout() {
+            self.project_root.as_path()
+        } else {
+            self.workdir.as_path()
+        }
+    }
+}
+
+/// `tbl-tool.toml` 反序列化的顶层结构。
+/// `[project]` 段对应 `ProjectConfig`（仓库展示信息 + Project 列表配置）；
+/// 其它段（export / ui / separators）是 Project 共享的工作空间默认值。
 #[derive(Debug, Clone, serde::Deserialize)]
-pub struct ProjectConfig {
-    pub project: ProjectMeta,
+pub struct WorkspaceConfig {
+    /// 仓库级配置段：`[project]`。
+    #[serde(default = "default_project_section", rename = "project")]
+    pub project: ProjectConfig,
     #[serde(default)]
     pub export: Option<ExportConfig>,
     #[serde(default)]
     pub ui: Option<UiConfig>,
     #[serde(default)]
     pub separators: crate::types::SeparatorsSection,
+}
+
+fn default_project_section() -> ProjectConfig {
+    ProjectConfig {
+        name: default_app_name(),
+        last_project: String::new(),
+        opened_projects: Vec::new(),
+        project_sort: String::new(),
+        project_order: Vec::new(),
+        config_dir: default_config_dir(),
+        cache_dir: default_cache_dir(),
+    }
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -98,6 +159,10 @@ pub struct UiConfig {
     /// 默认 double：让单击保留为"瞄准选中"，是 Ctrl+C/V 批量复制 ref id / enum 值的前提。
     #[serde(default = "default_picker_trigger_data")]
     pub picker_trigger_data: String,
+    /// 模板/Project 列表里展示 id 还是 name；默认 false → 显示 name。
+    /// 切换效果类似枚举显示 id/name。Project 实际目录始终用 id；此开关只决定**显示文本**。
+    #[serde(default)]
+    pub show_meta_id: bool,
 }
 
 #[derive(Debug, Clone, Default, serde::Deserialize)]
@@ -116,12 +181,55 @@ fn default_picker_trigger_data() -> String { "double".to_string() }
 
 fn default_true() -> bool { true }
 
+/// `[project]` toml 段：仓库级配置，不随 Project 切换。
+///
+/// 持有仓库展示名 + Project 列表管理状态（启动 last_project / 已打开列表 / 排序）。
+/// 注意这里的"项目"指仓库自身（workspace），具体 Project 元数据落在 `<project_root>/project.toml` 的 `[project]` 段（[`ProjectInstanceMeta`]）。
 #[derive(Debug, Clone, serde::Deserialize)]
-pub struct ProjectMeta {
+pub struct ProjectConfig {
+    /// 仓库展示名（默认 "my-game"）。
+    #[serde(default = "default_app_name")]
     pub name: String,
+    /// 启动时进入的 Project id；为空 = 扫到的第一个。
+    #[serde(default)]
+    pub last_project: String,
+    /// 启动时自动打开的 Project id 列表（DBeaver-style 多 Project 工作空间）。
+    /// 为空时仅打开 `last_project`。
+    #[serde(default)]
+    pub opened_projects: Vec<String>,
+    /// 项目排序方式：id / name / open / created / manual。空字符串=id。
+    #[serde(default)]
+    pub project_sort: String,
+    /// project_sort = "manual" 时使用：用户拖拽得到的 id 序列。
+    #[serde(default)]
+    pub project_order: Vec<String>,
+    /// 历史字段：老布局 `<workdir>/<config_dir>/`。S15-D 之后 Project 用 `<project_root>/config/`，
+    /// 该字段仅在迁移期 / 老 fixture 使用，新版本写出时不再带它。
+    #[serde(default = "default_config_dir")]
     pub config_dir: String,
+    /// 历史字段：同 config_dir 一样保留兼容；新版本走 `<project_root>/.tbl-cache/`。
     #[serde(default = "default_cache_dir")]
     pub cache_dir: String,
+}
+
+fn default_app_name() -> String { "my-game".to_string() }
+fn default_config_dir() -> String { "config".to_string() }
+
+/// `project.toml` 的 `[project]` 段：Project 自身元数据，落在 `<project_root>/project.toml`。
+/// 同一文件还可包含 `[export]` / `[ui]` / `[separators]` 等段，作为对全局 `tbl-tool.toml` 的覆盖。
+#[derive(Debug, Clone, Default, serde::Deserialize, serde::Serialize)]
+pub struct ProjectInstanceMeta {
+    #[serde(default)]
+    pub id: String,
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub created_at: String,
+    /// 来源模板 id（手动新建可空）
+    #[serde(default)]
+    pub source_template: String,
+    #[serde(default)]
+    pub source_template_version: String,
 }
 
 fn default_cache_dir() -> String {

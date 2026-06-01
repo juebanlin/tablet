@@ -6,6 +6,7 @@ use crate::ui;
 use crate::ui::type_selector::TypeSelectorState;
 use crate::ui::ref_picker::RefPickerState;
 use crate::ui::schema_dialog::{SchemaExportState, SchemaImportState, DataExportState};
+use crate::ui::template_dialog::{TemplateLibraryState, NewProjectState};
 
 pub struct TblApp {
     pub engine: ProjectEngine,
@@ -25,7 +26,10 @@ pub struct TblApp {
     pub tree_filter: TreeFilter,
     pub tree_filter_show_full_group: bool,
     pub tree_search: String,
-    pub tree_expanded: HashSet<String>,
+    /// (project_id, group_name) → 已展开的 group。多 project 同名 group 不冲突。
+    pub tree_expanded: HashSet<(String, String)>,
+    /// project_id 已展开的 project 根。
+    pub project_expanded: HashSet<String>,
     pub tree_context: Option<TreeContext>,
     pub type_selector: TypeSelectorState,
     pub ref_picker: RefPickerState,
@@ -33,13 +37,20 @@ pub struct TblApp {
     pub schema_export: SchemaExportState,
     pub schema_import: SchemaImportState,
     pub data_export: DataExportState,
+    pub template_lib: TemplateLibraryState,
+    pub new_project: NewProjectState,
+    /// "id" / "name" / "open" / "created" / "manual"。从 [project] project_sort 读初值，UI 写时持久化。
+    pub project_sort: String,
+    /// sort=manual 时使用；UI 拖拽顺序持久化到 [project] project_order。
+    pub project_order: Vec<String>,
     theme_applied: bool,
 }
 
 #[derive(Clone, Debug)]
 pub enum TreeContext {
-    Group(String),
-    Node { group: String, name: String, kind: tbl_core::ops::NodeKind },
+    Project(String),
+    Group { project_id: String, name: String },
+    Node { project_id: String, group: String, name: String, kind: tbl_core::ops::NodeKind },
     Blank,
 }
 
@@ -86,36 +97,97 @@ pub struct CellPos {
 
 #[derive(Clone, Debug)]
 pub enum SelectedNode {
-    Table { group: String, name: String },
-    Constant { group: String, name: String },
-    Enum { group: String, name: String },
+    Project { project_id: String },
+    Group { project_id: String, group: String },
+    Table { project_id: String, group: String, name: String },
+    Constant { project_id: String, group: String, name: String },
+    Enum { project_id: String, group: String, name: String },
+}
+
+impl SelectedNode {
+    pub fn project_id(&self) -> &str {
+        match self {
+            SelectedNode::Project { project_id }
+            | SelectedNode::Group { project_id, .. }
+            | SelectedNode::Table { project_id, .. }
+            | SelectedNode::Constant { project_id, .. }
+            | SelectedNode::Enum { project_id, .. } => project_id,
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
 pub enum PendingAction {
-    NewGroup,
-    NewTable { group: String },
-    NewConstant { group: String },
-    NewEnum { group: String },
-    DeleteGroup { group: String },
-    DeleteNode { group: String, name: String },
-    RenameGroup { old_name: String },
-    RenameNode { group: String, old_name: String },
-    CopyNode { group: String, name: String, kind: tbl_core::ops::NodeKind },
+    NewGroup { project_id: String },
+    NewTable { project_id: String, group: String },
+    NewConstant { project_id: String, group: String },
+    NewEnum { project_id: String, group: String },
+    DeleteGroup { project_id: String, group: String },
+    DeleteNode { project_id: String, group: String, name: String },
+    RenameGroup { project_id: String, old_name: String },
+    RenameNode { project_id: String, group: String, old_name: String },
+    CopyNode { project_id: String, group: String, name: String, kind: tbl_core::ops::NodeKind },
+    /// 重命名 project：弹两次输入框（id / name）；这里仅记录第一阶段（id），第二阶段由 input_name 收集
+    RenameProject { old_id: String, stage: RenameProjectStage },
+    /// 删除 project：单步 ConfirmDialog
+    DeleteProject { project_id: String },
+    /// 关闭 dirty Project：单步 ConfirmDialog（确认放弃未保存改动）
+    CloseDirtyProject { project_id: String },
+}
+
+#[derive(Clone, Debug)]
+pub enum RenameProjectStage {
+    /// 收集新 id
+    EnterId,
+    /// id 已确定，收集新 name
+    EnterName { new_id: String },
 }
 
 impl TblApp {
-    pub fn new(project: Project) -> Self {
-        let group_count = project.groups.len();
-        let auto_commit = project.config.ui.as_ref().map_or(true, |u| u.auto_commit_on_blur);
-        let rt_validate = project.config.ui.as_ref().map_or(false, |u| u.realtime_validate);
-        let header_single = project.config.ui.as_ref()
-            .map_or(true, |u| u.picker_trigger_header == "single");
-        let data_single = project.config.ui.as_ref()
-            .map_or(false, |u| u.picker_trigger_data == "single");
-        let expanded: HashSet<String> = project.groups.iter().map(|g| g.name.clone()).collect();
-        let mut engine = ProjectEngine::new(project);
-        engine.log(format!("已加载 {} 个 Group", group_count));
+    /// 从已构造好的 ProjectEngine（通常来自 `tbl_core::project::load_workspace`）创建 TblApp。
+    /// engine.projects 可能为 0..N（DBeaver-style 工作空间），all-closed 时 active=None。
+    pub fn from_engine(mut engine: ProjectEngine) -> Self {
+        // ui config 取自 active；全关时回落 projects[0]，再回落硬编码默认
+        let ui_cfg = engine
+            .active()
+            .or_else(|| engine.projects.first())
+            .and_then(|p| p.config.ui.clone());
+        let project_cfg_for_sort = engine
+            .active()
+            .or_else(|| engine.projects.first())
+            .map(|p| p.config.project.clone());
+
+        let auto_commit = ui_cfg.as_ref().map_or(true, |u| u.auto_commit_on_blur);
+        let rt_validate = ui_cfg.as_ref().map_or(false, |u| u.realtime_validate);
+        let header_single = ui_cfg.as_ref().map_or(true, |u| u.picker_trigger_header == "single");
+        let data_single = ui_cfg.as_ref().map_or(false, |u| u.picker_trigger_data == "single");
+
+        let project_sort = project_cfg_for_sort.as_ref()
+            .map(|p| p.project_sort.clone())
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| "id".to_string());
+        let project_order = project_cfg_for_sort.as_ref()
+            .map(|p| p.project_order.clone())
+            .unwrap_or_default();
+
+        // 默认展开 active project + 它的所有 group；其它 project（含 closed）折叠
+        let (expanded, project_expanded): (HashSet<(String, String)>, HashSet<String>) =
+            if let Some(active) = engine.active() {
+                let active_id = active.instance_meta.id.clone();
+                let exp = active.groups.iter()
+                    .map(|g| (active_id.clone(), g.name.clone()))
+                    .collect();
+                let pexp = std::iter::once(active_id).collect();
+                (exp, pexp)
+            } else {
+                (HashSet::new(), HashSet::new())
+            };
+
+        engine.revalidate_all_projects();
+        let opened = engine.projects.len();
+        let avail = engine.available().len();
+        engine.log(format!("已加载 {} / {} 个 Project", opened, avail));
+
         Self {
             engine,
             selected: None,
@@ -133,6 +205,7 @@ impl TblApp {
             tree_filter_show_full_group: false,
             tree_search: String::new(),
             tree_expanded: expanded,
+            project_expanded,
             tree_context: None,
             type_selector: TypeSelectorState::default(),
             ref_picker: RefPickerState::default(),
@@ -140,8 +213,18 @@ impl TblApp {
             schema_export: SchemaExportState::default(),
             schema_import: SchemaImportState::default(),
             data_export: DataExportState::default(),
+            template_lib: TemplateLibraryState::default(),
+            new_project: NewProjectState::default(),
+            project_sort,
+            project_order,
             theme_applied: false,
         }
+    }
+
+    /// 兼容老调用（projects 全部 opened，单 active = last_id）。新代码请用 from_engine。
+    pub fn new(projects: Vec<Project>, last_id: String) -> Self {
+        let engine = ProjectEngine::new_multi(projects, Some(last_id.as_str()));
+        Self::from_engine(engine)
     }
 
     fn apply_theme(&self, ctx: &egui::Context) {
@@ -512,7 +595,8 @@ impl TblApp {
     }
 
     pub fn save_all(&mut self) {
-        self.engine.save_all();
+        // 工具栏「保存」= 全部脏 project 一键落盘
+        self.engine.save_all_projects();
     }
 
     pub fn reload(&mut self) {
@@ -532,13 +616,14 @@ impl eframe::App for TblApp {
         }
         egui::TopBottomPanel::top("toolbar_panel").show(ctx, |ui| {
             ui.horizontal(|ui| {
-                if ui.button("生成测试数据").clicked() {
-                    self.generate_test_config();
-                }
-                if ui.button("清空配置").clicked() {
-                    self.clear_all_config();
-                }
-                ui.separator();
+                // S15-X 待重新评估 —— 暂时注释掉「生成测试数据」/「清空配置」
+                // if ui.button("生成测试数据").clicked() {
+                //     self.generate_test_config();
+                // }
+                // if ui.button("清空配置").clicked() {
+                //     self.clear_all_config();
+                // }
+                // ui.separator();
                 if ui.button("用Excel打开").clicked() {
                     self.log("Excel 编辑功能待实现".to_string());
                 }
@@ -563,6 +648,7 @@ impl eframe::App for TblApp {
                     self.schema_import.checked.clear();
                     self.schema_import.conflicts.clear();
                 }
+                // 模板库按钮已挪到 TreeSection 顶部功能区。
             });
         });
 
@@ -611,13 +697,16 @@ impl eframe::App for TblApp {
         ui::schema_dialog::render_export_dialog(ctx, self);
         ui::schema_dialog::render_import_dialog(ctx, self);
         ui::schema_dialog::render_data_export_dialog(ctx, self);
+        ui::template_dialog::render_library_dialog(ctx, self);
+        ui::template_dialog::render_new_project_dialog(ctx, self);
     }
 }
 
 impl TblApp {
     fn show_type_selector(&mut self, ctx: &egui::Context) {
-        let sep = self.engine.project.config.separators.clone();
-        let groups = self.engine.project.groups.clone();
+        let Some(active) = self.engine.active() else { return; };
+        let sep = active.config.separators.clone();
+        let groups = active.groups.clone();
         if let Some(type_str) = ui::type_selector::render_type_selector(ctx, &mut self.type_selector, &sep, &groups) {
             if let Some(cell) = self.type_selector.editing_cell.take() {
                 let group = self.type_selector.editing_group.clone();
@@ -630,7 +719,8 @@ impl TblApp {
     }
 
     fn show_ref_picker(&mut self, ctx: &egui::Context) {
-        let groups = self.engine.project.groups.clone();
+        let Some(active) = self.engine.active() else { return; };
+        let groups = active.groups.clone();
         if let Some(value) = ui::ref_picker::render_ref_picker(ctx, &mut self.ref_picker, &groups) {
             if let Some(cell) = self.ref_picker.editing_cell.take() {
                 let group = self.ref_picker.editing_group.clone();
@@ -649,19 +739,19 @@ impl TblApp {
         };
 
         match &action {
-            PendingAction::DeleteGroup { group } => {
-                let group = group.clone();
+            PendingAction::DeleteGroup { project_id, group } => {
+                let (pid, group) = (project_id.clone(), group.clone());
                 let mut open = true;
                 egui::Window::new("确认删除")
                     .collapsible(false).resizable(false).open(&mut open)
                     .show(ctx, |ui| {
-                        ui.label(format!("确定删除 Group \"{}\" 及其所有内容？", group));
+                        ui.label(format!("确定删除 [{}] Group \"{}\" 及其所有内容？", pid, group));
                         ui::modal::dialog_buttons(ui, |ui| {
                             if ui.button("取消").clicked() {
                                 self.pending_action = None;
                             }
                             if ui.button("确定").clicked() {
-                                self.engine.delete_group(&group);
+                                self.engine.with_active(&pid, |e| e.delete_group(&group));
                                 self.selected = None;
                                 self.pending_action = None;
                             }
@@ -670,19 +760,19 @@ impl TblApp {
                 if !open { self.pending_action = None; }
                 return;
             }
-            PendingAction::DeleteNode { group, name } => {
-                let (group, name) = (group.clone(), name.clone());
+            PendingAction::DeleteNode { project_id, group, name } => {
+                let (pid, group, name) = (project_id.clone(), group.clone(), name.clone());
                 let mut open = true;
                 egui::Window::new("确认删除")
                     .collapsible(false).resizable(false).open(&mut open)
                     .show(ctx, |ui| {
-                        ui.label(format!("确定删除 \"{}/{}\"？", group, name));
+                        ui.label(format!("确定删除 [{}] \"{}/{}\"？", pid, group, name));
                         ui::modal::dialog_buttons(ui, |ui| {
                             if ui.button("取消").clicked() {
                                 self.pending_action = None;
                             }
                             if ui.button("确定").clicked() {
-                                self.engine.delete_node(&group, &name);
+                                self.engine.with_active(&pid, |e| e.delete_node(&group, &name));
                                 self.selected = None;
                                 self.pending_action = None;
                             }
@@ -691,9 +781,66 @@ impl TblApp {
                 if !open { self.pending_action = None; }
                 return;
             }
-            PendingAction::CopyNode { group, name, kind } => {
+            PendingAction::DeleteProject { project_id } => {
+                let pid = project_id.clone();
+                let mut open = true;
+                egui::Window::new("确认删除 Project")
+                    .collapsible(false).resizable(false).open(&mut open)
+                    .show(ctx, |ui| {
+                        ui.label(format!("此操作不可逆，将永久删除 projects/{}/ 目录及其全部数据。", pid));
+                        ui.label("是否继续？");
+                        ui::modal::dialog_buttons(ui, |ui| {
+                            if ui.button("取消").clicked() {
+                                self.pending_action = None;
+                            }
+                            if ui.button("确定删除").clicked() {
+                                let core = ProjectAction::DeleteProject { project_id: pid.clone() };
+                                self.engine.execute_action(&core);
+                                if matches!(&self.selected, Some(s) if s.project_id() == pid) {
+                                    self.selected = None;
+                                }
+                                self.tree_expanded.retain(|(p, _)| p != &pid);
+                                self.project_expanded.remove(&pid);
+                                self.persist_workspace();
+                                self.pending_action = None;
+                            }
+                        });
+                    });
+                if !open { self.pending_action = None; }
+                return;
+            }
+            PendingAction::CloseDirtyProject { project_id } => {
+                let pid = project_id.clone();
+                let mut open = true;
+                egui::Window::new("未保存的修改")
+                    .collapsible(false).resizable(false).open(&mut open)
+                    .show(ctx, |ui| {
+                        ui.label(format!("Project \"{}\" 有未保存的修改，关闭后将丢失这些改动。", pid));
+                        ui.label("继续关闭？");
+                        ui::modal::dialog_buttons(ui, |ui| {
+                            if ui.button("取消").clicked() {
+                                self.pending_action = None;
+                            }
+                            if ui.button("放弃修改并关闭").clicked() {
+                                if matches!(&self.selected, Some(s) if s.project_id() == pid) {
+                                    self.selected = None;
+                                }
+                                if self.engine.close_project(&pid) {
+                                    self.tree_expanded.retain(|(p, _)| p != &pid);
+                                    self.project_expanded.remove(&pid);
+                                    self.persist_workspace();
+                                }
+                                self.pending_action = None;
+                            }
+                        });
+                    });
+                if !open { self.pending_action = None; }
+                return;
+            }
+            PendingAction::CopyNode { project_id, group, name, kind } => {
+                let pid = project_id.clone();
                 let (group, name, kind) = (group.clone(), name.clone(), kind.clone());
-                self.engine.copy_node(&group, &name, kind);
+                self.engine.with_active(&pid, |e| e.copy_node(&group, &name, kind));
                 self.pending_action = None;
                 return;
             }
@@ -701,12 +848,16 @@ impl TblApp {
         }
 
         let title = match &action {
-            PendingAction::NewGroup => "新建 Group",
+            PendingAction::NewGroup { .. } => "新建 Group",
             PendingAction::NewTable { .. } => "新建 Table",
             PendingAction::NewConstant { .. } => "新建 Constant",
             PendingAction::NewEnum { .. } => "新建 Enum",
             PendingAction::RenameGroup { .. } => "重命名 Group",
             PendingAction::RenameNode { .. } => "重命名",
+            PendingAction::RenameProject { stage, .. } => match stage {
+                RenameProjectStage::EnterId => "重命名 Project（新 id）",
+                RenameProjectStage::EnterName { .. } => "重命名 Project（新显示名）",
+            },
             _ => return,
         };
 
@@ -720,11 +871,29 @@ impl TblApp {
                     ui.label("名称:");
                     ui.text_edit_singleline(&mut self.input_name);
                 });
+                let input = self.input_name.clone();
                 let err = match &action {
-                    PendingAction::NewGroup => self.engine.validate_group_name(&self.input_name),
-                    PendingAction::RenameGroup { old_name } => self.engine.validate_group_name_rename(&self.input_name, old_name),
-                    PendingAction::RenameNode { old_name, .. } => self.engine.validate_node_name_rename(&self.input_name, old_name),
-                    _ => self.engine.validate_node_name(&self.input_name),
+                    PendingAction::NewGroup { project_id } => {
+                        self.engine.with_active(project_id, |e| e.validate_group_name(&input)).flatten()
+                    }
+                    PendingAction::RenameGroup { project_id, old_name } => {
+                        self.engine.with_active(project_id, |e| e.validate_group_name_rename(&input, old_name)).flatten()
+                    }
+                    PendingAction::RenameNode { project_id, old_name, .. } => {
+                        self.engine.with_active(project_id, |e| e.validate_node_name_rename(&input, old_name)).flatten()
+                    }
+                    PendingAction::NewTable { project_id, .. }
+                    | PendingAction::NewConstant { project_id, .. }
+                    | PendingAction::NewEnum { project_id, .. } => {
+                        self.engine.with_active(project_id, |e| e.validate_node_name(&input)).flatten()
+                    }
+                    PendingAction::RenameProject { stage, old_id } => match stage {
+                        RenameProjectStage::EnterId => self.engine.validate_project_id_rename(&input, old_id),
+                        RenameProjectStage::EnterName { .. } => {
+                            if input.trim().is_empty() { Some("名称不能为空".to_string()) } else { None }
+                        }
+                    },
+                    _ => None,
                 };
                 if let Some(ref msg) = err {
                     ui.label(egui::RichText::new(msg).color(egui::Color32::from_rgb(220, 50, 50)).size(11.0));
@@ -737,8 +906,6 @@ impl TblApp {
                     }
                     if ui.add_enabled(can_confirm, egui::Button::new("确定")).clicked() {
                         self.execute_action(&action);
-                        self.pending_action = None;
-                        self.input_name.clear();
                     }
                 });
             });
@@ -751,17 +918,98 @@ impl TblApp {
 
     fn execute_action(&mut self, action: &PendingAction) {
         let core_action = match action {
-            PendingAction::NewGroup => ProjectAction::NewGroup { name: self.input_name.clone() },
-            PendingAction::NewTable { group } => ProjectAction::NewTable { group: group.clone(), name: self.input_name.clone() },
-            PendingAction::NewConstant { group } => ProjectAction::NewConstant { group: group.clone(), name: self.input_name.clone() },
-            PendingAction::NewEnum { group } => ProjectAction::NewEnum { group: group.clone(), name: self.input_name.clone() },
-            PendingAction::RenameGroup { old_name } => ProjectAction::RenameGroup { old_name: old_name.clone(), new_name: self.input_name.clone() },
-            PendingAction::RenameNode { group, old_name } => ProjectAction::RenameNode { group: group.clone(), old_name: old_name.clone(), new_name: self.input_name.clone() },
+            PendingAction::NewGroup { project_id } => ProjectAction::NewGroup {
+                project_id: project_id.clone(), name: self.input_name.clone(),
+            },
+            PendingAction::NewTable { project_id, group } => ProjectAction::NewTable {
+                project_id: project_id.clone(), group: group.clone(), name: self.input_name.clone(),
+            },
+            PendingAction::NewConstant { project_id, group } => ProjectAction::NewConstant {
+                project_id: project_id.clone(), group: group.clone(), name: self.input_name.clone(),
+            },
+            PendingAction::NewEnum { project_id, group } => ProjectAction::NewEnum {
+                project_id: project_id.clone(), group: group.clone(), name: self.input_name.clone(),
+            },
+            PendingAction::RenameGroup { project_id, old_name } => ProjectAction::RenameGroup {
+                project_id: project_id.clone(), old_name: old_name.clone(), new_name: self.input_name.clone(),
+            },
+            PendingAction::RenameNode { project_id, group, old_name } => ProjectAction::RenameNode {
+                project_id: project_id.clone(), group: group.clone(), old_name: old_name.clone(), new_name: self.input_name.clone(),
+            },
+            PendingAction::RenameProject { stage, old_id } => match stage {
+                RenameProjectStage::EnterId => {
+                    let new_id = self.input_name.clone();
+                    let display = self.engine.find_project(old_id)
+                        .map(|p| p.instance_meta.name.clone())
+                        .unwrap_or_default();
+                    self.pending_action = Some(PendingAction::RenameProject {
+                        old_id: old_id.clone(),
+                        stage: RenameProjectStage::EnterName { new_id },
+                    });
+                    self.input_name = display;
+                    return;
+                }
+                RenameProjectStage::EnterName { new_id } => ProjectAction::RenameProject {
+                    old_id: old_id.clone(),
+                    new_id: new_id.clone(),
+                    new_name: self.input_name.clone(),
+                },
+            },
             _ => return,
         };
-        if matches!(action, PendingAction::NewGroup) {
-            self.tree_expanded.insert(self.input_name.clone());
+        if let PendingAction::NewGroup { project_id } = action {
+            self.tree_expanded.insert((project_id.clone(), self.input_name.clone()));
+            self.project_expanded.insert(project_id.clone());
         }
+        // RenameProject 可能改 id；记下 active 跟随
+        let old_active = self.engine.active_project_id().unwrap_or("").to_string();
+        let track_rename = matches!(action, PendingAction::RenameProject { .. });
         self.engine.execute_action(&core_action);
+        if track_rename {
+            if let ProjectAction::RenameProject { old_id, new_id, .. } = &core_action {
+                if old_id != new_id {
+                    // 更新 selected / tree_expanded / project_expanded
+                    if matches!(&self.selected, Some(s) if s.project_id() == old_id) {
+                        // selected 节点的 project_id 同步迁移
+                        let mut new_sel = self.selected.clone().unwrap();
+                        match &mut new_sel {
+                            SelectedNode::Project { project_id }
+                            | SelectedNode::Group { project_id, .. }
+                            | SelectedNode::Table { project_id, .. }
+                            | SelectedNode::Constant { project_id, .. }
+                            | SelectedNode::Enum { project_id, .. } => *project_id = new_id.clone(),
+                        }
+                        self.selected = Some(new_sel);
+                    }
+                    let migrated_groups: Vec<_> = self.tree_expanded.iter()
+                        .filter(|(p, _)| p == old_id)
+                        .map(|(_, g)| g.clone())
+                        .collect();
+                    self.tree_expanded.retain(|(p, _)| p != old_id);
+                    for g in migrated_groups {
+                        self.tree_expanded.insert((new_id.clone(), g));
+                    }
+                    if self.project_expanded.remove(old_id) {
+                        self.project_expanded.insert(new_id.clone());
+                    }
+                    if old_active == *old_id {
+                        let _ = self.engine.set_active_by_id(new_id);
+                    }
+                    // rename 改了 id：opened_projects / last_project 持久化
+                    self.persist_workspace();
+                }
+            }
+        }
+        self.pending_action = None;
+        self.input_name.clear();
+    }
+
+    /// 把当前 workspace 状态落盘到 `<workdir>/tbl-tool.toml`；失败仅 log。
+    pub fn persist_workspace(&mut self) {
+        if let Err(e) = tbl_core::project::persist_workspace_state(
+            &self.engine, &self.project_sort, &self.project_order,
+        ) {
+            self.log(format!("[workspace] 持久化失败: {}", e));
+        }
     }
 }

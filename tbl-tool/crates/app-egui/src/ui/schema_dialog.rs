@@ -20,7 +20,7 @@ pub struct SchemaImportState {
 pub fn render_export_dialog(ctx: &egui::Context, app: &mut TblApp) {
     if !app.schema_export.open { return; }
 
-    let groups = &app.engine.project.groups;
+    let groups = &app.engine.project().groups;
     if app.schema_export.checked.len() != groups.len() {
         app.schema_export.checked = groups.iter().map(|g| {
             let count = g.tables.iter().filter(|t| !t.deleted).count()
@@ -44,7 +44,7 @@ pub fn render_export_dialog(ctx: &egui::Context, app: &mut TblApp) {
 // PLACEHOLDER_EXPORT_CONTENT
 
 fn render_export_content(ui: &mut egui::Ui, app: &mut TblApp) {
-    let groups = &app.engine.project.groups;
+    let groups = &app.engine.project().groups;
     let total: usize = app.schema_export.checked.iter().map(|v| v.len()).sum();
     let selected: usize = app.schema_export.checked.iter().map(|v| v.iter().filter(|&&b| b).count()).sum();
 
@@ -101,7 +101,7 @@ fn render_export_content(ui: &mut egui::Ui, app: &mut TblApp) {
 }
 
 fn do_export(app: &mut TblApp) {
-    let groups = &app.engine.project.groups;
+    let groups = &app.engine.project().groups;
     let full_schema = schema_from_project(groups);
 
     let mut selected_sections = Vec::new();
@@ -120,7 +120,7 @@ fn do_export(app: &mut TblApp) {
         }
     }
 
-    let schema = TblSchema { sections: selected_sections };
+    let schema = TblSchema { meta: Default::default(), sections: selected_sections };
     let content = serialize_tblschema(&schema);
 
     let file = rfd::FileDialog::new()
@@ -256,7 +256,7 @@ fn load_import_schema(app: &mut TblApp) {
     match parse_tblschema(&content) {
         Ok(schema) => {
             let grouped = group_schema_sections(&schema);
-            let groups = &app.engine.project.groups;
+            let groups = &app.engine.project().groups;
 
             let mut checked = Vec::new();
             let mut conflicts = Vec::new();
@@ -310,9 +310,9 @@ fn do_import(app: &mut TblApp) {
         }
     }
 
-    let config_dir = app.engine.project.workdir.join(&app.engine.project.config.project.config_dir);
+    let config_dir = app.engine.project().data_dir();
     let (added, overwritten) = apply_schema_to_project(
-        &mut app.engine.project.groups,
+        &mut app.engine.project_mut().groups,
         &selected_sections,
         &config_dir,
     );

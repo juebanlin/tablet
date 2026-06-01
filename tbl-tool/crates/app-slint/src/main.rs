@@ -18,7 +18,7 @@ use simplelog::*;
 
 slint::include_modules!();
 
-use state::{AppState, CtxMenuKind, GridSelection, PendingAction, RefDisplayStrategy, SelectedNode, TreeFilter, TreeTarget, TsRefFilter, TsTab, TypeEditTarget};
+use state::{AppState, CtxMenuKind, GridSelection, PendingAction, RefDisplayStrategy, RenameProjectStage, SelectedNode, TreeFilter, TreeTarget, TsRefFilter, TsTab, TypeEditTarget};
 
 #[derive(Parser)]
 #[command(name = "tbl-tool", version = "0.1.0")]
@@ -51,10 +51,15 @@ fn main() -> anyhow::Result<()> {
 
     let app_state = Rc::new(RefCell::new(AppState::load(&workdir)?));
 
-    let log_level = app_state.borrow().engine.project.config.ui.as_ref()
-        .and_then(|u| u.log_level.as_deref())
-        .unwrap_or("debug")
-        .to_string();
+    let log_level = {
+        let st = app_state.borrow();
+        st.engine.active()
+            .or_else(|| st.engine.projects.first())
+            .and_then(|p| p.config.ui.as_ref())
+            .and_then(|u| u.log_level.as_deref())
+            .unwrap_or("debug")
+            .to_string()
+    };
     let file_level = match log_level.as_str() {
         "info" => LevelFilter::Info,
         "warn" => LevelFilter::Warn,
@@ -69,13 +74,19 @@ fn main() -> anyhow::Result<()> {
         Config::default(),
         log_file,
     )])?;
-    info!("loaded {} groups", app_state.borrow().engine.project.groups.len());
+    info!(
+        "loaded {} opened / {} available, {} groups in active",
+        app_state.borrow().engine.projects.len(),
+        app_state.borrow().engine.available().len(),
+        app_state.borrow().engine.active().map(|p| p.groups.len()).unwrap_or(0),
+    );
 
     let ui = AppWindow::new()?;
     {
         let st = app_state.borrow();
         ui.set_picker_trigger_header_single(st.picker_trigger_header_single);
         ui.set_picker_trigger_data_single(st.picker_trigger_data_single);
+        ui.set_tree_sort_index(sort_to_index(&st.project_sort));
     }
     push_tree(&ui, &app_state);
     push_grid(&ui, &app_state);
@@ -125,7 +136,97 @@ fn push_logs(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
 /// 构建树并推送到 slint。
 fn push_tree(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
     let nodes = convert::build_tree_nodes(&mut state.borrow_mut());
-    ui.set_tree_nodes(slint::ModelRc::new(slint::VecModel::from(nodes)));
+    // 复用同一个 VecModel：直接替换 items 而非整张 ModelRc。
+    // 整张 ModelRc 替换会让 slint Repeater 销毁并重建所有子元素（含 TouchArea），
+    // 第一次单击触发 rebuild 后，后续点击落在新 TouchArea 实例上 → 双击永远凑不齐。
+    use std::cell::OnceCell;
+    thread_local! {
+        static TREE_MODEL: OnceCell<Rc<slint::VecModel<TreeNode>>> = OnceCell::new();
+    }
+    TREE_MODEL.with(|cell| {
+        let model = cell.get_or_init(|| {
+            let m = Rc::new(slint::VecModel::<TreeNode>::default());
+            ui.set_tree_nodes(slint::ModelRc::from(m.clone()));
+            m
+        });
+        sync_vec_model(model, nodes);
+    });
+}
+
+/// 把 model 内容刷新成 new_items，复用尽可能多的行（in-place set_row_data），
+/// 使 slint Repeater 不销毁现有 TouchArea。
+fn sync_vec_model<T: Clone + 'static>(model: &Rc<slint::VecModel<T>>, new_items: Vec<T>) {
+    use slint::Model;
+    let old_len = model.row_count();
+    let new_len = new_items.len();
+    let common = old_len.min(new_len);
+    for (i, item) in new_items.iter().take(common).enumerate() {
+        model.set_row_data(i, item.clone());
+    }
+    if new_len > old_len {
+        for item in new_items.into_iter().skip(common) {
+            model.push(item);
+        }
+    } else {
+        for _ in new_len..old_len {
+            model.remove(new_len);
+        }
+    }
+}
+
+/// project_sort 字符串 ↔ slint ComboBox 索引。
+/// 顺序与 tree_section.slint 的 sort-options 对齐：["ID", "名称", "已打开", "创建时间", "手动"]。
+fn sort_to_index(s: &str) -> i32 {
+    match s {
+        "name" => 1,
+        "open" => 2,
+        "created" => 3,
+        "manual" => 4,
+        _ => 0,
+    }
+}
+fn index_to_sort(i: i32) -> &'static str {
+    match i { 1 => "name", 2 => "open", 3 => "created", 4 => "manual", _ => "id" }
+}
+
+/// 把当前 workspace 状态落盘到 `<workdir>/tbl-tool.toml`；失败仅 log。
+fn persist_workspace(state: &mut AppState) {
+    if let Err(e) = tbl_core::project::persist_workspace_state(
+        &state.engine, &state.project_sort, &state.project_order,
+    ) {
+        state.engine.log(format!("[workspace] 持久化失败: {}", e));
+    }
+}
+
+/// 打开一个 closed project，成功后 persist。返回是否真打开了一个新的。
+fn open_project_with_persist(state: &Rc<RefCell<AppState>>, pid: &str) -> bool {
+    let result = state.borrow_mut().engine.open_project(pid);
+    match result {
+        Ok(true) => {
+            persist_workspace(&mut *state.borrow_mut());
+            true
+        }
+        Ok(false) => false,
+        Err(e) => {
+            state.borrow_mut().engine.log(format!("[workspace] 打开 {} 失败: {}", pid, e));
+            false
+        }
+    }
+}
+
+/// 关闭一个 opened project，清掉相关 UI 态 + persist。
+fn close_project_with_persist(state: &Rc<RefCell<AppState>>, pid: &str) {
+    let mut st = state.borrow_mut();
+    if matches!(&st.selected, Some(s) if s.project_id() == pid) {
+        st.selected = None;
+        st.grid_selection = crate::state::GridSelection::None;
+        st.editing = None;
+    }
+    if st.engine.close_project(pid) {
+        st.tree_expanded.retain(|(p, _)| p != pid);
+        st.project_expanded.remove(pid);
+        persist_workspace(&mut *st);
+    }
 }
 
 /// 构建当前选中节点的 GridSection 快照并推送到 slint。
@@ -209,7 +310,7 @@ fn compute_editing_export_index(state: &Rc<RefCell<AppState>>, editing_r: i32, e
     let (data_r, data_c) = if editing_r >= 0 && editing_c >= 0 { (editing_r, editing_c) } else { (sel_r, sel_c) };
     let code: Option<String> = if header_col >= 0 {
         // Table 表头 export 行
-        if let Some(SelectedNode::Table { group, name }) = &st.selected {
+        if let Some(SelectedNode::Table { group, name, .. }) = &st.selected {
             st.engine.find_table(group, name)
                 .and_then(|t| t.schema.fields.get(header_col as usize))
                 .map(|f| f.export.code().to_string())
@@ -217,7 +318,7 @@ fn compute_editing_export_index(state: &Rc<RefCell<AppState>>, editing_r: i32, e
     } else if data_r >= 0 && data_c >= 0 {
         // Constant 数据行的 export 列
         match &st.selected {
-            Some(SelectedNode::Constant { group, name }) => {
+            Some(SelectedNode::Constant { group, name, .. }) => {
                 st.engine.find_constant(group, name)
                     .and_then(|c| c.entries.get(data_r as usize))
                     .map(|e| e.export.code().to_string())
@@ -314,16 +415,26 @@ fn wire_tree(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
             if let Some(ui) = weak.upgrade() { push_tree(&ui, &s); }
         });
     }
-    // 展开/折叠
+    // 展开/折叠（仅对 opened project / group 生效；closed project 三角点击不响应——靠双击/右键打开）
     {
         let s = state.clone();
         let weak = ui.as_weak();
         ui.on_tree_node_toggle_expand(move |id| {
             let mut st = s.borrow_mut();
-            if let Some(TreeTarget::Group(name)) = st.tree_targets.get(id as usize).cloned() {
-                if !st.tree_expanded.remove(&name) {
-                    st.tree_expanded.insert(name);
+            match st.tree_targets.get(id as usize).cloned() {
+                Some(TreeTarget::Project(pid)) => {
+                    if !st.engine.is_opened(&pid) { return; }
+                    if !st.project_expanded.remove(&pid) {
+                        st.project_expanded.insert(pid);
+                    }
                 }
+                Some(TreeTarget::Group { project_id, group }) => {
+                    let key = (project_id, group);
+                    if !st.tree_expanded.remove(&key) {
+                        st.tree_expanded.insert(key);
+                    }
+                }
+                _ => {}
             }
             drop(st);
             if let Some(ui) = weak.upgrade() { push_tree(&ui, &s); }
@@ -337,29 +448,45 @@ fn wire_tree(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
         ui.on_tree_node_clicked(move |id| {
             // 切节点前先 commit 当前编辑（取 slint editing-buffer）
             commit_editing(&ui_for_buf, &s);
+            let target = s.borrow().tree_targets.get(id as usize).cloned();
+            // 单击仅选中（含切 active），不触发展开/折叠；closed project 仅选中，不触发打开。
             let mut st = s.borrow_mut();
-            let target = st.tree_targets.get(id as usize).cloned();
             let mut grid_dirty = false;
             match target {
-                Some(TreeTarget::Group(name)) => {
-                    if !st.tree_expanded.remove(&name) {
-                        st.tree_expanded.insert(name);
+                Some(TreeTarget::Project(pid)) => {
+                    let opened = st.engine.is_opened(&pid);
+                    if opened {
+                        st.engine.set_active_by_id(&pid);
                     }
-                }
-                Some(TreeTarget::Table { group, name }) => {
-                    st.selected = Some(SelectedNode::Table { group, name });
+                    st.selected = Some(SelectedNode::Project { project_id: pid });
                     st.grid_selection = GridSelection::None;
                     st.editing = None;
                     grid_dirty = true;
                 }
-                Some(TreeTarget::Constant { group, name }) => {
-                    st.selected = Some(SelectedNode::Constant { group, name });
+                Some(TreeTarget::Group { project_id, group }) => {
+                    st.engine.set_active_by_id(&project_id);
+                    st.selected = Some(SelectedNode::Group { project_id, group });
                     st.grid_selection = GridSelection::None;
                     st.editing = None;
                     grid_dirty = true;
                 }
-                Some(TreeTarget::Enum { group, name }) => {
-                    st.selected = Some(SelectedNode::Enum { group, name });
+                Some(TreeTarget::Table { project_id, group, name }) => {
+                    st.engine.set_active_by_id(&project_id);
+                    st.selected = Some(SelectedNode::Table { project_id, group, name });
+                    st.grid_selection = GridSelection::None;
+                    st.editing = None;
+                    grid_dirty = true;
+                }
+                Some(TreeTarget::Constant { project_id, group, name }) => {
+                    st.engine.set_active_by_id(&project_id);
+                    st.selected = Some(SelectedNode::Constant { project_id, group, name });
+                    st.grid_selection = GridSelection::None;
+                    st.editing = None;
+                    grid_dirty = true;
+                }
+                Some(TreeTarget::Enum { project_id, group, name }) => {
+                    st.engine.set_active_by_id(&project_id);
+                    st.selected = Some(SelectedNode::Enum { project_id, group, name });
                     st.grid_selection = GridSelection::None;
                     st.editing = None;
                     grid_dirty = true;
@@ -383,13 +510,16 @@ fn wire_tree(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
                 st.tree_targets.get(id as usize).cloned()
             };
             let menu_kind = match kind {
-                Some(TreeTarget::Group(name)) => Some(CtxMenuKind::TreeGroup { name }),
-                Some(TreeTarget::Table { group, name }) =>
-                    Some(CtxMenuKind::TreeNode { group, name, kind: tbl_core::ops::NodeKind::Table }),
-                Some(TreeTarget::Constant { group, name }) =>
-                    Some(CtxMenuKind::TreeNode { group, name, kind: tbl_core::ops::NodeKind::Constant }),
-                Some(TreeTarget::Enum { group, name }) =>
-                    Some(CtxMenuKind::TreeNode { group, name, kind: tbl_core::ops::NodeKind::Enum }),
+                Some(TreeTarget::Project(pid)) =>
+                    Some(CtxMenuKind::TreeProject { project_id: pid }),
+                Some(TreeTarget::Group { project_id, group }) =>
+                    Some(CtxMenuKind::TreeGroup { project_id, name: group }),
+                Some(TreeTarget::Table { project_id, group, name }) =>
+                    Some(CtxMenuKind::TreeNode { project_id, group, name, kind: tbl_core::ops::NodeKind::Table }),
+                Some(TreeTarget::Constant { project_id, group, name }) =>
+                    Some(CtxMenuKind::TreeNode { project_id, group, name, kind: tbl_core::ops::NodeKind::Constant }),
+                Some(TreeTarget::Enum { project_id, group, name }) =>
+                    Some(CtxMenuKind::TreeNode { project_id, group, name, kind: tbl_core::ops::NodeKind::Enum }),
                 None => None,
             };
             if let Some(k) = menu_kind {
@@ -405,6 +535,66 @@ fn wire_tree(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
         ui.on_tree_blank_context_menu(move |x, y| {
             s.borrow_mut().ctx_menu.open_at(CtxMenuKind::TreeBlank, x as f32, y as f32);
             if let Some(ui) = weak.upgrade() { push_context_menu(&ui, &s); }
+        });
+    }
+    // 双击：closed project = 打开 + active；opened project root = 切换展开态
+    {
+        let s = state.clone();
+        let weak = ui.as_weak();
+        ui.on_tree_node_double_clicked(move |id| {
+            let target = s.borrow().tree_targets.get(id as usize).cloned();
+            match target {
+                Some(TreeTarget::Project(pid)) => {
+                    let opened = s.borrow().engine.is_opened(&pid);
+                    if !opened {
+                        if open_project_with_persist(&s, &pid) {
+                            let mut st = s.borrow_mut();
+                            st.engine.set_active_by_id(&pid);
+                            st.selected = Some(SelectedNode::Project { project_id: pid.clone() });
+                            st.project_expanded.insert(pid.clone());
+                            let groups: Vec<String> = st.engine.find_project(&pid)
+                                .map(|p| p.groups.iter().map(|g| g.name.clone()).collect())
+                                .unwrap_or_default();
+                            for g in groups {
+                                st.tree_expanded.insert((pid.clone(), g));
+                            }
+                        }
+                    } else {
+                        let mut st = s.borrow_mut();
+                        if !st.project_expanded.remove(&pid) {
+                            st.project_expanded.insert(pid);
+                        }
+                    }
+                }
+                Some(TreeTarget::Group { project_id, group }) => {
+                    let mut st = s.borrow_mut();
+                    let key = (project_id, group);
+                    if !st.tree_expanded.remove(&key) {
+                        st.tree_expanded.insert(key);
+                    }
+                }
+                _ => {}
+            }
+            if let Some(ui) = weak.upgrade() {
+                push_tree(&ui, &s);
+                push_grid(&ui, &s);
+            }
+        });
+    }
+    // 排序下拉切换
+    {
+        let s = state.clone();
+        let weak = ui.as_weak();
+        ui.on_tree_sort_changed(move |i| {
+            let new_sort = index_to_sort(i).to_string();
+            {
+                let mut st = s.borrow_mut();
+                if st.project_sort != new_sort {
+                    st.project_sort = new_sort;
+                    persist_workspace(&mut *st);
+                }
+            }
+            if let Some(ui) = weak.upgrade() { push_tree(&ui, &s); }
         });
     }
 }
@@ -644,7 +834,7 @@ fn wire_grid(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
             // 读当前 header cell 的存储值作为初始 buffer（Text 类：desc / field）
             let raw = {
                 let st = s.borrow();
-                if let Some(SelectedNode::Table { group, name }) = &st.selected {
+                if let Some(SelectedNode::Table { group, name, .. }) = &st.selected {
                     st.engine.find_table(group, name)
                         .and_then(|t| t.schema.fields.get(ci as usize))
                         .map(|f| match hi {
@@ -940,6 +1130,7 @@ fn wire_toolbar(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
         let mut export_dlg = false;
         let mut schema_export_dlg = false;
         let mut schema_import_dlg = false;
+        let mut template_lib_dlg = false;
         match id.as_str() {
             "generate-test" => {
                 s.borrow_mut().engine.generate_test_config();
@@ -952,8 +1143,8 @@ fn wire_toolbar(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
                 full_refresh = true;
             }
             "save" => {
-                s.borrow_mut().engine.save_all();
-                // save_all 内部会跑 revalidate_all 重算 validation_errors，
+                s.borrow_mut().engine.save_all_projects();
+                // save_all_projects 内部会跑 revalidate_all_projects 重算 validation_errors，
                 // 必须刷新 tree（! 标记）和 grid（红框）才能让用户看到错误
                 full_refresh = true;
             }
@@ -982,6 +1173,16 @@ fn wire_toolbar(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
                 }
                 schema_import_dlg = true;
             }
+            "template-library" => {
+                {
+                    let mut st = s.borrow_mut();
+                    st.template_lib.open = true;
+                    st.template_lib.tab = 0;
+                    st.template_lib.search.clear();
+                    st.template_lib.selected_id.clear();
+                }
+                template_lib_dlg = true;
+            }
             _ => {
                 // excel 等：后续 step
             }
@@ -999,6 +1200,7 @@ fn wire_toolbar(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
             if export_dlg { push_data_export(&ui, &s); }
             if schema_export_dlg { push_schema_export(&ui, &s); }
             if schema_import_dlg { push_schema_import(&ui, &s); }
+            if template_lib_dlg { push_template_library(&ui, &s); }
             // 任何 toolbar 操作都可能产生日志（save/reload/generate/clear 全会 log）
             push_logs(&ui, &s);
         }
@@ -1019,10 +1221,20 @@ fn reset_view_after_reload(state: &Rc<RefCell<AppState>>) {
     st.ref_picker.close();
     st.ctx_menu.close();
     st.pending.close();
-    // 重新展开所有 group（与 AppState::load 一致的初始态）
-    st.tree_expanded = st.engine.project.groups.iter().map(|g| g.name.clone()).collect();
-    // 同步 AppState::load：reload / generate-test / clear 后跑一遍全表验证。
-    st.engine.revalidate_all();
+    st.template_lib.open = false;
+    st.new_project.close();
+    // 重新展开当前 active project 下所有 group + active project 根；全关时清空展开集
+    if let Some(active_id) = st.engine.active_project_id().map(str::to_string) {
+        st.tree_expanded = st.engine.project().groups.iter()
+            .map(|g| (active_id.clone(), g.name.clone()))
+            .collect();
+        st.project_expanded = std::iter::once(active_id).collect();
+    } else {
+        st.tree_expanded.clear();
+        st.project_expanded.clear();
+    }
+    // 同步 AppState::load：reload / generate-test / clear 后跑一遍全 Project 验证。
+    st.engine.revalidate_all_projects();
     if !st.engine.validation_errors.is_empty() {
         let n = st.engine.validation_errors.len();
         st.engine.log(format!("[验证] 共 {} 个错误", n));
@@ -1132,11 +1344,11 @@ fn grid_dims(state: &Rc<RefCell<AppState>>) -> (usize, usize) {
     let st = state.borrow();
     let rows = st.grid_data_count + convert::EXTRA_ROWS;
     let cols = match &st.selected {
-        Some(SelectedNode::Table { group, name }) => st.engine.find_table(group, name)
+        Some(SelectedNode::Table { group, name, .. }) => st.engine.find_table(group, name)
             .map(|t| t.schema.fields.len()).unwrap_or(0),
         Some(SelectedNode::Constant { .. }) => 5,
         Some(SelectedNode::Enum { .. }) => 3,
-        None => 0,
+        Some(SelectedNode::Project { .. }) | Some(SelectedNode::Group { .. }) | None => 0,
     };
     (rows, cols)
 }
@@ -1154,7 +1366,7 @@ fn on_cell_export_selected(state: &Rc<RefCell<AppState>>, r: i32, _c: i32, idx: 
     };
     let mut st = state.borrow_mut();
     let (group, name) = match &st.selected {
-        Some(SelectedNode::Constant { group, name }) => (group.clone(), name.clone()),
+        Some(SelectedNode::Constant { group, name, .. }) => (group.clone(), name.clone()),
         _ => return,
     };
     st.engine.commit_constant_cell(&group, &name, r as usize, 3, opt.code().to_string());
@@ -1175,7 +1387,7 @@ fn on_header_export_selected(state: &Rc<RefCell<AppState>>, col: i32, idx: i32) 
     };
     let mut st = state.borrow_mut();
     let (group, name) = match &st.selected {
-        Some(SelectedNode::Table { group, name }) => (group.clone(), name.clone()),
+        Some(SelectedNode::Table { group, name, .. }) => (group.clone(), name.clone()),
         _ => return,
     };
     st.engine.commit_header_edit(&group, &name, 1, col as usize, opt.code().to_string());
@@ -1190,14 +1402,14 @@ fn on_header_export_selected(state: &Rc<RefCell<AppState>>, col: i32, idx: i32) 
 fn open_type_selector_for_cell(state: &Rc<RefCell<AppState>>, r: usize, c: usize) {
     let mut st = state.borrow_mut();
     let (group, name, is_table, current) = match &st.selected {
-        Some(SelectedNode::Constant { group, name }) => {
+        Some(SelectedNode::Constant { group, name, .. }) => {
             let cur = st.engine.find_constant(group, name)
                 .and_then(|cst| cst.entries.get(r))
                 .map(|e| e.tbl_type.clone())
                 .unwrap_or_default();
             (group.clone(), name.clone(), false, cur)
         }
-        Some(SelectedNode::Table { group, name }) => {
+        Some(SelectedNode::Table { group, name, .. }) => {
             // Table 数据格不会是 TypeEnumCol，但保留兜底
             (group.clone(), name.clone(), true, String::new())
         }
@@ -1210,7 +1422,7 @@ fn open_type_selector_for_cell(state: &Rc<RefCell<AppState>>, r: usize, c: usize
 fn open_type_selector_for_header(state: &Rc<RefCell<AppState>>, col: usize) {
     let mut st = state.borrow_mut();
     let (group, name, current) = match &st.selected {
-        Some(SelectedNode::Table { group, name }) => {
+        Some(SelectedNode::Table { group, name, .. }) => {
             let cur = st.engine.find_table(group, name)
                 .and_then(|t| t.schema.fields.get(col))
                 .map(|f| f.tbl_type.clone())
@@ -1225,7 +1437,7 @@ fn open_type_selector_for_header(state: &Rc<RefCell<AppState>>, col: usize) {
 /// 收集项目内可被引用的项（table + enum，排除 deleted），按名称排序。
 fn collect_ref_targets(state: &AppState) -> Vec<(String, bool /* is_table */)> {
     let mut out: Vec<(String, bool)> = Vec::new();
-    for g in &state.engine.project.groups {
+    for g in &state.engine.project().groups {
         for t in &g.tables { if !t.deleted { out.push((t.name.clone(), true)); } }
         for e in &g.enums  { if !e.deleted { out.push((e.name.clone(), false)); } }
     }
@@ -1271,7 +1483,7 @@ fn push_type_selector(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
     ui.set_ts_param_slots(slint::ModelRc::new(slint::VecModel::from(ts_slots)));
 
     // 预览：依据当前 tab 选择 data_type / ref_type
-    let sep = st.engine.project.config.separators.clone();
+    let sep = st.engine.project().config.separators.clone();
     let (preview, example, java, go, lua) = match ts.tab {
         TsTab::Data => {
             let t = ts.data_type();
@@ -1523,7 +1735,7 @@ fn pick_full_extras(table: &tbl_core::model::Table) -> Vec<usize> {
 
 /// 收集被引用项 (table or enum) 的所有可选条目；返回 None 表示该 ref_name 不存在。
 fn collect_ref_rows(state: &AppState, ref_name: &str, strategy: RefDisplayStrategy) -> Option<RefTargetData> {
-    for g in &state.engine.project.groups {
+    for g in &state.engine.project().groups {
         for t in &g.tables {
             if t.deleted || t.name != ref_name { continue; }
             let id_idx = match t.schema.fields.iter().position(|f| f.name == "id") {
@@ -1583,17 +1795,17 @@ fn collect_ref_rows(state: &AppState, ref_name: &str, strategy: RefDisplayStrate
 fn open_ref_picker_for_cell(state: &Rc<RefCell<AppState>>, r: usize, c: usize, ref_target: &str) {
     let mut st = state.borrow_mut();
     let default_strategy = RefDisplayStrategy::from_config(
-        st.engine.project.config.ui.as_ref()
+        st.engine.project().config.ui.as_ref()
             .map(|u| u.ref_picker.default_strategy.as_str())
             .unwrap_or("auto"));
     let (group, name, is_table, current) = match &st.selected {
-        Some(SelectedNode::Table { group, name }) => {
+        Some(SelectedNode::Table { group, name, .. }) => {
             let cur = st.engine.find_table(group, name)
                 .and_then(|t| t.records.get(r).and_then(|row| row.get(c)).cloned())
                 .unwrap_or_default();
             (group.clone(), name.clone(), true, cur)
         }
-        Some(SelectedNode::Constant { group, name }) => {
+        Some(SelectedNode::Constant { group, name, .. }) => {
             // Constant 不允许 Ref 类型；保留兜底
             (group.clone(), name.clone(), false, String::new())
         }
@@ -1862,6 +2074,31 @@ fn ctx_menu_items_for(kind: &CtxMenuKind, state: &AppState) -> Vec<CtxMenuItem> 
         CtxMenuKind::TreeBlank => vec![
             item("新建 Group", "tree.new-group", false),
         ],
+        CtxMenuKind::TreeProject { project_id } => {
+            if state.engine.is_opened(project_id) {
+                vec![
+                    item("保存此 Project", "tree.proj-save", false),
+                    item("导出此 Project (JSON)", "tree.proj-export-json", false),
+                    item("导出此 Project (XML)", "tree.proj-export-xml", false),
+                    sep(),
+                    item("新建 Group", "tree.proj-new-group", false),
+                    item("重命名 Project...", "tree.proj-rename", false),
+                    item("删除 Project...", "tree.proj-delete", false),
+                    sep(),
+                    item("关闭 Project", "tree.proj-close", false),
+                    sep(),
+                    item("在文件管理器打开", "tree.proj-open-dir", false),
+                ]
+            } else {
+                vec![
+                    item("打开 Project", "tree.proj-open", false),
+                    sep(),
+                    item("在文件管理器打开", "tree.proj-open-dir", false),
+                    item("重命名 Project...", "tree.proj-rename", false),
+                    item("删除 Project...", "tree.proj-delete", false),
+                ]
+            }
+        }
         CtxMenuKind::TreeGroup { .. } => vec![
             item("新建 Table", "tree.new-table", false),
             item("新建 Constant", "tree.new-constant", false),
@@ -1965,8 +2202,8 @@ fn revalidate_pending_input(state: &Rc<RefCell<AppState>>) {
     let action = match &st.pending.action { Some(a) => a.clone(), None => return };
     let buf = st.pending.input_buffer.clone();
     let err: Option<String> = match &action {
-        PendingAction::NewGroup => st.engine.validate_group_name(&buf),
-        PendingAction::RenameGroup { old_name } => st.engine.validate_group_name_rename(&buf, old_name),
+        PendingAction::NewGroup { .. } => st.engine.validate_group_name(&buf),
+        PendingAction::RenameGroup { old_name, .. } => st.engine.validate_group_name_rename(&buf, old_name),
         PendingAction::RenameNode { old_name, .. } => st.engine.validate_node_name_rename(&buf, old_name),
         PendingAction::NewTable { .. } | PendingAction::NewConstant { .. } | PendingAction::NewEnum { .. } =>
             st.engine.validate_node_name(&buf),
@@ -1981,13 +2218,19 @@ fn execute_pending_action(state: &Rc<RefCell<AppState>>) {
     let action = match st.pending.action.clone() { Some(a) => a, None => return };
     let buf = st.pending.input_buffer.clone();
     let core_action = match &action {
-        PendingAction::NewGroup => ProjectAction::NewGroup { name: buf.clone() },
-        PendingAction::NewTable { group } => ProjectAction::NewTable { group: group.clone(), name: buf.clone() },
-        PendingAction::NewConstant { group } => ProjectAction::NewConstant { group: group.clone(), name: buf.clone() },
-        PendingAction::NewEnum { group } => ProjectAction::NewEnum { group: group.clone(), name: buf.clone() },
-        PendingAction::RenameGroup { old_name } => ProjectAction::RenameGroup { old_name: old_name.clone(), new_name: buf.clone() },
-        PendingAction::RenameNode { group, old_name } => ProjectAction::RenameNode { group: group.clone(), old_name: old_name.clone(), new_name: buf.clone() },
-        PendingAction::DeleteGroup { group } => {
+        PendingAction::NewGroup { project_id } =>
+            ProjectAction::NewGroup { project_id: project_id.clone(), name: buf.clone() },
+        PendingAction::NewTable { project_id, group } =>
+            ProjectAction::NewTable { project_id: project_id.clone(), group: group.clone(), name: buf.clone() },
+        PendingAction::NewConstant { project_id, group } =>
+            ProjectAction::NewConstant { project_id: project_id.clone(), group: group.clone(), name: buf.clone() },
+        PendingAction::NewEnum { project_id, group } =>
+            ProjectAction::NewEnum { project_id: project_id.clone(), group: group.clone(), name: buf.clone() },
+        PendingAction::RenameGroup { project_id, old_name } =>
+            ProjectAction::RenameGroup { project_id: project_id.clone(), old_name: old_name.clone(), new_name: buf.clone() },
+        PendingAction::RenameNode { project_id, group, old_name } =>
+            ProjectAction::RenameNode { project_id: project_id.clone(), group: group.clone(), old_name: old_name.clone(), new_name: buf.clone() },
+        PendingAction::DeleteGroup { project_id: _, group } => {
             st.engine.delete_group(group);
             // 如果当前选中的节点在被删除的 group 下，清空选中
             if let Some(SelectedNode::Table { group: g, .. }
@@ -1999,22 +2242,101 @@ fn execute_pending_action(state: &Rc<RefCell<AppState>>) {
             st.pending.close();
             return;
         }
-        PendingAction::DeleteNode { group, name } => {
+        PendingAction::DeleteNode { project_id: _, group, name } => {
             st.engine.delete_node(group, name);
-            if let Some(SelectedNode::Table { group: g, name: n }
-                | SelectedNode::Constant { group: g, name: n }
-                | SelectedNode::Enum { group: g, name: n }) = &st.selected
+            if let Some(SelectedNode::Table { group: g, name: n, .. }
+                | SelectedNode::Constant { group: g, name: n, .. }
+                | SelectedNode::Enum { group: g, name: n, .. }) = &st.selected
             {
                 if g == group && n == name { st.selected = None; st.grid_selection = GridSelection::None; }
             }
             st.pending.close();
             return;
         }
+        PendingAction::RenameProject { old_id, stage } => match stage {
+            RenameProjectStage::EnterId => {
+                // 第一步：收新 id；不真正落地，跳到第二步
+                let new_id = buf.clone();
+                st.pending.action = Some(PendingAction::RenameProject {
+                    old_id: old_id.clone(),
+                    stage: RenameProjectStage::EnterName { new_id },
+                });
+                st.pending.input_buffer.clear();
+                st.pending.error = None;
+                return;
+            }
+            RenameProjectStage::EnterName { new_id } => {
+                ProjectAction::RenameProject {
+                    old_id: old_id.clone(),
+                    new_id: new_id.clone(),
+                    new_name: buf.clone(),
+                }
+            }
+        },
+        PendingAction::DeleteProject { project_id } => {
+            ProjectAction::DeleteProject { project_id: project_id.clone() }
+        }
+        PendingAction::CloseDirtyProject { project_id } => {
+            // 用户已确认放弃未保存改动 → 直接 close。
+            // 这里需要 drop 当前 borrow 以让 close_project_with_persist 重新 borrow。
+            let pid = project_id.clone();
+            st.pending.close();
+            drop(st);
+            close_project_with_persist(state, &pid);
+            return;
+        }
     };
-    if matches!(action, PendingAction::NewGroup) {
-        st.tree_expanded.insert(buf.clone());
+    if let PendingAction::NewGroup { project_id } = &action {
+        st.tree_expanded.insert((project_id.clone(), buf.clone()));
     }
+    // RenameProject 可能改 id —— 记下 active 在 execute 之前
+    let old_active = st.engine.active_project_id().map(str::to_string);
+    let track_rename = matches!(action, PendingAction::RenameProject { .. });
+    let track_delete = matches!(action, PendingAction::DeleteProject { .. });
     st.engine.execute_action(&core_action);
+    if track_rename {
+        if let ProjectAction::RenameProject { old_id, new_id, .. } = &core_action {
+            if old_id != new_id {
+                if matches!(&st.selected, Some(s) if s.project_id() == old_id) {
+                    if let Some(sel) = st.selected.as_mut() {
+                        match sel {
+                            SelectedNode::Project { project_id }
+                            | SelectedNode::Group { project_id, .. }
+                            | SelectedNode::Table { project_id, .. }
+                            | SelectedNode::Constant { project_id, .. }
+                            | SelectedNode::Enum { project_id, .. } => *project_id = new_id.clone(),
+                        }
+                    }
+                }
+                let migrated_groups: Vec<String> = st.tree_expanded.iter()
+                    .filter(|(p, _)| p == old_id)
+                    .map(|(_, g)| g.clone())
+                    .collect();
+                st.tree_expanded.retain(|(p, _)| p != old_id);
+                for g in migrated_groups {
+                    st.tree_expanded.insert((new_id.clone(), g));
+                }
+                if st.project_expanded.remove(old_id) {
+                    st.project_expanded.insert(new_id.clone());
+                }
+                if old_active.as_deref() == Some(old_id.as_str()) {
+                    let _ = st.engine.set_active_by_id(new_id);
+                }
+            }
+            persist_workspace(&mut *st);
+        }
+    } else if track_delete {
+        if let ProjectAction::DeleteProject { project_id } = &core_action {
+            if matches!(&st.selected, Some(s) if s.project_id() == project_id) {
+                st.selected = None;
+                st.grid_selection = GridSelection::None;
+                st.editing = None;
+            }
+            st.tree_expanded.retain(|(p, _)| p != project_id);
+            st.project_expanded.remove(project_id);
+            persist_workspace(&mut *st);
+        }
+    }
     st.pending.close();
 }
 
@@ -2022,7 +2344,7 @@ fn execute_pending_action(state: &Rc<RefCell<AppState>>) {
 fn perform_grid_col_action(state: &Rc<RefCell<AppState>>, col: usize, action: &str) {
     let mut st = state.borrow_mut();
     let (group, name) = match &st.selected {
-        Some(SelectedNode::Table { group, name }) => (group.clone(), name.clone()),
+        Some(SelectedNode::Table { group, name, .. }) => (group.clone(), name.clone()),
         _ => return,
     };
     match action {
@@ -2038,9 +2360,9 @@ fn perform_grid_col_action(state: &Rc<RefCell<AppState>>, col: usize, action: &s
 fn perform_grid_row_action(state: &Rc<RefCell<AppState>>, row: usize, action: &str) {
     let mut st = state.borrow_mut();
     let (group, name, is_table, is_constant, is_enum) = match &st.selected {
-        Some(SelectedNode::Table { group, name }) => (group.clone(), name.clone(), true, false, false),
-        Some(SelectedNode::Constant { group, name }) => (group.clone(), name.clone(), false, true, false),
-        Some(SelectedNode::Enum { group, name }) => (group.clone(), name.clone(), false, false, true),
+        Some(SelectedNode::Table { group, name, .. }) => (group.clone(), name.clone(), true, false, false),
+        Some(SelectedNode::Constant { group, name, .. }) => (group.clone(), name.clone(), false, true, false),
+        Some(SelectedNode::Enum { group, name, .. }) => (group.clone(), name.clone(), false, false, true),
         _ => return,
     };
     if is_table {
@@ -2052,7 +2374,7 @@ fn perform_grid_row_action(state: &Rc<RefCell<AppState>>, row: usize, action: &s
         }
     } else if is_constant {
         // Constant 没有专门的 insert/delete API；用 entries 直接增删
-        if let Some(g) = st.engine.project.groups.iter_mut().find(|g| g.name == group) {
+        if let Some(g) = st.engine.project_mut().groups.iter_mut().find(|g| g.name == group) {
             if let Some(c) = g.constants.iter_mut().find(|c| c.name == name) {
                 use tbl_core::model::{ConstEntry, Export};
                 match action {
@@ -2073,7 +2395,7 @@ fn perform_grid_row_action(state: &Rc<RefCell<AppState>>, row: usize, action: &s
             }
         }
     } else if is_enum {
-        if let Some(g) = st.engine.project.groups.iter_mut().find(|g| g.name == group) {
+        if let Some(g) = st.engine.project_mut().groups.iter_mut().find(|g| g.name == group) {
             if let Some(e) = g.enums.iter_mut().find(|e| e.name == name) {
                 use tbl_core::model::EnumEntry;
                 match action {
@@ -2233,10 +2555,10 @@ fn resolve_selection_rect(state: &Rc<RefCell<AppState>>) -> Option<(usize, usize
 /// 区域粘贴：按当前选中节点类型走 engine.paste_*_data。
 fn paste_region(state: &Rc<RefCell<AppState>>, r1: usize, c1: usize, text: &str) {
     let (group, name, kind) = match state.borrow().selected.clone() {
-        Some(SelectedNode::Table { group, name }) => (group, name, "table"),
-        Some(SelectedNode::Constant { group, name }) => (group, name, "constant"),
-        Some(SelectedNode::Enum { group, name }) => (group, name, "enum"),
-        None => return,
+        Some(SelectedNode::Table { group, name, .. }) => (group, name, "table"),
+        Some(SelectedNode::Constant { group, name, .. }) => (group, name, "constant"),
+        Some(SelectedNode::Enum { group, name, .. }) => (group, name, "enum"),
+        _ => return,
     };
     let mut st = state.borrow_mut();
     match kind {
@@ -2250,10 +2572,10 @@ fn paste_region(state: &Rc<RefCell<AppState>>, r1: usize, c1: usize, text: &str)
 /// 区域清空：按当前选中节点类型走 engine.clear_*_cells。
 fn clear_region(state: &Rc<RefCell<AppState>>, r1: usize, c1: usize, r2: usize, c2: usize) {
     let (group, name, kind) = match state.borrow().selected.clone() {
-        Some(SelectedNode::Table { group, name }) => (group, name, "table"),
-        Some(SelectedNode::Constant { group, name }) => (group, name, "constant"),
-        Some(SelectedNode::Enum { group, name }) => (group, name, "enum"),
-        None => return,
+        Some(SelectedNode::Table { group, name, .. }) => (group, name, "table"),
+        Some(SelectedNode::Constant { group, name, .. }) => (group, name, "constant"),
+        Some(SelectedNode::Enum { group, name, .. }) => (group, name, "enum"),
+        _ => return,
     };
     let cells: Vec<(usize, usize)> = (r1..=r2).flat_map(|r| (c1..=c2).map(move |c| (r, c))).collect();
     let mut st = state.borrow_mut();
@@ -2263,6 +2585,87 @@ fn clear_region(state: &Rc<RefCell<AppState>>, r1: usize, c1: usize, r2: usize, 
         _ => st.engine.clear_enum_cells(&group, &name, &cells),
     }
     if st.realtime_validate { st.engine.revalidate(&group, &name); }
+}
+
+fn handle_project_root_action(state: &Rc<RefCell<AppState>>, project_id: &str, action: &str) {
+    match action {
+        "tree.proj-save" => {
+            state.borrow_mut().engine.save_project(project_id);
+        }
+        "tree.proj-export-json" => {
+            let _ = state.borrow_mut().engine.export_project(
+                project_id,
+                tbl_core::export::export_all_json,
+                "JSON",
+            );
+        }
+        "tree.proj-export-xml" => {
+            let _ = state.borrow_mut().engine.export_project(
+                project_id,
+                tbl_core::export::export_all_xml,
+                "XML",
+            );
+        }
+        "tree.proj-new-group" => {
+            state.borrow_mut().pending.open(PendingAction::NewGroup {
+                project_id: project_id.to_string(),
+            });
+        }
+        "tree.proj-open" => {
+            // 右键 closed project → 打开 + 设 active + 默认展开
+            if open_project_with_persist(state, project_id) {
+                let mut st = state.borrow_mut();
+                st.engine.set_active_by_id(project_id);
+                st.selected = Some(SelectedNode::Project { project_id: project_id.to_string() });
+                st.project_expanded.insert(project_id.to_string());
+                let groups: Vec<String> = st.engine.find_project(project_id)
+                    .map(|p| p.groups.iter().map(|g| g.name.clone()).collect())
+                    .unwrap_or_default();
+                for g in groups {
+                    st.tree_expanded.insert((project_id.to_string(), g));
+                }
+            }
+        }
+        "tree.proj-close" => {
+            // 有未保存改动 → 弹 ConfirmDialog 二次确认；干净状态直接 close。
+            let dirty = state.borrow().engine.is_project_dirty(project_id);
+            if dirty {
+                state.borrow_mut().pending.open(PendingAction::CloseDirtyProject {
+                    project_id: project_id.to_string(),
+                });
+            } else {
+                close_project_with_persist(state, project_id);
+            }
+        }
+        "tree.proj-rename" => {
+            // 重命名 closed project：先打开（重命名流程操作的是已打开 project 的 root + 文件）
+            let need_open = !state.borrow().engine.is_opened(project_id);
+            if need_open {
+                open_project_with_persist(state, project_id);
+                state.borrow_mut().engine.set_active_by_id(project_id);
+                state.borrow_mut().project_expanded.insert(project_id.to_string());
+            }
+            state.borrow_mut().pending.open(PendingAction::RenameProject {
+                old_id: project_id.to_string(),
+                stage: RenameProjectStage::EnterId,
+            });
+        }
+        "tree.proj-delete" => {
+            state.borrow_mut().pending.open(PendingAction::DeleteProject {
+                project_id: project_id.to_string(),
+            });
+        }
+        "tree.proj-open-dir" => {
+            let st = state.borrow();
+            // opened：直接拿 project_root；closed：从 available_projects 拿 root
+            if let Some(p) = st.engine.find_project(project_id) {
+                let _ = open::that(&p.project_root);
+            } else if let Some(ap) = st.engine.available().iter().find(|a| a.id == project_id) {
+                let _ = open::that(&ap.root);
+            }
+        }
+        _ => {}
+    }
 }
 
 fn wire_context_menu(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
@@ -2291,38 +2694,48 @@ fn wire_context_menu(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
             match (kind, id.as_str()) {
                 // ── 树空白 ──
                 (Some(CtxMenuKind::TreeBlank), "tree.new-group") => {
-                    s.borrow_mut().pending.open(PendingAction::NewGroup);
+                    let project_id = {
+                        let st = s.borrow();
+                        st.selected.as_ref().map(|sn| sn.project_id().to_string())
+                            .or_else(|| st.engine.projects.first().map(|p| p.instance_meta.id.clone()))
+                            .unwrap_or_default()
+                    };
+                    s.borrow_mut().pending.open(PendingAction::NewGroup { project_id });
+                }
+                // ── 树 Project 根 ──
+                (Some(CtxMenuKind::TreeProject { project_id }), action) => {
+                    handle_project_root_action(&s, &project_id, action);
                 }
                 // ── 树 Group ──
-                (Some(CtxMenuKind::TreeGroup { name }), "tree.new-table") => {
-                    s.borrow_mut().pending.open(PendingAction::NewTable { group: name });
+                (Some(CtxMenuKind::TreeGroup { project_id, name }), "tree.new-table") => {
+                    s.borrow_mut().pending.open(PendingAction::NewTable { project_id, group: name });
                 }
-                (Some(CtxMenuKind::TreeGroup { name }), "tree.new-constant") => {
-                    s.borrow_mut().pending.open(PendingAction::NewConstant { group: name });
+                (Some(CtxMenuKind::TreeGroup { project_id, name }), "tree.new-constant") => {
+                    s.borrow_mut().pending.open(PendingAction::NewConstant { project_id, group: name });
                 }
-                (Some(CtxMenuKind::TreeGroup { name }), "tree.new-enum") => {
-                    s.borrow_mut().pending.open(PendingAction::NewEnum { group: name });
+                (Some(CtxMenuKind::TreeGroup { project_id, name }), "tree.new-enum") => {
+                    s.borrow_mut().pending.open(PendingAction::NewEnum { project_id, group: name });
                 }
-                (Some(CtxMenuKind::TreeGroup { name }), "tree.rename-group") => {
+                (Some(CtxMenuKind::TreeGroup { project_id, name }), "tree.rename-group") => {
                     let mut st = s.borrow_mut();
-                    st.pending.open(PendingAction::RenameGroup { old_name: name.clone() });
+                    st.pending.open(PendingAction::RenameGroup { project_id, old_name: name.clone() });
                     st.pending.input_buffer = name;
                 }
-                (Some(CtxMenuKind::TreeGroup { name }), "tree.delete-group") => {
-                    s.borrow_mut().pending.open(PendingAction::DeleteGroup { group: name });
+                (Some(CtxMenuKind::TreeGroup { project_id, name }), "tree.delete-group") => {
+                    s.borrow_mut().pending.open(PendingAction::DeleteGroup { project_id, group: name });
                 }
                 // ── 树节点 ──
-                (Some(CtxMenuKind::TreeNode { group, name, kind }), "tree.copy-node") => {
+                (Some(CtxMenuKind::TreeNode { project_id: _, group, name, kind }), "tree.copy-node") => {
                     let mut st = s.borrow_mut();
                     st.engine.copy_node(&group, &name, kind);
                 }
-                (Some(CtxMenuKind::TreeNode { group, name, .. }), "tree.rename-node") => {
+                (Some(CtxMenuKind::TreeNode { project_id, group, name, .. }), "tree.rename-node") => {
                     let mut st = s.borrow_mut();
-                    st.pending.open(PendingAction::RenameNode { group, old_name: name.clone() });
+                    st.pending.open(PendingAction::RenameNode { project_id, group, old_name: name.clone() });
                     st.pending.input_buffer = name;
                 }
-                (Some(CtxMenuKind::TreeNode { group, name, .. }), "tree.delete-node") => {
-                    s.borrow_mut().pending.open(PendingAction::DeleteNode { group, name });
+                (Some(CtxMenuKind::TreeNode { project_id, group, name, .. }), "tree.delete-node") => {
+                    s.borrow_mut().pending.open(PendingAction::DeleteNode { project_id, group, name });
                 }
                 // ── grid 列 ──
                 (Some(CtxMenuKind::GridCol { col }), action @ ("grid.col-insert-left"
@@ -2448,7 +2861,7 @@ fn wire_context_menu(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
 /// 默认勾选全部（Schema 导出对话框打开时调用）。
 fn rebuild_schema_export_items(st: &mut AppState) {
     let mut items: Vec<state::SchemaExportItem> = Vec::new();
-    for g in &st.engine.project.groups {
+    for g in &st.engine.project().groups {
         let mut sub: Vec<state::SchemaExportItem> = Vec::new();
         for t in &g.tables {
             if t.deleted { continue; }
@@ -2805,6 +3218,119 @@ fn wire_dialogs(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
             }
         });
     }
+
+    // ── 模板库 ─────────────────────────────────────────
+    {
+        let s = state.clone();
+        let weak = ui.as_weak();
+        ui.on_tpl_set_tab(move |i| {
+            {
+                let mut st = s.borrow_mut();
+                st.template_lib.tab = i;
+                st.template_lib.selected_id.clear();
+            }
+            if let Some(ui) = weak.upgrade() { push_template_library(&ui, &s); }
+        });
+    }
+    {
+        let s = state.clone();
+        let weak = ui.as_weak();
+        ui.on_tpl_search_edited(move |q| {
+            s.borrow_mut().template_lib.search = q.to_string();
+            if let Some(ui) = weak.upgrade() { push_template_library(&ui, &s); }
+        });
+    }
+    {
+        let s = state.clone();
+        let weak = ui.as_weak();
+        ui.on_tpl_select_item(move |idx| {
+            {
+                let mut st = s.borrow_mut();
+                let items = list_template_metas(&st.template_lib);
+                if let Some(m) = items.get(idx as usize) {
+                    st.template_lib.selected_id = m.id.clone();
+                }
+            }
+            if let Some(ui) = weak.upgrade() { push_template_library(&ui, &s); }
+        });
+    }
+    {
+        let s = state.clone();
+        let weak = ui.as_weak();
+        ui.on_tpl_use_template(move || {
+            // 关闭模板库 → 拿选中模板 → 打开新建项目
+            let opened = {
+                let mut st = s.borrow_mut();
+                let items = list_template_metas(&st.template_lib);
+                let chosen = items.iter().find(|m| m.id == st.template_lib.selected_id).cloned();
+                st.template_lib.open = false;
+                if let Some(meta) = chosen {
+                    st.new_project.open_with(&meta);
+                    true
+                } else {
+                    false
+                }
+            };
+            if let Some(ui) = weak.upgrade() {
+                push_template_library(&ui, &s);
+                if opened { push_new_project(&ui, &s); }
+            }
+        });
+    }
+
+    // ── 新建项目 ────────────────────────────────────────
+    {
+        let s = state.clone();
+        let weak = ui.as_weak();
+        ui.on_np_id_edited(move |v| {
+            {
+                let mut st = s.borrow_mut();
+                st.new_project.project_id = v.to_string();
+                st.new_project.id_prefilled = true;
+            }
+            if let Some(ui) = weak.upgrade() { push_new_project(&ui, &s); }
+        });
+    }
+    {
+        let s = state.clone();
+        let weak = ui.as_weak();
+        ui.on_np_name_edited(move |v| {
+            s.borrow_mut().new_project.project_name = v.to_string();
+            if let Some(ui) = weak.upgrade() { push_new_project(&ui, &s); }
+        });
+    }
+    {
+        let s = state.clone();
+        let weak = ui.as_weak();
+        ui.on_np_confirm(move || {
+            // 同步 in-out checkbox 当前值
+            if let Some(ui) = weak.upgrade() {
+                s.borrow_mut().new_project.switch_after = ui.get_np_switch_after();
+            }
+            let switched = run_new_project(&s);
+            if switched {
+                // 切换走 reload；reset_view + 大刷新（与 toolbar reload 一致）
+                reset_view_after_reload(&s);
+                if let Some(ui) = weak.upgrade() {
+                    push_tree(&ui, &s);
+                    push_grid(&ui, &s);
+                }
+            }
+            s.borrow_mut().new_project.close();
+            if let Some(ui) = weak.upgrade() {
+                push_new_project(&ui, &s);
+                push_logs(&ui, &s);
+            }
+        });
+    }
+    {
+        let s = state.clone();
+        let weak = ui.as_weak();
+        ui.on_np_cancel(move || {
+            s.borrow_mut().new_project.close();
+            if let Some(ui) = weak.upgrade() { push_new_project(&ui, &s); }
+        });
+    }
 }
 
 /// 执行数据导出（按 data_export 选项）。
@@ -2862,7 +3388,7 @@ fn run_schema_export(state: &Rc<RefCell<AppState>>) {
     use tbl_core::tblschema::{TblSchema, schema_from_project, serialize_tblschema};
     let (selected, full_schema) = {
         let st = state.borrow();
-        let full = schema_from_project(&st.engine.project.groups);
+        let full = schema_from_project(&st.engine.project().groups);
         let selected: Vec<(String, String)> = st.schema_export.items.iter().enumerate()
             .filter(|(i, it)| it.indent == 1 && st.schema_export.checked.get(*i).copied().unwrap_or(false))
             .map(|(_, it)| (it.group.clone(), it.name.clone()))
@@ -2875,7 +3401,7 @@ fn run_schema_export(state: &Rc<RefCell<AppState>>) {
             sections.push(sec.clone());
         }
     }
-    let schema = TblSchema { sections };
+    let schema = TblSchema { meta: Default::default(), sections };
     let content = serialize_tblschema(&schema);
     let file = rfd::FileDialog::new()
         .add_filter("TblSchema", &["tblschema"])
@@ -2930,7 +3456,7 @@ fn load_schema_import(state: &Rc<RefCell<AppState>>, file_path: &str) {
     let mut items: Vec<state::SchemaImportItem> = Vec::new();
     let mut checked: Vec<bool> = Vec::new();
     let mut conflicts: Vec<bool> = Vec::new();
-    let groups = &st.engine.project.groups;
+    let groups = &st.engine.project().groups;
     for (g, secs) in &grouped {
         items.push(state::SchemaImportItem { indent: 0, group: g.clone(), name: g.clone(), mode: SchemaMode::Table });
         checked.push(true);
@@ -2966,14 +3492,266 @@ fn run_schema_import(state: &Rc<RefCell<AppState>>) {
     let sections: Vec<_> = schema.sections.iter()
         .filter(|s| selected.iter().any(|(g, n)| g == &s.group && n == &s.name))
         .cloned().collect();
-    let config_dir = st.engine.project.workdir
-        .join(&st.engine.project.config.project.config_dir);
+    let config_dir = st.engine.project().data_dir();
     let (added, overwritten) = apply_schema_to_project(
-        &mut st.engine.project.groups,
+        &mut st.engine.project_mut().groups,
         &sections,
         &config_dir,
     );
     st.engine.log(format!("[导入Schema] 完成: {} 新增, {} 覆盖", added, overwritten));
+}
+
+// ──────── 模板库 / 新建项目 ────────
+
+/// 按当前 tab 列出模板 metas（不应用 search 过滤；过滤是 push 端的事）。
+fn list_template_metas(tl: &state::TemplateLibraryState) -> Vec<tbl_core::template::TemplateMeta> {
+    use tbl_core::template::{default_local_dir, BuiltinTemplates, LocalTemplates, TemplateSource};
+    match tl.tab {
+        1 => LocalTemplates::new(default_local_dir()).list(),
+        _ => BuiltinTemplates::new().list(),
+    }
+}
+
+fn push_template_library(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
+    use tbl_core::template::{default_local_dir, BuiltinTemplates, LocalTemplates, TemplateSource};
+    let st = state.borrow();
+    ui.set_dlg_template_open(st.template_lib.open);
+    if !st.template_lib.open {
+        return;
+    }
+
+    let builtin = BuiltinTemplates::new().list();
+    let local = LocalTemplates::new(default_local_dir()).list();
+    ui.set_tpl_builtin_count(builtin.len() as i32);
+    ui.set_tpl_local_count(local.len() as i32);
+    ui.set_tpl_tab_index(st.template_lib.tab);
+    ui.set_tpl_search(st.template_lib.search.clone().into());
+
+    let active = match st.template_lib.tab {
+        1 => &local,
+        _ => &builtin,
+    };
+    let q = st.template_lib.search.to_lowercase();
+    let filtered: Vec<&tbl_core::template::TemplateMeta> = active
+        .iter()
+        .filter(|m| {
+            if q.is_empty() {
+                return true;
+            }
+            m.id.to_lowercase().contains(&q)
+                || m.name.to_lowercase().contains(&q)
+                || m.category.to_lowercase().contains(&q)
+        })
+        .collect();
+
+    // 计算每个模板的 sections 数量（一次性展开内容）
+    let items: Vec<TemplateItem> = filtered
+        .iter()
+        .map(|m| {
+            let sections = load_template_sections_count(&m.id, m.source);
+            TemplateItem {
+                id: m.id.clone().into(),
+                name: (if m.name.is_empty() { m.id.clone() } else { m.name.clone() }).into(),
+                category: m.category.clone().into(),
+                version: m.version.clone().into(),
+                source: m.source.into(),
+                sections: sections as i32,
+                selected: m.id == st.template_lib.selected_id,
+            }
+        })
+        .collect();
+
+    let detail = filtered
+        .iter()
+        .find(|m| m.id == st.template_lib.selected_id)
+        .map(|m| {
+            let sections = load_template_sections_count(&m.id, m.source);
+            format!(
+                "id: {}\nname: {}\ncategory: {} · version: {} · 来源: {}\nSections: {}",
+                m.id,
+                if m.name.is_empty() { m.id.as_str() } else { m.name.as_str() },
+                if m.category.is_empty() { "-" } else { m.category.as_str() },
+                if m.version.is_empty() { "-" } else { m.version.as_str() },
+                m.source,
+                sections,
+            )
+        })
+        .unwrap_or_default();
+
+    let can_use = !st.template_lib.selected_id.is_empty();
+
+    ui.set_tpl_items(slint::ModelRc::new(slint::VecModel::from(items)));
+    ui.set_tpl_detail(detail.into());
+    ui.set_tpl_can_use(can_use);
+}
+
+fn load_template_sections_count(id: &str, source: &str) -> usize {
+    use tbl_core::template::{default_local_dir, BuiltinTemplates, LocalTemplates, TemplateSource};
+    let content = match source {
+        "local" => LocalTemplates::new(default_local_dir()).load_by_id(id),
+        _ => BuiltinTemplates::new().load_by_id(id),
+    };
+    content.map(|c| c.schema.sections.len()).unwrap_or(0)
+}
+
+fn push_new_project(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
+    use tbl_core::tblschema::is_valid_metadata_id;
+    let workdir = state.borrow().engine.workdir.clone();
+    let mut st = state.borrow_mut();
+    ui.set_dlg_new_project_open(st.new_project.open);
+    if !st.new_project.open {
+        return;
+    }
+
+    // 自动用 template id / name 预填
+    if !st.new_project.id_prefilled && st.new_project.project_id.is_empty() {
+        st.new_project.project_id = st.new_project.template_id.clone();
+        st.new_project.id_prefilled = true;
+    }
+    if st.new_project.project_name.is_empty() {
+        st.new_project.project_name = st.new_project.template_display.clone();
+    }
+
+    // 校验
+    let existing: Vec<String> = tbl_core::project::list_projects(&workdir)
+        .into_iter()
+        .map(|p| p.id)
+        .collect();
+    let id = &st.new_project.project_id;
+    let id_err = if id.is_empty() {
+        "Project ID 不能为空".to_string()
+    } else if !is_valid_metadata_id(id) {
+        "ID 仅允许小写字母 / 数字 / _ / -，长度 1..=32".to_string()
+    } else if existing.iter().any(|e| e == id) {
+        format!("ID 已存在: {}", id)
+    } else {
+        String::new()
+    };
+    let name_err = if st.new_project.project_name.trim().is_empty() {
+        "项目名不能为空".to_string()
+    } else {
+        String::new()
+    };
+
+    let can_confirm = id_err.is_empty() && name_err.is_empty();
+
+    ui.set_np_template_display(st.new_project.template_display.clone().into());
+    ui.set_np_project_id(st.new_project.project_id.clone().into());
+    ui.set_np_project_name(st.new_project.project_name.clone().into());
+    ui.set_np_switch_after(st.new_project.switch_after);
+    ui.set_np_id_error(id_err.into());
+    ui.set_np_name_error(name_err.into());
+    ui.set_np_can_confirm(can_confirm);
+}
+
+/// 真正落地新项目；返回是否切换 (= 之后需要 reload UI)。
+fn run_new_project(state: &Rc<RefCell<AppState>>) -> bool {
+    use tbl_core::model::{ProjectConfig, ProjectInstanceMeta};
+    use tbl_core::project::{upsert_project_config_section, write_project_meta, PROJECTS_DIR};
+    use tbl_core::template::{
+        default_local_dir, instantiate_template, BuiltinTemplates, LocalTemplates, TemplateSource,
+    };
+
+    let mut st = state.borrow_mut();
+    let workdir = st.engine.workdir.clone();
+    let project_id = st.new_project.project_id.clone();
+    let display_name = st.new_project.project_name.clone();
+    let template_id = st.new_project.template_id.clone();
+    let template_source = st.new_project.template_source.clone();
+    let switch_after = st.new_project.switch_after;
+    // 全关时 active = None，不能调 engine.project()。优先 active → opened[0] → 默认。
+    // 这条路径只读 [project] 段：name / config_dir / cache_dir + opened/sort/order，
+    // 缺时回落到 hardcoded 默认即可（用户可在 tbl-tool.toml 里手改）。
+    let cur_project_cfg: ProjectConfig = st.engine.active()
+        .or_else(|| st.engine.projects.first())
+        .map(|p| p.config.project.clone())
+        .unwrap_or_else(|| ProjectConfig {
+            name: "my-game".to_string(),
+            last_project: String::new(),
+            opened_projects: Vec::new(),
+            project_sort: "id".to_string(),
+            project_order: Vec::new(),
+            config_dir: "config".to_string(),
+            cache_dir: ".tbl-cache".to_string(),
+        });
+    let workspace_name = cur_project_cfg.name.clone();
+    let workspace_config_dir = cur_project_cfg.config_dir.clone();
+    let workspace_cache_dir = cur_project_cfg.cache_dir.clone();
+
+    let content = match template_source.as_str() {
+        "local" => LocalTemplates::new(default_local_dir()).load_by_id(&template_id),
+        _ => BuiltinTemplates::new().load_by_id(&template_id),
+    };
+    let content = match content {
+        Some(c) => c,
+        None => {
+            st.engine.log(format!("[新建项目] 模板未找到: {}", template_id));
+            return false;
+        }
+    };
+
+    let projects_dir = workdir.join(PROJECTS_DIR);
+    if let Err(e) = std::fs::create_dir_all(&projects_dir) {
+        st.engine.log(format!("[新建项目] 创建 projects/ 失败: {}", e));
+        return false;
+    }
+    let project_root = projects_dir.join(&project_id);
+    if project_root.exists() {
+        st.engine.log(format!("[新建项目] 目录已存在: {}", project_root.display()));
+        return false;
+    }
+
+    if let Err(e) = instantiate_template(&content.schema, &project_root) {
+        st.engine.log(format!("[新建项目] 实例化模板失败: {}", e));
+        let _ = std::fs::remove_dir_all(&project_root);
+        return false;
+    }
+
+    let meta = ProjectInstanceMeta {
+        id: project_id.clone(),
+        name: display_name,
+        created_at: chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string(),
+        source_template: content.meta.id.clone(),
+        source_template_version: content.meta.version.clone(),
+    };
+    if let Err(e) = write_project_meta(&project_root, &meta) {
+        st.engine.log(format!("[新建项目] 写入 project.toml 失败: {}", e));
+        return false;
+    }
+
+    if switch_after {
+        let config_path = workdir.join(tbl_core::CONFIG_FILE);
+        let original = std::fs::read_to_string(&config_path).unwrap_or_default();
+        let cur = cur_project_cfg.clone();
+        let new_project_cfg = ProjectConfig {
+            name: workspace_name,
+            last_project: project_id.clone(),
+            opened_projects: cur.opened_projects,
+            project_sort: cur.project_sort,
+            project_order: cur.project_order,
+            config_dir: workspace_config_dir,
+            cache_dir: workspace_cache_dir,
+        };
+        let updated = upsert_project_config_section(&original, &new_project_cfg);
+        if let Err(e) = std::fs::write(&config_path, updated) {
+            st.engine.log(format!("[新建项目] 写入 tbl-tool.toml 失败: {}", e));
+        }
+    }
+
+    st.engine.log(format!(
+        "[新建项目] 已创建 {} ({})",
+        project_root.display(),
+        if switch_after { "切换中..." } else { "未切换" }
+    ));
+
+    drop(st);
+
+    if switch_after {
+        // 触发 engine.reload —— 与 toolbar reload 走同一路径
+        state.borrow_mut().engine.reload();
+        return true;
+    }
+    false
 }
 
 

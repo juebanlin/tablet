@@ -499,9 +499,29 @@ Lua 端全部展开为 table 字面量，不降级为 string。
 
 ```
 #!tblschema v1
+# @meta id: full
+# @meta name: 完整测试模板
+# @meta category: test
+# @meta version: 1.0.0
 ```
 
-第一行必须是版本标识。
+第一行必须是版本标识。紧随其后的 `# @meta key: value` 注释行定义 schema 元数据。
+
+| 字段 | 约束 | 用途 |
+|------|------|------|
+| id | `[a-z0-9_-]{1,32}` | 程序内唯一标识，文件名约定 `<id>.tblschema` |
+| name | 任意文本（含中文） | UI 展示文案 |
+| category | 任意文本 | 模板库分类筛选（test / slg / rpg / ...）|
+| version | semver | 模板版本，后续模板更新比对用 |
+
+兼容规则：
+
+- 老 .tblschema 无 `# @meta` 行 → id 走文件名 stem 兜底（`full.tblschema` → `id=full`），name 等于 id
+- 重复 key 后者覆盖前者
+- key 大小写敏感
+- `# @meta` 行必须出现在第一个 `[group/Name]` 之前；之后的 `#` 行视作普通注释
+
+UI 上是否展示 id 还是 name 由全局开关 `[ui] show_meta_id` 决定（@04.5.x、@07.4.10），默认 false 显示 name。
 
 ### 10.2 Section 声明
 

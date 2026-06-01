@@ -23,11 +23,12 @@ import { TypeSelector, RefItem, TsParamSlot } from "dialogs/type_selector.slint"
 import { RefPicker, RefRow, RefHeader } from "dialogs/ref_picker.slint";
 import { ExportDialog } from "dialogs/export_dialog.slint";
 import { SchemaExportDialog, SchemaImportDialog, SchemaItem } from "dialogs/schema_dialog.slint";
+import { TemplateLibraryDialog, NewProjectDialog, TemplateItem } from "dialogs/template_dialog.slint";
 import { ContextMenu, CtxMenuItem } from "dialogs/context_menu.slint";
 import { InputDialog } from "dialogs/input_dialog.slint";
 import { ConfirmDialog } from "dialogs/confirm_dialog.slint";
 
-export { TreeNode, HeaderCell, DataCell, DataRow, CellKind, LogEntry, RefItem, TsParamSlot, RefRow, RefHeader, SchemaItem, CtxMenuItem }
+export { TreeNode, HeaderCell, DataCell, DataRow, CellKind, LogEntry, RefItem, TsParamSlot, RefRow, RefHeader, SchemaItem, CtxMenuItem, TemplateItem }
 
 export component AppWindow inherits Window {
     title: "tbl-tool";
@@ -44,13 +45,17 @@ export component AppWindow inherits Window {
     in-out property <int> tree-filter-index: 0;
     in-out property <bool> tree-full-group: false;
     in-out property <string> tree-search: "";
+    in property <[string]> tree-sort-options: ["ID", "名称", "已打开", "创建时间", "手动"];
+    in-out property <int> tree-sort-index: 0;
     callback tree-node-clicked(int);
+    callback tree-node-double-clicked(int);
     callback tree-node-toggle-expand(int);
     callback tree-node-context-menu(int, length, length);
     callback tree-blank-context-menu(length, length);
     callback tree-search-edited(string);
     callback tree-filter-changed(int);
     callback tree-full-group-toggled(bool);
+    callback tree-sort-changed(int);
 
     // ── GridSection ─────────────────────────────────────────
     in property <string> grid-title: "未选中";
@@ -193,6 +198,34 @@ export component AppWindow inherits Window {
     callback si-toggle-item(int);
     callback si-confirm();
 
+    // ── Dialog: 模板库 ──────────────────────────────────────
+    in-out property <bool> dlg-template-open: false;
+    in-out property <int> tpl-tab-index: 0;
+    in property <int> tpl-builtin-count: 0;
+    in property <int> tpl-local-count: 0;
+    in-out property <string> tpl-search;
+    in property <[TemplateItem]> tpl-items;
+    in property <string> tpl-detail;
+    in property <bool> tpl-can-use: false;
+    callback tpl-set-tab(int);
+    callback tpl-search-edited(string);
+    callback tpl-select-item(int);
+    callback tpl-use-template();
+
+    // ── Dialog: 新建项目 ────────────────────────────────────
+    in-out property <bool> dlg-new-project-open: false;
+    in property <string> np-template-display;
+    in-out property <string> np-project-id;
+    in-out property <string> np-project-name;
+    in-out property <bool> np-switch-after: true;
+    in property <string> np-id-error;
+    in property <string> np-name-error;
+    in property <bool> np-can-confirm: false;
+    callback np-id-edited(string);
+    callback np-name-edited(string);
+    callback np-confirm();
+    callback np-cancel();
+
     // ── ContextMenu / InputDialog / ConfirmDialog ───────────
     in property <bool> ctx-menu-open: false;
     in property <length> ctx-menu-x: 0;
@@ -287,6 +320,7 @@ export component AppWindow inherits Window {
                 if (id == "export") { root.dlg-export-open = true; }
                 if (id == "export-schema") { root.dlg-schema-export-open = true; }
                 if (id == "import-schema") { root.dlg-schema-import-open = true; }
+                if (id == "template-library") { root.dlg-template-open = true; }
                 root.toolbar-btn-clicked(id);
             }
         }
@@ -303,7 +337,10 @@ export component AppWindow inherits Window {
                     filter-index: root.tree-filter-index;
                     full-group <=> root.tree-full-group;
                     search <=> root.tree-search;
+                    sort-options: root.tree-sort-options;
+                    sort-index: root.tree-sort-index;
                     node-clicked(id) => { root.drop-focus(); root.tree-node-clicked(id); }
+                    node-double-clicked(id) => { root.drop-focus(); root.tree-node-double-clicked(id); }
                     node-toggle-expand(id) => { root.drop-focus(); root.tree-node-toggle-expand(id); }
                     node-context-menu(id, x, y) => { root.tree-node-context-menu(id, x, y); }
                     blank-context-menu(x, y) => { root.tree-blank-context-menu(x, y); }
@@ -311,6 +348,8 @@ export component AppWindow inherits Window {
                     filter-changed(i) => { root.tree-filter-index = i; root.tree-filter-changed(i); }
                     search-edited(s) => { root.tree-search-edited(s); }
                     full-group-toggled(c) => { root.tree-full-group-toggled(c); }
+                    template-library-clicked() => { root.drop-focus(); root.dlg-template-open = true; root.toolbar-btn-clicked("template-library"); }
+                    sort-changed(i) => { root.tree-sort-index = i; root.tree-sort-changed(i); }
                 }
             }
 
@@ -501,6 +540,37 @@ export component AppWindow inherits Window {
         cancel => { root.dlg-schema-import-open = false; }
     }
 
+    TemplateLibraryDialog {
+        open: root.dlg-template-open;
+        tab-index: root.tpl-tab-index;
+        builtin-count: root.tpl-builtin-count;
+        local-count: root.tpl-local-count;
+        search <=> root.tpl-search;
+        items: root.tpl-items;
+        detail-text: root.tpl-detail;
+        can-use: root.tpl-can-use;
+        set-tab(i) => { root.tpl-tab-index = i; root.tpl-set-tab(i); }
+        search-edited(s) => { root.tpl-search-edited(s); }
+        select-item(i) => { root.tpl-select-item(i); }
+        use-template => { root.tpl-use-template(); }
+        cancel => { root.dlg-template-open = false; }
+    }
+
+    NewProjectDialog {
+        open: root.dlg-new-project-open;
+        template-display: root.np-template-display;
+        project-id <=> root.np-project-id;
+        project-name <=> root.np-project-name;
+        switch-after <=> root.np-switch-after;
+        id-error: root.np-id-error;
+        name-error: root.np-name-error;
+        can-confirm: root.np-can-confirm;
+        id-edited(s) => { root.np-id-edited(s); }
+        name-edited(s) => { root.np-name-edited(s); }
+        confirm => { root.np-confirm(); }
+        cancel => { root.np-cancel(); root.dlg-new-project-open = false; }
+    }
+
     InputDialog {
         open: root.dlg-input-open;
         title: root.dlg-input-title;
@@ -546,13 +616,13 @@ export component AppWindowPreview inherits AppWindow {
     hover-info: "光标: C4";
 
     tree-nodes: [
-        { id: 1, indent: 0, expanded: true, icon: "📁", name: "hero", mark: "*", mark-color: Theme.mark-modified, is-group: true, selected: false },
-        { id: 2, indent: 1, expanded: false, icon: "📊", name: "HeroBase", mark: "*", mark-color: Theme.mark-modified, is-group: false, selected: true },
-        { id: 3, indent: 1, expanded: false, icon: "📊", name: "HeroSkill", mark: "+", mark-color: Theme.mark-new, is-group: false, selected: false },
-        { id: 4, indent: 1, expanded: false, icon: "📋", name: "HeroConst", mark: "", mark-color: Theme.text-primary, is-group: false, selected: false },
-        { id: 5, indent: 1, expanded: false, icon: "🔢", name: "HeroType", mark: "!", mark-color: Theme.text-error, is-group: false, selected: false },
-        { id: 6, indent: 0, expanded: true, icon: "📁", name: "global", mark: "", mark-color: Theme.text-primary, is-group: true, selected: false },
-        { id: 7, indent: 1, expanded: false, icon: "📋", name: "GameConst", mark: "", mark-color: Theme.text-primary, is-group: false, selected: false },
+        { id: 1, indent: 0, expanded: true, icon: "📁", name: "hero", mark: "*", mark-color: Theme.mark-modified, is-group: true, selected: false, closed: false },
+        { id: 2, indent: 1, expanded: false, icon: "📊", name: "HeroBase", mark: "*", mark-color: Theme.mark-modified, is-group: false, selected: true, closed: false },
+        { id: 3, indent: 1, expanded: false, icon: "📊", name: "HeroSkill", mark: "+", mark-color: Theme.mark-new, is-group: false, selected: false, closed: false },
+        { id: 4, indent: 1, expanded: false, icon: "📋", name: "HeroConst", mark: "", mark-color: Theme.text-primary, is-group: false, selected: false, closed: false },
+        { id: 5, indent: 1, expanded: false, icon: "🔢", name: "HeroType", mark: "!", mark-color: Theme.text-error, is-group: false, selected: false, closed: false },
+        { id: 6, indent: 0, expanded: true, icon: "📁", name: "global", mark: "", mark-color: Theme.text-primary, is-group: true, selected: false, closed: false },
+        { id: 7, indent: 1, expanded: false, icon: "📋", name: "GameConst", mark: "", mark-color: Theme.text-primary, is-group: false, selected: false, closed: false },
     ];
 
     grid-col-count: 5;

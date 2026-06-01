@@ -37,9 +37,11 @@ fn main() -> anyhow::Result<()> {
     }
     std::fs::write(&lock_path, std::process::id().to_string())?;
 
-    let project = tbl_core::project::load_project(&workdir)?;
-
-    let log_level = project.config.ui.as_ref()
+    let engine = tbl_core::project::load_workspace(&workdir)?;
+    // 用 active project（或全关时的兜底）的 ui config 决定日志 level
+    let log_level = engine.active()
+        .or_else(|| engine.projects.first())
+        .and_then(|p| p.config.ui.as_ref())
         .and_then(|u| u.log_level.as_deref())
         .unwrap_or("debug");
     let file_level = match log_level {
@@ -54,7 +56,12 @@ fn main() -> anyhow::Result<()> {
     CombinedLogger::init(vec![
         WriteLogger::new(file_level, Config::default(), log_file),
     ])?;
-    info!("loaded {} groups", project.groups.len());
+    info!(
+        "loaded {} opened / {} available, {} groups in active",
+        engine.projects.len(),
+        engine.available().len(),
+        engine.active().map(|p| p.groups.len()).unwrap_or(0),
+    );
 
     let options = eframe::NativeOptions {
         viewport: eframe::egui::ViewportBuilder::default()
@@ -70,7 +77,7 @@ fn main() -> anyhow::Result<()> {
         options,
         Box::new(|cc| {
             setup_fonts(&cc.egui_ctx);
-            Ok(Box::new(app::TblApp::new(project)))
+            Ok(Box::new(app::TblApp::from_engine(engine)))
         }),
     ).map_err(|e| anyhow::anyhow!("{}", e));
 

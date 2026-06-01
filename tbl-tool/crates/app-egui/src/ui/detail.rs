@@ -35,7 +35,13 @@ pub fn render(ui: &mut egui::Ui, app: &mut TblApp) {
     );
     match &selected {
         None => { grid_ui.centered_and_justified(|ui| { ui.label("选择左侧节点查看详情"); }); }
-        Some(SelectedNode::Table { group, name }) => {
+        Some(SelectedNode::Project { .. }) => {
+            grid_ui.centered_and_justified(|ui| { ui.label("选择 Project 下的具体节点查看详情"); });
+        }
+        Some(SelectedNode::Group { .. }) => {
+            grid_ui.centered_and_justified(|ui| { ui.label("选择 Group 下的具体节点查看详情"); });
+        }
+        Some(SelectedNode::Table { group, name, .. }) => {
             let grid_data = build_table_grid(app, group, name);
             if let Some(gd) = grid_data {
                 let heading_resp = grid_ui.heading(format!("📊 {} ({}条)", name, gd.data_count));
@@ -45,7 +51,7 @@ pub fn render(ui: &mut egui::Ui, app: &mut TblApp) {
                 grid::render_grid(&mut grid_ui, app, group, name, &gd);
             }
         }
-        Some(SelectedNode::Constant { group, name }) => {
+        Some(SelectedNode::Constant { group, name, .. }) => {
             let grid_data = build_constant_grid(app, group, name);
             if let Some(gd) = grid_data {
                 let heading_resp = grid_ui.heading(format!("📋 {} ({}项)", name, gd.data_count));
@@ -55,7 +61,7 @@ pub fn render(ui: &mut egui::Ui, app: &mut TblApp) {
                 grid::render_grid(&mut grid_ui, app, group, name, &gd);
             }
         }
-        Some(SelectedNode::Enum { group, name }) => {
+        Some(SelectedNode::Enum { group, name, .. }) => {
             let grid_data = build_enum_grid(app, group, name);
             if let Some(gd) = grid_data {
                 let heading_resp = grid_ui.heading(format!("🔢 {} ({}项)", name, gd.data_count));
@@ -267,9 +273,9 @@ fn build_enum_grid(app: &TblApp, group: &str, name: &str) -> Option<GridData> {
 fn render_col_context(ui: &mut egui::Ui, app: &mut TblApp) {
     let col = match app.context_col { Some(c) => c, None => return };
     let (group, name) = match &app.selected {
-        Some(SelectedNode::Table { group, name })
-        | Some(SelectedNode::Constant { group, name })
-        | Some(SelectedNode::Enum { group, name }) => (group.clone(), name.clone()),
+        Some(SelectedNode::Table { group, name, .. })
+        | Some(SelectedNode::Constant { group, name, .. })
+        | Some(SelectedNode::Enum { group, name, .. }) => (group.clone(), name.clone()),
         _ => return,
     };
     let is_index_col = matches!(&app.selected, Some(SelectedNode::Table { .. }) if {
@@ -306,9 +312,9 @@ fn render_col_context(ui: &mut egui::Ui, app: &mut TblApp) {
 fn render_row_context(ui: &mut egui::Ui, app: &mut TblApp) {
     let row = match app.context_row { Some(r) => r, None => return };
     let (group, name) = match &app.selected {
-        Some(SelectedNode::Table { group, name })
-        | Some(SelectedNode::Constant { group, name })
-        | Some(SelectedNode::Enum { group, name }) => (group.clone(), name.clone()),
+        Some(SelectedNode::Table { group, name, .. })
+        | Some(SelectedNode::Constant { group, name, .. })
+        | Some(SelectedNode::Enum { group, name, .. }) => (group.clone(), name.clone()),
         _ => return,
     };
     egui::Area::new(egui::Id::new("row_ctx"))
@@ -339,9 +345,9 @@ fn render_row_context(ui: &mut egui::Ui, app: &mut TblApp) {
 fn render_cell_context(ui: &mut egui::Ui, app: &mut TblApp) {
     if !app.edit_state.selected.selectable() { return; }
     let (group, name) = match &app.selected {
-        Some(SelectedNode::Table { group, name })
-        | Some(SelectedNode::Constant { group, name })
-        | Some(SelectedNode::Enum { group, name }) => (group.clone(), name.clone()),
+        Some(SelectedNode::Table { group, name, .. })
+        | Some(SelectedNode::Constant { group, name, .. })
+        | Some(SelectedNode::Enum { group, name, .. }) => (group.clone(), name.clone()),
         _ => return,
     };
 
@@ -426,9 +432,9 @@ fn render_cell_context(ui: &mut egui::Ui, app: &mut TblApp) {
 
 fn build_grid_for_selected(app: &TblApp) -> Option<GridData> {
     match &app.selected {
-        Some(SelectedNode::Table { group, name }) => build_table_grid(app, group, name),
-        Some(SelectedNode::Constant { group, name }) => build_constant_grid(app, group, name),
-        Some(SelectedNode::Enum { group, name }) => build_enum_grid(app, group, name),
+        Some(SelectedNode::Table { group, name, .. }) => build_table_grid(app, group, name),
+        Some(SelectedNode::Constant { group, name, .. }) => build_constant_grid(app, group, name),
+        Some(SelectedNode::Enum { group, name, .. }) => build_enum_grid(app, group, name),
         _ => None,
     }
 }

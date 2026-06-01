@@ -194,7 +194,7 @@ pub fn export_all_java(project: &Project) -> Result<super::ExportResult> {
     let opts = super::ExportOptions { line_ending, encoding };
 
     let pkg_path = pkg.replace('.', "/");
-    let output_dir = project.workdir.join(code_output).join(&pkg_path);
+    let output_dir = project.export_root().join(code_output).join(&pkg_path);
     let types_dir = output_dir.join("types");
     let tpl_dir = output_dir.join("tpl");
 
