@@ -903,16 +903,19 @@ impl ProjectEngine {
         {
             let g = match self.project().groups.iter().find(|g| g.name == group) { Some(g) => g, None => return };
             if let Some(table) = g.tables.iter().find(|t| t.name == name) {
+                if table.deleted { return; }
                 for err in validate_table(table, &sep, Some(&refs)) {
                     new_errs.push((err.row, err.col));
                 }
             }
             if let Some(constant) = g.constants.iter().find(|c| c.name == name) {
+                if constant.deleted { return; }
                 for err in validate_constant(constant, &sep) {
                     new_errs.push((err.row, err.col));
                 }
             }
             if let Some(enum_def) = g.enums.iter().find(|e| e.name == name) {
+                if enum_def.deleted { return; }
                 for err in validate_enum(enum_def) {
                     new_errs.push((err.row, err.col));
                 }
