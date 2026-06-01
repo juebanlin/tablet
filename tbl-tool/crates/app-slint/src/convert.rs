@@ -44,8 +44,8 @@ pub fn build_tree_nodes(state: &mut AppState) -> Vec<TreeNode> {
     // 已打开 project 的 (id, name, groups) snapshot；用于三层渲染（避免 borrow 冲突）
     let opened_set: HashSet<String> = state.engine.opened_ids().into_iter().collect();
     let opened_snap: HashMap<String, (String, Vec<tbl_core::model::Group>)> = state.engine.projects.iter()
-        .map(|p| (p.instance_meta.id.clone(),
-                  (p.instance_meta.name.clone(), p.groups.clone())))
+        .map(|p| (p.schema.meta.id.clone(),
+                  (p.schema.meta.name.clone(), p.groups.clone())))
         .collect();
 
     let sorted = sorted_available(
@@ -155,7 +155,7 @@ pub fn build_tree_nodes(state: &mut AppState) -> Vec<TreeNode> {
             indent: 0,
             expanded: p_expanded,
             icon: SharedString::from(ICON_PROJECT),
-            name: SharedString::from(if active { format!("{} ★", pname) } else { pname.clone() }),
+            name: SharedString::from(if active { format!("{} ⭐", pname) } else { pname.clone() }),
             mark: SharedString::from(p_mark),
             mark_color: p_mark_color,
             is_group: true, // 共享组节点的展开三角 UI

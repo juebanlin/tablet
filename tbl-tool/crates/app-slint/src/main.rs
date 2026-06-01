@@ -3842,7 +3842,9 @@ fn run_new_project(state: &Rc<RefCell<AppState>>) -> bool {
         let cur = cur_project_cfg.clone();
         let new_project_cfg = ProjectConfig {
             last_project: new_id.clone(),
-            opened_projects: cur.opened_projects,
+            // 用 engine.opened_ids() 拿当前会话实际打开的项目（含新创建的），
+            // 避免用 cur.opened_projects（启动时的 snapshot）覆盖掉本会话新打开/新建的项目
+            opened_projects: st.engine.opened_ids(),
             project_sort: cur.project_sort,
             project_order: cur.project_order,
             config_dir: cur.config_dir,

@@ -517,7 +517,9 @@ fn do_create_project(app: &mut TblApp) {
         };
         let new_project_cfg = ProjectConfig {
             last_project: new_id.clone(),
-            opened_projects: cur.opened_projects.clone(),
+            // 用 engine.opened_ids() 拿当前会话实际打开的项目（含新创建的），
+            // 避免用 cur.opened_projects（启动时的 snapshot）覆盖掉本会话新打开/新建的项目
+            opened_projects: app.engine.opened_ids(),
             project_sort: cur.project_sort.clone(),
             project_order: cur.project_order.clone(),
             config_dir: cur.config_dir.clone(),
