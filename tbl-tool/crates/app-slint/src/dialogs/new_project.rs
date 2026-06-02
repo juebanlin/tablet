@@ -92,16 +92,14 @@ pub fn push(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
     ui_h.set_np_can_confirm(can_confirm);
 }
 
-/// 真正落地新项目；返回是否需要 reload UI（仅 Empty / FromTemplate + open_after 时）。
-/// Clone 模式：只内存 push + set_active，不 reload（项目还没落盘）。
+/// 真正落地新项目；返回是否需要"大刷新"（reload + reset view）。
+/// 三种模式都走内存模式：项目仅在内存里，schema_dirty + root_pending_create=true，
+/// 树面板自动显示 +；用户点保存才落盘。所以一律返回 false。
 fn run(state: &Rc<RefCell<AppState>>) -> bool {
-    use tbl_core::model::ProjectConfig;
-    use tbl_core::project::upsert_project_config_section;
     use tbl_core::tblschema::TblSchema;
     use tbl_core::template::{default_local_dir, BuiltinTemplates, LocalTemplates, TemplateSource};
 
     let mut st = state.borrow_mut();
-    let workdir = st.engine.workdir.clone();
     let mode = st.new_project.mode.clone();
     let project_id = st.new_project.project_id.clone();
     let display_name = st.new_project.project_name.clone();
@@ -109,19 +107,6 @@ fn run(state: &Rc<RefCell<AppState>>) -> bool {
     let version = st.new_project.project_version.clone();
     let open_after = st.new_project.open_after;
     let now = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
-
-    // [project] 段 fallback：active → opened[0] → 默认（用于 last_project 写入）
-    let cur_project_cfg: ProjectConfig = st.engine.active()
-        .or_else(|| st.engine.projects.first())
-        .map(|p| p.config.project.clone())
-        .unwrap_or_else(|| ProjectConfig {
-            last_project: String::new(),
-            opened_projects: Vec::new(),
-            project_sort: "id".to_string(),
-            project_order: Vec::new(),
-            config_dir: "config".to_string(),
-            cache_dir: ".tbl-cache".to_string(),
-        });
 
     let result: Result<String, String> = match &mode {
         NewProjectMode::Empty => {
@@ -131,7 +116,7 @@ fn run(state: &Rc<RefCell<AppState>>) -> bool {
             schema.meta.category = category.clone();
             schema.meta.version = version.clone();
             schema.meta.created_at = now.clone();
-            st.engine.create_project_from_schema(schema)
+            st.engine.create_project_in_memory(schema)
         }
         NewProjectMode::FromTemplate { template_id, template_source, .. } => {
             let content = match template_source.as_str() {
@@ -153,7 +138,7 @@ fn run(state: &Rc<RefCell<AppState>>) -> bool {
             schema.meta.created_at = now.clone();
             schema.meta.source_template = content.meta.id.clone();
             schema.meta.source_template_version = content.meta.version.clone();
-            st.engine.create_project_from_schema(schema)
+            st.engine.create_project_in_memory(schema)
         }
         NewProjectMode::Clone { source_project_id, .. } => {
             let res = st.engine
@@ -177,49 +162,13 @@ fn run(state: &Rc<RefCell<AppState>>) -> bool {
         }
     };
 
-    let is_clone = matches!(mode, NewProjectMode::Clone { .. });
-
-    if is_clone {
+    if open_after {
         st.engine.set_active_by_id(&new_id);
-        st.engine.log(format!(
-            "[新建项目] 已克隆 {} （内存中，需保存才落地）",
-            new_id
-        ));
-        return false;
     }
-
-    if open_after {
-        let config_path = workdir.join(tbl_core::CONFIG_FILE);
-        let original = std::fs::read_to_string(&config_path).unwrap_or_default();
-        let cur = cur_project_cfg.clone();
-        let new_project_cfg = ProjectConfig {
-            last_project: new_id.clone(),
-            // 用 engine.opened_ids() 拿当前会话实际打开的项目（含新创建的），
-            // 避免用 cur.opened_projects（启动时的 snapshot）覆盖掉本会话新打开/新建的项目
-            opened_projects: st.engine.opened_ids(),
-            project_sort: cur.project_sort,
-            project_order: cur.project_order,
-            config_dir: cur.config_dir,
-            cache_dir: cur.cache_dir,
-        };
-        let updated = upsert_project_config_section(&original, &new_project_cfg);
-        if let Err(e) = std::fs::write(&config_path, updated) {
-            st.engine.log(format!("[新建项目] 写入 tbl-tool.toml 失败: {}", e));
-        }
-    }
-
     st.engine.log(format!(
-        "[新建项目] 已创建 {} ({})",
-        new_id,
-        if open_after { "打开中..." } else { "未打开" }
+        "[新建项目] 已创建 {}（内存中，需保存才落地）",
+        new_id
     ));
-
-    drop(st);
-
-    if open_after {
-        state.borrow_mut().engine.reload();
-        return true;
-    }
     false
 }
 
@@ -268,13 +217,7 @@ pub fn wire(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
             if let Some(ui_h) = weak.upgrade() {
                 s.borrow_mut().new_project.open_after = ui_h.get_np_open_after();
             }
-            let switched = run(&s);
-            if switched {
-                // 切换走 reload；reset_view + 大刷新（与 toolbar reload 一致）
-                if let Some(ui_h) = weak.upgrade() {
-                    refresh::after_workspace_reload(&ui_h, &s);
-                }
-            }
+            run(&s);
             s.borrow_mut().new_project.close();
             if let Some(ui_h) = weak.upgrade() {
                 push(&ui_h, &s);

@@ -63,7 +63,12 @@ fn sync_schema_from_groups(project: &mut Project) {
 
 /// 保存单个 Project 的所有 dirty / deleted 节点；返回 (保存数, 删除数)。
 /// 抽出来给 save_all（active 一份）和 save_all_projects（遍历）共用。
+///
+/// 项目级落盘（root 目录创建 / .tblschema 写入）算 1 次保存动作，
+/// 让"空项目（仅 meta，无 group）"首次保存的日志为"已保存 1 个文件"而不是"无修改"。
 fn save_project_files(project: &mut Project) -> (usize, usize) {
+    let mut count = 0;
+    let mut deleted = 0;
     // 第一步：克隆出来但未落盘的项目，先建 root 目录 + 让 schema 一并落地
     if project.root_pending_create {
         if let Err(e) = std::fs::create_dir_all(&project.project_root) {
@@ -78,11 +83,9 @@ fn save_project_files(project: &mut Project) -> (usize, usize) {
         let path = project.project_root.join(crate::project::PROJECT_SCHEMA_FILE);
         if std::fs::write(&path, txt).is_ok() {
             project.schema_dirty = false;
+            count += 1;
         }
     }
-
-    let mut count = 0;
-    let mut deleted = 0;
     for group in &mut project.groups {
         if group.is_new {
             let _ = std::fs::create_dir_all(&group.dir);
@@ -485,6 +488,56 @@ impl ProjectEngine {
             }
             Err(e) => Err(format!("加载新项目失败: {}", e)),
         }
+    }
+
+    /// 内存模式创建新 Project：与 clone_project_in_memory 行为对齐。
+    /// - 不立即落盘；root_pending_create=true、schema_dirty=true
+    /// - sections 展开为 group.is_new=true、节点 original="" → 树面板 `+` 标记
+    /// - config 借用现有任意 opened project 的 WorkspaceConfig，否则用默认 fallback
+    /// - 同时加进 available_projects（未保存前目录还不存在，但 UI 树要展示）
+    /// 返回 new_id 或错误信息。
+    pub fn create_project_in_memory(
+        &mut self,
+        schema: crate::tblschema::TblSchema,
+    ) -> Result<String, String> {
+        if !crate::tblschema::is_valid_metadata_id(&schema.meta.id) {
+            return Err(format!("project id 不合法: {}", schema.meta.id));
+        }
+        if self.available_projects.iter().any(|a| a.id == schema.meta.id) {
+            return Err(format!("project id 已存在: {}", schema.meta.id));
+        }
+        let project_id = schema.meta.id.clone();
+        let project_root = self.workdir.join(crate::project::PROJECTS_DIR).join(&project_id);
+
+        // 借用任一已打开 project 的 config 当默认（与 workspace 共享段对齐）；都没有则走 toml 默认
+        let config = self.projects.first().map(|p| p.config.clone())
+            .or_else(|| toml::from_str::<WorkspaceConfig>("").ok())
+            .ok_or_else(|| "无法构造默认 WorkspaceConfig".to_string())?;
+
+        let mut new_project = Project {
+            workdir: self.workdir.clone(),
+            project_root: project_root.clone(),
+            config,
+            schema: schema.clone(),
+            groups: Vec::new(),
+            schema_dirty: true,
+            root_pending_create: true,
+        };
+
+        // 用 apply_schema_to_project 把 sections 展开为 groups+nodes：
+        // 它会建出 group.is_new=true、节点 dirty=true、original=""，正好对齐"内存模式"语义。
+        let data_dir = new_project.data_dir();
+        crate::tblschema::apply_schema_to_project(
+            &mut new_project.groups,
+            &schema.sections,
+            &data_dir,
+        );
+
+        let avail = AvailableProject::from_project(&new_project);
+        self.available_projects.push(avail);
+        self.available_projects.sort_by(|a, b| a.id.cmp(&b.id));
+        self.projects.push(new_project);
+        Ok(project_id)
     }
 
     /// 内存深拷贝克隆：把 source_project_id 的当前状态（含未保存改动）整体复制为新 project，
@@ -1237,6 +1290,7 @@ impl ProjectEngine {
     /// 全部关闭时返回 false。
     pub fn is_dirty(&self) -> bool {
         let Some(p) = self.active() else { return false; };
+        if p.root_pending_create || p.schema_dirty { return true; }
         for g in &p.groups {
             if g.is_new { return true; }
             for t in &g.tables { if t.dirty || t.deleted { return true; } }
@@ -1249,6 +1303,7 @@ impl ProjectEngine {
     /// 任一 Project 有未保存改动。退出工具 / 全保存判空用。
     pub fn is_dirty_any(&self) -> bool {
         for p in &self.projects {
+            if p.root_pending_create || p.schema_dirty { return true; }
             for g in &p.groups {
                 if g.is_new { return true; }
                 for t in &g.tables { if t.dirty || t.deleted { return true; } }
@@ -1773,6 +1828,9 @@ impl ProjectEngine {
     /// 该 Project 是否有未保存改动。
     pub fn is_project_dirty(&self, project_id: &str) -> bool {
         let Some(project) = self.find_project(project_id) else { return false; };
+        // 内存模式新建 / 克隆出来的项目：root 还没落盘 / schema 还没落盘 → 一定 dirty。
+        // 即便 groups 为空也算（空 Empty 项目也不能"关掉就没了"）
+        if project.root_pending_create || project.schema_dirty { return true; }
         for g in &project.groups {
             if g.is_new { return true; }
             for t in &g.tables { if t.dirty || t.deleted { return true; } }

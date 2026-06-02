@@ -47,14 +47,6 @@ pub fn after_ctx_menu(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
     ui::log_panel::push(ui_h, state);
 }
 
-/// 工程级 reload（reload 按钮 / 切 active project / template-create open-after）。
-pub fn after_workspace_reload(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
-    ui::toolbar::reset_view_after_reload(state);
-    ui::tree::push(ui_h, state);
-    ui::grid::push(ui_h, state);
-    ui::log_panel::push(ui_h, state);
-}
-
 /// 仅日志（罕见：单独打 log 不动业务）。
 pub fn after_log(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
     ui::log_panel::push(ui_h, state);

@@ -105,10 +105,15 @@ pub fn build_tree_nodes(state: &mut AppState) -> Vec<TreeNode> {
         if !project_show { continue; }
 
         // 项目根节点 marker 聚合
+        let project_obj = state.engine.find_project(pid);
+        let root_pending = project_obj.map(|p| p.root_pending_create).unwrap_or(false);
+        let schema_dirty = project_obj.map(|p| p.schema_dirty).unwrap_or(false);
         let mut all_deleted_self = false;
         let mut all_deleted = true;
-        let mut has_dirty = false;
-        let mut has_new = false;
+        // 项目级"新建未落盘"算 has_new；项目级 schema_dirty（且 root 已落盘 → 仅 meta/structure 改）算 has_dirty。
+        // 这两条让空项目（无 group）也能正确显示 🟢/🟡。
+        let mut has_dirty = schema_dirty && !root_pending;
+        let mut has_new = root_pending;
         for g in &groups {
             if !g.tables.is_empty() || !g.constants.is_empty() || !g.enums.is_empty() {
                 all_deleted_self = true;
@@ -131,8 +136,8 @@ pub fn build_tree_nodes(state: &mut AppState) -> Vec<TreeNode> {
             }
         }
         let project_deleted = all_deleted_self && all_deleted;
-        let project_dirty = has_dirty && !project_deleted;
-        let project_new = has_new && !project_dirty && !project_deleted;
+        let project_new = has_new && !project_deleted;
+        let project_dirty = has_dirty && !project_new && !project_deleted;
         let project_has_errors = state.engine.has_project_error(pid);
 
         let p_expanded = state.project_expanded.contains(pid);

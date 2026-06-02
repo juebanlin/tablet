@@ -19,16 +19,23 @@ pub const ACTIVE_STAR: &str = "⭐";
 pub const WARN: &str = "⚠";
 /// 对话框标题里的告警（带 emoji variation selector，UI 字号下颜色更明显）
 pub const WARN_EMOJI: &str = "⚠️";
+/// 公式栏 / readonly 单元格右侧的锁标记。
+/// 现仅在 `ui/components/formula_bar.slint` 内字面量使用；
+/// 此常量供未来 Rust 端推送 readonly 提示时复用，避免再次散落字面量。
+#[allow(dead_code)]
+pub const ICON_READONLY_LOCK: &str = "🔒";
 
 // ──────── 引用类型标签（type_selector / ref_picker 共享） ────────
 pub const REF_LABEL_TABLE: &str = "📊 表引用";
 pub const REF_LABEL_ENUM: &str = "🔢 枚举引用";
 
 // ──────── 节点 marker（树面板 deleted/new/modified/error 角标） ────────
-pub const MARK_NEW: &str = "+";
-pub const MARK_MOD: &str = "*";
-pub const MARK_DEL: &str = "-";
-pub const MARK_ERR: &str = "!";
+//
+// 使用动作语义 emoji，颜色由字形自带；mark-color 文字色仍保留供未来纯文本 fallback。
+pub const MARK_NEW: &str = "🆕";
+pub const MARK_MOD: &str = "📝";
+pub const MARK_DEL: &str = "🗑️";
+pub const MARK_ERR: &str = "🚨";
 pub const MARK_NONE: &str = "";
 
 // ──────── 节点 marker 色 ────────
