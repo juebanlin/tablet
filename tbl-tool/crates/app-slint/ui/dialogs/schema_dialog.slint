@@ -23,8 +23,8 @@ export struct SchemaItem {
 }
 
 // ── 共享内容区（表头 + 列表 + 底部计数） ─────────────────────────
-// 单独抽出来是为了 Export/Import 两个 dialog 共用同一布局逻辑。
-component SchemaItemList inherits Rectangle {
+// 单独抽出来是为了 Export/Import/CreateProject 三个 dialog 共用同一布局逻辑。
+export component SchemaItemList inherits Rectangle {
     in property <[SchemaItem]> items;
     in property <bool> show-conflict-col: false;
 

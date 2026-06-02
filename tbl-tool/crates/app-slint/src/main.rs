@@ -11,7 +11,7 @@
 //   refresh.rs  跨模块刷新 fan-out（callback 末尾按"刚做了什么"选 helper）
 //   ui/         主窗口区域：tree / grid / grid_actions / toolbar / log_panel / focus
 //   dialogs/    子窗口：context_menu / pending / type_selector / ref_picker /
-//               data_export / schema_io / template_library / new_project
+//               data_export / schema_io / create_project（统一）/ clone_project
 //
 // 每个 ui/dialogs 模块统一对外暴露 `wire(ui, state)` + `push(ui, state)`。
 
@@ -119,8 +119,8 @@ fn main() -> anyhow::Result<()> {
     dialogs::ref_picker::wire(&app_window, &app_state);
     dialogs::data_export::wire(&app_window, &app_state);
     dialogs::schema_io::wire(&app_window, &app_state);
-    dialogs::template_library::wire(&app_window, &app_state);
-    dialogs::new_project::wire(&app_window, &app_state);
+    dialogs::create_project::wire(&app_window, &app_state);
+    dialogs::clone_project::wire(&app_window, &app_state);
 
     let result = app_window.run().map_err(|e| anyhow::anyhow!("{}", e));
     let _ = std::fs::remove_file(&lock_path);

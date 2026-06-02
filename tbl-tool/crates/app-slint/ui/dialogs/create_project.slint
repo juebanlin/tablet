@@ -1,0 +1,487 @@
+// 「新建项目」统一对话框（@docs/04-UI设计.md §6.7）。
+//
+// 3 tab + 单页左右分栏：
+//   - tab=0 空项目：左半占位文字，右半填身份
+//   - tab=1 从文件：左半文件浏览 + sections-picker，右半填身份 + 灌入预设 checkbox
+//   - tab=2 从模板：左半内置/本地子 tab + 搜索 + 列表 + sections-picker，右半同上
+//
+// 替代旧 TemplateLibraryDialog 与顶部「导入 Schema」按钮。
+// 克隆走另一个对话框（NewProjectDialog 仅留 Clone 模式）。
+
+import { Theme } from "../theme.slint";
+import { DialogChrome } from "dialog_chrome.slint";
+import { SchemaItem, SchemaItemList } from "schema_dialog.slint";
+import { TemplateItem } from "template_dialog.slint";
+import { Button, CheckBox, LineEdit, ScrollView } from "std-widgets.slint";
+
+export component CreateProjectDialog inherits Rectangle {
+    in property <bool> open: false;
+
+    // —— tab ——
+    in property <int> tab-index: 0;          // 0=空 / 1=文件 / 2=模板
+
+    // —— 共享身份 ——
+    in-out property <string> project-id;
+    in-out property <string> project-name;
+    in-out property <string> project-category;
+    in-out property <string> project-version;
+    in-out property <bool> open-after: true;
+    in property <string> id-error;
+    in property <string> name-error;
+    in property <bool> can-confirm: false;
+    /// 来源（FromFile / FromTemplate）带 # @preset 时显示「灌入预设」开关
+    in property <bool> source-has-preset: false;
+    in-out property <bool> with-preset: false;
+
+    // —— FromFile tab ——
+    in-out property <string> file-path;
+    in property <bool> file-loaded: false;
+    in property <string> file-error;
+
+    // —— FromTemplate tab ——
+    in property <int> tpl-subtab: 0;
+    in property <int> tpl-builtin-count: 0;
+    in property <int> tpl-local-count: 0;
+    in-out property <string> tpl-search;
+    in property <[TemplateItem]> tpl-items;
+    in property <bool> tpl-selected: false;
+
+    // —— 共享 sections-picker ——
+    in property <[SchemaItem]> picker-items;
+    in-out property <bool> picker-all-checked: false;
+    in property <int> picker-selected-count: 0;
+    in property <int> picker-total-count: 0;
+
+    callback set-tab(int);
+    callback id-edited(string);
+    callback name-edited(string);
+    callback category-edited(string);
+    callback version-edited(string);
+    callback file-browse();
+    callback tpl-set-subtab(int);
+    callback tpl-search-edited(string);
+    callback tpl-select-item(int);
+    callback picker-toggle-all(bool);
+    callback picker-toggle-item(int);
+    callback confirm();
+    callback cancel();
+
+    visible: root.open;
+    width: 100%;
+    height: 100%;
+
+    DialogChrome {
+        title: "新建项目";
+        dialog-w: 820px;
+        dialog-h: 560px;
+        primary-text: "创建";
+        primary-enabled: root.can-confirm;
+        primary-clicked => { root.confirm(); }
+        cancel-clicked => { root.cancel(); }
+        scrim-clicked => { root.cancel(); }
+
+        VerticalLayout {
+            padding: Theme.sp-4;
+            spacing: Theme.sp-3;
+
+            // ── tab bar ──
+            HorizontalLayout {
+                spacing: Theme.sp-2;
+                alignment: start;
+                Button {
+                    text: "空项目";
+                    primary: root.tab-index == 0;
+                    clicked => { root.set-tab(0); }
+                }
+                Button {
+                    text: "从文件...";
+                    primary: root.tab-index == 1;
+                    clicked => { root.set-tab(1); }
+                }
+                Button {
+                    text: "从模板";
+                    primary: root.tab-index == 2;
+                    clicked => { root.set-tab(2); }
+                }
+            }
+            Rectangle { height: 1px; background: Theme.border-light; }
+
+            // ── 主体：左右分栏 ──
+            HorizontalLayout {
+                spacing: Theme.sp-4;
+                vertical-stretch: 1;
+
+                // ── 左半：来源 ──
+                Rectangle {
+                    width: 460px;
+                    background: Theme.bg-panel;
+                    border-color: Theme.border-light;
+                    border-width: 1px;
+
+                    // tab=0 空
+                    if root.tab-index == 0: VerticalLayout {
+                        padding: Theme.sp-4;
+                        spacing: Theme.sp-3;
+                        alignment: center;
+                        Text {
+                            text: "空项目无需选择来源";
+                            font-size: Theme.fs-small;
+                            color: Theme.text-secondary;
+                            horizontal-alignment: center;
+                        }
+                        Text {
+                            text: "右侧填写项目身份后点击「创建」";
+                            font-size: Theme.fs-tiny;
+                            color: Theme.text-secondary;
+                            horizontal-alignment: center;
+                        }
+                    }
+
+                    // tab=1 从文件
+                    if root.tab-index == 1: VerticalLayout {
+                        padding: Theme.sp-3;
+                        spacing: Theme.sp-3;
+                        // 文件浏览行
+                        HorizontalLayout {
+                            spacing: Theme.sp-2;
+                            Text {
+                                text: "文件:";
+                                font-size: Theme.fs-small;
+                                width: 40px;
+                                vertical-alignment: center;
+                            }
+                            LineEdit {
+                                text <=> root.file-path;
+                            }
+                            Button {
+                                text: "浏览...";
+                                clicked => { root.file-browse(); }
+                            }
+                        }
+                        if root.file-error != "": Text {
+                            text: root.file-error;
+                            font-size: Theme.fs-tiny;
+                            color: Theme.text-error;
+                            wrap: word-wrap;
+                        }
+                        Rectangle { height: 1px; background: Theme.border-light; }
+
+                        // 未加载占位 / 已加载 sections 列表
+                        if !root.file-loaded: Rectangle {
+                            vertical-stretch: 1;
+                            Text {
+                                text: "请选择 .tblschema 文件";
+                                font-size: Theme.fs-small;
+                                color: Theme.text-secondary;
+                                horizontal-alignment: center;
+                                vertical-alignment: center;
+                            }
+                        }
+                        if root.file-loaded: VerticalLayout {
+                            spacing: Theme.sp-2;
+                            vertical-stretch: 1;
+
+                            CheckBox {
+                                text: "全选";
+                                checked <=> root.picker-all-checked;
+                                toggled => { root.picker-toggle-all(self.checked); }
+                            }
+                            Rectangle {
+                                vertical-stretch: 1;
+                                SchemaItemList {
+                                    items: root.picker-items;
+                                    show-conflict-col: false;
+                                    toggle-item(i) => { root.picker-toggle-item(i); }
+                                }
+                            }
+                            Text {
+                                text: "已选: " + root.picker-selected-count + "/" + root.picker-total-count + " 个 section";
+                                font-size: Theme.fs-tiny;
+                                color: Theme.text-secondary;
+                            }
+                        }
+                    }
+
+                    // tab=2 从模板
+                    if root.tab-index == 2: VerticalLayout {
+                        padding: Theme.sp-3;
+                        spacing: Theme.sp-2;
+                        // 子 tab：内置 / 本地
+                        HorizontalLayout {
+                            spacing: Theme.sp-2;
+                            alignment: start;
+                            Button {
+                                text: "内置 (" + root.tpl-builtin-count + ")";
+                                primary: root.tpl-subtab == 0;
+                                clicked => { root.tpl-set-subtab(0); }
+                            }
+                            Button {
+                                text: "本地 (" + root.tpl-local-count + ")";
+                                primary: root.tpl-subtab == 1;
+                                clicked => { root.tpl-set-subtab(1); }
+                            }
+                            Button {
+                                text: "网络 (-)";
+                                enabled: false;
+                            }
+                        }
+
+                        // 搜索
+                        HorizontalLayout {
+                            spacing: Theme.sp-2;
+                            Text {
+                                text: "🔍";
+                                font-size: Theme.fs-small;
+                                width: 20px;
+                                vertical-alignment: center;
+                            }
+                            LineEdit {
+                                text <=> root.tpl-search;
+                                placeholder-text: "名称 / id";
+                                edited(s) => { root.tpl-search-edited(s); }
+                            }
+                        }
+
+                        // 模板列表（点击选中）
+                        Rectangle {
+                            height: 130px;
+                            background: Theme.bg-panel;
+                            border-color: Theme.border-light;
+                            border-width: 1px;
+                            ScrollView {
+                                VerticalLayout {
+                                    spacing: 0;
+                                    for it[i] in root.tpl-items: Rectangle {
+                                        height: Theme.row-h * 2;
+                                        background: it.selected ? Theme.bg-row-alt : transparent;
+                                        border-color: Theme.border-light;
+                                        border-width: 1px;
+                                        VerticalLayout {
+                                            padding-left: Theme.sp-3;
+                                            padding-right: Theme.sp-3;
+                                            padding-top: 2px;
+                                            padding-bottom: 2px;
+                                            spacing: 2px;
+                                            HorizontalLayout {
+                                                spacing: Theme.sp-2;
+                                                Text {
+                                                    text: it.name;
+                                                    font-size: Theme.fs-small;
+                                                    color: Theme.text-primary;
+                                                    vertical-alignment: center;
+                                                }
+                                                Rectangle { horizontal-stretch: 1; }
+                                                Text {
+                                                    text: it.category == "" ? "-" : it.category;
+                                                    font-size: Theme.fs-tiny;
+                                                    color: Theme.text-secondary;
+                                                    vertical-alignment: center;
+                                                }
+                                                Text {
+                                                    text: "v" + (it.version == "" ? "-" : it.version);
+                                                    font-size: Theme.fs-tiny;
+                                                    color: Theme.text-secondary;
+                                                    vertical-alignment: center;
+                                                }
+                                            }
+                                            Text {
+                                                text: "ID: " + it.id + "  ·  " + it.sections + " 个 section  ·  " + it.source;
+                                                font-size: Theme.fs-tiny;
+                                                color: Theme.text-secondary;
+                                            }
+                                        }
+                                        TouchArea {
+                                            clicked => { root.tpl-select-item(i); }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        Rectangle { height: 1px; background: Theme.border-light; }
+
+                        // sections-picker（已选模板时显示）
+                        if !root.tpl-selected: Rectangle {
+                            vertical-stretch: 1;
+                            Text {
+                                text: "请选择一个模板";
+                                font-size: Theme.fs-small;
+                                color: Theme.text-secondary;
+                                horizontal-alignment: center;
+                                vertical-alignment: center;
+                            }
+                        }
+                        if root.tpl-selected: VerticalLayout {
+                            spacing: Theme.sp-2;
+                            vertical-stretch: 1;
+                            CheckBox {
+                                text: "全选";
+                                checked <=> root.picker-all-checked;
+                                toggled => { root.picker-toggle-all(self.checked); }
+                            }
+                            Rectangle {
+                                vertical-stretch: 1;
+                                SchemaItemList {
+                                    items: root.picker-items;
+                                    show-conflict-col: false;
+                                    toggle-item(i) => { root.picker-toggle-item(i); }
+                                }
+                            }
+                            Text {
+                                text: "已选: " + root.picker-selected-count + "/" + root.picker-total-count + " 个 section";
+                                font-size: Theme.fs-tiny;
+                                color: Theme.text-secondary;
+                            }
+                        }
+                    }
+                }
+
+                // ── 右半：身份输入 ──
+                Rectangle {
+                    horizontal-stretch: 1;
+                    VerticalLayout {
+                        padding-left: Theme.sp-3;
+                        padding-right: Theme.sp-3;
+                        spacing: Theme.sp-3;
+
+                        HorizontalLayout {
+                            spacing: Theme.sp-2;
+                            Text {
+                                text: "项目 ID:";
+                                font-size: Theme.fs-small;
+                                width: 60px;
+                                vertical-alignment: center;
+                            }
+                            LineEdit {
+                                text: root.project-id;
+                                placeholder-text: "[a-z0-9_-]{1,32}";
+                                edited(s) => { root.id-edited(s); }
+                            }
+                        }
+                        if root.id-error != "": Text {
+                            text: root.id-error;
+                            font-size: Theme.fs-tiny;
+                            color: Theme.text-error;
+                        }
+
+                        HorizontalLayout {
+                            spacing: Theme.sp-2;
+                            Text {
+                                text: "项目名:";
+                                font-size: Theme.fs-small;
+                                width: 60px;
+                                vertical-alignment: center;
+                            }
+                            LineEdit {
+                                text: root.project-name;
+                                placeholder-text: "可中文，仅用于显示";
+                                edited(s) => { root.name-edited(s); }
+                            }
+                        }
+                        if root.name-error != "": Text {
+                            text: root.name-error;
+                            font-size: Theme.fs-tiny;
+                            color: Theme.text-error;
+                        }
+
+                        HorizontalLayout {
+                            spacing: Theme.sp-2;
+                            Text {
+                                text: "分类:";
+                                font-size: Theme.fs-small;
+                                width: 60px;
+                                vertical-alignment: center;
+                            }
+                            LineEdit {
+                                text: root.project-category;
+                                placeholder-text: "test / slg / rpg / ...";
+                                edited(s) => { root.category-edited(s); }
+                            }
+                        }
+
+                        HorizontalLayout {
+                            spacing: Theme.sp-2;
+                            Text {
+                                text: "版本:";
+                                font-size: Theme.fs-small;
+                                width: 60px;
+                                vertical-alignment: center;
+                            }
+                            LineEdit {
+                                text: root.project-version;
+                                placeholder-text: "1.0.0";
+                                edited(s) => { root.version-edited(s); }
+                            }
+                        }
+
+                        Text {
+                            text: "目录预览：projects/" + root.project-id + "/";
+                            font-size: Theme.fs-tiny;
+                            color: Theme.text-secondary;
+                        }
+
+                        Rectangle { height: 1px; background: Theme.border-light; }
+
+                        CheckBox {
+                            text: "立即打开新项目";
+                            checked <=> root.open-after;
+                        }
+
+                        if root.source-has-preset: HorizontalLayout {
+                            spacing: Theme.sp-2;
+                            CheckBox {
+                                text: "灌入预设数据";
+                                checked <=> root.with-preset;
+                            }
+                            Text {
+                                text: "（来源含 # @preset 块）";
+                                font-size: Theme.fs-tiny;
+                                color: Theme.text-secondary;
+                                vertical-alignment: center;
+                            }
+                        }
+
+                        Rectangle { vertical-stretch: 1; }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// ── 预览 ─────────────────────────────────────────────
+export component CreateProjectDialogPreview inherits Window {
+    title: "CreateProject Preview";
+    width: 920px;
+    height: 680px;
+
+    CreateProjectDialog {
+        open: true;
+        tab-index: 2;
+        project-id: "my-slg";
+        project-name: "我的 SLG";
+        project-category: "slg";
+        project-version: "1.0.0";
+        open-after: true;
+        can-confirm: true;
+        source-has-preset: true;
+        with-preset: true;
+        tpl-subtab: 0;
+        tpl-builtin-count: 1;
+        tpl-local-count: 0;
+        tpl-items: [
+            { id: "standard", name: "标准游戏配置", category: "sample", version: "1.0.0", source: "builtin", sections: 7, selected: true },
+        ];
+        tpl-selected: true;
+        picker-items: [
+            { indent: 0, icon: "📁", name: "hero",   group-name: "hero",   checked: true,  tristate: false, is-conflict: false },
+            { indent: 1, icon: "📊", name: "HeroBase", group-name: "hero", checked: true,  tristate: false, is-conflict: false },
+            { indent: 1, icon: "🔢", name: "HeroType", group-name: "hero", checked: true,  tristate: false, is-conflict: false },
+            { indent: 0, icon: "📁", name: "global", group-name: "global", checked: true,  tristate: false, is-conflict: false },
+            { indent: 1, icon: "📋", name: "GameConst", group-name: "global", checked: true, tristate: false, is-conflict: false },
+        ];
+        picker-all-checked: true;
+        picker-selected-count: 3;
+        picker-total-count: 3;
+    }
+}

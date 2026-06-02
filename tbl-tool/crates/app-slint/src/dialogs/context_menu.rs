@@ -57,6 +57,7 @@ pub(crate) fn items_for(kind: &CtxMenuKind, state: &AppState) -> Vec<CtxMenuItem
                     item("保存", "tree.proj-save", false),
                     item("导出...", "tree.proj-export", false),
                     item("导出 Schema...", "tree.proj-export-schema", false),
+                    item("合并 Schema...", "tree.proj-merge-schema", false),
                     sep(),
                     item("新建 Group", "tree.proj-new-group", false),
                     item("复制(克隆)...", "tree.proj-clone", false),

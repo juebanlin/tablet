@@ -210,6 +210,13 @@ pub(crate) fn handle_project_root_action(state: &Rc<RefCell<AppState>>, project_
             st.schema_export.open = true;
             crate::dialogs::schema_io::rebuild_export_items(&mut st);
         }
+        "tree.proj-merge-schema" => {
+            // 合并 Schema：与旧顶部「导入 Schema」一致的对话框，作用于当前 project
+            let mut st = state.borrow_mut();
+            st.engine.set_active_by_id(project_id);
+            st.schema_import = crate::state::SchemaImportState::default();
+            st.schema_import.open = true;
+        }
         "tree.proj-new-group" => {
             state.borrow_mut().pending.open(PendingAction::NewGroup {
                 project_id: project_id.to_string(),
@@ -226,7 +233,7 @@ pub(crate) fn handle_project_root_action(state: &Rc<RefCell<AppState>>, project_
                     ))
                     .unwrap_or_else(|| (project_id.to_string(), String::new(), String::new()))
             };
-            state.borrow_mut().new_project.open_clone(project_id, &display, &category, &version);
+            state.borrow_mut().clone_project.open_clone(project_id, &display, &category, &version);
         }
         "tree.proj-open" => {
             // 右键 closed project → 打开 + 设 active + 默认展开

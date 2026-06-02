@@ -564,110 +564,126 @@ pub struct SchemaImportItem {
     pub mode: tbl_core::tblschema::SchemaMode,
 }
 
-// ──────── 模板库 / 新建项目 ────────
+// ──────── 新建项目 / 克隆项目 ────────
 
-/// 模板库对话框（@04.6.6）。当前 tab + 已选模板 id + 搜索关键字。
-/// items 由 push_template_library 即时从 BuiltinTemplates / LocalTemplates 拉取，不缓存。
-#[derive(Default)]
-pub struct TemplateLibraryState {
+/// 统一「新建项目」对话框：3 tab（空 / 从文件 / 从模板）+ 单页左右分栏。
+/// 替代旧 TemplateLibrary + 顶部「导入 Schema」+ NewProject Empty/FromTemplate 三个入口。
+pub struct CreateProjectState {
     pub open: bool,
-    /// 0 = 内置 / 1 = 本地
+    /// 0 = 空项目 / 1 = 从文件 / 2 = 从模板
     pub tab: i32,
-    pub search: String,
-    /// 当前选中的模板 id（在所有 tab 中唯一定位）
-    pub selected_id: String,
-}
 
-/// NewProject 对话框的 3 种模式。决定标题、介绍行、id/name 默认值与落地路径。
-#[derive(Clone, Debug)]
-pub enum NewProjectMode {
-    /// 空项目（来自树面板「新建项目」按钮）
-    Empty,
-    /// 从模板（来自「模板库」对话框）
-    FromTemplate {
-        template_id: String,
-        template_source: String, // "builtin" / "local"
-        template_display: String,
-    },
-    /// 克隆已有 project（来自 opened project 右键菜单）
-    Clone {
-        source_project_id: String,
-        source_display: String,
-    },
-}
-
-impl Default for NewProjectMode {
-    fn default() -> Self {
-        NewProjectMode::Empty
-    }
-}
-
-/// 新建项目对话框（@04.6.7）。3 模式：Empty / FromTemplate / Clone。
-#[derive(Default)]
-pub struct NewProjectState {
-    pub open: bool,
-    pub mode: NewProjectMode,
+    // —— 共享身份字段 ——
     pub project_id: String,
     pub project_name: String,
     pub project_category: String,
     pub project_version: String,
-    /// 「立即打开新项目」勾选项；默认 true（克隆模式置 false，且 UI 灰态）
+    /// 「立即打开新项目」勾选项；默认 true
     pub open_after: bool,
-    /// 标记是否已经按 mode 默认值预填过 project id（避免覆盖用户手输）
+    /// 标记是否已经预填过 project id（避免文件/模板改变时覆盖用户手输）
     pub id_prefilled: bool,
-    /// 模板是否带 # @preset 块（仅 FromTemplate 有意义；用于在对话框上显示「灌入预设」开关）
-    pub template_has_preset: bool,
-    /// 「灌入预设数据」勾选项；默认跟 template_has_preset 一致；用户可在对话框关掉
+    /// 「灌入预设数据」勾选项；仅 FromFile / FromTemplate tab 且来源带 preset 时显示
     pub with_preset: bool,
+
+    // —— FromFile tab 专用 ——
+    pub file_path: String,
+    pub file_schema: Option<tbl_core::tblschema::TblSchema>,
+    /// parse 失败时显示的错误（占位用，目前只记 log）
+    pub file_error: String,
+
+    // —— FromTemplate tab 专用 ——
+    /// 0 = 内置 / 1 = 本地
+    pub tpl_subtab: i32,
+    pub tpl_search: String,
+    pub tpl_selected_id: String,
+    /// FromTemplate 当前选中模板的 schema 缓存（按 tpl_selected_id 加载）
+    pub tpl_schema: Option<tbl_core::tblschema::TblSchema>,
+    pub tpl_meta_id: String,
+    pub tpl_meta_version: String,
+
+    // —— 共享 sections-picker（FromFile + FromTemplate 共用）——
+    pub picker_items: Vec<CreatePickerItem>,
+    pub picker_checked: Vec<bool>,
 }
 
-impl NewProjectState {
+impl Default for CreateProjectState {
+    fn default() -> Self {
+        Self {
+            open: false,
+            tab: 0,
+            project_id: String::new(),
+            project_name: String::new(),
+            project_category: String::new(),
+            project_version: "1.0.0".to_string(),
+            open_after: true,
+            id_prefilled: false,
+            with_preset: false,
+            file_path: String::new(),
+            file_schema: None,
+            file_error: String::new(),
+            tpl_subtab: 0,
+            tpl_search: String::new(),
+            tpl_selected_id: String::new(),
+            tpl_schema: None,
+            tpl_meta_id: String::new(),
+            tpl_meta_version: String::new(),
+            picker_items: Vec::new(),
+            picker_checked: Vec::new(),
+        }
+    }
+}
+
+/// 扁平化的 sections-picker 行：组节点 indent=0，子节点 indent=1。
+#[derive(Clone, Debug)]
+pub struct CreatePickerItem {
+    pub indent: u8,
+    pub group: String,
+    pub name: String,
+    pub mode: tbl_core::tblschema::SchemaMode,
+}
+
+impl CreateProjectState {
     pub fn open_empty(&mut self) {
+        *self = Self::default();
         self.open = true;
-        self.mode = NewProjectMode::Empty;
-        self.project_id.clear();
-        self.project_name.clear();
-        self.project_category.clear();
-        self.project_version = "1.0.0".to_string();
-        self.open_after = true;
-        self.id_prefilled = true;
-        self.template_has_preset = false;
-        self.with_preset = false;
+        self.tab = 0;
     }
 
-    pub fn open_from_template(&mut self, meta: &tbl_core::template::TemplateMeta) {
-        self.open = true;
-        self.mode = NewProjectMode::FromTemplate {
-            template_id: meta.id.clone(),
-            template_source: meta.source.to_string(),
-            template_display: if meta.name.is_empty() {
-                meta.id.clone()
-            } else {
-                meta.name.clone()
-            },
-        };
-        self.project_id.clear();
-        self.project_name.clear();
-        self.project_category = meta.category.clone();
-        self.project_version = if meta.version.is_empty() {
-            "1.0.0".to_string()
-        } else {
-            meta.version.clone()
-        };
-        self.open_after = true;
-        self.id_prefilled = false;
-        // template_has_preset / with_preset 由调用方在打开后用 set_template_preset_hint 校准
-        self.template_has_preset = false;
-        self.with_preset = false;
+    pub fn close(&mut self) {
+        *self = Self::default();
     }
 
-    /// 在 open_from_template 之后调用，告诉 NewProjectState 该模板是否带 preset。
-    /// 调用方可单独读模板 schema 的 meta.has_preset 后传进来。
-    pub fn set_template_preset_hint(&mut self, has_preset: bool) {
-        self.template_has_preset = has_preset;
-        self.with_preset = has_preset;
+    /// 当前 tab 是否需要 sections-picker（仅 FromFile / FromTemplate）
+    pub fn needs_picker(&self) -> bool {
+        self.tab == 1 || self.tab == 2
     }
 
+    /// 当前 tab 决定的 source schema（FromFile / FromTemplate 共享 picker 与 with_preset）
+    pub fn source_schema(&self) -> Option<&tbl_core::tblschema::TblSchema> {
+        match self.tab {
+            1 => self.file_schema.as_ref(),
+            2 => self.tpl_schema.as_ref(),
+            _ => None,
+        }
+    }
+}
+
+/// 克隆项目对话框（项目右键「复制(克隆)...」专用）。
+/// 与旧 NewProjectState 的 Clone 模式一致：仅做内存深拷贝 + 改 id/name/category/version。
+#[derive(Default)]
+pub struct CloneProjectState {
+    pub open: bool,
+    pub source_project_id: String,
+    pub source_display: String,
+    pub project_id: String,
+    pub project_name: String,
+    pub project_category: String,
+    pub project_version: String,
+    /// 标记 id 是否已被用户改过（cancel 后再次打开沿用 *_copy 的默认值）
+    pub id_prefilled: bool,
+}
+
+impl CloneProjectState {
     pub fn open_clone(
         &mut self,
         source_id: &str,
@@ -676,10 +692,8 @@ impl NewProjectState {
         source_version: &str,
     ) {
         self.open = true;
-        self.mode = NewProjectMode::Clone {
-            source_project_id: source_id.to_string(),
-            source_display: source_display.to_string(),
-        };
+        self.source_project_id = source_id.to_string();
+        self.source_display = source_display.to_string();
         self.project_id = format!("{}_copy", source_id);
         self.project_name = format!("{}_copy", source_display);
         self.project_category = source_category.to_string();
@@ -688,22 +702,18 @@ impl NewProjectState {
         } else {
             source_version.to_string()
         };
-        self.open_after = false;
         self.id_prefilled = true;
-        self.template_has_preset = false;
-        self.with_preset = false;
     }
 
     pub fn close(&mut self) {
         self.open = false;
-        self.mode = NewProjectMode::Empty;
+        self.source_project_id.clear();
+        self.source_display.clear();
         self.project_id.clear();
         self.project_name.clear();
         self.project_category.clear();
         self.project_version.clear();
         self.id_prefilled = false;
-        self.template_has_preset = false;
-        self.with_preset = false;
     }
 }
 
@@ -761,10 +771,10 @@ pub struct AppState {
     pub schema_export: SchemaExportState,
     /// Schema 导入对话框
     pub schema_import: SchemaImportState,
-    /// 模板库对话框
-    pub template_lib: TemplateLibraryState,
-    /// 新建项目对话框
-    pub new_project: NewProjectState,
+    /// 「新建项目」统一对话框（3 tab：空 / 文件 / 模板）
+    pub create_project: CreateProjectState,
+    /// 「复制(克隆)项目」对话框（项目右键专用）
+    pub clone_project: CloneProjectState,
     /// "id" / "name" / "open" / "created" / "manual"。从 [project] project_sort 读初值，UI 写时持久化。
     pub project_sort: String,
     /// sort=manual 时使用；UI 拖拽顺序持久化到 [project] project_order。
@@ -838,8 +848,8 @@ impl AppState {
             data_export: DataExportState::default(),
             schema_export: SchemaExportState::default(),
             schema_import: SchemaImportState::default(),
-            template_lib: TemplateLibraryState::default(),
-            new_project: NewProjectState::default(),
+            create_project: CreateProjectState::default(),
+            clone_project: CloneProjectState::default(),
             project_sort,
             project_order,
         })

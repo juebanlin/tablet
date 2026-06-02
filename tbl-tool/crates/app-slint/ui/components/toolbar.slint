@@ -1,14 +1,14 @@
 // 顶部工具栏：单行主按钮区。
 // 表级开关（如「枚举显示名字」）和表级动作（如「Excel 编辑」）已下移至 GridRibbon。
-// Project 级导出（导出 / 导出 Schema）已迁到 TreeProject 右键菜单；
-// 导入 Schema 留在这里（交互上是 workspace 级，不绑定具体 project）。
+// Project 级导出（导出 / 导出 Schema）和合并 Schema 已迁到 TreeProject 右键菜单；
+// 工具栏只保留 workspace 级动作（保存 / 重新加载）。
 // 对应 docs/02-UI设计.md §5.1。
 
 import { Theme } from "../theme.slint";
 import { Button } from "std-widgets.slint";
 
 export component Toolbar inherits Rectangle {
-    callback btn-clicked(string);          // 按钮 id：generate-test/clear/save/reload/import-schema
+    callback btn-clicked(string);          // 按钮 id：generate-test/clear/save/reload
 
     height: Theme.toolbar-h;
     background: Theme.bg-toolbar;
@@ -29,9 +29,8 @@ export component Toolbar inherits Rectangle {
         // Rectangle { width: 1px; background: Theme.border-light; }
         Button { text: "保存"; clicked => { root.btn-clicked("save"); } }
         Button { text: "重新加载"; clicked => { root.btn-clicked("reload"); } }
-        Rectangle { width: 1px; background: Theme.border-light; }
-        Button { text: "导入 Schema"; clicked => { root.btn-clicked("import-schema"); } }
-        // 模板库按钮已挪到 TreeSection 顶部功能区（在搜索框上方）。
+        // 「导入 Schema」已迁到项目右键 → 「合并 Schema...」（与「导出 Schema...」对偶）。
+        // 「模板库」按钮已挪到 TreeSection 顶部功能区，并整合进统一「新建项目」对话框。
     }
 }
 

@@ -23,7 +23,8 @@ import { TypeSelector, RefItem, TsParamSlot } from "dialogs/type_selector.slint"
 import { RefPicker, RefRow, RefHeader } from "dialogs/ref_picker.slint";
 import { ExportDialog } from "dialogs/export_dialog.slint";
 import { SchemaExportDialog, SchemaImportDialog, SchemaItem } from "dialogs/schema_dialog.slint";
-import { TemplateLibraryDialog, NewProjectDialog, TemplateItem } from "dialogs/template_dialog.slint";
+import { NewProjectDialog, TemplateItem } from "dialogs/template_dialog.slint";
+import { CreateProjectDialog } from "dialogs/create_project.slint";
 import { ContextMenu, CtxMenuItem } from "dialogs/context_menu.slint";
 import { InputDialog } from "dialogs/input_dialog.slint";
 import { ConfirmDialog } from "dialogs/confirm_dialog.slint";
@@ -208,43 +209,69 @@ export component AppWindow inherits Window {
     callback si-toggle-item(int);
     callback si-confirm();
 
-    // ── Dialog: 模板库 ──────────────────────────────────────
-    in-out property <bool> dlg-template-open: false;
-    in-out property <int> tpl-tab-index: 0;
-    in property <int> tpl-builtin-count: 0;
-    in property <int> tpl-local-count: 0;
-    in-out property <string> tpl-search;
-    in property <[TemplateItem]> tpl-items;
-    in property <string> tpl-detail;
-    in property <bool> tpl-can-use: false;
-    callback tpl-set-tab(int);
-    callback tpl-search-edited(string);
-    callback tpl-select-item(int);
-    callback tpl-use-template();
+    // ── Dialog: 新建项目（统一 3 tab：空 / 文件 / 模板）──────
+    in-out property <bool> dlg-create-project-open: false;
+    in property <int> cp-tab-index: 0;
+    in-out property <string> cp-project-id;
+    in-out property <string> cp-project-name;
+    in-out property <string> cp-project-category;
+    in-out property <string> cp-project-version;
+    in-out property <bool> cp-open-after: true;
+    in property <string> cp-id-error;
+    in property <string> cp-name-error;
+    in property <bool> cp-can-confirm: false;
+    in property <bool> cp-source-has-preset: false;
+    in-out property <bool> cp-with-preset: false;
+    // FromFile tab
+    in-out property <string> cp-file-path;
+    in property <bool> cp-file-loaded: false;
+    in property <string> cp-file-error;
+    // FromTemplate tab
+    in property <int> cp-tpl-subtab: 0;
+    in property <int> cp-tpl-builtin-count: 0;
+    in property <int> cp-tpl-local-count: 0;
+    in-out property <string> cp-tpl-search;
+    in property <[TemplateItem]> cp-tpl-items;
+    in property <bool> cp-tpl-selected: false;
+    // sections-picker
+    in property <[SchemaItem]> cp-picker-items;
+    in-out property <bool> cp-picker-all-checked: false;
+    in property <int> cp-picker-selected-count: 0;
+    in property <int> cp-picker-total-count: 0;
+    callback cp-set-tab(int);
+    callback cp-id-edited(string);
+    callback cp-name-edited(string);
+    callback cp-category-edited(string);
+    callback cp-version-edited(string);
+    callback cp-file-browse();
+    callback cp-tpl-set-subtab(int);
+    callback cp-tpl-search-edited(string);
+    callback cp-tpl-select-item(int);
+    callback cp-picker-toggle-all(bool);
+    callback cp-picker-toggle-item(int);
+    callback cp-confirm();
+    callback cp-cancel();
+    callback cp-new-project-clicked();
 
-    // ── Dialog: 新建项目 ────────────────────────────────────
+    // ── Dialog: 克隆项目（项目右键专用，仅复制 + 改 id/name）──────
     in-out property <bool> dlg-new-project-open: false;
-    in property <string> np-dialog-title: "新建项目";
+    in property <string> np-dialog-title: "复制项目";
     in property <string> np-intro-line;
     in-out property <string> np-project-id;
     in-out property <string> np-project-name;
     in-out property <string> np-project-category;
     in-out property <string> np-project-version;
-    in-out property <bool> np-open-after: true;
-    in property <bool> np-allow-open-after: true;
+    in-out property <bool> np-open-after: false;
+    in property <bool> np-allow-open-after: false;
     in property <string> np-id-error;
     in property <string> np-name-error;
     in property <bool> np-can-confirm: false;
-    /// 模板带 preset 时 NewProject 才显示「灌入预设」开关
-    in property <bool> np-template-has-preset: false;
-    in-out property <bool> np-with-preset: false;
     callback np-id-edited(string);
     callback np-name-edited(string);
     callback np-category-edited(string);
     callback np-version-edited(string);
     callback np-confirm();
     callback np-cancel();
-    callback np-new-project-clicked();
 
     // ── ContextMenu / InputDialog / ConfirmDialog ───────────
     in property <bool> ctx-menu-open: false;
@@ -365,8 +392,8 @@ export component AppWindow inherits Window {
                     filter-changed(i) => { root.tree-filter-index = i; root.tree-filter-changed(i); }
                     search-edited(s) => { root.tree-search-edited(s); }
                     full-group-toggled(c) => { root.tree-full-group-toggled(c); }
-                    template-library-clicked() => { root.drop-focus(); root.toolbar-btn-clicked("template-library"); }
-                    new-project-clicked() => { root.drop-focus(); root.np-new-project-clicked(); }
+                    template-library-clicked() => { root.drop-focus(); root.cp-new-project-clicked(); }
+                    new-project-clicked() => { root.drop-focus(); root.cp-new-project-clicked(); }
                     sort-changed(i) => { root.tree-sort-index = i; root.tree-sort-changed(i); }
                 }
             }
@@ -563,20 +590,45 @@ export component AppWindow inherits Window {
         cancel => { root.dlg-schema-import-open = false; }
     }
 
-    TemplateLibraryDialog {
-        open: root.dlg-template-open;
-        tab-index: root.tpl-tab-index;
-        builtin-count: root.tpl-builtin-count;
-        local-count: root.tpl-local-count;
-        search <=> root.tpl-search;
-        items: root.tpl-items;
-        detail-text: root.tpl-detail;
-        can-use: root.tpl-can-use;
-        set-tab(i) => { root.tpl-set-tab(i); }
-        search-edited(s) => { root.tpl-search-edited(s); }
-        select-item(i) => { root.tpl-select-item(i); }
-        use-template => { root.tpl-use-template(); }
-        cancel => { root.dlg-template-open = false; }
+    CreateProjectDialog {
+        open: root.dlg-create-project-open;
+        tab-index: root.cp-tab-index;
+        project-id <=> root.cp-project-id;
+        project-name <=> root.cp-project-name;
+        project-category <=> root.cp-project-category;
+        project-version <=> root.cp-project-version;
+        open-after <=> root.cp-open-after;
+        id-error: root.cp-id-error;
+        name-error: root.cp-name-error;
+        can-confirm: root.cp-can-confirm;
+        source-has-preset: root.cp-source-has-preset;
+        with-preset <=> root.cp-with-preset;
+        file-path <=> root.cp-file-path;
+        file-loaded: root.cp-file-loaded;
+        file-error: root.cp-file-error;
+        tpl-subtab: root.cp-tpl-subtab;
+        tpl-builtin-count: root.cp-tpl-builtin-count;
+        tpl-local-count: root.cp-tpl-local-count;
+        tpl-search <=> root.cp-tpl-search;
+        tpl-items: root.cp-tpl-items;
+        tpl-selected: root.cp-tpl-selected;
+        picker-items: root.cp-picker-items;
+        picker-all-checked <=> root.cp-picker-all-checked;
+        picker-selected-count: root.cp-picker-selected-count;
+        picker-total-count: root.cp-picker-total-count;
+        set-tab(i) => { root.cp-set-tab(i); }
+        id-edited(s) => { root.cp-id-edited(s); }
+        name-edited(s) => { root.cp-name-edited(s); }
+        category-edited(s) => { root.cp-category-edited(s); }
+        version-edited(s) => { root.cp-version-edited(s); }
+        file-browse => { root.cp-file-browse(); }
+        tpl-set-subtab(i) => { root.cp-tpl-set-subtab(i); }
+        tpl-search-edited(s) => { root.cp-tpl-search-edited(s); }
+        tpl-select-item(i) => { root.cp-tpl-select-item(i); }
+        picker-toggle-all(c) => { root.cp-picker-toggle-all(c); }
+        picker-toggle-item(i) => { root.cp-picker-toggle-item(i); }
+        confirm => { root.cp-confirm(); }
+        cancel => { root.cp-cancel(); root.dlg-create-project-open = false; }
     }
 
     NewProjectDialog {
@@ -592,8 +644,6 @@ export component AppWindow inherits Window {
         id-error: root.np-id-error;
         name-error: root.np-name-error;
         can-confirm: root.np-can-confirm;
-        template-has-preset: root.np-template-has-preset;
-        with-preset <=> root.np-with-preset;
         id-edited(s) => { root.np-id-edited(s); }
         name-edited(s) => { root.np-name-edited(s); }
         category-edited(s) => { root.np-category-edited(s); }
