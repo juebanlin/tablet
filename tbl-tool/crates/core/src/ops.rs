@@ -1805,19 +1805,22 @@ impl ProjectEngine {
     /// `DeleteProject` 的实际逻辑（拆出便于阅读）。
     /// 用户允许删到 0 个 project（DBeaver-style 全部关闭）。
     fn execute_delete_project(&mut self, project_id: &str) {
-        // 找到要删的盘上根（即使没 opened 也要找 available 里的 root）
-        let project_root = if let Some(idx) = self.projects.iter().position(|p| p.schema.meta.id == project_id) {
-            self.projects[idx].project_root.clone()
+        // 找到要删的盘上根 + 是否仅在内存中（root_pending_create）
+        let (project_root, in_memory_only) = if let Some(idx) = self.projects.iter().position(|p| p.schema.meta.id == project_id) {
+            (self.projects[idx].project_root.clone(), self.projects[idx].root_pending_create)
         } else if let Some(ap) = self.available_projects.iter().find(|a| a.id == project_id) {
-            ap.root.clone()
+            (ap.root.clone(), false)
         } else {
             self.log(format!("Project 不存在: {}", project_id));
             return;
         };
 
-        if let Err(e) = std::fs::remove_dir_all(&project_root) {
-            self.log(format!("删除 project 目录失败: {}", e));
-            return;
+        // 内存项目（还没落盘）：跳过文件系统删除；NotFound 也忽略，按"目标已不在"处理。
+        if !in_memory_only && project_root.exists() {
+            if let Err(e) = std::fs::remove_dir_all(&project_root) {
+                self.log(format!("删除 project 目录失败: {}", e));
+                return;
+            }
         }
 
         // 从 opened 移除（如果在）
