@@ -36,12 +36,14 @@ pub fn after_pending_action(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
     ui::log_panel::push(ui_h, state);
 }
 
-/// 右键菜单 action 走完后的标准 fan-out（含可能被打开的 input/confirm/new-project）。
+/// 右键菜单 action 走完后的标准 fan-out（含可能被打开的 input/confirm/new-project / 数据导出 / schema 导出）。
 pub fn after_ctx_menu(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
     dialogs::context_menu::push(ui_h, state);
     dialogs::pending::push_input(ui_h, state);
     dialogs::pending::push_confirm(ui_h, state);
     dialogs::new_project::push(ui_h, state);
+    dialogs::data_export::push(ui_h, state);
+    dialogs::schema_io::push_export(ui_h, state);
     ui::tree::push(ui_h, state);
     ui::grid::push(ui_h, state);
     ui::log_panel::push(ui_h, state);

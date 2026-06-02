@@ -15,10 +15,7 @@ pub fn wire(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
     ui_h.on_toolbar_btn_clicked(move |id| {
         let id = id.to_string();
         let mut full_refresh = false;
-        let mut export_dlg = false;
-        let mut schema_export_dlg = false;
         let mut schema_import_dlg = false;
-        let mut template_lib_dlg = false;
         match id.as_str() {
             "generate-test" => {
                 s.borrow_mut().engine.generate_test_config();
@@ -41,18 +38,6 @@ pub fn wire(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
                 reset_view_after_reload(&s);
                 full_refresh = true;
             }
-            "export" => {
-                s.borrow_mut().data_export.open = true;
-                export_dlg = true;
-            }
-            "export-schema" => {
-                {
-                    let mut st = s.borrow_mut();
-                    st.schema_export.open = true;
-                    dialogs::schema_io::rebuild_export_items(&mut st);
-                }
-                schema_export_dlg = true;
-            }
             "import-schema" => {
                 {
                     let mut st = s.borrow_mut();
@@ -61,19 +46,7 @@ pub fn wire(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
                 }
                 schema_import_dlg = true;
             }
-            "template-library" => {
-                {
-                    let mut st = s.borrow_mut();
-                    st.template_lib.open = true;
-                    st.template_lib.tab = 0;
-                    st.template_lib.search.clear();
-                    st.template_lib.selected_id.clear();
-                }
-                template_lib_dlg = true;
-            }
-            _ => {
-                // excel 等：后续 step
-            }
+            _ => {}
         }
         if let Some(ui_h) = weak.upgrade() {
             if full_refresh {
@@ -85,10 +58,7 @@ pub fn wire(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
                 dialogs::pending::push_input(&ui_h, &s);
                 dialogs::pending::push_confirm(&ui_h, &s);
             }
-            if export_dlg { dialogs::data_export::push(&ui_h, &s); }
-            if schema_export_dlg { dialogs::schema_io::push_export(&ui_h, &s); }
             if schema_import_dlg { dialogs::schema_io::push_import(&ui_h, &s); }
-            if template_lib_dlg { dialogs::template_library::push(&ui_h, &s); }
             // 任何 toolbar 操作都可能产生日志（save/reload/generate/clear 全会 log）
             refresh::after_log(&ui_h, &s);
         }

@@ -35,6 +35,11 @@ pub fn push(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
     ui_h.set_grid_subtitle(snap.subtitle.into());
     // 「枚举显示名字」仅在 Table 选中时启用（constant/enum 没有 @ref 列，勾上无效）
     ui_h.set_show_enum_name_enabled(matches!(state.borrow().selected, Some(SelectedNode::Table { .. })));
+    // 「Excel 编辑」绑定具体节点（Table / Constant / Enum 都接受），未选中时禁用
+    ui_h.set_excel_edit_enabled(matches!(
+        state.borrow().selected,
+        Some(SelectedNode::Table { .. } | SelectedNode::Constant { .. } | SelectedNode::Enum { .. })
+    ));
     ui_h.set_grid_col_count(snap.col_count);
     ui_h.set_grid_header_rows(slint::ModelRc::new(slint::VecModel::from(
         snap.header_rows.into_iter()
@@ -99,6 +104,21 @@ pub fn wire(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
         ui_h.on_show_enum_name_toggled(move |c| {
             s.borrow_mut().view_show_enum_name = c;
             if let Some(ui_h) = weak.upgrade() { push(&ui_h, &s); }
+        });
+    }
+    // 「Excel 编辑」按钮：暂未实现，先打 log，避免按钮看着哑
+    //
+    // TODO(excel-edit): 点击后弹窗让用户选「单项 / 整组」两种模式，再走对应导出 + 外部编辑回填流程：
+    //   - 单项导出：选中某个 Table/Constant/Enum，生成单 sheet xlsx 让用户在外部 Excel 里编辑
+    //   - 整组导出：选中某 Group 节点（届时要把 excel-edit-enabled 扩到 Group 选中态）
+    //     → 生成多 sheet xlsx，组内每个 Table/Constant/Enum 一个 sheet
+    // 编辑完成后监听 xlsx 变化，反序列化回 records / entries 并写回 state；最后清理临时文件。
+    {
+        let s = state.clone();
+        let weak = ui_h.as_weak();
+        ui_h.on_excel_edit_clicked(move || {
+            s.borrow_mut().engine.log("[Excel 编辑] 功能尚未实现".to_string());
+            if let Some(ui_h) = weak.upgrade() { crate::refresh::after_log(&ui_h, &s); }
         });
     }
     // 单元格点击 → 行为按 ColumnKind + picker_trigger_data 配置分发：

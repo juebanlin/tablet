@@ -241,6 +241,15 @@ pub fn wire(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
             }
         });
     }
+    // sx-cancel：同步 Rust 端 open，否则下次刷新（ctx fan-out 等）会把对话框重新推开
+    {
+        let s = state.clone();
+        let weak = ui_h.as_weak();
+        ui_h.on_sx_cancel(move || {
+            s.borrow_mut().schema_export.open = false;
+            if let Some(ui_h) = weak.upgrade() { push_export(&ui_h, &s); }
+        });
+    }
     // si-browse-file
     {
         let s = state.clone();

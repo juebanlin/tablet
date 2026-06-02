@@ -20,31 +20,42 @@ pub fn push(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
 }
 
 pub fn wire(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
-    let s = state.clone();
-    let weak = ui_h.as_weak();
-    ui_h.on_ex_confirm(move || {
-        let (json, xml, java, go, lua) = match weak.upgrade() {
-            Some(ui_h) => (
-                ui_h.get_ex_json(), ui_h.get_ex_xml(), ui_h.get_ex_java(),
-                ui_h.get_ex_go(), ui_h.get_ex_lua(),
-            ),
-            None => return,
-        };
-        {
-            let mut st = s.borrow_mut();
-            st.data_export.json = json;
-            st.data_export.xml = xml;
-            st.data_export.java = java;
-            st.data_export.go = go;
-            st.data_export.lua = lua;
-            st.data_export.open = false;
-        }
-        run(&s);
-        if let Some(ui_h) = weak.upgrade() {
-            push(&ui_h, &s);
-            refresh::after_log(&ui_h, &s);
-        }
-    });
+    {
+        let s = state.clone();
+        let weak = ui_h.as_weak();
+        ui_h.on_ex_confirm(move || {
+            let (json, xml, java, go, lua) = match weak.upgrade() {
+                Some(ui_h) => (
+                    ui_h.get_ex_json(), ui_h.get_ex_xml(), ui_h.get_ex_java(),
+                    ui_h.get_ex_go(), ui_h.get_ex_lua(),
+                ),
+                None => return,
+            };
+            {
+                let mut st = s.borrow_mut();
+                st.data_export.json = json;
+                st.data_export.xml = xml;
+                st.data_export.java = java;
+                st.data_export.go = go;
+                st.data_export.lua = lua;
+                st.data_export.open = false;
+            }
+            run(&s);
+            if let Some(ui_h) = weak.upgrade() {
+                push(&ui_h, &s);
+                refresh::after_log(&ui_h, &s);
+            }
+        });
+    }
+    {
+        // 取消时同步 Rust 端 open，否则下次刷新会把对话框重新推开（ctx fan-out 必踩）
+        let s = state.clone();
+        let weak = ui_h.as_weak();
+        ui_h.on_ex_cancel(move || {
+            s.borrow_mut().data_export.open = false;
+            if let Some(ui_h) = weak.upgrade() { push(&ui_h, &s); }
+        });
+    }
 }
 
 /// 执行数据导出（按 data_export 选项）。

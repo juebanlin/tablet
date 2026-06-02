@@ -23,7 +23,9 @@ export component GridSection inherits Rectangle {
     // ── 功能 bar ──
     in-out property <bool> show-enum-name: false;
     in property <bool> show-enum-name-enabled: true;
+    in property <bool> excel-edit-enabled: false;
     callback show-enum-name-toggled(bool);
+    callback excel-edit-clicked();
 
     // ── 公式栏 ──
     in property <string> coord;
@@ -89,7 +91,9 @@ export component GridSection inherits Rectangle {
         GridRibbon {
             show-enum-name <=> root.show-enum-name;
             show-enum-name-enabled: root.show-enum-name-enabled;
+            excel-edit-enabled: root.excel-edit-enabled;
             show-enum-name-toggled(c) => { root.show-enum-name-toggled(c); }
+            excel-edit-clicked => { root.excel-edit-clicked(); }
         }
         FormulaBar {
             coord: root.coord;

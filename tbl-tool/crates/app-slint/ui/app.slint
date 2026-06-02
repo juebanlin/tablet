@@ -62,7 +62,9 @@ export component AppWindow inherits Window {
     in property <string> grid-subtitle: "";
     in-out property <bool> show-enum-name: false;
     in property <bool> show-enum-name-enabled: false;
+    in property <bool> excel-edit-enabled: false;
     callback show-enum-name-toggled(bool);
+    callback excel-edit-clicked();
 
     in property <string> coord;
     in property <string> formula-display: "";
@@ -173,6 +175,7 @@ export component AppWindow inherits Window {
     in-out property <bool> ex-go: false;
     in-out property <bool> ex-lua: true;
     callback ex-confirm();
+    callback ex-cancel();
 
     // ── Dialog: Schema 导出 ─────────────────────────────────
     in-out property <bool> dlg-schema-export-open: false;
@@ -183,6 +186,7 @@ export component AppWindow inherits Window {
     callback sx-toggle-all(bool);
     callback sx-toggle-item(int);
     callback sx-confirm();
+    callback sx-cancel();
 
     // ── Dialog: Schema 导入 ─────────────────────────────────
     in-out property <bool> dlg-schema-import-open: false;
@@ -383,7 +387,9 @@ export component AppWindow inherits Window {
                 subtitle: root.grid-subtitle;
                 show-enum-name <=> root.show-enum-name;
                 show-enum-name-enabled: root.show-enum-name-enabled;
+                excel-edit-enabled: root.excel-edit-enabled;
                 show-enum-name-toggled(c) => { root.show-enum-name-toggled(c); }
+                excel-edit-clicked => { root.excel-edit-clicked(); }
                 coord: root.coord;
                 formula-display: root.formula-display;
                 formula-editable: root.formula-editable;
@@ -517,7 +523,7 @@ export component AppWindow inherits Window {
         preset-server => { root.ex-json = true; root.ex-xml = true; root.ex-java = true; root.ex-go = true; root.ex-lua = false; }
         preset-client => { root.ex-json = false; root.ex-xml = false; root.ex-java = false; root.ex-go = false; root.ex-lua = true; }
         confirm => { root.ex-confirm(); root.dlg-export-open = false; }
-        cancel => { root.dlg-export-open = false; }
+        cancel => { root.ex-cancel(); root.dlg-export-open = false; }
     }
 
     SchemaExportDialog {
@@ -529,7 +535,7 @@ export component AppWindow inherits Window {
         toggle-all(c) => { root.sx-toggle-all(c); }
         toggle-item(i) => { root.sx-toggle-item(i); }
         confirm => { root.sx-confirm(); root.dlg-schema-export-open = false; }
-        cancel => { root.dlg-schema-export-open = false; }
+        cancel => { root.sx-cancel(); root.dlg-schema-export-open = false; }
     }
 
     SchemaImportDialog {

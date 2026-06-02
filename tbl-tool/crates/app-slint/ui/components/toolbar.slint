@@ -1,12 +1,14 @@
 // 顶部工具栏：单行主按钮区。
-// 表级开关（如「枚举显示名字」）已下移至右侧表格面板的功能区 bar。
+// 表级开关（如「枚举显示名字」）和表级动作（如「Excel 编辑」）已下移至 GridRibbon。
+// Project 级导出（导出 / 导出 Schema）已迁到 TreeProject 右键菜单；
+// 导入 Schema 留在这里（交互上是 workspace 级，不绑定具体 project）。
 // 对应 docs/02-UI设计.md §5.1。
 
 import { Theme } from "../theme.slint";
 import { Button } from "std-widgets.slint";
 
 export component Toolbar inherits Rectangle {
-    callback btn-clicked(string);          // 按钮 id：generate-test/clear/excel/save/reload/export/export-schema/import-schema
+    callback btn-clicked(string);          // 按钮 id：generate-test/clear/save/reload/import-schema
 
     height: Theme.toolbar-h;
     background: Theme.bg-toolbar;
@@ -25,12 +27,9 @@ export component Toolbar inherits Rectangle {
         // Button { text: "生成测试数据"; clicked => { root.btn-clicked("generate-test"); } }
         // Button { text: "清空配置"; clicked => { root.btn-clicked("clear"); } }
         // Rectangle { width: 1px; background: Theme.border-light; }
-        Button { text: "用 Excel 打开"; clicked => { root.btn-clicked("excel"); } }
         Button { text: "保存"; clicked => { root.btn-clicked("save"); } }
         Button { text: "重新加载"; clicked => { root.btn-clicked("reload"); } }
         Rectangle { width: 1px; background: Theme.border-light; }
-        Button { text: "导出"; clicked => { root.btn-clicked("export"); } }
-        Button { text: "导出 Schema"; clicked => { root.btn-clicked("export-schema"); } }
         Button { text: "导入 Schema"; clicked => { root.btn-clicked("import-schema"); } }
         // 模板库按钮已挪到 TreeSection 顶部功能区（在搜索框上方）。
     }

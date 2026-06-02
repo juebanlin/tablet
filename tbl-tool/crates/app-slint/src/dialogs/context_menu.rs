@@ -55,8 +55,8 @@ pub(crate) fn items_for(kind: &CtxMenuKind, state: &AppState) -> Vec<CtxMenuItem
             if state.engine.is_opened(project_id) {
                 vec![
                     item("保存", "tree.proj-save", false),
-                    item("导出 (JSON)", "tree.proj-export-json", false),
-                    item("导出 (XML)", "tree.proj-export-xml", false),
+                    item("导出...", "tree.proj-export", false),
+                    item("导出 Schema...", "tree.proj-export-schema", false),
                     sep(),
                     item("新建 Group", "tree.proj-new-group", false),
                     item("复制(克隆)...", "tree.proj-clone", false),

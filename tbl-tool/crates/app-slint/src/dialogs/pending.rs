@@ -197,19 +197,18 @@ pub(crate) fn handle_project_root_action(state: &Rc<RefCell<AppState>>, project_
         "tree.proj-save" => {
             state.borrow_mut().engine.save_project(project_id);
         }
-        "tree.proj-export-json" => {
-            let _ = state.borrow_mut().engine.export_project(
-                project_id,
-                tbl_core::export::export_all_json,
-                "JSON",
-            );
+        "tree.proj-export" => {
+            // 数据导出对话框走 active project；切到当前选中 project 再开
+            let mut st = state.borrow_mut();
+            st.engine.set_active_by_id(project_id);
+            st.data_export.open = true;
         }
-        "tree.proj-export-xml" => {
-            let _ = state.borrow_mut().engine.export_project(
-                project_id,
-                tbl_core::export::export_all_xml,
-                "XML",
-            );
+        "tree.proj-export-schema" => {
+            // Schema 导出对话框同样走 active project
+            let mut st = state.borrow_mut();
+            st.engine.set_active_by_id(project_id);
+            st.schema_export.open = true;
+            crate::dialogs::schema_io::rebuild_export_items(&mut st);
         }
         "tree.proj-new-group" => {
             state.borrow_mut().pending.open(PendingAction::NewGroup {

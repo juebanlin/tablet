@@ -1,13 +1,15 @@
-// 表格区功能 bar：归属于当前选中表，显示表级开关（枚举显示名字、…）。
+// 表格区功能 bar：归属于当前选中表，显示表级开关 / 动作（枚举显示名字、Excel 编辑…）。
 // 与 GridArea 等宽。对应 docs/02-UI设计.md §5.2。
 
 import { Theme } from "../theme.slint";
-import { CheckBox } from "std-widgets.slint";
+import { Button, CheckBox } from "std-widgets.slint";
 
 export component GridRibbon inherits Rectangle {
     in-out property <bool> show-enum-name: false;
     in property <bool> show-enum-name-enabled: true;
+    in property <bool> excel-edit-enabled: false;
     callback show-enum-name-toggled(bool);
+    callback excel-edit-clicked();
 
     height: Theme.ribbon-h;
     background: Theme.bg-toolbar;
@@ -20,6 +22,11 @@ export component GridRibbon inherits Rectangle {
         spacing: Theme.sp-5;
         alignment: start;
 
+        Button {
+            text: "Excel 编辑";
+            enabled: root.excel-edit-enabled;
+            clicked => { root.excel-edit-clicked(); }
+        }
         CheckBox {
             text: "枚举显示名字";
             checked <=> root.show-enum-name;
@@ -36,5 +43,6 @@ export component GridRibbonPreview inherits Window {
 
     GridRibbon {
         show-enum-name: true;
+        excel-edit-enabled: true;
     }
 }
