@@ -9,6 +9,7 @@ use tbl_core::types::{BaseType, Paradigm};
 use crate::state::{
     AppState, SelectedNode, TsRefFilter, TsTab, TypeEditTarget,
 };
+use crate::theme::{ICON_ENUM, ICON_TABLE};
 use crate::{refresh, AppWindow, RefItem, TsParamSlot};
 
 /// Constant data cell type 列单击 → 打开 TypeSelector（编辑该数据格的 type）
@@ -127,7 +128,7 @@ pub fn push(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
         let search_ok = search.is_empty() || name.to_lowercase().contains(&search);
         kind_ok && search_ok
     }).map(|(name, is_table)| {
-        let icon = if *is_table { "📊" } else { "🔢" };
+        let icon = if *is_table { ICON_TABLE } else { ICON_ENUM };
         let kind_label = if *is_table { "table" } else { "enum" };
         RefItem {
             icon: icon.into(),

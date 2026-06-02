@@ -6,6 +6,7 @@ use std::rc::Rc;
 use slint::ComponentHandle;
 
 use crate::state::{AppState, RefDisplayStrategy, SelectedNode};
+use crate::theme::{REF_LABEL_ENUM, REF_LABEL_TABLE, WARN_EMOJI};
 use crate::{refresh, AppWindow, RefHeader, RefRow};
 
 /// 被引用项（Table 或 Enum）的可选条目集合，含表头与每行 (id, extras)。
@@ -139,16 +140,17 @@ pub fn push(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
     ui_h.set_rp_strategy_index(rp.strategy.to_index());
 
     let target = collect_ref_rows(&st, &rp.ref_name, rp.strategy);
+    let target_missing_label = format!("{} 引用不存在", WARN_EMOJI);
     let (kind_label, target_missing, is_table, id_header, headers, rows): (&str, bool, bool, (String, String), Vec<(String, String)>, Vec<(String, Vec<String>)>) = match target {
         Some(t) => (
-            if t.is_table { "📊 表引用" } else { "🔢 枚举引用" },
+            if t.is_table { REF_LABEL_TABLE } else { REF_LABEL_ENUM },
             false,
             t.is_table,
             t.id_header,
             t.headers,
             t.rows,
         ),
-        None => ("⚠️ 引用不存在", true, true, ("id".to_string(), String::new()), Vec::new(), Vec::new()),
+        None => (target_missing_label.as_str(), true, true, ("id".to_string(), String::new()), Vec::new(), Vec::new()),
     };
     ui_h.set_rp_kind_label(kind_label.into());
     ui_h.set_rp_target_missing(target_missing);
@@ -189,7 +191,7 @@ pub fn push(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
                 let nm = ex.first().cloned().unwrap_or_default();
                 if nm.is_empty() { id.clone() } else { format!("{} ({})", id, nm) }
             })
-            .unwrap_or_else(|| format!("{} ⚠️ 不存在", rp.selected_id))
+            .unwrap_or_else(|| format!("{} {} 不存在", rp.selected_id, WARN_EMOJI))
     };
     ui_h.set_rp_selection_preview(preview.into());
 }

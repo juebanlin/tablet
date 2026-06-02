@@ -6,7 +6,8 @@
 //
 // 后端模块布局：
 //   state.rs    数据 / 业务态
-//   convert.rs  state → UI 数据（GridSnapshot / TreeNode）
+//   theme.rs    全 crate 共享视觉常量（图标 / marker / 颜色）
+//   convert/    state → UI 数据派生（tree / grid / 工具）
 //   refresh.rs  跨模块刷新 fan-out（callback 末尾按"刚做了什么"选 helper）
 //   ui/         主窗口区域：tree / grid / grid_actions / toolbar / log_panel / focus
 //   dialogs/    子窗口：context_menu / pending / type_selector / ref_picker /
@@ -17,6 +18,7 @@
 #![cfg_attr(target_os = "windows", windows_subsystem = "windows")]
 
 mod state;
+mod theme;
 mod convert;
 mod refresh;
 mod ui;

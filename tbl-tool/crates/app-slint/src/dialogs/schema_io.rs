@@ -6,6 +6,7 @@ use std::rc::Rc;
 use slint::ComponentHandle;
 
 use crate::state::{self, AppState};
+use crate::theme::{ICON_CONST, ICON_ENUM, ICON_GROUP, ICON_TABLE};
 use crate::{refresh, ui, AppWindow, SchemaItem};
 
 /// 把当前 project 的 groups/tables/constants/enums 扁平化为 SchemaExportItem 列表，
@@ -60,9 +61,9 @@ pub fn push_export(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
             for k in start..end {
                 if sx.checked.get(k).copied().unwrap_or(false) { any = true; } else { all = false; }
             }
-            (all && start < end, any && !all, "📁".to_string())
+            (all && start < end, any && !all, ICON_GROUP.to_string())
         } else {
-            let icon = if item.is_table { "📊" } else { "📋" };
+            let icon = if item.is_table { ICON_TABLE } else { ICON_CONST };
             (sx.checked.get(idx).copied().unwrap_or(false), false, icon.to_string())
         };
         slint_items.push(SchemaItem {
@@ -130,12 +131,12 @@ pub fn push_import(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
             for k in start..end {
                 if si.checked.get(k).copied().unwrap_or(false) { any = true; } else { all = false; }
             }
-            (all && start < end, any && !all, "📁".to_string(), false)
+            (all && start < end, any && !all, ICON_GROUP.to_string(), false)
         } else {
             let icon = match item.mode {
-                SchemaMode::Table => "📊",
-                SchemaMode::Constant => "📋",
-                SchemaMode::Enum => "🔢",
+                SchemaMode::Table => ICON_TABLE,
+                SchemaMode::Constant => ICON_CONST,
+                SchemaMode::Enum => ICON_ENUM,
             };
             (
                 si.checked.get(idx).copied().unwrap_or(false),
