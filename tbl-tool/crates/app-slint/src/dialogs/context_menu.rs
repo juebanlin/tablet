@@ -54,27 +54,27 @@ pub(crate) fn items_for(kind: &CtxMenuKind, state: &AppState) -> Vec<CtxMenuItem
         CtxMenuKind::TreeProject { project_id } => {
             if state.engine.is_opened(project_id) {
                 vec![
-                    item("保存此 Project", "tree.proj-save", false),
-                    item("导出此 Project (JSON)", "tree.proj-export-json", false),
-                    item("导出此 Project (XML)", "tree.proj-export-xml", false),
+                    item("保存", "tree.proj-save", false),
+                    item("导出 (JSON)", "tree.proj-export-json", false),
+                    item("导出 (XML)", "tree.proj-export-xml", false),
                     sep(),
                     item("新建 Group", "tree.proj-new-group", false),
                     item("复制(克隆)...", "tree.proj-clone", false),
                     item_owned(paste_group_label.clone(), "tree.paste-group", !has_group_cb),
-                    item("重命名 Project...", "tree.proj-rename", false),
-                    item("删除 Project...", "tree.proj-delete", false),
+                    item("重命名...", "tree.proj-rename", false),
+                    item("删除", "tree.proj-delete", false),
                     sep(),
-                    item("关闭 Project", "tree.proj-close", false),
+                    item("关闭", "tree.proj-close", false),
                     sep(),
                     item("在文件管理器打开", "tree.proj-open-dir", false),
                 ]
             } else {
                 vec![
-                    item("打开 Project", "tree.proj-open", false),
+                    item("打开", "tree.proj-open", false),
                     sep(),
                     item("在文件管理器打开", "tree.proj-open-dir", false),
-                    item("重命名 Project...", "tree.proj-rename", false),
-                    item("删除 Project...", "tree.proj-delete", false),
+                    item("重命名...", "tree.proj-rename", false),
+                    item("删除", "tree.proj-delete", false),
                 ]
             }
         }
