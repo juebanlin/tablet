@@ -183,6 +183,8 @@ export component AppWindow inherits Window {
     in-out property <bool> sx-all-checked: false;
     in property <int> sx-selected-count: 0;
     in property <int> sx-total-count: 0;
+    /// 是否把当前数据作为 # @preset 块写进导出文件
+    in-out property <bool> sx-with-preset: false;
     callback sx-toggle-all(bool);
     callback sx-toggle-item(int);
     callback sx-confirm();
@@ -197,6 +199,10 @@ export component AppWindow inherits Window {
     in property <int> si-selected-count: 0;
     in property <int> si-total-count: 0;
     in property <int> si-conflict-count: 0;
+    /// schema 是否带 `# @preset` 块（控制 with-preset 复选框可见性）
+    in property <bool> si-has-preset: false;
+    /// with-preset 勾选状态（true = 把 schema preset 一并灌进项目）
+    in-out property <bool> si-with-preset: true;
     callback si-browse-file();
     callback si-toggle-all(bool);
     callback si-toggle-item(int);
@@ -229,6 +235,9 @@ export component AppWindow inherits Window {
     in property <string> np-id-error;
     in property <string> np-name-error;
     in property <bool> np-can-confirm: false;
+    /// 模板带 preset 时 NewProject 才显示「灌入预设」开关
+    in property <bool> np-template-has-preset: false;
+    in-out property <bool> np-with-preset: false;
     callback np-id-edited(string);
     callback np-name-edited(string);
     callback np-category-edited(string);
@@ -529,6 +538,7 @@ export component AppWindow inherits Window {
         all-checked <=> root.sx-all-checked;
         selected-count: root.sx-selected-count;
         total-count: root.sx-total-count;
+        with-preset <=> root.sx-with-preset;
         toggle-all(c) => { root.sx-toggle-all(c); }
         toggle-item(i) => { root.sx-toggle-item(i); }
         confirm => { root.sx-confirm(); root.dlg-schema-export-open = false; }
@@ -544,6 +554,8 @@ export component AppWindow inherits Window {
         selected-count: root.si-selected-count;
         total-count: root.si-total-count;
         conflict-count: root.si-conflict-count;
+        has-preset: root.si-has-preset;
+        with-preset <=> root.si-with-preset;
         browse-file => { root.si-browse-file(); }
         toggle-all(c) => { root.si-toggle-all(c); }
         toggle-item(i) => { root.si-toggle-item(i); }
@@ -580,6 +592,8 @@ export component AppWindow inherits Window {
         id-error: root.np-id-error;
         name-error: root.np-name-error;
         can-confirm: root.np-can-confirm;
+        template-has-preset: root.np-template-has-preset;
+        with-preset <=> root.np-with-preset;
         id-edited(s) => { root.np-id-edited(s); }
         name-edited(s) => { root.np-name-edited(s); }
         category-edited(s) => { root.np-category-edited(s); }

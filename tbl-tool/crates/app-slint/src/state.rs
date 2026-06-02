@@ -528,6 +528,9 @@ pub struct SchemaExportState {
     pub items: Vec<SchemaExportItem>,
     /// items 同步长度的 checked。组节点 checked 由子节点聚合，不直接读写。
     pub checked: Vec<bool>,
+    /// 是否把当前 records / entries 作为 `# @preset` 块写入导出文件。
+    /// 默认 false：导出"结构骨架"用于复用；true 用于"结构 + 数据"打包迁移。
+    pub with_preset: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -548,6 +551,9 @@ pub struct SchemaImportState {
     pub items: Vec<SchemaImportItem>,
     pub checked: Vec<bool>,
     pub conflicts: Vec<bool>,
+    /// 是否把 schema 里的 `# @preset` 数据一同灌进项目（ND+tbl 语义：apply 后即解耦）。
+    /// 默认 true：有预设就直接拿；用户可以在导入对话框里关掉。
+    pub with_preset: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -609,6 +615,10 @@ pub struct NewProjectState {
     pub open_after: bool,
     /// 标记是否已经按 mode 默认值预填过 project id（避免覆盖用户手输）
     pub id_prefilled: bool,
+    /// 模板是否带 # @preset 块（仅 FromTemplate 有意义；用于在对话框上显示「灌入预设」开关）
+    pub template_has_preset: bool,
+    /// 「灌入预设数据」勾选项；默认跟 template_has_preset 一致；用户可在对话框关掉
+    pub with_preset: bool,
 }
 
 impl NewProjectState {
@@ -621,6 +631,8 @@ impl NewProjectState {
         self.project_version = "1.0.0".to_string();
         self.open_after = true;
         self.id_prefilled = true;
+        self.template_has_preset = false;
+        self.with_preset = false;
     }
 
     pub fn open_from_template(&mut self, meta: &tbl_core::template::TemplateMeta) {
@@ -644,6 +656,16 @@ impl NewProjectState {
         };
         self.open_after = true;
         self.id_prefilled = false;
+        // template_has_preset / with_preset 由调用方在打开后用 set_template_preset_hint 校准
+        self.template_has_preset = false;
+        self.with_preset = false;
+    }
+
+    /// 在 open_from_template 之后调用，告诉 NewProjectState 该模板是否带 preset。
+    /// 调用方可单独读模板 schema 的 meta.has_preset 后传进来。
+    pub fn set_template_preset_hint(&mut self, has_preset: bool) {
+        self.template_has_preset = has_preset;
+        self.with_preset = has_preset;
     }
 
     pub fn open_clone(
@@ -668,6 +690,8 @@ impl NewProjectState {
         };
         self.open_after = false;
         self.id_prefilled = true;
+        self.template_has_preset = false;
+        self.with_preset = false;
     }
 
     pub fn close(&mut self) {
@@ -678,6 +702,8 @@ impl NewProjectState {
         self.project_category.clear();
         self.project_version.clear();
         self.id_prefilled = false;
+        self.template_has_preset = false;
+        self.with_preset = false;
     }
 }
 

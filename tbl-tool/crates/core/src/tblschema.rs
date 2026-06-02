@@ -14,6 +14,9 @@ pub struct SchemaMetadata {
     pub source_template: String,
     /// 项目身份：来源模板版本。
     pub source_template_version: String,
+    /// derive 字段：任一 section.preset 非空 → true。serialize 前由调用方刷新；
+    /// 反序列化阶段跟随 # @meta has_preset 行（缺省 false）。
+    pub has_preset: bool,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -22,16 +25,24 @@ pub struct TblSchema {
     pub sections: Vec<SchemaSection>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct SchemaSection {
     pub group: String,
     pub name: String,
     pub mode: SchemaMode,
+    /// Table 段：列声明；Constant / Enum 段：永远空（entries 在项目 .tbl 里，preset 例外）。
     pub fields: Vec<SchemaField>,
+    /// 可选预设数据（与 .tbl `---` 之后行同形态）：
+    /// - Table：每行 = 一条 record（按列序）
+    /// - Constant：每行 = `name | type | value | export | desc`
+    /// - Enum：每行 = `id | name | desc`
+    /// 仅在「带预设」的 schema 文件 / 导出选项下出现；apply_schema_to_project 按 with_preset 决定是否灌入项目。
+    pub preset: Vec<Vec<String>>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub enum SchemaMode {
+    #[default]
     Table,
     Constant,
     Enum,
@@ -74,6 +85,7 @@ pub fn parse_tblschema(content: &str) -> Result<TblSchema> {
     let mut current: Option<SchemaSection> = None;
     let mut meta = SchemaMetadata::default();
     let mut seen_section = false;
+    let mut in_preset = false;
 
     for (line_num, line) in content.lines().enumerate() {
         let trimmed = line.trim();
@@ -82,6 +94,17 @@ pub fn parse_tblschema(content: &str) -> Result<TblSchema> {
         }
 
         if trimmed.starts_with('#') {
+            // `# @preset` 进入预设数据模式；之后的非 `#` / 非 `[` 行按 `|` 切作为预设行。
+            // 仅识别独立 `# @preset`（后接空白或行尾），其它带后缀写法当注释。
+            if let Some(rest) = trimmed.trim_start_matches('#').trim_start().strip_prefix("@preset") {
+                if rest.trim().is_empty() {
+                    if current.is_none() {
+                        bail!("line {}: `# @preset` 必须出现在某个 [section] 之后", line_num + 1);
+                    }
+                    in_preset = true;
+                    continue;
+                }
+            }
             // 仅在第一个 [group/Name] 之前的 `# @meta key: value` 行视作 metadata；
             // 之后的 `#` 行一律视作普通注释。
             if !seen_section {
@@ -94,6 +117,7 @@ pub fn parse_tblschema(content: &str) -> Result<TblSchema> {
                         "created_at" => meta.created_at = value,
                         "source_template" => meta.source_template = value,
                         "source_template_version" => meta.source_template_version = value,
+                        "has_preset" => meta.has_preset = value.eq_ignore_ascii_case("true"),
                         _ => { /* 未知 key：忽略，前向兼容 */ }
                     }
                 }
@@ -103,14 +127,32 @@ pub fn parse_tblschema(content: &str) -> Result<TblSchema> {
 
         if trimmed.starts_with('[') {
             seen_section = true;
+            in_preset = false;
             if let Some(sec) = current.take() {
                 validate_section(&sec, line_num)?;
                 sections.push(sec);
             }
             current = Some(parse_section_header(trimmed, line_num)?);
         } else if let Some(ref mut sec) = current {
-            let field = parse_field_line(trimmed, line_num, &sec.mode)?;
-            sec.fields.push(field);
+            if in_preset {
+                // preset 行：按 `|` 切，trim 单元格。空行已在外层过滤。
+                let cells: Vec<String> = trimmed.split('|').map(|s| s.trim().to_string()).collect();
+                sec.preset.push(cells);
+            } else {
+                match sec.mode {
+                    SchemaMode::Table => {
+                        let field = parse_field_line(trimmed, line_num, &sec.mode)?;
+                        sec.fields.push(field);
+                    }
+                    SchemaMode::Constant | SchemaMode::Enum => {
+                        let mode_name = if matches!(sec.mode, SchemaMode::Constant) { "constant" } else { "enum" };
+                        bail!(
+                            "line {}: [{}/{}] {} 段不允许直接的数据行（如需预设值请放进 `# @preset` 块）",
+                            line_num + 1, sec.group, sec.name, mode_name
+                        );
+                    }
+                }
+            }
         } else {
             bail!("line {}: field outside section", line_num + 1);
         }
@@ -125,6 +167,9 @@ pub fn parse_tblschema(content: &str) -> Result<TblSchema> {
     if meta.name.is_empty() {
         meta.name = meta.id.clone();
     }
+
+    // has_preset 永远从 sections 重算，忽略 @meta 行声明
+    meta.has_preset = sections.iter().any(|s| !s.preset.is_empty());
 
     Ok(TblSchema { meta, sections })
 }
@@ -165,6 +210,7 @@ fn parse_section_header(line: &str, line_num: usize) -> Result<SchemaSection> {
         name: name.trim().to_string(),
         mode,
         fields: Vec::new(),
+        preset: Vec::new(),
     })
 }
 
@@ -252,6 +298,11 @@ pub fn serialize_tblschema(schema: &TblSchema) -> String {
     if !schema.meta.source_template_version.is_empty() {
         writeln!(s, "# @meta source_template_version: {}", schema.meta.source_template_version).unwrap();
     }
+    // has_preset 是 derive 字段：以实际 sections 为准
+    let has_preset = schema.sections.iter().any(|s| !s.preset.is_empty());
+    if has_preset {
+        writeln!(s, "# @meta has_preset: true").unwrap();
+    }
 
     for sec in &schema.sections {
         writeln!(s).unwrap();
@@ -261,24 +312,32 @@ pub fn serialize_tblschema(schema: &TblSchema) -> String {
             SchemaMode::Enum => "enum",
         };
         writeln!(s, "[{}/{}] {}", sec.group, sec.name, mode).unwrap();
-        match sec.mode {
-            SchemaMode::Enum => {
-                for f in &sec.fields {
-                    // tbl_type 借位存 id
-                    writeln!(s, "{} | {} | {}", f.tbl_type, f.name, f.desc).unwrap();
-                }
+
+        // 仅 Table 段输出列声明；Constant / Enum 段是「结构在项目 .tbl 里」，schema 只留段头。
+        if matches!(sec.mode, SchemaMode::Table) {
+            for f in &sec.fields {
+                writeln!(s, "{} | {} | {} | {}", f.name, f.tbl_type, f.export, f.desc).unwrap();
             }
-            _ => {
-                for f in &sec.fields {
-                    writeln!(s, "{} | {} | {} | {}", f.name, f.tbl_type, f.export, f.desc).unwrap();
-                }
+        }
+
+        // 预设数据 sub-block
+        if !sec.preset.is_empty() {
+            writeln!(s, "# @preset").unwrap();
+            for row in &sec.preset {
+                writeln!(s, "{}", row.join(" | ")).unwrap();
             }
         }
     }
     s
 }
 
-pub fn schema_from_project(groups: &[Group]) -> TblSchema {
+/// 把 project 反向编码成 TblSchema：
+/// - Table 段：列定义照写；with_preset=true 时把 records 作为 preset 行
+/// - Constant 段：fields 永远空（新范式）；with_preset=true 时 entries → preset
+/// - Enum 段：同 Constant
+///
+/// meta 留空（调用方按导出场景填）。
+pub fn schema_from_project(groups: &[Group], with_preset: bool) -> TblSchema {
     let mut sections = Vec::new();
     for group in groups {
         for table in &group.tables {
@@ -289,46 +348,60 @@ pub fn schema_from_project(groups: &[Group]) -> TblSchema {
                 export: export_to_code(&f.export),
                 desc: f.desc.clone(),
             }).collect();
+            let preset = if with_preset {
+                table.records.iter().map(|r| r.clone()).collect()
+            } else {
+                Vec::new()
+            };
             sections.push(SchemaSection {
                 group: group.name.clone(),
                 name: table.name.clone(),
                 mode: SchemaMode::Table,
                 fields,
+                preset,
             });
         }
         for constant in &group.constants {
             if constant.deleted { continue; }
-            let fields = constant.entries.iter()
-                .filter(|e| !e.name.is_empty())
-                .map(|e| SchemaField {
-                    name: e.name.clone(),
-                    tbl_type: e.tbl_type.clone(),
-                    export: export_to_code(&e.export),
-                    desc: e.desc.clone(),
-                }).collect();
+            // 新范式：constant section 的 schema fields 永远空（结构信息全在项目 .tbl）
+            let preset = if with_preset {
+                constant.entries.iter()
+                    .filter(|e| !e.name.is_empty())
+                    .map(|e| vec![
+                        e.name.clone(),
+                        e.tbl_type.clone(),
+                        e.value.clone(),
+                        export_to_code(&e.export),
+                        e.desc.clone(),
+                    ])
+                    .collect()
+            } else {
+                Vec::new()
+            };
             sections.push(SchemaSection {
                 group: group.name.clone(),
                 name: constant.name.clone(),
                 mode: SchemaMode::Constant,
-                fields,
+                fields: Vec::new(),
+                preset,
             });
         }
         for enum_def in &group.enums {
             if enum_def.deleted { continue; }
-            // tbl_type 借位存 id
-            let fields = enum_def.entries.iter()
-                .filter(|e| !e.id.is_empty() || !e.name.is_empty())
-                .map(|e| SchemaField {
-                    name: e.name.clone(),
-                    tbl_type: e.id.clone(),
-                    export: String::new(),
-                    desc: e.desc.clone(),
-                }).collect();
+            let preset = if with_preset {
+                enum_def.entries.iter()
+                    .filter(|e| !e.id.is_empty() || !e.name.is_empty())
+                    .map(|e| vec![e.id.clone(), e.name.clone(), e.desc.clone()])
+                    .collect()
+            } else {
+                Vec::new()
+            };
             sections.push(SchemaSection {
                 group: group.name.clone(),
                 name: enum_def.name.clone(),
                 mode: SchemaMode::Enum,
-                fields,
+                fields: Vec::new(),
+                preset,
             });
         }
     }
@@ -344,7 +417,19 @@ fn export_to_code(e: &Export) -> String {
     }
 }
 
-pub fn apply_schema_to_project(groups: &mut Vec<Group>, sections: &[SchemaSection], config_dir: &Path) -> (usize, usize) {
+/// 把 schema sections 应用到 project：
+/// - Table 段写入 / 替换列定义；with_preset=true 时把 preset 行作为 records 灌入
+/// - Constant / Enum 段：新范式下 schema 段头里不再带 entries，因此行数据来自 preset
+///     - with_preset=true：preset 行 → entries
+///     - with_preset=false：entries 留空（用户在 UI 里手动添加）
+///
+/// 返回 (added_nodes, overwritten_nodes)。
+pub fn apply_schema_to_project(
+    groups: &mut Vec<Group>,
+    sections: &[SchemaSection],
+    config_dir: &Path,
+    with_preset: bool,
+) -> (usize, usize) {
     let mut added = 0usize;
     let mut overwritten = 0usize;
 
@@ -373,14 +458,30 @@ pub fn apply_schema_to_project(groups: &mut Vec<Group>, sections: &[SchemaSectio
                     tbl_type: f.tbl_type.clone(),
                     export: Export::from_str(&f.export),
                 }).collect();
+                let new_len = fields.len();
+
+                let records: Vec<Vec<String>> = if with_preset {
+                    sec.preset.iter().map(|row| {
+                        let mut r = row.clone();
+                        r.resize(new_len, String::new()); // 多余/缺失列对齐
+                        r
+                    }).collect()
+                } else {
+                    Vec::new()
+                };
 
                 if let Some(table) = group.tables.iter_mut().find(|t| t.name == sec.name) {
                     let old_len = table.schema.fields.len();
-                    let new_len = fields.len();
                     table.schema.fields = fields;
-                    for row in &mut table.records {
-                        row.resize(new_len, String::new());
-                        if new_len < old_len { row.truncate(new_len); }
+                    if with_preset {
+                        // preset 覆盖现有 records（与 overwritten 语义一致）
+                        table.records = records;
+                    } else {
+                        // 仅同步列结构，保留现有 records 但按新列数 resize
+                        for row in &mut table.records {
+                            row.resize(new_len, String::new());
+                            if new_len < old_len { row.truncate(new_len); }
+                        }
                     }
                     table.dirty = true;
                     overwritten += 1;
@@ -390,7 +491,7 @@ pub fn apply_schema_to_project(groups: &mut Vec<Group>, sections: &[SchemaSectio
                         name: sec.name.clone(),
                         path,
                         schema: TableSchema { fields },
-                        records: Vec::new(),
+                        records,
                         dirty: true,
                         deleted: false,
                         original: String::new(),
@@ -399,16 +500,23 @@ pub fn apply_schema_to_project(groups: &mut Vec<Group>, sections: &[SchemaSectio
                 }
             }
             SchemaMode::Constant => {
-                let entries: Vec<ConstEntry> = sec.fields.iter().map(|f| ConstEntry {
-                    name: f.name.clone(),
-                    tbl_type: f.tbl_type.clone(),
-                    value: String::new(),
-                    export: Export::from_str(&f.export),
-                    desc: f.desc.clone(),
-                }).collect();
+                // preset 行：name | type | value | export | desc
+                let entries: Vec<ConstEntry> = if with_preset {
+                    sec.preset.iter().map(|row| ConstEntry {
+                        name:     row.first()  .cloned().unwrap_or_default(),
+                        tbl_type: row.get(1)   .cloned().unwrap_or_default(),
+                        value:    row.get(2)   .cloned().unwrap_or_default(),
+                        export:   Export::from_str(row.get(3).map(String::as_str).unwrap_or("cs")),
+                        desc:     row.get(4)   .cloned().unwrap_or_default(),
+                    }).collect()
+                } else {
+                    Vec::new()
+                };
 
                 if let Some(constant) = group.constants.iter_mut().find(|c| c.name == sec.name) {
-                    constant.entries = entries;
+                    if with_preset {
+                        constant.entries = entries;
+                    } // 不带预设：保留现有 entries，仅记一次 overwritten
                     constant.dirty = true;
                     overwritten += 1;
                 } else {
@@ -425,15 +533,21 @@ pub fn apply_schema_to_project(groups: &mut Vec<Group>, sections: &[SchemaSectio
                 }
             }
             SchemaMode::Enum => {
-                // tbl_type 借位存 id
-                let entries: Vec<EnumEntry> = sec.fields.iter().map(|f| EnumEntry {
-                    id: f.tbl_type.clone(),
-                    name: f.name.clone(),
-                    desc: f.desc.clone(),
-                }).collect();
+                // preset 行：id | name | desc
+                let entries: Vec<EnumEntry> = if with_preset {
+                    sec.preset.iter().map(|row| EnumEntry {
+                        id:   row.first().cloned().unwrap_or_default(),
+                        name: row.get(1) .cloned().unwrap_or_default(),
+                        desc: row.get(2) .cloned().unwrap_or_default(),
+                    }).collect()
+                } else {
+                    Vec::new()
+                };
 
                 if let Some(en) = group.enums.iter_mut().find(|e| e.name == sec.name) {
-                    en.entries = entries;
+                    if with_preset {
+                        en.entries = entries;
+                    }
                     en.dirty = true;
                     overwritten += 1;
                 } else {
@@ -592,6 +706,7 @@ id | int | cs | x
                 export: "cs".to_string(),
                 desc: "x".to_string(),
             }],
+            preset: Vec::new(),
         });
         let txt = serialize_tblschema(&s);
         assert!(txt.contains("# @meta id: demo"));
@@ -605,5 +720,201 @@ id | int | cs | x
         assert_eq!(back.meta.category, "test");
         assert_eq!(back.meta.version, "0.1.0");
         assert_eq!(back.sections.len(), 1);
+    }
+
+    #[test]
+    fn parses_preset_block_for_table() {
+        let src = r#"#!tblschema v1
+[hero/HeroBase] table
+id   | int | cs | 英雄ID
+name | str | cs | 名称
+# @preset
+1 | Alice
+2 | Bob
+"#;
+        let s = parse_tblschema(src).expect("parse");
+        assert_eq!(s.sections.len(), 1);
+        assert_eq!(s.sections[0].fields.len(), 2);
+        assert_eq!(s.sections[0].preset.len(), 2);
+        assert_eq!(s.sections[0].preset[0], vec!["1", "Alice"]);
+        assert_eq!(s.sections[0].preset[1], vec!["2", "Bob"]);
+        assert!(s.meta.has_preset);
+    }
+
+    #[test]
+    fn parses_preset_block_for_constant() {
+        let src = r#"#!tblschema v1
+[global/GlobalConst] constant
+# @preset
+max_level | int | 100 | cs | 最大等级
+"#;
+        let s = parse_tblschema(src).expect("parse");
+        assert_eq!(s.sections.len(), 1);
+        assert_eq!(s.sections[0].mode, SchemaMode::Constant);
+        assert!(s.sections[0].fields.is_empty(), "constant 段 fields 应为空");
+        assert_eq!(s.sections[0].preset.len(), 1);
+        assert_eq!(s.sections[0].preset[0], vec!["max_level", "int", "100", "cs", "最大等级"]);
+        assert!(s.meta.has_preset);
+    }
+
+    #[test]
+    fn parses_preset_block_for_enum() {
+        let src = r#"#!tblschema v1
+[hero/HeroType] enum
+# @preset
+1 | Warrior | 战士
+2 | Mage    | 法师
+"#;
+        let s = parse_tblschema(src).expect("parse");
+        assert_eq!(s.sections.len(), 1);
+        assert_eq!(s.sections[0].mode, SchemaMode::Enum);
+        assert_eq!(s.sections[0].preset.len(), 2);
+        assert!(s.meta.has_preset);
+    }
+
+    #[test]
+    fn constant_section_rejects_inline_entries() {
+        let src = r#"#!tblschema v1
+[global/GlobalConst] constant
+max_level | int | cs | 最大等级
+"#;
+        let err = parse_tblschema(src).expect_err("constant 段不允许直接 entry 行");
+        let msg = err.to_string();
+        assert!(msg.contains("constant"), "msg = {}", msg);
+        assert!(msg.contains("@preset"), "msg = {}", msg);
+    }
+
+    #[test]
+    fn enum_section_rejects_inline_entries() {
+        let src = r#"#!tblschema v1
+[hero/HeroType] enum
+1 | Warrior | 战士
+"#;
+        let err = parse_tblschema(src).expect_err("enum 段不允许直接 entry 行");
+        let msg = err.to_string();
+        assert!(msg.contains("enum"), "msg = {}", msg);
+        assert!(msg.contains("@preset"), "msg = {}", msg);
+    }
+
+    #[test]
+    fn preset_terminates_at_next_section() {
+        let src = r#"#!tblschema v1
+[a/T] table
+id | int | cs | x
+# @preset
+1 | foo
+[b/U] table
+id | int | cs | y
+"#;
+        let s = parse_tblschema(src).expect("parse");
+        assert_eq!(s.sections.len(), 2);
+        assert_eq!(s.sections[0].preset.len(), 1);
+        assert_eq!(s.sections[1].preset.len(), 0);
+        assert_eq!(s.sections[1].fields.len(), 1);
+    }
+
+    #[test]
+    fn has_preset_recomputed_from_sections() {
+        // schema 文件里写 has_preset: true，但实际 sections.preset 全空 → 重算为 false
+        let src = r#"#!tblschema v1
+# @meta has_preset: true
+
+[g/N] table
+id | int | cs | x
+"#;
+        let s = parse_tblschema(src).expect("parse");
+        assert!(!s.meta.has_preset, "应该按 sections 重算");
+    }
+
+    #[test]
+    fn serialize_round_trips_preset() {
+        let schema = TblSchema {
+            meta: SchemaMetadata { id: "demo".into(), name: "demo".into(), ..Default::default() },
+            sections: vec![
+                SchemaSection {
+                    group: "hero".into(),
+                    name: "HeroBase".into(),
+                    mode: SchemaMode::Table,
+                    fields: vec![
+                        SchemaField { name: "id".into(), tbl_type: "int".into(), export: "cs".into(), desc: "ID".into() },
+                        SchemaField { name: "name".into(), tbl_type: "str".into(), export: "cs".into(), desc: "名".into() },
+                    ],
+                    preset: vec![
+                        vec!["1".into(), "Alice".into()],
+                        vec!["2".into(), "Bob".into()],
+                    ],
+                },
+                SchemaSection {
+                    group: "global".into(),
+                    name: "GlobalConst".into(),
+                    mode: SchemaMode::Constant,
+                    fields: vec![],
+                    preset: vec![
+                        vec!["max_level".into(), "int".into(), "100".into(), "cs".into(), "最大等级".into()],
+                    ],
+                },
+                SchemaSection {
+                    group: "hero".into(),
+                    name: "HeroType".into(),
+                    mode: SchemaMode::Enum,
+                    fields: vec![],
+                    preset: vec![
+                        vec!["1".into(), "WARRIOR".into(), "战士".into()],
+                    ],
+                },
+            ],
+        };
+        let txt = serialize_tblschema(&schema);
+        assert!(txt.contains("# @meta has_preset: true"), "txt = {}", txt);
+        assert!(txt.contains("# @preset"));
+        let back = parse_tblschema(&txt).expect("re-parse");
+        assert_eq!(back.sections.len(), 3);
+        assert!(back.meta.has_preset);
+        assert_eq!(back.sections[0].preset.len(), 2);
+        assert_eq!(back.sections[0].preset[0], vec!["1", "Alice"]);
+        assert_eq!(back.sections[1].mode, SchemaMode::Constant);
+        assert_eq!(back.sections[1].preset.len(), 1);
+        assert_eq!(back.sections[1].preset[0], vec!["max_level", "int", "100", "cs", "最大等级"]);
+        assert_eq!(back.sections[2].mode, SchemaMode::Enum);
+        assert_eq!(back.sections[2].preset.len(), 1);
+    }
+
+    #[test]
+    fn serialize_constant_enum_no_inline_entries() {
+        // Constant / Enum 段在 schema 文件里只剩段头（哪怕 fields 非空也不输出，
+        // 因为新范式 entries 全在项目 .tbl 里）。
+        let schema = TblSchema {
+            meta: SchemaMetadata::default(),
+            sections: vec![
+                SchemaSection {
+                    group: "g".into(),
+                    name: "C".into(),
+                    mode: SchemaMode::Constant,
+                    fields: vec![SchemaField {
+                        name: "ignored".into(), tbl_type: "int".into(), export: "cs".into(), desc: "x".into()
+                    }],
+                    preset: vec![],
+                },
+                SchemaSection {
+                    group: "g".into(),
+                    name: "E".into(),
+                    mode: SchemaMode::Enum,
+                    fields: vec![SchemaField {
+                        name: "WAR".into(), tbl_type: "1".into(), export: String::new(), desc: "".into()
+                    }],
+                    preset: vec![],
+                },
+            ],
+        };
+        let txt = serialize_tblschema(&schema);
+        // 段头有
+        assert!(txt.contains("[g/C] constant"));
+        assert!(txt.contains("[g/E] enum"));
+        // entry 行没有
+        assert!(!txt.contains("ignored"));
+        assert!(!txt.contains("WAR"));
+        // 没有 preset 块
+        assert!(!txt.contains("@preset"));
+        assert!(!txt.contains("has_preset"));
     }
 }

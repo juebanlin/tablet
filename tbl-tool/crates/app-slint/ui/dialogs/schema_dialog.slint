@@ -89,6 +89,7 @@ export component SchemaExportDialog inherits Rectangle {
     in property <bool> all-tristate: false;
     in property <int> selected-count: 0;
     in property <int> total-count: 0;
+    in-out property <bool> with-preset: false;
 
     callback toggle-all(bool);
     callback toggle-item(int);
@@ -123,6 +124,19 @@ export component SchemaExportDialog inherits Rectangle {
                 }
                 Rectangle { horizontal-stretch: 1; }
             }
+            HorizontalLayout {
+                spacing: Theme.sp-2;
+                CheckBox {
+                    text: "同时导出当前数据作为预设";
+                    checked <=> root.with-preset;
+                }
+                Text {
+                    text: "（写 # @preset 块；用于结构 + 数据迁移）";
+                    font-size: Theme.fs-tiny;
+                    color: Theme.text-secondary;
+                    vertical-alignment: center;
+                }
+            }
             Rectangle { height: 1px; background: Theme.border-light; }
 
             // 列表
@@ -155,6 +169,8 @@ export component SchemaImportDialog inherits Rectangle {
     in property <int> selected-count: 0;
     in property <int> total-count: 0;
     in property <int> conflict-count: 0;
+    in property <bool> has-preset: false;
+    in-out property <bool> with-preset: true;
 
     callback browse-file();
     callback toggle-all(bool);
@@ -218,6 +234,20 @@ export component SchemaImportDialog inherits Rectangle {
                     text: "全选";
                     checked <=> root.all-checked;
                     toggled => { root.toggle-all(self.checked); }
+                }
+
+                if root.has-preset: HorizontalLayout {
+                    spacing: Theme.sp-2;
+                    CheckBox {
+                        text: "导入时一并灌入预设数据";
+                        checked <=> root.with-preset;
+                    }
+                    Text {
+                        text: "（schema 含 # @preset 块）";
+                        font-size: Theme.fs-tiny;
+                        color: Theme.text-secondary;
+                        vertical-alignment: center;
+                    }
                 }
 
                 Rectangle {

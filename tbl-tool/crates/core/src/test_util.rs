@@ -28,12 +28,12 @@ impl TestGenOptions {
     }
 }
 
-/// 取内置模板 schema：opts.include_empty 决定走 `empty` 还是 `full`。
-fn builtin_schema(opts: &TestGenOptions) -> TblSchema {
-    let id = if opts.include_empty { "empty" } else { "full" };
+/// 取内置模板 schema：当前只剩 `standard`。
+/// `opts.include_empty` 现在仅影响 generate_data_rows 时是否注入空值，schema 来源不变。
+fn builtin_schema(_opts: &TestGenOptions) -> TblSchema {
     BuiltinTemplates::new()
-        .load_by_id(id)
-        .expect("内置模板缺失（full / empty）")
+        .load_by_id("standard")
+        .expect("内置模板缺失（standard）")
         .schema
 }
 
@@ -110,9 +110,12 @@ fn generate_enum_tbl(sec: &SchemaSection) -> String {
     writeln!(s, "#!tbl v2").unwrap();
     writeln!(s, "#mode enum").unwrap();
     writeln!(s, "---").unwrap();
-    // sec.fields: tbl_type 借位存 id, name 存条目名, desc 存描述
-    for f in &sec.fields {
-        writeln!(s, "{}|{}|{}", f.tbl_type, f.name, f.desc).unwrap();
+    // 新范式：enum 行数据全在 preset（id | name | desc）
+    for row in &sec.preset {
+        let id   = row.first().map(String::as_str).unwrap_or("");
+        let name = row.get(1) .map(String::as_str).unwrap_or("");
+        let desc = row.get(2) .map(String::as_str).unwrap_or("");
+        writeln!(s, "{}|{}|{}", id, name, desc).unwrap();
     }
     s
 }
@@ -139,78 +142,66 @@ fn generate_const_tbl(sec: &SchemaSection) -> String {
     writeln!(s, "#!tbl v2").unwrap();
     writeln!(s, "#mode constant").unwrap();
     writeln!(s, "---").unwrap();
-    for f in &sec.fields {
-        let value = default_const_value(&f.tbl_type);
-        writeln!(s, "{}|{}|{}|{}|{}", f.name, f.tbl_type, value, f.export_display(), f.desc).unwrap();
+    // 新范式：constant 行数据全在 preset（name | type | value | export | desc）
+    // 内部 preset 的 export 列是 code（cs / s / c / -），落到 .tbl 时换成显示文案
+    for row in &sec.preset {
+        let name      = row.first()  .map(String::as_str).unwrap_or("");
+        let tbl_type  = row.get(1)   .map(String::as_str).unwrap_or("");
+        let value     = row.get(2)   .map(String::as_str).unwrap_or("");
+        let export_cd = row.get(3)   .map(String::as_str).unwrap_or("cs");
+        let desc      = row.get(4)   .map(String::as_str).unwrap_or("");
+        let export_disp = match export_cd {
+            "cs" | "" => "前后端",
+            "c" => "客户端",
+            "s" => "服务器",
+            "-" => "不导出",
+            _ => "前后端",
+        };
+        writeln!(s, "{}|{}|{}|{}|{}", name, tbl_type, value, export_disp, desc).unwrap();
     }
     s
-}
-
-fn default_const_value(tbl_type: &str) -> &str {
-    match tbl_type {
-        "int" => "100",
-        "long" => "10000",
-        "float" | "double" => "1.0",
-        "bool" => "true",
-        "str" => "test-server",
-        t if t.starts_with("Tuple2") => "5,10",
-        t if t.starts_with("Tuple3") => "1,2,3",
-        t if t.starts_with("Tuple4") => "1,2,3,4",
-        _ => "1",
-    }
 }
 
 // === 数据行生成 ===
 
 fn generate_data_rows(sec: &SchemaSection, opts: &TestGenOptions) -> Vec<Vec<String>> {
-    if opts.seed > 0 || opts.rows > 0 {
-        generate_random_rows(sec, opts)
-    } else {
-        generate_fixed_rows(sec, opts)
+    // 默认：直接吐 schema 自带的 preset，schema 是 "标品配置" 的唯一真相。
+    if opts.seed == 0 && opts.rows == 0 && !opts.include_empty {
+        return preset_rows_aligned(sec);
     }
+    // include_empty 但仍是 fixed 模式：在 preset 之上吹空非关键字段，扩出"测空"行。
+    if opts.seed == 0 && opts.rows == 0 {
+        return generate_fixed_rows(sec, opts);
+    }
+    // 随机模式：用列类型生成 N 行
+    generate_random_rows(sec, opts)
+}
+
+/// 把 sec.preset 按 fields 列数对齐：缺失列补空串、超出列截断。
+fn preset_rows_aligned(sec: &SchemaSection) -> Vec<Vec<String>> {
+    let n = sec.fields.len();
+    sec.preset.iter().map(|row| {
+        let mut r: Vec<String> = row.clone();
+        r.resize(n, String::new());
+        r
+    }).collect()
 }
 
 fn generate_fixed_rows(sec: &SchemaSection, opts: &TestGenOptions) -> Vec<Vec<String>> {
-    let row_count = if opts.include_empty { 2 } else { 3 };
-    let mut rows = Vec::new();
-
-    for i in 0..row_count {
-        let mut row = Vec::new();
-        for f in &sec.fields {
-            let val = if opts.include_empty && f.name != "id" && f.name != "name" && i % 2 != 0 {
-                // 第偶数行的非关键字段留空（测试空值）
-                match f.name.as_str() {
-                    "desc" => "测试空血量".to_string(),
-                    _ => String::new(),
-                }
-            } else {
-                fixed_value_for_field(f, i)
-            };
-            row.push(val);
-        }
-        rows.push(row);
+    // 以 preset 为基底：偶数行原样保留；奇数行把非关键字段吹空（"含空值测试"）。
+    let base = preset_rows_aligned(sec);
+    if !opts.include_empty || base.is_empty() {
+        return base;
     }
-    rows
-}
-
-fn fixed_value_for_field(f: &SchemaField, row_idx: usize) -> String {
-    let names = ["战士", "法师", "弓手"];
-    match f.name.as_str() {
-        "id" => format!("{}", 1001 + row_idx),
-        "name" => names[row_idx % names.len()].to_string(),
-        _ => match f.tbl_type.as_str() {
-            "int" => match row_idx { 0 => "100", 1 => "80", _ => "90" }.to_string(),
-            "str" => String::new(),
-            t if t.starts_with("List<") => {
-                match row_idx { 0 => "1;2;3", 1 => "4;5", _ => "6;7;8" }.to_string()
-            }
-            t if t.starts_with('@') => {
-                // 引用类型固定数据：取 1..=3 循环（与内置 HeroType 三个条目对齐）
-                ((row_idx % 3) + 1).to_string()
-            }
-            _ => "0".to_string(),
-        }
-    }
+    base.into_iter().enumerate().map(|(i, row)| {
+        if i % 2 == 0 { return row; }
+        row.into_iter().enumerate().map(|(col, val)| {
+            let fname = sec.fields.get(col).map(|f| f.name.as_str()).unwrap_or("");
+            if fname == "id" || fname == "name" { val }
+            else if fname == "desc" { "测试空值".to_string() }
+            else { String::new() }
+        }).collect()
+    }).collect()
 }
 
 struct SimpleRng(u64);

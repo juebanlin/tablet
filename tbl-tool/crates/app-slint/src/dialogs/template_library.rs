@@ -137,12 +137,19 @@ pub fn wire(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
         ui_h.on_tpl_use_template(move || {
             // 关闭模板库 → 拿选中模板 → 打开新建项目
             let opened = {
+                use tbl_core::template::{default_local_dir, BuiltinTemplates, LocalTemplates, TemplateSource};
                 let mut st = s.borrow_mut();
                 let items = list_metas(&st.template_lib);
                 let chosen = items.iter().find(|m| m.id == st.template_lib.selected_id).cloned();
                 st.template_lib.open = false;
                 if let Some(meta) = chosen {
+                    // 提前加载一次 schema 取 has_preset，让对话框可以显示「灌入预设」开关
+                    let has_preset = match meta.source {
+                        "local" => LocalTemplates::new(default_local_dir()).load_by_id(&meta.id),
+                        _ => BuiltinTemplates::new().load_by_id(&meta.id),
+                    }.map(|c| c.schema.meta.has_preset).unwrap_or(false);
                     st.new_project.open_from_template(&meta);
+                    st.new_project.set_template_preset_hint(has_preset);
                     true
                 } else {
                     false

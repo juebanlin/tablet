@@ -102,7 +102,7 @@ fn render_export_content(ui: &mut egui::Ui, app: &mut TblApp) {
 
 fn do_export(app: &mut TblApp) {
     let groups = &app.engine.project().groups;
-    let full_schema = schema_from_project(groups);
+    let full_schema = schema_from_project(groups, false);
 
     let mut selected_sections = Vec::new();
     for (gi, group) in groups.iter().enumerate() {
@@ -315,6 +315,7 @@ fn do_import(app: &mut TblApp) {
         &mut app.engine.project_mut().groups,
         &selected_sections,
         &config_dir,
+        false,
     );
 
     app.log(format!("[导入Schema] 完成: {} 新增, {} 覆盖", added, overwritten));

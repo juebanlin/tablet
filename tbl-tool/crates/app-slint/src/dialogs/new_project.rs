@@ -90,6 +90,8 @@ pub fn push(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
     ui_h.set_np_id_error(id_err.into());
     ui_h.set_np_name_error(name_err.into());
     ui_h.set_np_can_confirm(can_confirm);
+    ui_h.set_np_template_has_preset(st.new_project.template_has_preset);
+    ui_h.set_np_with_preset(st.new_project.with_preset);
 }
 
 /// 真正落地新项目；返回是否需要"大刷新"（reload + reset view）。
@@ -106,6 +108,7 @@ fn run(state: &Rc<RefCell<AppState>>) -> bool {
     let category = st.new_project.project_category.clone();
     let version = st.new_project.project_version.clone();
     let open_after = st.new_project.open_after;
+    let with_preset = st.new_project.with_preset;
     let now = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
 
     let result: Result<String, String> = match &mode {
@@ -116,7 +119,7 @@ fn run(state: &Rc<RefCell<AppState>>) -> bool {
             schema.meta.category = category.clone();
             schema.meta.version = version.clone();
             schema.meta.created_at = now.clone();
-            st.engine.create_project_in_memory(schema)
+            st.engine.create_project_in_memory_with(schema, false)
         }
         NewProjectMode::FromTemplate { template_id, template_source, .. } => {
             let content = match template_source.as_str() {
@@ -138,7 +141,7 @@ fn run(state: &Rc<RefCell<AppState>>) -> bool {
             schema.meta.created_at = now.clone();
             schema.meta.source_template = content.meta.id.clone();
             schema.meta.source_template_version = content.meta.version.clone();
-            st.engine.create_project_in_memory(schema)
+            st.engine.create_project_in_memory_with(schema, with_preset)
         }
         NewProjectMode::Clone { source_project_id, .. } => {
             let res = st.engine
@@ -215,7 +218,9 @@ pub fn wire(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
         ui_h.on_np_confirm(move || {
             // 同步 in-out checkbox 当前值
             if let Some(ui_h) = weak.upgrade() {
-                s.borrow_mut().new_project.open_after = ui_h.get_np_open_after();
+                let mut st = s.borrow_mut();
+                st.new_project.open_after = ui_h.get_np_open_after();
+                st.new_project.with_preset = ui_h.get_np_with_preset();
             }
             run(&s);
             s.borrow_mut().new_project.close();

@@ -172,6 +172,13 @@ fn render_table_skeleton(sec: &SchemaSection) -> String {
     )
     .unwrap();
     writeln!(s, "---").unwrap();
+    // 预设 records：按列序补齐到 fields.len()
+    let n = sec.fields.len();
+    for row in &sec.preset {
+        let mut cells: Vec<String> = row.iter().cloned().collect();
+        cells.resize(n, String::new());
+        writeln!(s, "{}", cells.join("|")).unwrap();
+    }
     s
 }
 
@@ -180,10 +187,15 @@ fn render_constant_skeleton(sec: &SchemaSection) -> String {
     writeln!(s, "#!tbl v2").unwrap();
     writeln!(s, "#mode constant").unwrap();
     writeln!(s, "---").unwrap();
-    for f in &sec.fields {
-        // value 留空；export 缺省 → "前后端"
-        let export = if f.export.is_empty() { "cs" } else { f.export.as_str() };
-        writeln!(s, "{}|{}||{}|{}", f.name, f.tbl_type, display_export(export), f.desc).unwrap();
+    // 新范式：constant 段头不带 fields，行数据全在 preset。
+    // preset 行：name | type | value | export(code) | desc
+    for row in &sec.preset {
+        let name     = row.first()  .map(String::as_str).unwrap_or("");
+        let tbl_type = row.get(1)   .map(String::as_str).unwrap_or("");
+        let value    = row.get(2)   .map(String::as_str).unwrap_or("");
+        let export   = row.get(3)   .map(String::as_str).unwrap_or("cs");
+        let desc     = row.get(4)   .map(String::as_str).unwrap_or("");
+        writeln!(s, "{}|{}|{}|{}|{}", name, tbl_type, value, display_export(export), desc).unwrap();
     }
     s
 }
@@ -193,9 +205,13 @@ fn render_enum_skeleton(sec: &SchemaSection) -> String {
     writeln!(s, "#!tbl v2").unwrap();
     writeln!(s, "#mode enum").unwrap();
     writeln!(s, "---").unwrap();
-    for f in &sec.fields {
-        // sec.fields: tbl_type 借位存 id；name 存条目名；desc 存描述
-        writeln!(s, "{}|{}|{}", f.tbl_type, f.name, f.desc).unwrap();
+    // 新范式：enum 段头不带 fields，行数据全在 preset。
+    // preset 行：id | name | desc
+    for row in &sec.preset {
+        let id   = row.first().map(String::as_str).unwrap_or("");
+        let name = row.get(1) .map(String::as_str).unwrap_or("");
+        let desc = row.get(2) .map(String::as_str).unwrap_or("");
+        writeln!(s, "{}|{}|{}", id, name, desc).unwrap();
     }
     s
 }
@@ -248,36 +264,32 @@ mod tests {
                             desc: "血量".to_string(),
                         },
                     ],
+                    preset: Vec::new(),
                 },
                 SchemaSection {
                     group: "hero".to_string(),
                     name: "HeroType".to_string(),
                     mode: SchemaMode::Enum,
-                    fields: vec![
-                        SchemaField {
-                            name: "WARRIOR".to_string(),
-                            tbl_type: "1".to_string(),
-                            export: String::new(),
-                            desc: "战士".to_string(),
-                        },
-                        SchemaField {
-                            name: "MAGE".to_string(),
-                            tbl_type: "2".to_string(),
-                            export: String::new(),
-                            desc: "法师".to_string(),
-                        },
+                    // 新范式：enum 段头不带 fields，行数据全在 preset
+                    fields: Vec::new(),
+                    preset: vec![
+                        vec!["1".to_string(), "WARRIOR".to_string(), "战士".to_string()],
+                        vec!["2".to_string(), "MAGE".to_string(),    "法师".to_string()],
                     ],
                 },
                 SchemaSection {
                     group: "global".to_string(),
                     name: "GlobalConst".to_string(),
                     mode: SchemaMode::Constant,
-                    fields: vec![SchemaField {
-                        name: "max_level".to_string(),
-                        tbl_type: "int".to_string(),
-                        export: "cs".to_string(),
-                        desc: "最大等级".to_string(),
-                    }],
+                    // 新范式：constant 段头不带 fields，行数据全在 preset
+                    fields: Vec::new(),
+                    preset: vec![vec![
+                        "max_level".to_string(),
+                        "int".to_string(),
+                        "100".to_string(),
+                        "cs".to_string(),
+                        "最大等级".to_string(),
+                    ]],
                 },
             ],
         }
@@ -308,12 +320,12 @@ mod tests {
         assert!(hero_type.contains("1|WARRIOR|战士"));
         assert!(hero_type.contains("2|MAGE|法师"));
 
-        // Constant 骨架：value 留空
+        // Constant 骨架：从 preset 灌入预设 value
         let global =
             std::fs::read_to_string(target.join("config/global/GlobalConst.tbl"))
                 .expect("read const");
         assert!(global.contains("#mode constant"));
-        assert!(global.contains("max_level|int||前后端|最大等级"));
+        assert!(global.contains("max_level|int|100|前后端|最大等级"));
 
         let _ = std::fs::remove_dir_all(&target);
     }
@@ -349,6 +361,74 @@ mod tests {
         let m = TemplateMeta::from_schema(&schema, "builtin");
         assert_eq!(m.id, "x");
         assert_eq!(m.name, "x");
+    }
+
+    #[test]
+    fn instantiate_writes_table_preset_records() {
+        let target = unique_tmp("table_preset");
+        let mut schema = TblSchema::default();
+        schema.meta.id = "demo".into();
+        schema.sections.push(SchemaSection {
+            group: "hero".into(),
+            name: "HeroBase".into(),
+            mode: SchemaMode::Table,
+            fields: vec![
+                SchemaField { name: "id".into(),   tbl_type: "int".into(), export: "cs".into(), desc: "ID".into() },
+                SchemaField { name: "name".into(), tbl_type: "str".into(), export: "cs".into(), desc: "名".into() },
+            ],
+            preset: vec![
+                vec!["1".into(), "Alice".into()],
+                vec!["2".into(), "Bob".into()],
+            ],
+        });
+        instantiate_template(&schema, &target).expect("instantiate");
+        let txt = std::fs::read_to_string(target.join("config/hero/HeroBase.tbl")).expect("read tbl");
+        assert!(txt.contains("---"));
+        assert!(txt.contains("1|Alice"));
+        assert!(txt.contains("2|Bob"));
+        let _ = std::fs::remove_dir_all(&target);
+    }
+
+    #[test]
+    fn instantiate_writes_enum_preset() {
+        let target = unique_tmp("enum_preset");
+        let mut schema = TblSchema::default();
+        schema.meta.id = "demo".into();
+        schema.sections.push(SchemaSection {
+            group: "hero".into(),
+            name: "HeroType".into(),
+            mode: SchemaMode::Enum,
+            fields: Vec::new(),
+            preset: vec![
+                vec!["1".into(), "WAR".into(), "战士".into()],
+                vec!["2".into(), "MAGE".into(), "法师".into()],
+            ],
+        });
+        instantiate_template(&schema, &target).expect("instantiate");
+        let txt = std::fs::read_to_string(target.join("config/hero/HeroType.tbl")).expect("read");
+        assert!(txt.contains("1|WAR|战士"));
+        assert!(txt.contains("2|MAGE|法师"));
+        let _ = std::fs::remove_dir_all(&target);
+    }
+
+    #[test]
+    fn instantiate_constant_no_preset_writes_only_header() {
+        // 新范式：constant 段头不带 fields，没 preset 时项目里只有空 constant 节点
+        let target = unique_tmp("const_empty");
+        let mut schema = TblSchema::default();
+        schema.meta.id = "demo".into();
+        schema.sections.push(SchemaSection {
+            group: "g".into(),
+            name: "C".into(),
+            mode: SchemaMode::Constant,
+            fields: Vec::new(),
+            preset: Vec::new(),
+        });
+        instantiate_template(&schema, &target).expect("instantiate");
+        let txt = std::fs::read_to_string(target.join("config/g/C.tbl")).expect("read");
+        assert!(txt.contains("#mode constant"));
+        assert!(txt.trim().ends_with("---"), "txt = {:?}", txt);
+        let _ = std::fs::remove_dir_all(&target);
     }
 
     #[test]

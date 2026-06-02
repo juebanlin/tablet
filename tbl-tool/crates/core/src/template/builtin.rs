@@ -10,8 +10,7 @@ use crate::tblschema::{fill_metadata_defaults, parse_tblschema};
 ///
 /// 解析失败 = 编译期就坏的内置 schema，单元测试会先失败把它顶出来。
 const BUILTIN_FILES: &[(&str, &str)] = &[
-    (include_str!("../../schemas/full.tblschema"), "full"),
-    (include_str!("../../schemas/empty.tblschema"), "empty"),
+    (include_str!("../../schemas/standard.tblschema"), "standard"),
 ];
 
 #[derive(Debug, Default)]
@@ -58,8 +57,7 @@ mod tests {
         let src = BuiltinTemplates::new();
         let list = src.list();
         let ids: Vec<_> = list.iter().map(|m| m.id.as_str()).collect();
-        assert!(ids.contains(&"full"));
-        assert!(ids.contains(&"empty"));
+        assert!(ids.contains(&"standard"));
         for m in &list {
             assert_eq!(m.source, "builtin");
         }
@@ -68,10 +66,10 @@ mod tests {
     #[test]
     fn load_full_returns_schema_with_sections() {
         let src = BuiltinTemplates::new();
-        let c = src.load_by_id("full").expect("full template");
-        assert_eq!(c.meta.id, "full");
+        let c = src.load_by_id("standard").expect("standard template");
+        assert_eq!(c.meta.id, "standard");
         assert!(!c.schema.sections.is_empty());
-        // full 包含 enum + table + constant
+        // standard 包含 enum + table + constant
         let modes: Vec<_> = c
             .schema
             .sections

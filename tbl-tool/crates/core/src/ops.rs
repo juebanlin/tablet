@@ -55,7 +55,8 @@ fn dedupe_name<'a, I: IntoIterator<Item = &'a str>>(base: &str, existing: I) -> 
 /// / paste_node_to / paste_group_to 后都要调一次，保证 save 时 project.tblschema
 /// 与磁盘 .tbl 一致。
 fn sync_schema_from_groups(project: &mut Project) {
-    let mut s = crate::tblschema::schema_from_project(&project.groups);
+    // sync 永远不带 preset：project.tblschema 是「结构骨架」，行数据归项目里的 .tbl
+    let mut s = crate::tblschema::schema_from_project(&project.groups, false);
     s.meta = project.schema.meta.clone();
     project.schema = s;
     project.schema_dirty = true;
@@ -496,9 +497,12 @@ impl ProjectEngine {
     /// - config 借用现有任意 opened project 的 WorkspaceConfig，否则用默认 fallback
     /// - 同时加进 available_projects（未保存前目录还不存在，但 UI 树要展示）
     /// 返回 new_id 或错误信息。
-    pub fn create_project_in_memory(
+    ///
+    /// `with_preset`：当 schema.meta.has_preset=true 时是否把 # @preset 行一并灌入项目。
+    pub fn create_project_in_memory_with(
         &mut self,
         schema: crate::tblschema::TblSchema,
+        with_preset: bool,
     ) -> Result<String, String> {
         if !crate::tblschema::is_valid_metadata_id(&schema.meta.id) {
             return Err(format!("project id 不合法: {}", schema.meta.id));
@@ -531,6 +535,7 @@ impl ProjectEngine {
             &mut new_project.groups,
             &schema.sections,
             &data_dir,
+            with_preset,
         );
 
         let avail = AvailableProject::from_project(&new_project);
@@ -538,6 +543,16 @@ impl ProjectEngine {
         self.available_projects.sort_by(|a, b| a.id.cmp(&b.id));
         self.projects.push(new_project);
         Ok(project_id)
+    }
+
+    /// 旧接口：默认按 schema.meta.has_preset 决定是否灌入预设数据。
+    /// 新代码请直接调 `create_project_in_memory_with(schema, with_preset)`。
+    pub fn create_project_in_memory(
+        &mut self,
+        schema: crate::tblschema::TblSchema,
+    ) -> Result<String, String> {
+        let with_preset = schema.meta.has_preset;
+        self.create_project_in_memory_with(schema, with_preset)
     }
 
     /// 内存深拷贝克隆：把 source_project_id 的当前状态（含未保存改动）整体复制为新 project，

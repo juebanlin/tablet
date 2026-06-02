@@ -23,13 +23,18 @@ pub(crate) fn rebuild_export_items(st: &mut AppState) {
             if c.deleted { continue; }
             sub.push(state::SchemaExportItem { indent: 1, group: g.name.clone(), name: c.name.clone(), is_table: false });
         }
-        // schema_from_project 同样跳过 enum 段，这里和 egui 端一致
+        for e in &g.enums {
+            if e.deleted { continue; }
+            sub.push(state::SchemaExportItem { indent: 1, group: g.name.clone(), name: e.name.clone(), is_table: false });
+        }
         if sub.is_empty() { continue; }
         items.push(state::SchemaExportItem { indent: 0, group: g.name.clone(), name: g.name.clone(), is_table: false });
         items.extend(sub);
     }
     st.schema_export.checked = vec![true; items.len()];
     st.schema_export.items = items;
+    // 每次打开对话框默认不带预设：导出"结构骨架"是更常见路径
+    st.schema_export.with_preset = false;
 }
 
 /// 把 SchemaExportState 推到 slint 端：组节点 tristate 由其下子节点聚合。
@@ -87,6 +92,7 @@ pub fn push_export(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
     ui_h.set_sx_all_checked(all_checked);
     ui_h.set_sx_selected_count(selected);
     ui_h.set_sx_total_count(total);
+    ui_h.set_sx_with_preset(sx.with_preset);
 }
 
 /// 把 SchemaImportState 推到 slint 端：file_loaded / items / 冲突计数。
@@ -166,12 +172,15 @@ pub fn push_import(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
             && si.conflicts.get(*i).copied().unwrap_or(false))
         .count() as i32;
     let all_checked = selected == total && total > 0;
+    let has_preset = si.schema.as_ref().map(|s| s.meta.has_preset).unwrap_or(false);
 
     ui_h.set_si_items(slint::ModelRc::new(slint::VecModel::from(slint_items)));
     ui_h.set_si_all_checked(all_checked);
     ui_h.set_si_selected_count(selected);
     ui_h.set_si_total_count(total);
     ui_h.set_si_conflict_count(conflict);
+    ui_h.set_si_has_preset(has_preset);
+    ui_h.set_si_with_preset(si.with_preset);
 }
 
 pub fn wire(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
@@ -233,6 +242,10 @@ pub fn wire(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
         let s = state.clone();
         let weak = ui_h.as_weak();
         ui_h.on_sx_confirm(move || {
+            // 把 slint 端 with-preset 的最新值同步回 Rust state，再跑 export
+            if let Some(ui_h) = weak.upgrade() {
+                s.borrow_mut().schema_export.with_preset = ui_h.get_sx_with_preset();
+            }
             run_export(&s);
             s.borrow_mut().schema_export.open = false;
             if let Some(ui_h) = weak.upgrade() {
@@ -325,6 +338,10 @@ pub fn wire(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
         let s = state.clone();
         let weak = ui_h.as_weak();
         ui_h.on_si_confirm(move || {
+            // 把 slint 端 with-preset 的最新值同步回 Rust state，再跑 import
+            if let Some(ui_h) = weak.upgrade() {
+                s.borrow_mut().schema_import.with_preset = ui_h.get_si_with_preset();
+            }
             run_import(&s);
             s.borrow_mut().schema_import.open = false;
             if let Some(ui_h) = weak.upgrade() {
@@ -342,7 +359,7 @@ fn run_export(state: &Rc<RefCell<AppState>>) {
     use tbl_core::tblschema::{TblSchema, schema_from_project, serialize_tblschema};
     let (selected, full_schema) = {
         let st = state.borrow();
-        let full = schema_from_project(&st.engine.project().groups);
+        let full = schema_from_project(&st.engine.project().groups, st.schema_export.with_preset);
         let selected: Vec<(String, String)> = st.schema_export.items.iter().enumerate()
             .filter(|(i, it)| it.indent == 1 && st.schema_export.checked.get(*i).copied().unwrap_or(false))
             .map(|(_, it)| (it.group.clone(), it.name.clone()))
@@ -431,6 +448,8 @@ fn load_import(state: &Rc<RefCell<AppState>>, file_path: &str) {
     st.schema_import.items = items;
     st.schema_import.checked = checked;
     st.schema_import.conflicts = conflicts;
+    // schema 自带 preset 时默认勾选「灌入预设」；不带则关掉
+    st.schema_import.with_preset = schema.meta.has_preset;
     st.schema_import.schema = Some(schema);
 }
 
@@ -447,10 +466,12 @@ fn run_import(state: &Rc<RefCell<AppState>>) {
         .filter(|s| selected.iter().any(|(g, n)| g == &s.group && n == &s.name))
         .cloned().collect();
     let config_dir = st.engine.project().data_dir();
+    let with_preset = st.schema_import.with_preset;
     let (added, overwritten) = apply_schema_to_project(
         &mut st.engine.project_mut().groups,
         &sections,
         &config_dir,
+        with_preset,
     );
     st.engine.log(format!("[导入Schema] 完成: {} 新增, {} 覆盖", added, overwritten));
 }

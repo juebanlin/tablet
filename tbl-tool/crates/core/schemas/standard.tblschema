@@ -1,0 +1,104 @@
+#!tblschema v1
+# @meta id: standard
+# @meta name: 标品游戏配置模板
+# @meta category: sample
+# @meta version: 1.0.0
+# @meta has_preset: true
+
+# 这份模板用于"演示 + 测试"双用途：
+# 1. UI 模板库新建项目时一键生成可玩样例
+# 2. core 测试管线（generate_test_config）按 preset 灌入数据
+# 涵盖了所有基础类型、主要容器范式、引用类型，以及"枚举/常量/数据表"三种段。
+
+# ──────────────── Enum 段 ────────────────
+# 新范式：enum 段只声明段头，行数据在 # @preset 块里。
+
+[enums/HeroType] enum
+# @preset
+1 | WARRIOR | 战士
+2 | MAGE    | 法师
+3 | ARCHER  | 弓手
+4 | PRIEST  | 牧师
+
+[enums/ItemQuality] enum
+# @preset
+1 | WHITE  | 普通
+2 | GREEN  | 优秀
+3 | BLUE   | 稀有
+4 | PURPLE | 史诗
+5 | ORANGE | 传说
+
+[enums/BuildingType] enum
+# @preset
+1 | RESOURCE | 资源
+2 | MILITARY | 军事
+3 | SPECIAL  | 特殊
+
+# ──────────────── Constant 段 ────────────────
+# 几乎覆盖所有支持的类型：int / long / float / double / bool / str
+# + List / Set / Map / Tuple2/3/4 + 引用 @Xxx。
+# 新范式：constant 段只声明段头，行数据 (name|type|value|export|desc) 在 # @preset 里。
+
+[global/GameConst] constant
+# @preset
+version       | str                     | 1.0.0           | cs | 版本号
+max_level     | int                     | 100             | s  | 最大等级
+max_exp       | long                    | 999999999       | s  | 最大经验
+gravity       | float                   | 9.8             | cs | 重力加速度
+pi            | double                  | 3.14159265      | cs | 圆周率
+debug_mode    | bool                    | true            | -  | 调试开关
+default_pos2  | Tuple2<int,int>         | 0,0             | cs | 出生平面坐标
+default_pos3  | Tuple3<int,int,int>     | 0,0,0           | cs | 出生空间坐标
+quad_grid     | Tuple4<int,int,int,int> | 0,0,1,1         | cs | 网格 (x,y,w,h)
+attr_keys     | List<str>               | hp;mp;atk       | cs | 属性键列表
+init_items    | List<int>               | 1001;1002;1003  | cs | 初始物品 ID
+unique_skills | Set<int>                | 100;200;300     | cs | 技能 ID 集合
+attr_caps     | Map<str,int>            | hp:9999,mp:5000 | s  | 属性上限
+default_hero  | @HeroType               | 1               | cs | 默认英雄类型
+
+# ──────────────── Table 段 ────────────────
+# Table 段在 schema 里写列声明（结构）；预设 records 写在 # @preset 里。
+
+[hero/HeroBase] table
+id      | int          | cs | 英雄 ID
+name    | str          | cs | 名称
+hp      | int          | s  | 血量
+mp      | int          | s  | 法力
+atk     | float        | s  | 攻击
+def     | float        | s  | 防御
+kind    | @HeroType    | cs | 英雄类型
+quality | @ItemQuality | cs | 品质
+skills  | List<int>    | cs | 技能 ID 列表
+attrs   | Map<str,int> | s  | 属性表
+desc    | str          | cs | 描述
+# @preset
+1001 | 阿尔托利亚 | 1200 | 300 | 88.5  | 60.0 | 1 | 5 | 1;2;3   | hp:1200,atk:88   | 圆桌骑士
+1002 | 梅林       | 700  | 800 | 120.0 | 30.0 | 2 | 5 | 4;5     | mp:800,atk:120   | 大魔法师
+1003 | 罗宾汉     | 900  | 200 | 95.5  | 45.0 | 3 | 4 | 6;7;8;9 | hp:900,atk:95    | 神射手
+1004 | 萨拉丁     | 1000 | 500 | 70.0  | 75.0 | 4 | 4 | 10;11   | hp:1000,def:75   | 圣职者
+
+[item/Item] table
+id        | int          | cs | 物品 ID
+name      | str          | cs | 名称
+quality   | @ItemQuality | cs | 品质
+price     | long         | s  | 价格
+weight    | float        | cs | 重量
+stack_max | int          | cs | 堆叠上限
+desc      | str          | cs | 描述
+# @preset
+2001 | 生命药水 | 1 | 100      | 0.5 | 99 | 恢复 100 点生命
+2002 | 法力药水 | 1 | 100      | 0.5 | 99 | 恢复 100 点法力
+2003 | 烈焰之剑 | 4 | 50000    | 4.5 | 1  | 史诗级武器
+2004 | 创世之刃 | 5 | 99999999 | 6.0 | 1  | 传说级武器
+
+[building/Building] table
+id   | int             | cs | 建筑 ID
+name | str             | cs | 名称
+kind | @BuildingType   | cs | 类型
+size | Tuple2<int,int> | cs | 占地 (w,h)
+cost | Map<str,int>    | s  | 建造成本
+desc | str             | cs | 描述
+# @preset
+3001 | 伐木场 | 1 | 2,2 | wood:0,stone:50    | 产出木材
+3002 | 兵营   | 2 | 3,3 | wood:200,stone:100 | 训练士兵
+3003 | 神庙   | 3 | 4,4 | wood:500,stone:500 | 增益建筑
