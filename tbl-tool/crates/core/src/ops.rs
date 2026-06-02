@@ -1139,6 +1139,8 @@ impl ProjectEngine {
         let mut errors = Vec::new();
         let sep = &self.project().config.separators;
         let refs = RefIndex::build(&self.project().groups);
+        let allow_ref = self.project().config.ui.as_ref()
+            .map_or(true, |u| u.constant_ref_allowed);
         for group in &self.project().groups {
             for table in &group.tables {
                 if table.deleted { continue; }
@@ -1148,7 +1150,7 @@ impl ProjectEngine {
             }
             for constant in &group.constants {
                 if constant.deleted { continue; }
-                for err in validate_constant(constant, sep) {
+                for err in validate_constant(constant, sep, allow_ref, Some(&refs)) {
                     errors.push(format_validation_log(&group.name, &constant.name, &err));
                 }
             }
@@ -1167,6 +1169,8 @@ impl ProjectEngine {
         self.validation_errors.retain(|(p, g, n, _, _)| p != &pid || g != group || n != name);
         let sep = self.project().config.separators.clone();
         let refs = RefIndex::build(&self.project().groups);
+        let allow_ref = self.project().config.ui.as_ref()
+            .map_or(true, |u| u.constant_ref_allowed);
         let mut new_errs: Vec<(usize, usize)> = Vec::new();
         {
             let g = match self.project().groups.iter().find(|g| g.name == group) { Some(g) => g, None => return };
@@ -1178,7 +1182,7 @@ impl ProjectEngine {
             }
             if let Some(constant) = g.constants.iter().find(|c| c.name == name) {
                 if constant.deleted { return; }
-                for err in validate_constant(constant, &sep) {
+                for err in validate_constant(constant, &sep, allow_ref, Some(&refs)) {
                     new_errs.push((err.row, err.col));
                 }
             }
@@ -1902,6 +1906,8 @@ impl ProjectEngine {
         let mut errors = Vec::new();
         let sep = &project.config.separators;
         let refs = RefIndex::build(&project.groups);
+        let allow_ref = project.config.ui.as_ref()
+            .map_or(true, |u| u.constant_ref_allowed);
         for group in &project.groups {
             for table in &group.tables {
                 if table.deleted { continue; }
@@ -1911,7 +1917,7 @@ impl ProjectEngine {
             }
             for constant in &group.constants {
                 if constant.deleted { continue; }
-                for err in validate_constant(constant, sep) {
+                for err in validate_constant(constant, sep, allow_ref, Some(&refs)) {
                     errors.push(format_validation_log(&group.name, &constant.name, &err));
                 }
             }

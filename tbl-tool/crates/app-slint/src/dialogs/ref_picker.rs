@@ -119,8 +119,12 @@ pub(crate) fn open_for_cell(state: &Rc<RefCell<AppState>>, r: usize, c: usize, r
             (group.clone(), name.clone(), true, cur)
         }
         Some(SelectedNode::Constant { group, name, .. }) => {
-            // Constant 不允许 Ref 类型；保留兜底
-            (group.clone(), name.clone(), false, String::new())
+            // Constant value 列(c=2) 引用类型：取该行 entry.value 作为当前值
+            let cur = st.engine.find_constant(group, name)
+                .and_then(|cst| cst.entries.get(r))
+                .map(|e| e.value.clone())
+                .unwrap_or_default();
+            (group.clone(), name.clone(), false, cur)
         }
         _ => return,
     };

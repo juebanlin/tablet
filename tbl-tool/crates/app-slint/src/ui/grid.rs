@@ -33,8 +33,14 @@ pub fn push(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
     }
     ui_h.set_grid_title(snap.title.into());
     ui_h.set_grid_subtitle(snap.subtitle.into());
-    // 「枚举显示名字」仅在 Table 选中时启用（constant/enum 没有 @ref 列，勾上无效）
-    ui_h.set_show_enum_name_enabled(matches!(state.borrow().selected, Some(SelectedNode::Table { .. })));
+    // 「枚举显示名字」对 Table / Constant 启用：
+    // - Table：列级 @ref 列；
+    // - Constant：value 列单元格级 @ref 类型（视行 entry.tbl_type 而定）。
+    // Enum 没有引用列，禁用。
+    ui_h.set_show_enum_name_enabled(matches!(
+        state.borrow().selected,
+        Some(SelectedNode::Table { .. } | SelectedNode::Constant { .. })
+    ));
     // 「Excel 编辑」绑定具体节点（Table / Constant / Enum 都接受），未选中时禁用
     ui_h.set_excel_edit_enabled(matches!(
         state.borrow().selected,
@@ -141,7 +147,8 @@ pub fn wire(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
             // 第二次落到新实例上只会再次触发 clicked、永远不会变成 double-clicked。
             let (kind, data_single) = {
                 let st = s.borrow();
-                (st.grid_column_kinds.get(c as usize).cloned(), st.picker_trigger_data_single)
+                (grid_actions::effective_column_kind_at(&st, r as usize, c as usize),
+                 st.picker_trigger_data_single)
             };
             s.borrow_mut().grid_selection = GridSelection::Cell(r as usize, c as usize);
             // single 模式下：Ref / TypeEnumCol 单击直接弹（ExportEnumCol 由 slint 端 TouchArea 自己处理 popup）
@@ -367,7 +374,8 @@ pub fn wire(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
         ui_h.on_grid_cell_double_clicked(move |r, c| {
             let (kind, data_single) = {
                 let st = s.borrow();
-                (st.grid_column_kinds.get(c as usize).cloned(), st.picker_trigger_data_single)
+                (grid_actions::effective_column_kind_at(&st, r as usize, c as usize),
+                 st.picker_trigger_data_single)
             };
             let allow = kind.as_ref().map_or(false, |k| k.double_click_to_edit());
             if !allow { return; }
@@ -477,7 +485,7 @@ pub fn wire(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
                 if st.editing.is_some() { return; }
                 match st.grid_selection {
                     GridSelection::Cell(r, c) => {
-                        let kind = st.grid_column_kinds.get(c).cloned();
+                        let kind = grid_actions::effective_column_kind_at(&st, r, c);
                         if matches!(kind, Some(state::ColumnKind::Text)) {
                             Some((r, c, convert::raw_cell_for(&st, r, c)))
                         } else { None }

@@ -15,6 +15,7 @@ use crate::{refresh, AppWindow, RefItem, TsParamSlot};
 /// Constant data cell type 列单击 → 打开 TypeSelector（编辑该数据格的 type）
 pub(crate) fn open_for_cell(state: &Rc<RefCell<AppState>>, r: usize, c: usize) {
     let mut st = state.borrow_mut();
+    let allow_const_ref = st.constant_ref_allowed;
     let (group, name, is_table, current) = match &st.selected {
         Some(SelectedNode::Constant { group, name, .. }) => {
             let cur = st.engine.find_constant(group, name)
@@ -29,12 +30,13 @@ pub(crate) fn open_for_cell(state: &Rc<RefCell<AppState>>, r: usize, c: usize) {
         }
         _ => return,
     };
-    st.type_selector.open_with(&current, TypeEditTarget::CellType { row: r, col: c }, &group, &name, is_table);
+    st.type_selector.open_with(&current, TypeEditTarget::CellType { row: r, col: c }, &group, &name, is_table, allow_const_ref);
 }
 
 /// Table 表头 type 行单击 → 打开 TypeSelector（编辑该列的 tbl_type）
 pub(crate) fn open_for_header(state: &Rc<RefCell<AppState>>, col: usize) {
     let mut st = state.borrow_mut();
+    let allow_const_ref = st.constant_ref_allowed;
     let (group, name, current) = match &st.selected {
         Some(SelectedNode::Table { group, name, .. }) => {
             let cur = st.engine.find_table(group, name)
@@ -45,7 +47,7 @@ pub(crate) fn open_for_header(state: &Rc<RefCell<AppState>>, col: usize) {
         }
         _ => return,
     };
-    st.type_selector.open_with(&current, TypeEditTarget::HeaderType { col }, &group, &name, true);
+    st.type_selector.open_with(&current, TypeEditTarget::HeaderType { col }, &group, &name, true, allow_const_ref);
 }
 
 /// 收集项目内可被引用的项（table + enum，排除 deleted），按名称排序。

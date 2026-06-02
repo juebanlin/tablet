@@ -62,7 +62,10 @@ pub(super) fn cell_validation_message(state: &AppState, r: usize, c: usize) -> O
         }
         Some(SelectedNode::Constant { group, name, .. }) => {
             let constant = state.engine.find_constant(group, name)?;
-            validate_constant(constant, sep)
+            let refs = RefIndex::build(&state.engine.project().groups);
+            let allow_ref = state.engine.project().config.ui.as_ref()
+                .map_or(true, |u| u.constant_ref_allowed);
+            validate_constant(constant, sep, allow_ref, Some(&refs))
         }
         Some(SelectedNode::Enum { group, name, .. }) => {
             let enum_def = state.engine.find_enum(group, name)?;

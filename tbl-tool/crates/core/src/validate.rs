@@ -347,6 +347,15 @@ pub fn validate_table_row_with_refs(
 }
 
 pub fn validate_constant_cell(entry: &ConstEntry, col: usize, sep: &SeparatorsSection) -> Option<ValidationError> {
+    validate_constant_cell_with_refs(entry, col, sep, None)
+}
+
+pub fn validate_constant_cell_with_refs(
+    entry: &ConstEntry,
+    col: usize,
+    sep: &SeparatorsSection,
+    refs: Option<&RefIndex>,
+) -> Option<ValidationError> {
     if col == ConstantCol::Name.col() {
         let name = &entry.name;
         if name.is_empty() { return None; }
@@ -358,21 +367,36 @@ pub fn validate_constant_cell(entry: &ConstEntry, col: usize, sep: &SeparatorsSe
         let value = &entry.value;
         if value.is_empty() { return None; }
         if let Some(tbl_type) = TblType::parse(&entry.tbl_type) {
-            return tbl_type.validate_value(value, sep).map(|msg| {
-                ValidationError::cell(ValidationCode::BaseTypeMismatch, msg)
-                    .with_col_field_value(col, &entry.name, value)
-            });
+            if let Some(msg) = tbl_type.validate_value(value, sep) {
+                return Some(ValidationError::cell(ValidationCode::BaseTypeMismatch, msg)
+                    .with_col_field_value(col, &entry.name, value));
+            }
+            if let Some(refs) = refs {
+                if let Some((code, msg)) = validate_ref_value(&entry.tbl_type, value, refs) {
+                    return Some(ValidationError::cell(code, msg)
+                        .with_col_field_value(col, &entry.name, value));
+                }
+            }
         }
     }
     None
 }
 
 pub fn validate_constant_row(constant: &Constant, row: usize, sep: &SeparatorsSection) -> Vec<ValidationError> {
+    validate_constant_row_with_refs(constant, row, sep, None)
+}
+
+pub fn validate_constant_row_with_refs(
+    constant: &Constant,
+    row: usize,
+    sep: &SeparatorsSection,
+    refs: Option<&RefIndex>,
+) -> Vec<ValidationError> {
     let mut errors = Vec::new();
     let entry = match constant.entries.get(row) { Some(e) => e, None => return errors };
 
     for col in 0..5 {
-        if let Some(err) = validate_constant_cell(entry, col, sep) {
+        if let Some(err) = validate_constant_cell_with_refs(entry, col, sep, refs) {
             errors.push(err.with_row(row));
         }
     }
@@ -640,7 +664,7 @@ pub fn validate_table_schema_with_refs(
     errors
 }
 
-pub fn validate_constant_schema(constant: &Constant, _sep: &SeparatorsSection) -> Vec<ValidationError> {
+pub fn validate_constant_schema(constant: &Constant, _sep: &SeparatorsSection, allow_ref: bool) -> Vec<ValidationError> {
     let mut errors = Vec::new();
 
     let mut seen_names = std::collections::HashSet::new();
@@ -672,7 +696,7 @@ pub fn validate_constant_schema(constant: &Constant, _sep: &SeparatorsSection) -
                     None,
                 ).with_field(&entry.name)
             ),
-            Some(t) if t.paradigm == Paradigm::Ref => errors.push(
+            Some(t) if t.paradigm == Paradigm::Ref && !allow_ref => errors.push(
                 ValidationError::schema(
                     ValidationCode::ConstantRefForbidden,
                     "constant 不允许使用 @Xxx 引用类型".to_string(),
@@ -760,10 +784,12 @@ pub fn validate_table(
 pub fn validate_constant(
     constant: &Constant,
     sep: &SeparatorsSection,
+    allow_ref: bool,
+    refs: Option<&RefIndex>,
 ) -> Vec<ValidationError> {
-    let mut errors = validate_constant_schema(constant, sep);
+    let mut errors = validate_constant_schema(constant, sep, allow_ref);
     for row in 0..constant.entries.len() {
-        errors.extend(validate_constant_row(constant, row, sep));
+        errors.extend(validate_constant_row_with_refs(constant, row, sep, refs));
     }
     errors
 }

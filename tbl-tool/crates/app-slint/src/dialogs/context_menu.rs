@@ -108,15 +108,13 @@ pub(crate) fn items_for(kind: &CtxMenuKind, state: &AppState) -> Vec<CtxMenuItem
             item("下方插入行", "grid.row-insert-below", false),
             item("删除行", "grid.row-delete", false),
         ],
-        CtxMenuKind::GridCell { row: _, col } => {
+        CtxMenuKind::GridCell { row, col } => {
             let mut items = Vec::new();
             // picker 类首项：差异化文案；多选状态下不显示首项（避免误以为支持批量）
             let single_cell = matches!(state.grid_selection, GridSelection::Cell(_, _));
             if single_cell {
-                if let Some(label) = state.grid_column_kinds
-                    .get(*col)
-                    .and_then(|k| k.picker_action_label())
-                {
+                let kind = ui::grid_actions::effective_column_kind_at(state, *row, *col);
+                if let Some(label) = kind.as_ref().and_then(|k| k.picker_action_label()) {
                     items.push(item(label, "grid.cell-pick", false));
                     items.push(sep());
                 }
@@ -244,7 +242,7 @@ pub fn wire(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
                     // 等价于双击 picker cell：弹 RefPicker / TypeSelector
                     // ExportEnumCol cell 的 popup 是 slint 端 component-internal property，
                     // 没暴露到 Rust 端，只能由用户双击/单击 cell 触发；右键菜单不接管。
-                    let kind = s.borrow().grid_column_kinds.get(col).cloned();
+                    let kind = ui::grid_actions::effective_column_kind_at(&s.borrow(), row, col);
                     match kind {
                         Some(crate::state::ColumnKind::Ref { ref target }) => {
                             dialogs::ref_picker::open_for_cell(&s, row, col, target);

@@ -96,6 +96,10 @@ picker_trigger_data = "double"
 #   false - 显示 name（默认）
 #   true  - 显示 id（路径标识）
 show_meta_id = false
+# 是否允许 Constant 表使用 @Xxx 引用类型
+#   true  - 允许（默认；常量值经常指向 table/enum 某项，如 default_hero = @HeroType:1）
+#   false - 禁用（恢复早期行为，constant 段里的 @Xxx 会校验失败）
+constant_ref_allowed = true
 
 [ui.ref_picker]
 # 引用选择弹窗对 Table 的列展示策略：

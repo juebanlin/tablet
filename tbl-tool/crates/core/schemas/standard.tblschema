@@ -53,7 +53,7 @@ quad_grid     | Tuple4<int,int,int,int> | 0,0,1,1         | cs | 网格 (x,y,w,h
 attr_keys     | List<str>               | hp;mp;atk       | cs | 属性键列表
 init_items    | List<int>               | 1001;1002;1003  | cs | 初始物品 ID
 unique_skills | Set<int>                | 100;200;300     | cs | 技能 ID 集合
-attr_caps     | Map<str,int>            | hp:9999,mp:5000 | s  | 属性上限
+attr_caps     | Map<str,int>            | hp:9999;mp:5000 | s  | 属性上限
 default_hero  | @HeroType               | 1               | cs | 默认英雄类型
 
 # ──────────────── Table 段 ────────────────
@@ -72,10 +72,10 @@ skills  | List<int>    | cs | 技能 ID 列表
 attrs   | Map<str,int> | s  | 属性表
 desc    | str          | cs | 描述
 # @preset
-1001 | 阿尔托利亚 | 1200 | 300 | 88.5  | 60.0 | 1 | 5 | 1;2;3   | hp:1200,atk:88   | 圆桌骑士
-1002 | 梅林       | 700  | 800 | 120.0 | 30.0 | 2 | 5 | 4;5     | mp:800,atk:120   | 大魔法师
-1003 | 罗宾汉     | 900  | 200 | 95.5  | 45.0 | 3 | 4 | 6;7;8;9 | hp:900,atk:95    | 神射手
-1004 | 萨拉丁     | 1000 | 500 | 70.0  | 75.0 | 4 | 4 | 10;11   | hp:1000,def:75   | 圣职者
+1001 | 阿尔托利亚 | 1200 | 300 | 88.5  | 60.0 | 1 | 5 | 1;2;3   | hp:1200;atk:88   | 圆桌骑士
+1002 | 梅林       | 700  | 800 | 120.0 | 30.0 | 2 | 5 | 4;5     | mp:800;atk:120   | 大魔法师
+1003 | 罗宾汉     | 900  | 200 | 95.5  | 45.0 | 3 | 4 | 6;7;8;9 | hp:900;atk:95    | 神射手
+1004 | 萨拉丁     | 1000 | 500 | 70.0  | 75.0 | 4 | 4 | 10;11   | hp:1000;def:75   | 圣职者
 
 [item/Item] table
 id        | int          | cs | 物品 ID
@@ -99,6 +99,6 @@ size | Tuple2<int,int> | cs | 占地 (w,h)
 cost | Map<str,int>    | s  | 建造成本
 desc | str             | cs | 描述
 # @preset
-3001 | 伐木场 | 1 | 2,2 | wood:0,stone:50    | 产出木材
-3002 | 兵营   | 2 | 3,3 | wood:200,stone:100 | 训练士兵
-3003 | 神庙   | 3 | 4,4 | wood:500,stone:500 | 增益建筑
+3001 | 伐木场 | 1 | 2,2 | wood:0;stone:50    | 产出木材
+3002 | 兵营   | 2 | 3,3 | wood:200;stone:100 | 训练士兵
+3003 | 神庙   | 3 | 4,4 | wood:500;stone:500 | 增益建筑

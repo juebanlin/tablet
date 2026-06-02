@@ -392,7 +392,6 @@ export component AppWindow inherits Window {
                     filter-changed(i) => { root.tree-filter-index = i; root.tree-filter-changed(i); }
                     search-edited(s) => { root.tree-search-edited(s); }
                     full-group-toggled(c) => { root.tree-full-group-toggled(c); }
-                    template-library-clicked() => { root.drop-focus(); root.cp-new-project-clicked(); }
                     new-project-clicked() => { root.drop-focus(); root.cp-new-project-clicked(); }
                     sort-changed(i) => { root.tree-sort-index = i; root.tree-sort-changed(i); }
                 }

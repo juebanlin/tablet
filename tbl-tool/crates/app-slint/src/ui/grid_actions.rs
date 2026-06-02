@@ -53,6 +53,26 @@ pub(crate) fn column_kind_to_slint(k: &state::ColumnKind) -> CellKind {
     }
 }
 
+/// 算「这个 (row,col) 实际行为应该按哪种 ColumnKind 走」。
+///
+/// 默认就是列级 `grid_column_kinds[col]`；对 Constant 表 value 列(c=2)做单元格级覆写：
+/// 如果该行 entry 的 `tbl_type` 解析后是 `Paradigm::Ref`，则把 Text 升级为 `Ref { target }`。
+/// 这让 Constant 引用值单元格复用 Table 的 RefPicker 流程（双击 / 单击触发、ctx menu「选择引用...」）。
+pub(crate) fn effective_column_kind_at(state: &AppState, r: usize, c: usize) -> Option<state::ColumnKind> {
+    let base = state.grid_column_kinds.get(c).cloned()?;
+    if c != 2 { return Some(base); }
+    let (group, name) = match &state.selected {
+        Some(state::SelectedNode::Constant { group, name, .. }) => (group.clone(), name.clone()),
+        _ => return Some(base),
+    };
+    let constant = state.engine.find_constant(&group, &name)?;
+    let entry = constant.entries.get(r)?;
+    let t = tbl_core::types::TblType::parse(&entry.tbl_type)?;
+    if t.paradigm != tbl_core::types::Paradigm::Ref { return Some(base); }
+    let target = t.ref_name?;
+    Some(state::ColumnKind::Ref { target })
+}
+
 /// 计算 export popup 的 current-index：从当前 cell / header 读出 export code，映射到 0..3。
 /// popup 列表顺序：["前后端","客户端","服务器","不导出"]。
 pub(crate) fn compute_editing_export_index(

@@ -303,10 +303,21 @@ fn build_constant_grid(state: &AppState, group: &str, name: &str) -> GridSnapsho
         let cells = match entry {
             Some(e) => {
                 let export_disp = e.export.display().to_string();
+                // value 列：若 tbl_type 是 @Xxx 引用，按 view_show_enum_name 走与 Table 相同的 id→name 翻译
+                let value_ref_target: Option<String> = tbl_core::types::TblType::parse(&e.tbl_type)
+                    .filter(|t| t.paradigm == tbl_core::types::Paradigm::Ref)
+                    .and_then(|t| t.ref_name);
+                let value_disp = display_for_table_cell(state, &value_ref_target, &e.value);
+                let value_has_error = state.engine.has_active_cell_error(group, name, r, 2);
+                let value_is_empty_ref = value_ref_target.is_some() && e.value.is_empty();
                 vec![
                     plain_cell(state, group, name, r, 0, &e.name),
                     plain_cell(state, group, name, r, 1, &e.tbl_type),
-                    plain_cell(state, group, name, r, 2, &e.value),
+                    DataCell {
+                        text: SharedString::from(value_disp),
+                        has_error: value_has_error,
+                        is_empty_ref: value_is_empty_ref,
+                    },
                     plain_cell(state, group, name, r, 3, &export_disp),
                     plain_cell(state, group, name, r, 4, &e.desc),
                 ]

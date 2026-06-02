@@ -41,7 +41,6 @@ export component TreeSection inherits Rectangle {
     callback filter-changed(int);
     callback search-edited(string);
     callback full-group-toggled(bool);
-    callback template-library-clicked();
     callback new-project-clicked();
     callback sort-changed(int);
 
@@ -68,7 +67,7 @@ export component TreeSection inherits Rectangle {
             }
         }
 
-        // ─── 2. 顶部功能区：模板库 + 排序下拉 ───
+        // ─── 2. 顶部功能区：新建项目 + 排序下拉 ───
         Rectangle {
             height: top-stack.preferred-height;
             background: Theme.bg-toolbar;
@@ -81,10 +80,6 @@ export component TreeSection inherits Rectangle {
                 Button {
                     text: "新建项目";
                     clicked => { root.new-project-clicked(); }
-                }
-                Button {
-                    text: "模板库";
-                    clicked => { root.template-library-clicked(); }
                 }
                 ComboBox {
                     model: root.sort-options;
@@ -147,81 +142,85 @@ export component TreeSection inherits Rectangle {
             }
         }
 
-        // ─── 4. 节点展示区 ───
-        ScrollView {
-            VerticalLayout {
-                padding: 0;
-                spacing: 0;
-                for node in root.nodes: Rectangle {
-                    height: Theme.row-h;
-                    background: node.selected ? Theme.bg-row-selected : transparent;
+        // ─── 4. 节点展示区（ScrollView 满铺；底层 TouchArea 接管空白区右键 / 失焦点击）───
+        Rectangle {
+            vertical-stretch: 1;
 
-                    // 行级 TouchArea：包住整行；triangle TouchArea 作为嵌套子级优先 dispatch（slint 的内层 TouchArea 先于外层吃事件）
-                    TouchArea {
-                        clicked => { root.node-clicked(node.id); }
-                        double-clicked => { root.node-double-clicked(node.id); }
-                        pointer-event(e) => {
-                            if e.button == PointerEventButton.right && e.kind == PointerEventKind.up {
-                                root.node-context-menu(node.id,
-                                    self.absolute-position.x + self.mouse-x,
-                                    self.absolute-position.y + self.mouse-y);
-                            }
-                        }
-
-                        HorizontalLayout {
-                            padding-left: 4px + node.indent * 14px;
-                            padding-right: Theme.sp-2;
-                            spacing: Theme.sp-2;
-                            alignment: start;
-
-                            // 展开三角（仅组节点）；嵌套 TouchArea 比父 TouchArea 优先吃事件
-                            if node.is-group: Rectangle {
-                                width: 12px;
-                                TouchArea {
-                                    clicked => { root.node-toggle-expand(node.id); }
-                                    Text {
-                                        text: node.expanded ? "▼" : "▶";
-                                        font-size: 9px;
-                                        color: Theme.text-secondary;
-                                        vertical-alignment: center;
-                                    }
-                                }
-                            }
-                            if !node.is-group: Rectangle { width: 12px; }
-
-                            Text {
-                                text: node.icon;
-                                font-size: Theme.fs-small;
-                                vertical-alignment: center;
-                                opacity: node.closed ? 0.5 : 1.0;
-                            }
-                            Text {
-                                text: node.name;
-                                font-size: Theme.fs-small;
-                                color: node.closed ? Theme.text-secondary : Theme.text-primary;
-                                vertical-alignment: center;
-                                opacity: node.closed ? 0.7 : 1.0;
-                            }
-                            if node.mark != "": Text {
-                                text: node.mark;
-                                font-size: Theme.fs-small;
-                                color: node.mark-color;
-                                vertical-alignment: center;
-                            }
-                        }
+            // 底层：空白区右键 + 左键失焦。被节点行级 TouchArea 覆盖的区域不会命中这里。
+            TouchArea {
+                clicked => { root.blank-clicked(); }
+                pointer-event(e) => {
+                    if e.button == PointerEventButton.right && e.kind == PointerEventKind.up {
+                        root.blank-context-menu(
+                            self.absolute-position.x + self.mouse-x,
+                            self.absolute-position.y + self.mouse-y);
                     }
                 }
             }
-        }
 
-        // 空白区右键 + 左键失焦
-        TouchArea {
-            clicked => { root.blank-clicked(); }
-            pointer-event(e) => {
-                if e.button == PointerEventButton.right && e.kind == PointerEventKind.up {
-                    root.blank-context-menu(
-                        self.absolute-position.x + self.mouse-x,
-                        self.absolute-position.y + self.mouse-y);
+            ScrollView {
+                VerticalLayout {
+                    padding: 0;
+                    spacing: 0;
+                    for node in root.nodes: Rectangle {
+                        height: Theme.row-h;
+                        background: node.selected ? Theme.bg-row-selected : transparent;
+
+                        // 行级 TouchArea：包住整行；triangle TouchArea 作为嵌套子级优先 dispatch（slint 的内层 TouchArea 先于外层吃事件）
+                        TouchArea {
+                            clicked => { root.node-clicked(node.id); }
+                            double-clicked => { root.node-double-clicked(node.id); }
+                            pointer-event(e) => {
+                                if e.button == PointerEventButton.right && e.kind == PointerEventKind.up {
+                                    root.node-context-menu(node.id,
+                                        self.absolute-position.x + self.mouse-x,
+                                        self.absolute-position.y + self.mouse-y);
+                                }
+                            }
+
+                            HorizontalLayout {
+                                padding-left: 4px + node.indent * 14px;
+                                padding-right: Theme.sp-2;
+                                spacing: Theme.sp-2;
+                                alignment: start;
+
+                                // 展开三角（仅组节点）；嵌套 TouchArea 比父 TouchArea 优先吃事件
+                                if node.is-group: Rectangle {
+                                    width: 12px;
+                                    TouchArea {
+                                        clicked => { root.node-toggle-expand(node.id); }
+                                        Text {
+                                            text: node.expanded ? "▼" : "▶";
+                                            font-size: 9px;
+                                            color: Theme.text-secondary;
+                                            vertical-alignment: center;
+                                        }
+                                    }
+                                }
+                                if !node.is-group: Rectangle { width: 12px; }
+
+                                Text {
+                                    text: node.icon;
+                                    font-size: Theme.fs-small;
+                                    vertical-alignment: center;
+                                    opacity: node.closed ? 0.5 : 1.0;
+                                }
+                                Text {
+                                    text: node.name;
+                                    font-size: Theme.fs-small;
+                                    color: node.closed ? Theme.text-secondary : Theme.text-primary;
+                                    vertical-alignment: center;
+                                    opacity: node.closed ? 0.7 : 1.0;
+                                }
+                                if node.mark != "": Text {
+                                    text: node.mark;
+                                    font-size: Theme.fs-small;
+                                    color: node.mark-color;
+                                    vertical-alignment: center;
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }

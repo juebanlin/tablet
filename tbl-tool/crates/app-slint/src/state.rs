@@ -180,6 +180,7 @@ impl TypeSelectorState {
     }
 
     /// 用当前单元格的存储值预填弹窗：先 parse；解析失败按 Base/int 兜底。
+    /// `allow_constant_ref`：从 [ui] constant_ref_allowed 读取。Constant + 不允许时 ref tab 禁用。
     pub fn open_with(
         &mut self,
         current_type: &str,
@@ -187,14 +188,15 @@ impl TypeSelectorState {
         group: &str,
         name: &str,
         is_table: bool,
+        allow_constant_ref: bool,
     ) {
         self.open = true;
         self.target = Some(target);
         self.editing_group = group.to_string();
         self.editing_name = name.to_string();
         self.editing_source_table = is_table;
-        // Constant 不允许引用类型
-        self.ref_disabled = !is_table;
+        // Constant：仅当 [ui] constant_ref_allowed = false 时禁用 ref tab
+        self.ref_disabled = !is_table && !allow_constant_ref;
         self.ref_search.clear();
         self.ref_filter = TsRefFilter::All;
         if let Some(t) = TblType::parse(current_type) {
@@ -746,6 +748,9 @@ pub struct AppState {
     pub picker_trigger_header_single: bool,
     /// 数据区 picker 单元格呼出方式：true = 单击呼出，false = 双击呼出（[ui] picker_trigger_data）
     pub picker_trigger_data_single: bool,
+    /// 是否允许 Constant 表使用 @Xxx 引用类型（[ui] constant_ref_allowed）。
+    /// 控制 TypeSelector 的 Reference tab 是否对 Constant 开放。
+    pub constant_ref_allowed: bool,
     /// 当前正在 inline 编辑的单元格位置。仅 Text 列允许进入。
     pub editing: Option<(usize, usize)>,
     /// 编辑 buffer。inline LineEdit / 公式栏 LineEdit 共享同一份（slint 端 editing-buffer property）。
@@ -795,6 +800,9 @@ impl AppState {
         let data_single = cfg_src
             .and_then(|p| p.config.ui.as_ref())
             .map_or(false, |u| u.picker_trigger_data == "single");
+        let constant_ref_allowed = cfg_src
+            .and_then(|p| p.config.ui.as_ref())
+            .map_or(true, |u| u.constant_ref_allowed);
         let project_sort = cfg_src
             .map(|p| p.config.project.project_sort.clone())
             .filter(|s| !s.is_empty())
@@ -836,6 +844,7 @@ impl AppState {
             realtime_validate: rt_validate,
             picker_trigger_header_single: header_single,
             picker_trigger_data_single: data_single,
+            constant_ref_allowed,
             editing: None,
             editing_buffer: String::new(),
             editing_in_formula: false,

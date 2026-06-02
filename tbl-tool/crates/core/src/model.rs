@@ -171,6 +171,11 @@ pub struct UiConfig {
     /// 切换效果类似枚举显示 id/name。Project 实际目录始终用 id；此开关只决定**显示文本**。
     #[serde(default)]
     pub show_meta_id: bool,
+    /// 是否允许 Constant 表使用 @Xxx 引用类型。
+    /// 默认 true：常量值经常需要指向某条 table/enum 项（如 default_hero = @HeroType:1）。
+    /// 设 false 则恢复早期行为，schema 校验会把 constant 段里的 @Xxx 报为 ConstantRefForbidden。
+    #[serde(default = "default_true")]
+    pub constant_ref_allowed: bool,
 }
 
 #[derive(Debug, Clone, Default, serde::Deserialize)]
