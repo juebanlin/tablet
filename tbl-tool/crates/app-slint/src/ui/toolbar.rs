@@ -1,4 +1,5 @@
-// 顶部工具栏：generate-test / clear / save / reload + 打开三个对话框 + 模板库。
+// 顶部工具栏：generate-test / clear / save / reload + 导入 Schema + 模板库。
+// 数据导出 / Schema 导出 已迁到 TreeProject 右键菜单（按 project 走）。
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -16,6 +17,7 @@ pub fn wire(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
         let id = id.to_string();
         let mut full_refresh = false;
         let mut schema_import_dlg = false;
+        let mut template_lib_dlg = false;
         match id.as_str() {
             "generate-test" => {
                 s.borrow_mut().engine.generate_test_config();
@@ -46,6 +48,16 @@ pub fn wire(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
                 }
                 schema_import_dlg = true;
             }
+            "template-library" => {
+                {
+                    let mut st = s.borrow_mut();
+                    st.template_lib.open = true;
+                    st.template_lib.tab = 0;
+                    st.template_lib.search.clear();
+                    st.template_lib.selected_id.clear();
+                }
+                template_lib_dlg = true;
+            }
             _ => {}
         }
         if let Some(ui_h) = weak.upgrade() {
@@ -59,6 +71,7 @@ pub fn wire(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
                 dialogs::pending::push_confirm(&ui_h, &s);
             }
             if schema_import_dlg { dialogs::schema_io::push_import(&ui_h, &s); }
+            if template_lib_dlg { dialogs::template_library::push(&ui_h, &s); }
             // 任何 toolbar 操作都可能产生日志（save/reload/generate/clear 全会 log）
             refresh::after_log(&ui_h, &s);
         }

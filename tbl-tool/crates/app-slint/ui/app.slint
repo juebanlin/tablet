@@ -328,10 +328,7 @@ export component AppWindow inherits Window {
         Toolbar {
             btn-clicked(id) => {
                 root.drop-focus();
-                if (id == "export") { root.dlg-export-open = true; }
-                if (id == "export-schema") { root.dlg-schema-export-open = true; }
-                if (id == "import-schema") { root.dlg-schema-import-open = true; }
-                if (id == "template-library") { root.dlg-template-open = true; }
+                // 各对话框 open 由 Rust 端在 toolbar wire 内设置，slint 这里仅转发。
                 root.toolbar-btn-clicked(id);
             }
         }
@@ -359,7 +356,7 @@ export component AppWindow inherits Window {
                     filter-changed(i) => { root.tree-filter-index = i; root.tree-filter-changed(i); }
                     search-edited(s) => { root.tree-search-edited(s); }
                     full-group-toggled(c) => { root.tree-full-group-toggled(c); }
-                    template-library-clicked() => { root.drop-focus(); root.dlg-template-open = true; root.toolbar-btn-clicked("template-library"); }
+                    template-library-clicked() => { root.drop-focus(); root.toolbar-btn-clicked("template-library"); }
                     new-project-clicked() => { root.drop-focus(); root.np-new-project-clicked(); }
                     sort-changed(i) => { root.tree-sort-index = i; root.tree-sort-changed(i); }
                 }
@@ -563,7 +560,7 @@ export component AppWindow inherits Window {
         items: root.tpl-items;
         detail-text: root.tpl-detail;
         can-use: root.tpl-can-use;
-        set-tab(i) => { root.tpl-tab-index = i; root.tpl-set-tab(i); }
+        set-tab(i) => { root.tpl-set-tab(i); }
         search-edited(s) => { root.tpl-search-edited(s); }
         select-item(i) => { root.tpl-select-item(i); }
         use-template => { root.tpl-use-template(); }

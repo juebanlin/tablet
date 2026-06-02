@@ -12,11 +12,5 @@ kind   | @HeroType | cs | 类型
 skills | List<int> | cs | 技能组
 
 [hero/HeroType] enum
-1 | WARRIOR | 战士
-2 | MAGE    | 法师
-3 | ARCHER  | 弓手
 
 [global/GlobalConst] constant
-max_level   | int             | cs | 最大等级
-start_pos   | Tuple2<int,int> | cs | 出生坐标
-server_name | str             | s  | 服务器名称
