@@ -11,6 +11,7 @@ use crate::tblschema::{fill_metadata_defaults, parse_tblschema};
 /// 解析失败 = 编译期就坏的内置 schema，单元测试会先失败把它顶出来。
 const BUILTIN_FILES: &[(&str, &str)] = &[
     (include_str!("../../schemas/standard.tblschema"), "standard"),
+    (include_str!("../../schemas/sanguo.tblschema"), "sanguo"),
 ];
 
 #[derive(Debug, Default)]
