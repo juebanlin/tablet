@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/core", "crates/app-egui", "crates/app-slint", "crates/app-fltk", "crates/app-cli"]
+members = ["crates/core", "crates/app-slint", "crates/app-cli"]
 resolver = "2"
 
 [profile.dev]
