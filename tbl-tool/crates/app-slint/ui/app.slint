@@ -352,8 +352,8 @@ export component AppWindow inherits Window {
 
     // ── 大区拉伸尺寸 ───────────────────────────────────────
     // TreeSection 宽度、LogPanel 高度由 splitter 拖动调整。
-    // tree-w 最小 220px：slint 端 TreeSection 内层有功能区 border + padding 双层堆叠，
-    // 比 egui 多消耗约 20px，所以下限比 egui 的 200px 多出 20px 才能给搜索框留同样间隔。
+    // tree-w 最小 220px：TreeSection 内层有功能区 border + padding 双层堆叠，
+    // 搜索框 + 过滤下拉的最小可读宽度对应外层 220px。
     in-out property <length> tree-w: 240px;
     in-out property <length> log-h: 120px;
 

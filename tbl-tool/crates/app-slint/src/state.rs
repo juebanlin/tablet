@@ -60,7 +60,7 @@ pub enum TreeTarget {
 }
 
 /// 列的可编辑性维度。决定单/双击进入哪种编辑器、公式栏是否可写。
-/// 与 egui 端 `CellKind` 对应；颜色（ReadOnly 灰色等）是另一维度，不依赖此 enum。
+/// 颜色（ReadOnly 灰色等）是另一维度，不依赖此 enum。
 #[derive(Clone, Debug, PartialEq)]
 pub enum ColumnKind {
     /// 不可编辑（id 列等）。颜色是否灰色由展示层独立决定。

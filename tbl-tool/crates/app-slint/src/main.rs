@@ -1,4 +1,4 @@
-// 启动壳子：与 egui 端策略对齐
+// 启动壳子（@05.13 跨平台启动约定）
 // - Windows 下隐藏控制台（避免双击/run 带 console；同时抑制 vm3dgl 等 OpenGL 启动日志）
 //   仅 Windows 平台需要这个属性，Linux/macOS 不存在 subsystem 概念
 // - CLI workdir / lock 文件 / 文件日志 / 加载 project

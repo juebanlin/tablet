@@ -225,14 +225,14 @@ fn build_table_grid(state: &AppState, group: &str, name: &str) -> GridSnapshot {
         .map(|f| f.tbl_type.strip_prefix('@').map(|s| s.trim().to_string()))
         .collect();
     let column_kinds: Vec<ColumnKind> = ref_targets.iter().enumerate().map(|(i, t)| {
-        if i == 0 { return ColumnKind::Text; } // id 列：数据行可编辑（与 egui 一致）；表头才是 ReadOnly
+        if i == 0 { return ColumnKind::Text; } // id 列：数据行可编辑；表头才是 ReadOnly
         match t {
             Some(name) => ColumnKind::Ref { target: name.clone() },
             None => ColumnKind::Text,
         }
     }).collect();
 
-    // 表头四行的 ColumnKind：与 egui 对齐——desc 行整行 Text；export/type/field 三行 id 列固定 ReadOnly。
+    // 表头四行的 ColumnKind：desc 行整行 Text；export/type/field 三行 id 列固定 ReadOnly。
     let mk_header_kinds_id_ro = |non_id: ColumnKind| -> Vec<ColumnKind> {
         fields.iter().enumerate().map(|(i, _)| {
             if i == 0 { ColumnKind::ReadOnly } else { non_id.clone() }

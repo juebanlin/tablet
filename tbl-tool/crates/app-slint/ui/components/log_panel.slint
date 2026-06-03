@@ -1,9 +1,8 @@
 // 日志面板：全窗口底部独立区域，带「日志」标题。
-// 对应 docs/02-UI设计.md §1.1。
+// 对应 docs/04-UI设计.md §1.1。
 //
 // 实现：把所有日志合成单个多行字符串，渲染为 read-only 多行 TextInput，
-// 这样用户可以跨行选中 + Ctrl+C 复制（egui 端用 ScrollArea + 多行 SelectableLabel 实现，
-// 在 slint 里用单 TextInput 更简单）。
+// 这样用户可以跨行选中 + Ctrl+C 复制。
 // 颜色 tint 因此从"按 level"退化为"统一颜色"——错误信息从 `[验证]/失败/错误` 前缀辨识。
 
 import { Theme } from "../theme.slint";

@@ -52,7 +52,7 @@ GridArea 单元格 / 选区支持 Excel 风格的复制粘贴：
 
 剪贴板格式与 xlsx 是**两条独立的桥**：剪贴板走文本，xlsx 走二进制；它们的字段类型解析都委托回 core 的 `parse_*` 函数，保证 UI / 核心一致。
 
-实现位置：`crates/app-egui/src/ui/grid.rs::handle_clipboard_*`、`crates/app-slint/src/main.rs` 中相同位置（slint 端待补）。
+实现位置：`crates/app-slint/src/ui/grid_actions.rs`（剪贴板读写）+ `crates/app-slint/src/ui/focus.rs`（绑 `grid-shortcut-copy/cut/paste` callback）。底层走 `arboard` 读写系统剪贴板。
 
 ## 5. 状态
 
@@ -60,4 +60,4 @@ GridArea 单元格 / 选区支持 Excel 风格的复制粘贴：
 |------|------|
 | 核心 xlsx 导出 / 导入 | ⚠️ 待开发，见 @02 |
 | UI 桥接流程（调起 / 监控 / 临时文件） | ⚠️ 待开发，留到核心 xlsx 完成后做 |
-| 剪贴板 TSV 复制粘贴 | egui 已实现 / slint 待补 |
+| 剪贴板 TSV 复制粘贴 | ✅ 已实现 |

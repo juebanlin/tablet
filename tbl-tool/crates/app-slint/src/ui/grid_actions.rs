@@ -128,8 +128,8 @@ pub(crate) fn selection_anchor(state: &Rc<RefCell<AppState>>) -> Option<(usize, 
 }
 
 /// 取当前选中节点的 (rows, cols)，用于鼠标拖选 / 区域操作的边界裁剪。
-/// rows 包含 EXTRA_ROWS 占位行：用户可以拖选 / 粘贴 / 清空到表尾的空白行，
-/// 跟 egui 端 display_rows 行为一致；engine.paste_*_data 内部会按需 push 新行。
+/// rows 包含 EXTRA_ROWS 占位行：用户可以拖选 / 粘贴 / 清空到表尾的空白行；
+/// engine.paste_*_data 内部会按需 push 新行。
 /// 没有选中节点时返回 (0, 0)。
 pub(crate) fn dims(state: &Rc<RefCell<AppState>>) -> (usize, usize) {
     let st = state.borrow();
@@ -264,7 +264,7 @@ pub(crate) fn perform_row_action(state: &Rc<RefCell<AppState>>, row: usize, acti
 /// 选区由 GridSelection 决定（单格 / 区域 / 整行 / 整列）；由调用方确保命中合法选区。
 /// `tag` 决定日志前缀：右键传中文动词（复制/粘贴/清空），键盘传按键组合（Ctrl+C/Ctrl+V/Delete）。
 ///
-/// 范围语义对齐 Excel + egui：
+/// 范围语义对齐 Excel：
 /// - Copy: TSV 拼接区域，UI 日志只打范围（如 `[Ctrl+C] B2:D5 (4行×3列)`），不打内容
 /// - Paste: clipboard TSV 从锚点展开覆盖
 /// - Clear: 清空区域所有 cell
