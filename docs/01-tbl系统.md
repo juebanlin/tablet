@@ -87,7 +87,7 @@ gm_password|str            |xxx  |s  |GM密码
 
 - 没有 `#desc / #type / #export / #field` 头——5 列固定为 `name | type | value | export | desc`
 - `export` 列留空 = 默认 `cs`（前后端）
-- 不能用 `@Xxx` 引用类型（constant 是固定值，不承载跨表关联）
+- 允许 `@Xxx` 引用类型（默认开启；通过 `[ui] constant_ref_allowed = false` 可全局关闭，关闭后已存在的引用列报 schema 错误）
 
 ### 4.3 Enum 模式
 
@@ -110,7 +110,7 @@ gm_password|str            |xxx  |s  |GM密码
 |------|-------|----------|------|
 | 表头行 | 4 行（desc/type/export/field） | 0 行（5 列固定语义） | 0 行（3 列固定语义） |
 | 主键 | 第一列必须是 `id: int` | 无（每行一个 name） | 第一列 `id: int+`（不为 0） |
-| 引用 `@Xxx` | 允许 | **禁止** | 不适用 |
+| 引用 `@Xxx` | 允许 | 允许（默认开；`[ui] constant_ref_allowed` 关） | 不适用 |
 | 数据导出 | JSON / XML | JSON / XML | 不导出（写入代码） |
 | 跨平台代码 | Tpl 类（一行一实例） | Tpl 类（每行一字段） | enum / typed int / table |
 
@@ -257,37 +257,31 @@ UI 类型选择器分 [数据类型] / [引用类型] 两个 tab，但只是用�
 
 ### 7.4 分隔符配置
 
-每种范式有自己的分隔符表，互不影响。配置写在 `tbl-tool.toml [separators]`：
+每种范式有自己的分隔符表，互不影响。**配置以项目自身的 `.tblschema` 为单一来源**：每个项目把自己使用的分隔符以 `# @sep key = value` 行嵌在 schema 头部（详见 @10.3）。加载项目时，schema 里的 `separators` 直接覆盖运行时分隔符；同一仓库不同项目可各自独立设定，互不干扰。
 
-```toml
-[separators]
-Tuple2 = ","
-Tuple3 = ","
-Tuple4 = ","
-List = ";"
-Set = ";"
-
-[separators.Map]
-kv = ":"
-entry = ";"
-
-[separators.List_Tuple2]
-tuple = ","
-list = ";"
-
-[separators.Map_Tuple2]
-kv = ":"
-tuple = ","
-entry = ";"
-
-[separators.Map_List]
-kv = ":"
-item = ","
-entry = ";"
-# Tuple3/4、List_Tuple3/4、Map_Tuple3/4 同理
+```
+# @sep List = ;
+# @sep Map.kv = :
+# @sep Map.entry = ;
 ```
 
-默认值覆盖绝大多数场景，仅历史数据兼容时需修改。
+GUI 入口：项目右键 →「项目设置...」→「分隔符」tab（含 25 个 leaf）。修改后写回项目 `.tblschema` 并触发该项目全表重校验。
+
+`tbl-tool.toml [separators]` 段降级为「程序级默认值」：仅在「新建空项目」时把当前内存中的默认分隔符**拷贝**到新项目 schema 作为初值，之后该项目不再读取 toml；从模板/文件新建项目则继承 source schema 的 separators。
+
+| 行为 | 数据来源 |
+|------|---------|
+| 已加载项目运行期 | 该项目 `.tblschema` 的 `# @sep` 行 → `Project.config.separators` |
+| 新建空项目 | 启动时从 `tbl-tool.toml [separators]` 读到内存 `engine.default_separators`，新项目拷贝此对象 |
+| 从模板/文件新建项目 | source schema 的 `separators` |
+| 运行期改分隔符 | 「项目设置 → 分隔符」→ 写回 `.tblschema` → revalidate_all |
+
+序列化策略：`serialize_tblschema` **只输出与默认值不同的 leaf**——一个完全使用默认分隔符的项目，schema 里看不到任何 `# @sep` 行，保持文件干净。
+
+支持的 25 个 leaf 见 @07.4.9（`SeparatorsSection` 字段）。键名规则：
+
+- 顶级键：`Tuple2 / Tuple3 / Tuple4 / List / Set`
+- 嵌套键：`Map.kv / Map.entry / List_Tuple2.tuple / List_Tuple2.list / Map_Tuple2.kv / ... / Map_List.entry`
 
 ### 7.5 引用类型 `@Xxx`
 
@@ -428,7 +422,8 @@ Lua 端全部展开为 table 字面量，不降级为 string。
 | 不存在 | schema 非法 | "引用的配置项 X 不存在" |
 | `mode = enum` | 值必须是该 enum 的某个 id | "引用值 5 不存在于 HeroType" |
 | `mode = table` | 值必须是该表存在的 id | "引用值 1099 不存在于 HeroBase" |
-| `mode = constant` | schema 非法 | "不能引用 constant（无 id 概念）" |
+| `mode = constant` | schema 非法（constant 没有 id 概念，不可被引用） | "不能引用 constant" |
+| Constant 字段使用 `@Xxx` 但 `[ui] constant_ref_allowed = false` | schema 非法 | "Constant 不允许引用类型（已在 [ui] 关闭）" |
 
 引用值为空合法（视作"未引用"）。
 
@@ -456,7 +451,7 @@ Lua 端全部展开为 table 字面量，不降级为 string。
 |------|------|
 | cell | name 符合命名规则；value 按类型验证 |
 | row | name 已填但 value 为空 → "name已填但value为空" |
-| schema | name 不重复；类型可解析；**禁止 @Xxx** |
+| schema | name 不重复；类型可解析；`@Xxx` 引用类型受 `[ui] constant_ref_allowed` 开关控制（默认开启；关闭时报 schema 非法） |
 
 ### 8.9 Enum 验证
 
@@ -503,9 +498,15 @@ Lua 端全部展开为 table 字面量，不降级为 string。
 # @meta name: 完整测试模板
 # @meta category: test
 # @meta version: 1.0.0
+# @meta created_at: 2026-06-03T10:30:00Z
+# @meta source_template: full
+# @meta source_template_version: 1.0.0
+# @meta has_preset: true
+# @sep List = ;
+# @sep Map.entry = ;
 ```
 
-第一行必须是版本标识。紧随其后的 `# @meta key: value` 注释行定义 schema 元数据。
+第一行必须是版本标识。紧随其后的 **directive 行** —— `# @meta` 与 `# @sep` —— 在第一个 `[group/Name]` 之前出现，定义 schema 元数据与项目分隔符配置。
 
 | 字段 | 约束 | 用途 |
 |------|------|------|
@@ -513,13 +514,17 @@ Lua 端全部展开为 table 字面量，不降级为 string。
 | name | 任意文本（含中文） | UI 展示文案 |
 | category | 任意文本 | 模板库分类筛选（test / slg / rpg / ...）|
 | version | semver | 模板版本，后续模板更新比对用 |
+| created_at | ISO-8601（UTC） | 项目创建时间。模板侧通常为空 |
+| source_template | 模板 id | 项目从哪个模板新建。手动新建 / 模板自身留空 |
+| source_template_version | semver | 来源模板版本（模板更新比对锚点） |
+| has_preset | `true` / `false` | 是否含 `# @preset` 数据块（详见 @10.4）。**derive 字段**：序列化时按实际 sections 重算，反序列化也以 section 实际状态为准 |
 
 兼容规则：
 
 - 老 .tblschema 无 `# @meta` 行 → id 走文件名 stem 兜底（`full.tblschema` → `id=full`），name 等于 id
 - 重复 key 后者覆盖前者
 - key 大小写敏感
-- `# @meta` 行必须出现在第一个 `[group/Name]` 之前；之后的 `#` 行视作普通注释
+- `# @meta` / `# @sep` directive 行必须出现在第一个 `[group/Name]` 之前；之后的 `#` 行视作普通注释（`# @preset` 例外，见 @10.4）
 
 UI 上是否展示 id 还是 name 由全局开关 `[ui] show_meta_id` 决定（@04.5.x、@07.4.10），默认 false 显示 name。
 
@@ -533,7 +538,19 @@ UI 上是否展示 id 还是 name 由全局开关 `[ui] show_meta_id` 决定（@
 - `Name` — 配置项名（PascalCase）
 - `mode` — `table` / `constant` / `enum`
 
-### 10.3 字段行
+### 10.3 分隔符 directive `# @sep`
+
+格式：`# @sep <key> = <value>`
+
+- key 取自 `SeparatorsSection` 的 25 个 leaf（@7.4）：`Tuple2 / Tuple3 / Tuple4 / List / Set / Map.kv / Map.entry / List_TupleN.tuple / List_TupleN.list / Map_TupleN.{kv,tuple,entry} / Map_List.{kv,item,entry}`
+- value 等号两侧 trim，**值本身不再 trim 内部空格**（保留原样以支持空白类分隔符）
+- 必须出现在第一个 `[group/Name]` 之前；之后的 `# @sep` 视作普通注释（与 `# @meta` 同等约束）
+- 未列出 / 未识别的 key 静默忽略，前向兼容
+- 序列化时**只输出与 `SeparatorsSection::default()` 不同的 leaf**——默认配置的项目 schema 中不会出现任何 `# @sep` 行
+
+加载链路：每个 Project 用自身 schema 的 separators 覆盖 `Project.config.separators`，运行期校验/导出/示例值生成全部读 config，与 workspace toml 的 `[separators]` 解耦（@7.4 / @07.4.9）。
+
+### 10.4 字段行
 
 ```
 field_name | type | export | desc
@@ -548,11 +565,56 @@ field_name | type | export | desc
 
 Enum mode 的数据行为 `id | name | desc`，无 type/export 列。
 
-### 10.4 注释与空行
+### 10.5 预设数据 directive `# @preset`
 
-`#` 开头行 = 注释。空行 = 忽略。
+格式：在 `[group/Name] mode` 段内、字段行之后插入独立 `# @preset` 行；之后的非 `#` / 非 `[` 行按 `|` 切作为该段的预设数据，直到下一个 `[group/Name]` 或 EOF。
 
-### 10.5 多文件合并
+```
+[hero/HeroBase] table
+id     | int       | cs | 英雄ID
+name   | str       | cs | 名称
+type   | @HeroType | cs | 引用枚举：英雄类型
+skills | List<int> | cs | 技能 id 列表
+# @preset
+1001 | 战士 | 1 | 1;2;3
+1002 | 法师 | 2 | 4;5
+
+[global/GlobalConst] constant
+# @preset
+max_level | int             | 100  | cs | 最大等级
+start_pos | Tuple2<int,int> | 5,10 | cs | 出生坐标
+
+[hero/HeroType] enum
+# @preset
+1 | WARRIOR | 战士
+2 | MAGE    | 法师
+3 | ARCHER  | 弓手
+```
+
+按 mode 不同，预设行的列含义如下：
+
+| Mode | 预设行格式 |
+|------|-----------|
+| Table | `<id> | <字段2> | <字段3> | ...`（按 schema 字段顺序） |
+| Constant | `<name> | <type> | <value> | <export> | <desc>` |
+| Enum | `<id> | <name> | <desc>` |
+
+行为约束：
+
+- 必须出现在 `[group/Name]` 之后，否则解析失败（`# @preset 必须出现在某个 [section] 之后`）
+- Constant / Enum 段的字段/条目**只能写在 `# @preset` 块里**——schema 主体不允许直接的数据行
+- 加载到项目时，`apply_schema_to_project(with_preset)` 决定是否把预设数据灌入新建 Project 的 .tbl
+  - 「新建项目」对话框带 `with_preset` 复选框（仅当 `has_preset = true` 时可见）
+  - 「合并 Schema」/「导出 Schema」对话框同样可选是否带 preset
+- `# @meta has_preset` 字段是 derive：序列化前按实际 sections 重算，反序列化时也以解析到的 preset 行为准（无论 meta 行写什么都会被覆盖）
+
+预设数据是模板「开箱即用」的核心——例如三国题材模板 `sanguo.tblschema` 把所有英雄 / 兵种 / 建筑数据都打进 preset，新建项目时一键生成。
+
+### 10.6 注释与空行
+
+`#` 开头行 = 注释（除 `# @meta` / `# @sep` / `# @preset` 三种 directive）。空行 = 忽略。
+
+### 10.7 多文件合并
 
 | 规则 | 处理 |
 |------|------|
@@ -560,18 +622,18 @@ Enum mode 的数据行为 `id | name | desc`，无 type/export 列。
 | 同 key 出现在多个文件 | 报错（结构冲突） |
 | 同 section 内字段名重复 | 报错 |
 | 不同 section 同字段名 | 允许 |
+| metadata / separators | 合并产物清空（多文件无单一来源），调用方按需重填 |
 
-### 10.6 内置测试 schema
+### 10.8 内置测试 schema
 
-工具内置多套 .tblschema 用于回归测试，位于 `crates/core/schemas/`：
+工具内置多套 .tblschema 用于回归测试与新建项目模板，位于 `crates/core/schemas/`：
 
 | 文件 | 用途 |
 |------|------|
-| `basic.tblschema` | 基础类型测试 |
-| `collection.tblschema` | List/Set/Map 测试 |
-| `tuple.tblschema` | Tuple2/3/4 测试 |
-| `empty.tblschema` | 空值策略测试 |
-| `full.tblschema` | 完整项目结构（所有类型组合） |
+| `standard.tblschema` | 标准范式覆盖：所有类型组合 + Constant/Enum，generate-test 默认源 |
+| `sanguo.tblschema` | 三国题材完整 demo：含 10 套枚举 + 8 张 Table + 1 张 Constant，全部带 `# @preset` 数据 |
+
+后续可扩展：文件直接放进 `crates/core/schemas/`，`build.rs` 自动重编。模板加载详见 @02 项目模板章节。
 
 测试流程详见 @09。
 
