@@ -28,4 +28,5 @@ tbl-tool/tests/*/go.mod
 tbl-tool/tests/*/go.sum
 
 # Claude
-.claude/
+.claude/*
+!.claude/skills/

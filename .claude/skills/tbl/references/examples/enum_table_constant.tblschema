@@ -1,0 +1,70 @@
+#!tblschema v1
+# @meta id: rpg-demo
+# @meta name: RPG 简化模板
+# @meta category: rpg
+# @meta version: 1.0.0
+
+# 一份"小型 RPG"的最小可玩 schema：枚举 + 表 + 常量各一个角色，
+# 演示 ai 在收到「做一个简单 RPG 配置」时应有的产出形态。
+
+# ──────────── 枚举 ────────────
+
+[shared/HeroClass] enum
+# @preset
+1 | WARRIOR | 战士
+2 | MAGE    | 法师
+3 | ARCHER  | 弓手
+
+[shared/Element] enum
+# @preset
+1 | FIRE  | 火
+2 | WATER | 水
+3 | WIND  | 风
+4 | EARTH | 土
+
+[shared/SkillTarget] enum
+# @preset
+1 | SELF  | 自身
+2 | ALLY  | 友军
+3 | ENEMY | 敌方
+4 | AOE   | 群体
+
+# ──────────── 数据表 ────────────
+
+[hero/HeroBase] table
+id          | int             | cs | 英雄 ID
+name        | str             | cs | 名称
+class       | @HeroClass      | cs | 职业
+element     | @Element        | cs | 元素
+base_hp     | int             | cs | 基础生命
+base_atk    | int             | cs | 基础攻击
+skills      | List<int>       | cs | 学会的技能 ID
+counters    | List<int>       | cs | 克制的英雄 ID
+desc        | str             | c  | 客户端展示描述
+# @preset
+1001 | 阿瑞斯 | 1 | 1 | 1200 | 180 | 1;2 | 1003 | 战神化身
+1002 | 莉莉丝 | 2 | 2 |  800 | 240 | 3;4 |      | 月之女巫
+1003 | 阿尔忒弥斯 | 3 | 3 |  900 | 200 | 5   | 1001 | 月光神射手
+
+[skill/SkillBase] table
+id        | int            | cs | 技能 ID
+name      | str            | cs | 名称
+target    | @SkillTarget   | cs | 目标类型
+power     | int            | cs | 基础威力
+costs     | Map<int,int>   | cs | 资源消耗 (Element→数值)
+# @preset
+1 | 烈焰斩 | 3 | 100 | 1:30
+2 | 战吼   | 1 | 0   |
+3 | 寒冰刺 | 3 | 90  | 2:25
+4 | 水墙   | 1 | 0   | 2:40
+5 | 穿云箭 | 3 | 110 | 3:20
+
+# ──────────── 全局常量 ────────────
+
+[global/Const] constant
+# @preset
+max_level     | int             | 80          | cs | 最大等级
+spawn_pos     | Tuple2<int,int> | 0,0         | cs | 出生坐标
+default_class | @HeroClass      | 1           | cs | 默认职业
+init_skills   | List<int>       | 1;2         | cs | 新手赠送技能
+debug_pwd     | str             | dev_only    | s  | 调试密码
