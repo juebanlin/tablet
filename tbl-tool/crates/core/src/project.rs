@@ -108,7 +108,9 @@ constant_ref_allowed = true
 default_strategy = "auto"
 
 [separators]
-# 类型分隔符配置（按范式），默认值覆盖绝大多数场景
+# 程序级默认分隔符：仅在「新建空项目」时拷贝到 schema.separators 作为初值。
+# 已加载项目走各自 .tblschema 的 # @sep 行（GUI「项目右键 → 项目设置 → 分隔符」编辑），
+# 与本段无关。从模板/文件新建则继承 source schema 的 separators。
 Tuple2 = ","
 Tuple3 = ","
 Tuple4 = ","
@@ -195,7 +197,10 @@ pub fn load_project(workdir: &Path) -> Result<Project> {
         (workdir.to_path_buf(), schema, None)
     };
 
-    let config = merge_project_config(&global_text, project_text.as_deref())?;
+    let mut config = merge_project_config(&global_text, project_text.as_deref())?;
+    // 分隔符以 schema.separators 为单一来源（@docs/plans 方案）：
+    // workspace tbl-tool.toml [separators] 与 project.toml [separators] 都被 schema 覆盖。
+    config.separators = schema.separators.clone();
 
     // 决定 config 数据目录：多 Project 模式恒为 `<project_root>/config/`；
     // 老布局走 `<project_root>/<config_dir>`（即 `<workdir>/<config_dir>`）
@@ -240,6 +245,8 @@ pub fn load_specific_project(workdir: &Path, project_id: &str) -> Result<Project
 
     let mut config = merge_project_config(&global_text, proj_text.as_deref())?;
     config.project.last_project = project_id.to_string();
+    // 分隔符以 schema.separators 为唯一来源
+    config.separators = schema.separators.clone();
 
     let data_dir = project_root.join("config");
     let groups = if data_dir.is_dir() { load_groups_in(&data_dir)? } else { Vec::new() };
@@ -378,12 +385,15 @@ pub fn load_workspace(workdir: &Path) -> Result<crate::ops::ProjectEngine> {
     } else {
         opened.first().map(|p| p.schema.meta.id.clone())
     };
-    let engine = ProjectEngine::new_workspace(
+    let mut engine = ProjectEngine::new_workspace(
         workdir.to_path_buf(),
         available,
         opened,
         active_id.as_deref(),
     );
+    // workspace tbl-tool.toml [separators] 作为「新建空项目」时 schema.separators 的初值；
+    // toml 里没写的字段走 SeparatorsSection 自身 default。
+    engine.set_default_separators(workspace_cfg.separators.clone());
     Ok(engine)
 }
 

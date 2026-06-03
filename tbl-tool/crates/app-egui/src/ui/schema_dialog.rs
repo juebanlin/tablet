@@ -120,7 +120,7 @@ fn do_export(app: &mut TblApp) {
         }
     }
 
-    let schema = TblSchema { meta: Default::default(), sections: selected_sections };
+    let schema = TblSchema { meta: Default::default(), separators: Default::default(), sections: selected_sections };
     let content = serialize_tblschema(&schema);
 
     let file = rfd::FileDialog::new()

@@ -62,7 +62,7 @@ pub(crate) fn items_for(kind: &CtxMenuKind, state: &AppState) -> Vec<CtxMenuItem
                     item("新建 Group", "tree.proj-new-group", false),
                     item("复制(克隆)...", "tree.proj-clone", false),
                     item_owned(paste_group_label.clone(), "tree.paste-group", !has_group_cb),
-                    item("重命名...", "tree.proj-rename", false),
+                    item("项目设置...", "tree.proj-settings", false),
                     item("删除", "tree.proj-delete", false),
                     sep(),
                     item("关闭", "tree.proj-close", false),
@@ -74,7 +74,7 @@ pub(crate) fn items_for(kind: &CtxMenuKind, state: &AppState) -> Vec<CtxMenuItem
                     item("打开", "tree.proj-open", false),
                     sep(),
                     item("在文件管理器打开", "tree.proj-open-dir", false),
-                    item("重命名...", "tree.proj-rename", false),
+                    item("项目设置...", "tree.proj-settings", false),
                     item("删除", "tree.proj-delete", false),
                 ]
             }

@@ -317,6 +317,9 @@ fn run(state: &Rc<RefCell<AppState>>) {
     let result: Result<String, String> = match tab {
         0 => {
             let mut schema = TblSchema::default();
+            // 程序级默认分隔符（来自 workspace tbl-tool.toml [separators]）拷贝到新项目；
+            // 项目落盘后这份 schema.separators 即成为该项目自身的单一来源。
+            schema.separators = st.engine.default_separators.clone();
             schema.meta.id = project_id.clone();
             schema.meta.name = display_name.clone();
             schema.meta.category = category.clone();
@@ -342,7 +345,7 @@ fn run(state: &Rc<RefCell<AppState>>) {
             } else {
                 (String::new(), String::new())
             };
-            let mut schema = TblSchema { meta: source.meta.clone(), sections };
+            let mut schema = TblSchema { meta: source.meta.clone(), separators: source.separators.clone(), sections };
             schema.meta.id = project_id.clone();
             schema.meta.name = display_name.clone();
             schema.meta.category = category.clone();

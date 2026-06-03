@@ -164,6 +164,10 @@ pub struct ProjectEngine {
     pub validation_errors: HashSet<(String, String, String, usize, usize)>,
     /// 进程内剪贴板：tree 面板复制粘贴的载体。不持久化，关闭/退出随 engine drop。
     pub node_clipboard: Option<NodeClipboard>,
+    /// 启动时从 workspace `tbl-tool.toml [separators]` 读到的"程序级默认分隔符"；
+    /// 仅用作「新建空项目」时 schema.separators 的初值（从模板/文件复制时取 source.separators）。
+    /// 已加载项目的 separators 各自走 schema，运行期不再读这里。
+    pub default_separators: crate::types::SeparatorsSection,
     pub logs: Vec<String>,
 }
 
@@ -293,6 +297,7 @@ impl ProjectEngine {
             active_idx: Some(0),
             validation_errors: HashSet::new(),
             node_clipboard: None,
+            default_separators: crate::types::SeparatorsSection::default(),
             logs: Vec::new(),
         }
     }
@@ -313,6 +318,7 @@ impl ProjectEngine {
             active_idx,
             validation_errors: HashSet::new(),
             node_clipboard: None,
+            default_separators: crate::types::SeparatorsSection::default(),
             logs: Vec::new(),
         }
     }
@@ -340,8 +346,14 @@ impl ProjectEngine {
             active_idx,
             validation_errors: HashSet::new(),
             node_clipboard: None,
+            default_separators: crate::types::SeparatorsSection::default(),
             logs: Vec::new(),
         }
+    }
+
+    /// 设置「新建空项目」时使用的默认分隔符。`load_workspace` 启动时调一次。
+    pub fn set_default_separators(&mut self, sep: crate::types::SeparatorsSection) {
+        self.default_separators = sep;
     }
 
     /// active project 的不可变引用；active=None 时 panic（调用方应先 active() 取 Option）。

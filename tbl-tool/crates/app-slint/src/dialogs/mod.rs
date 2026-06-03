@@ -10,3 +10,4 @@ pub mod data_export;
 pub mod schema_io;
 pub mod create_project;
 pub mod clone_project;
+pub mod project_settings;

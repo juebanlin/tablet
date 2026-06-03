@@ -121,6 +121,7 @@ fn main() -> anyhow::Result<()> {
     dialogs::schema_io::wire(&app_window, &app_state);
     dialogs::create_project::wire(&app_window, &app_state);
     dialogs::clone_project::wire(&app_window, &app_state);
+    dialogs::project_settings::wire(&app_window, &app_state);
 
     let result = app_window.run().map_err(|e| anyhow::anyhow!("{}", e));
     let _ = std::fs::remove_file(&lock_path);

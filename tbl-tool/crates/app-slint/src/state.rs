@@ -412,18 +412,10 @@ pub enum PendingAction {
     DeleteNode { project_id: String, group: String, name: String },
     RenameGroup { project_id: String, old_name: String },
     RenameNode { project_id: String, group: String, old_name: String },
-    /// 重命名 Project：两步走 — 先收 id，再收 name；UI 端用 stage 字段切换提示
-    RenameProject { old_id: String, stage: RenameProjectStage },
     /// 删除 Project：单步 ConfirmDialog
     DeleteProject { project_id: String },
     /// 关闭 dirty Project：单步 ConfirmDialog（确认放弃未保存改动）
     CloseDirtyProject { project_id: String },
-}
-
-#[derive(Clone, Debug)]
-pub enum RenameProjectStage {
-    EnterId,
-    EnterName { new_id: String },
 }
 
 impl PendingAction {
@@ -433,8 +425,7 @@ impl PendingAction {
             | PendingAction::NewConstant { .. }
             | PendingAction::NewEnum { .. }
             | PendingAction::RenameGroup { .. }
-            | PendingAction::RenameNode { .. }
-            | PendingAction::RenameProject { .. })
+            | PendingAction::RenameNode { .. })
     }
     pub fn needs_confirm(&self) -> bool {
         matches!(self, PendingAction::DeleteGroup { .. }
@@ -450,10 +441,6 @@ impl PendingAction {
             PendingAction::NewEnum { .. } => "新建 Enum",
             PendingAction::RenameGroup { .. } => "重命名 Group",
             PendingAction::RenameNode { .. } => "重命名",
-            PendingAction::RenameProject { stage, .. } => match stage {
-                RenameProjectStage::EnterId => "重命名 Project（新 id）",
-                RenameProjectStage::EnterName { .. } => "重命名 Project（新名称）",
-            },
             _ => "",
         }
     }
@@ -719,6 +706,43 @@ impl CloneProjectState {
     }
 }
 
+/// 项目设置对话框（项目右键「项目设置...」入口）。
+///
+/// 一锁式编辑全部 project meta + 分隔符；旧两段式 RenameProject 流程已被替代。
+/// id 改动 → 复用 engine `RenameProject` 动作处理目录 rename；
+/// name/category/version/separators → 直接落 schema.meta + schema.separators，
+/// schema_dirty=true，写盘 + revalidate_all。
+#[derive(Default)]
+pub struct ProjectSettingsState {
+    pub open: bool,
+    /// 当前编辑的 project id（也是 dialog 打开时的 old_id）
+    pub project_id: String,
+    /// 0=身份  1=分隔符
+    pub tab: i32,
+    pub id_buf: String,
+    pub name_buf: String,
+    pub category_buf: String,
+    pub version_buf: String,
+    /// id 实时校验消息（空 = 合法）；不合法时禁用「确定」
+    pub id_error: String,
+    /// 分隔符编辑缓冲
+    pub sep: tbl_core::types::SeparatorsSection,
+}
+
+impl ProjectSettingsState {
+    pub fn close(&mut self) {
+        self.open = false;
+        self.project_id.clear();
+        self.tab = 0;
+        self.id_buf.clear();
+        self.name_buf.clear();
+        self.category_buf.clear();
+        self.version_buf.clear();
+        self.id_error.clear();
+        self.sep = tbl_core::types::SeparatorsSection::default();
+    }
+}
+
 pub struct AppState {
     pub engine: ProjectEngine,
     pub selected: Option<SelectedNode>,
@@ -780,6 +804,8 @@ pub struct AppState {
     pub create_project: CreateProjectState,
     /// 「复制(克隆)项目」对话框（项目右键专用）
     pub clone_project: CloneProjectState,
+    /// 「项目设置」对话框（id / name / category / version / 分隔符）
+    pub project_settings: ProjectSettingsState,
     /// "id" / "name" / "open" / "created" / "manual"。从 [project] project_sort 读初值，UI 写时持久化。
     pub project_sort: String,
     /// sort=manual 时使用；UI 拖拽顺序持久化到 [project] project_order。
@@ -859,6 +885,7 @@ impl AppState {
             schema_import: SchemaImportState::default(),
             create_project: CreateProjectState::default(),
             clone_project: CloneProjectState::default(),
+            project_settings: ProjectSettingsState::default(),
             project_sort,
             project_order,
         })

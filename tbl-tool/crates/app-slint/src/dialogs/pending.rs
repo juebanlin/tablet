@@ -9,7 +9,7 @@ use std::rc::Rc;
 use slint::ComponentHandle;
 
 use crate::state::{
-    AppState, GridSelection, PendingAction, RenameProjectStage, SelectedNode,
+    AppState, GridSelection, PendingAction, SelectedNode,
 };
 use crate::{ui, AppWindow};
 
@@ -104,26 +104,6 @@ pub(crate) fn execute(state: &Rc<RefCell<AppState>>) {
             st.pending.close();
             return;
         }
-        PendingAction::RenameProject { old_id, stage } => match stage {
-            RenameProjectStage::EnterId => {
-                // 第一步：收新 id；不真正落地，跳到第二步
-                let new_id = buf.clone();
-                st.pending.action = Some(PendingAction::RenameProject {
-                    old_id: old_id.clone(),
-                    stage: RenameProjectStage::EnterName { new_id },
-                });
-                st.pending.input_buffer.clear();
-                st.pending.error = None;
-                return;
-            }
-            RenameProjectStage::EnterName { new_id } => {
-                ProjectAction::RenameProject {
-                    old_id: old_id.clone(),
-                    new_id: new_id.clone(),
-                    new_name: buf.clone(),
-                }
-            }
-        },
         PendingAction::DeleteProject { project_id } => {
             ProjectAction::DeleteProject { project_id: project_id.clone() }
         }
@@ -140,43 +120,9 @@ pub(crate) fn execute(state: &Rc<RefCell<AppState>>) {
     if let PendingAction::NewGroup { project_id } = &action {
         st.tree_expanded.insert((project_id.clone(), buf.clone()));
     }
-    // RenameProject 可能改 id —— 记下 active 在 execute 之前
-    let old_active = st.engine.active_project_id().map(str::to_string);
-    let track_rename = matches!(action, PendingAction::RenameProject { .. });
     let track_delete = matches!(action, PendingAction::DeleteProject { .. });
     st.engine.execute_action(&core_action);
-    if track_rename {
-        if let ProjectAction::RenameProject { old_id, new_id, .. } = &core_action {
-            if old_id != new_id {
-                if matches!(&st.selected, Some(s) if s.project_id() == old_id) {
-                    if let Some(sel) = st.selected.as_mut() {
-                        match sel {
-                            SelectedNode::Project { project_id }
-                            | SelectedNode::Group { project_id, .. }
-                            | SelectedNode::Table { project_id, .. }
-                            | SelectedNode::Constant { project_id, .. }
-                            | SelectedNode::Enum { project_id, .. } => *project_id = new_id.clone(),
-                        }
-                    }
-                }
-                let migrated_groups: Vec<String> = st.tree_expanded.iter()
-                    .filter(|(p, _)| p == old_id)
-                    .map(|(_, g)| g.clone())
-                    .collect();
-                st.tree_expanded.retain(|(p, _)| p != old_id);
-                for g in migrated_groups {
-                    st.tree_expanded.insert((new_id.clone(), g));
-                }
-                if st.project_expanded.remove(old_id) {
-                    st.project_expanded.insert(new_id.clone());
-                }
-                if old_active.as_deref() == Some(old_id.as_str()) {
-                    let _ = st.engine.set_active_by_id(new_id);
-                }
-            }
-            ui::tree::persist_workspace(&mut *st);
-        }
-    } else if track_delete {
+    if track_delete {
         if let ProjectAction::DeleteProject { project_id } = &core_action {
             if matches!(&st.selected, Some(s) if s.project_id() == project_id) {
                 st.selected = None;
@@ -261,18 +207,15 @@ pub(crate) fn handle_project_root_action(state: &Rc<RefCell<AppState>>, project_
                 ui::tree::close_project_with_persist(state, project_id);
             }
         }
-        "tree.proj-rename" => {
-            // 重命名 closed project：先打开（重命名流程操作的是已打开 project 的 root + 文件）
+        "tree.proj-settings" => {
+            // 项目设置 closed project：先打开（设置流程操作的是已打开 project 的 root + 文件）
             let need_open = !state.borrow().engine.is_opened(project_id);
             if need_open {
                 ui::tree::open_project_with_persist(state, project_id);
                 state.borrow_mut().engine.set_active_by_id(project_id);
                 state.borrow_mut().project_expanded.insert(project_id.to_string());
             }
-            state.borrow_mut().pending.open(PendingAction::RenameProject {
-                old_id: project_id.to_string(),
-                stage: RenameProjectStage::EnterId,
-            });
+            crate::dialogs::project_settings::open_for(state, project_id);
         }
         "tree.proj-delete" => {
             state.borrow_mut().pending.open(PendingAction::DeleteProject {

@@ -596,7 +596,7 @@ fn validate_map_list(value: &str, key: BaseType, elem: BaseType, entry_sep: &str
 
 use serde::Deserialize;
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "PascalCase")]
 pub struct SeparatorsSection {
     #[serde(default = "default_comma")]
@@ -627,7 +627,7 @@ pub struct SeparatorsSection {
     pub map_list: MapListSep,
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
 pub struct MapSep {
     #[serde(default = "default_colon")]
     pub kv: String,
@@ -635,7 +635,7 @@ pub struct MapSep {
     pub entry: String,
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
 pub struct ListTupleSep {
     #[serde(default = "default_comma")]
     pub tuple: String,
@@ -643,7 +643,7 @@ pub struct ListTupleSep {
     pub list: String,
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
 pub struct MapTupleSep {
     #[serde(default = "default_colon")]
     pub kv: String,
@@ -653,7 +653,7 @@ pub struct MapTupleSep {
     pub entry: String,
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
 pub struct MapListSep {
     #[serde(default = "default_colon")]
     pub kv: String,

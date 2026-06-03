@@ -42,6 +42,7 @@ pub fn after_ctx_menu(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
     dialogs::pending::push_input(ui_h, state);
     dialogs::pending::push_confirm(ui_h, state);
     dialogs::clone_project::push(ui_h, state);
+    dialogs::project_settings::push(ui_h, state);
     dialogs::data_export::push(ui_h, state);
     dialogs::schema_io::push_export(ui_h, state);
     dialogs::schema_io::push_import(ui_h, state);

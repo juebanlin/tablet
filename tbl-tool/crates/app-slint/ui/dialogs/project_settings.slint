@@ -1,0 +1,340 @@
+// 项目设置对话框：身份（id/name/category/version）+ 分隔符（25 leaves）2 tab。
+// 对应 plan §7（docs/plans/分隔符配置内嵌schema-与项目设置对话框.md）。
+
+import { Theme } from "../theme.slint";
+import { DialogChrome } from "dialog_chrome.slint";
+import { Button, LineEdit, ScrollView } from "std-widgets.slint";
+
+// Tab segmented bar：身份 / 分隔符
+component TabBar inherits Rectangle {
+    in property <int> current: 0;
+    callback changed(int);
+
+    height: 32px;
+    background: Theme.bg-toolbar;
+    border-color: Theme.border-light;
+    border-width: 1px;
+
+    HorizontalLayout {
+        spacing: 0;
+        padding-left: Theme.sp-3;
+        padding-top: 4px;
+        alignment: start;
+        Rectangle {
+            width: 96px;
+            background: root.current == 0 ? Theme.bg-row-selected : transparent;
+            Text {
+                text: "身份";
+                font-size: Theme.fs-normal;
+                color: Theme.text-primary;
+                vertical-alignment: center;
+                horizontal-alignment: center;
+            }
+            TouchArea { clicked => { root.changed(0); } }
+        }
+        Rectangle {
+            width: 96px;
+            background: root.current == 1 ? Theme.bg-row-selected : transparent;
+            Text {
+                text: "分隔符";
+                font-size: Theme.fs-normal;
+                color: Theme.text-primary;
+                vertical-alignment: center;
+                horizontal-alignment: center;
+            }
+            TouchArea { clicked => { root.changed(1); } }
+        }
+    }
+}
+
+// 单条紧凑分隔符行：[label][input][label][input]...（label 70px，input 64px）
+component SepRow inherits HorizontalLayout {
+    in property <string> l1;
+    in-out property <string> v1;
+    in property <string> l2;
+    in-out property <string> v2;
+    in property <string> l3;
+    in-out property <string> v3;
+    in property <bool> show2: true;
+    in property <bool> show3: false;
+    callback edited1(string);
+    callback edited2(string);
+    callback edited3(string);
+
+    spacing: Theme.sp-2;
+    alignment: start;
+
+    Text {
+        text: root.l1; width: 96px;
+        color: Theme.text-primary;
+        vertical-alignment: center;
+        horizontal-alignment: end;
+    }
+    LineEdit {
+        text <=> root.v1;
+        width: 56px;
+        edited(s) => { root.edited1(s); }
+    }
+    if root.show2: Text {
+        text: root.l2; width: 96px;
+        color: Theme.text-primary;
+        vertical-alignment: center;
+        horizontal-alignment: end;
+    }
+    if root.show2: LineEdit {
+        text <=> root.v2;
+        width: 56px;
+        edited(s) => { root.edited2(s); }
+    }
+    if root.show3: Text {
+        text: root.l3; width: 96px;
+        color: Theme.text-primary;
+        vertical-alignment: center;
+        horizontal-alignment: end;
+    }
+    if root.show3: LineEdit {
+        text <=> root.v3;
+        width: 56px;
+        edited(s) => { root.edited3(s); }
+    }
+}
+
+export component ProjectSettingsDialog inherits Rectangle {
+    in property <bool> open: false;
+    in property <int> tab: 0;
+    // 身份 buf
+    in-out property <string> id-buf;
+    in-out property <string> name-buf;
+    in-out property <string> category-buf;
+    in-out property <string> version-buf;
+    in property <string> id-error;
+    in property <bool> can-confirm: true;
+    // 分隔符 buf —— 25 个叶子
+    in-out property <string> sep-tuple2;
+    in-out property <string> sep-tuple3;
+    in-out property <string> sep-tuple4;
+    in-out property <string> sep-list;
+    in-out property <string> sep-set;
+    in-out property <string> sep-map-kv;
+    in-out property <string> sep-map-entry;
+    in-out property <string> sep-lt2-tuple;
+    in-out property <string> sep-lt2-list;
+    in-out property <string> sep-lt3-tuple;
+    in-out property <string> sep-lt3-list;
+    in-out property <string> sep-lt4-tuple;
+    in-out property <string> sep-lt4-list;
+    in-out property <string> sep-mt2-kv;
+    in-out property <string> sep-mt2-tuple;
+    in-out property <string> sep-mt2-entry;
+    in-out property <string> sep-mt3-kv;
+    in-out property <string> sep-mt3-tuple;
+    in-out property <string> sep-mt3-entry;
+    in-out property <string> sep-mt4-kv;
+    in-out property <string> sep-mt4-tuple;
+    in-out property <string> sep-mt4-entry;
+    in-out property <string> sep-ml-kv;
+    in-out property <string> sep-ml-item;
+    in-out property <string> sep-ml-entry;
+
+    callback tab-changed(int);
+    callback id-edited(string);
+    callback name-edited(string);
+    callback category-edited(string);
+    callback version-edited(string);
+    /// (key, value) — key 与 # @sep 行 key 一致
+    callback sep-edited(string, string);
+    callback reset-sep();
+    callback confirm();
+    callback cancel();
+
+    visible: root.open;
+    width: 100%;
+    height: 100%;
+
+    DialogChrome {
+        title: "项目设置";
+        dialog-w: 720px;
+        dialog-h: 560px;
+        primary-text: "确定";
+        primary-enabled: root.can-confirm;
+        primary-clicked => { root.confirm(); }
+        cancel-clicked => { root.cancel(); }
+        scrim-clicked => { root.cancel(); }
+        show-secondary: root.tab == 1;
+        secondary-text: "恢复默认";
+        secondary-clicked => { root.reset-sep(); }
+
+        VerticalLayout {
+            spacing: 0;
+            padding: 0;
+
+            TabBar {
+                current: root.tab;
+                changed(i) => { root.tab-changed(i); }
+            }
+
+            // 身份 tab —— 4 行表单
+            if root.tab == 0: Rectangle {
+                vertical-stretch: 1;
+                VerticalLayout {
+                    padding: Theme.sp-4;
+                    spacing: Theme.sp-3;
+
+                    HorizontalLayout {
+                        spacing: Theme.sp-3;
+                        alignment: stretch;
+                        Text { text: "项目 ID:"; width: 96px; vertical-alignment: center; color: Theme.text-primary; }
+                        LineEdit {
+                            text <=> root.id-buf;
+                            edited(s) => { root.id-edited(s); }
+                        }
+                    }
+                    HorizontalLayout {
+                        spacing: Theme.sp-3;
+                        alignment: stretch;
+                        Text { text: "名称:"; width: 96px; vertical-alignment: center; color: Theme.text-primary; }
+                        LineEdit {
+                            text <=> root.name-buf;
+                            edited(s) => { root.name-edited(s); }
+                        }
+                    }
+                    HorizontalLayout {
+                        spacing: Theme.sp-3;
+                        alignment: stretch;
+                        Text { text: "分类:"; width: 96px; vertical-alignment: center; color: Theme.text-primary; }
+                        LineEdit {
+                            text <=> root.category-buf;
+                            edited(s) => { root.category-edited(s); }
+                        }
+                    }
+                    HorizontalLayout {
+                        spacing: Theme.sp-3;
+                        alignment: stretch;
+                        Text { text: "版本:"; width: 96px; vertical-alignment: center; color: Theme.text-primary; }
+                        LineEdit {
+                            text <=> root.version-buf;
+                            edited(s) => { root.version-edited(s); }
+                        }
+                    }
+                    if root.id-error != "": Text {
+                        text: root.id-error;
+                        color: Theme.text-error;
+                        font-size: Theme.fs-tiny;
+                        wrap: word-wrap;
+                    }
+                    Text {
+                        text: "提示：改 id 会重命名项目目录；其它字段仅落到 .tblschema 元数据。";
+                        color: Theme.text-secondary;
+                        font-size: Theme.fs-tiny;
+                        wrap: word-wrap;
+                    }
+                    Rectangle { vertical-stretch: 1; }
+                }
+            }
+
+            // 分隔符 tab —— 紧凑分组
+            if root.tab == 1: ScrollView {
+                vertical-stretch: 1;
+                VerticalLayout {
+                    padding: Theme.sp-4;
+                    spacing: Theme.sp-3;
+
+                    // 基础容器
+                    Text { text: "基础"; color: Theme.text-secondary; font-size: Theme.fs-small; }
+                    SepRow {
+                        l1: "Tuple2"; v1 <=> root.sep-tuple2;
+                        l2: "Tuple3"; v2 <=> root.sep-tuple3;
+                        l3: "Tuple4"; v3 <=> root.sep-tuple4;
+                        show2: true; show3: true;
+                        edited1(s) => { root.sep-edited("Tuple2", s); }
+                        edited2(s) => { root.sep-edited("Tuple3", s); }
+                        edited3(s) => { root.sep-edited("Tuple4", s); }
+                    }
+                    SepRow {
+                        l1: "List"; v1 <=> root.sep-list;
+                        l2: "Set"; v2 <=> root.sep-set;
+                        show2: true; show3: false;
+                        edited1(s) => { root.sep-edited("List", s); }
+                        edited2(s) => { root.sep-edited("Set", s); }
+                    }
+
+                    // Map
+                    Text { text: "Map"; color: Theme.text-secondary; font-size: Theme.fs-small; }
+                    SepRow {
+                        l1: "Map.kv"; v1 <=> root.sep-map-kv;
+                        l2: "Map.entry"; v2 <=> root.sep-map-entry;
+                        show2: true; show3: false;
+                        edited1(s) => { root.sep-edited("Map.kv", s); }
+                        edited2(s) => { root.sep-edited("Map.entry", s); }
+                    }
+
+                    // List<TupleN>
+                    Text { text: "List<TupleN>"; color: Theme.text-secondary; font-size: Theme.fs-small; }
+                    SepRow {
+                        l1: "List_Tuple2.tuple"; v1 <=> root.sep-lt2-tuple;
+                        l2: "List_Tuple2.list"; v2 <=> root.sep-lt2-list;
+                        show2: true; show3: false;
+                        edited1(s) => { root.sep-edited("List_Tuple2.tuple", s); }
+                        edited2(s) => { root.sep-edited("List_Tuple2.list", s); }
+                    }
+                    SepRow {
+                        l1: "List_Tuple3.tuple"; v1 <=> root.sep-lt3-tuple;
+                        l2: "List_Tuple3.list"; v2 <=> root.sep-lt3-list;
+                        show2: true; show3: false;
+                        edited1(s) => { root.sep-edited("List_Tuple3.tuple", s); }
+                        edited2(s) => { root.sep-edited("List_Tuple3.list", s); }
+                    }
+                    SepRow {
+                        l1: "List_Tuple4.tuple"; v1 <=> root.sep-lt4-tuple;
+                        l2: "List_Tuple4.list"; v2 <=> root.sep-lt4-list;
+                        show2: true; show3: false;
+                        edited1(s) => { root.sep-edited("List_Tuple4.tuple", s); }
+                        edited2(s) => { root.sep-edited("List_Tuple4.list", s); }
+                    }
+
+                    // Map<*,TupleN>
+                    Text { text: "Map<*,TupleN>"; color: Theme.text-secondary; font-size: Theme.fs-small; }
+                    SepRow {
+                        l1: "Map_Tuple2.kv"; v1 <=> root.sep-mt2-kv;
+                        l2: "Map_Tuple2.tuple"; v2 <=> root.sep-mt2-tuple;
+                        l3: "Map_Tuple2.entry"; v3 <=> root.sep-mt2-entry;
+                        show2: true; show3: true;
+                        edited1(s) => { root.sep-edited("Map_Tuple2.kv", s); }
+                        edited2(s) => { root.sep-edited("Map_Tuple2.tuple", s); }
+                        edited3(s) => { root.sep-edited("Map_Tuple2.entry", s); }
+                    }
+                    SepRow {
+                        l1: "Map_Tuple3.kv"; v1 <=> root.sep-mt3-kv;
+                        l2: "Map_Tuple3.tuple"; v2 <=> root.sep-mt3-tuple;
+                        l3: "Map_Tuple3.entry"; v3 <=> root.sep-mt3-entry;
+                        show2: true; show3: true;
+                        edited1(s) => { root.sep-edited("Map_Tuple3.kv", s); }
+                        edited2(s) => { root.sep-edited("Map_Tuple3.tuple", s); }
+                        edited3(s) => { root.sep-edited("Map_Tuple3.entry", s); }
+                    }
+                    SepRow {
+                        l1: "Map_Tuple4.kv"; v1 <=> root.sep-mt4-kv;
+                        l2: "Map_Tuple4.tuple"; v2 <=> root.sep-mt4-tuple;
+                        l3: "Map_Tuple4.entry"; v3 <=> root.sep-mt4-entry;
+                        show2: true; show3: true;
+                        edited1(s) => { root.sep-edited("Map_Tuple4.kv", s); }
+                        edited2(s) => { root.sep-edited("Map_Tuple4.tuple", s); }
+                        edited3(s) => { root.sep-edited("Map_Tuple4.entry", s); }
+                    }
+
+                    // Map<*,List>
+                    Text { text: "Map<*,List>"; color: Theme.text-secondary; font-size: Theme.fs-small; }
+                    SepRow {
+                        l1: "Map_List.kv"; v1 <=> root.sep-ml-kv;
+                        l2: "Map_List.item"; v2 <=> root.sep-ml-item;
+                        l3: "Map_List.entry"; v3 <=> root.sep-ml-entry;
+                        show2: true; show3: true;
+                        edited1(s) => { root.sep-edited("Map_List.kv", s); }
+                        edited2(s) => { root.sep-edited("Map_List.item", s); }
+                        edited3(s) => { root.sep-edited("Map_List.entry", s); }
+                    }
+                }
+            }
+        }
+    }
+}

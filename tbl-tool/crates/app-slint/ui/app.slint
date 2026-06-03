@@ -26,6 +26,7 @@ import { SchemaExportDialog, SchemaImportDialog, SchemaItem } from "dialogs/sche
 import { NewProjectDialog, TemplateItem } from "dialogs/template_dialog.slint";
 import { CreateProjectDialog } from "dialogs/create_project.slint";
 import { ContextMenu, CtxMenuItem } from "dialogs/context_menu.slint";
+import { ProjectSettingsDialog } from "dialogs/project_settings.slint";
 import { InputDialog } from "dialogs/input_dialog.slint";
 import { ConfirmDialog } from "dialogs/confirm_dialog.slint";
 
@@ -272,6 +273,50 @@ export component AppWindow inherits Window {
     callback np-version-edited(string);
     callback np-confirm();
     callback np-cancel();
+
+    // ── Dialog: 项目设置（id/name/category/version + 25 分隔符 leaves）─────
+    in-out property <bool> dlg-ps-open: false;
+    in-out property <int> ps-tab: 0;
+    in-out property <string> ps-id-buf;
+    in-out property <string> ps-name-buf;
+    in-out property <string> ps-category-buf;
+    in-out property <string> ps-version-buf;
+    in property <string> ps-id-error;
+    in property <bool> ps-can-confirm: true;
+    in-out property <string> ps-sep-tuple2;
+    in-out property <string> ps-sep-tuple3;
+    in-out property <string> ps-sep-tuple4;
+    in-out property <string> ps-sep-list;
+    in-out property <string> ps-sep-set;
+    in-out property <string> ps-sep-map-kv;
+    in-out property <string> ps-sep-map-entry;
+    in-out property <string> ps-sep-lt2-tuple;
+    in-out property <string> ps-sep-lt2-list;
+    in-out property <string> ps-sep-lt3-tuple;
+    in-out property <string> ps-sep-lt3-list;
+    in-out property <string> ps-sep-lt4-tuple;
+    in-out property <string> ps-sep-lt4-list;
+    in-out property <string> ps-sep-mt2-kv;
+    in-out property <string> ps-sep-mt2-tuple;
+    in-out property <string> ps-sep-mt2-entry;
+    in-out property <string> ps-sep-mt3-kv;
+    in-out property <string> ps-sep-mt3-tuple;
+    in-out property <string> ps-sep-mt3-entry;
+    in-out property <string> ps-sep-mt4-kv;
+    in-out property <string> ps-sep-mt4-tuple;
+    in-out property <string> ps-sep-mt4-entry;
+    in-out property <string> ps-sep-ml-kv;
+    in-out property <string> ps-sep-ml-item;
+    in-out property <string> ps-sep-ml-entry;
+    callback ps-tab-changed(int);
+    callback ps-id-edited(string);
+    callback ps-name-edited(string);
+    callback ps-category-edited(string);
+    callback ps-version-edited(string);
+    callback ps-sep-edited(string, string);
+    callback ps-reset-sep();
+    callback ps-confirm();
+    callback ps-cancel();
 
     // ── ContextMenu / InputDialog / ConfirmDialog ───────────
     in property <bool> ctx-menu-open: false;
@@ -649,6 +694,51 @@ export component AppWindow inherits Window {
         version-edited(s) => { root.np-version-edited(s); }
         confirm => { root.np-confirm(); }
         cancel => { root.np-cancel(); root.dlg-new-project-open = false; }
+    }
+
+    ProjectSettingsDialog {
+        open: root.dlg-ps-open;
+        tab: root.ps-tab;
+        id-buf <=> root.ps-id-buf;
+        name-buf <=> root.ps-name-buf;
+        category-buf <=> root.ps-category-buf;
+        version-buf <=> root.ps-version-buf;
+        id-error: root.ps-id-error;
+        can-confirm: root.ps-can-confirm;
+        sep-tuple2 <=> root.ps-sep-tuple2;
+        sep-tuple3 <=> root.ps-sep-tuple3;
+        sep-tuple4 <=> root.ps-sep-tuple4;
+        sep-list <=> root.ps-sep-list;
+        sep-set <=> root.ps-sep-set;
+        sep-map-kv <=> root.ps-sep-map-kv;
+        sep-map-entry <=> root.ps-sep-map-entry;
+        sep-lt2-tuple <=> root.ps-sep-lt2-tuple;
+        sep-lt2-list <=> root.ps-sep-lt2-list;
+        sep-lt3-tuple <=> root.ps-sep-lt3-tuple;
+        sep-lt3-list <=> root.ps-sep-lt3-list;
+        sep-lt4-tuple <=> root.ps-sep-lt4-tuple;
+        sep-lt4-list <=> root.ps-sep-lt4-list;
+        sep-mt2-kv <=> root.ps-sep-mt2-kv;
+        sep-mt2-tuple <=> root.ps-sep-mt2-tuple;
+        sep-mt2-entry <=> root.ps-sep-mt2-entry;
+        sep-mt3-kv <=> root.ps-sep-mt3-kv;
+        sep-mt3-tuple <=> root.ps-sep-mt3-tuple;
+        sep-mt3-entry <=> root.ps-sep-mt3-entry;
+        sep-mt4-kv <=> root.ps-sep-mt4-kv;
+        sep-mt4-tuple <=> root.ps-sep-mt4-tuple;
+        sep-mt4-entry <=> root.ps-sep-mt4-entry;
+        sep-ml-kv <=> root.ps-sep-ml-kv;
+        sep-ml-item <=> root.ps-sep-ml-item;
+        sep-ml-entry <=> root.ps-sep-ml-entry;
+        tab-changed(i) => { root.ps-tab = i; root.ps-tab-changed(i); }
+        id-edited(s) => { root.ps-id-edited(s); }
+        name-edited(s) => { root.ps-name-edited(s); }
+        category-edited(s) => { root.ps-category-edited(s); }
+        version-edited(s) => { root.ps-version-edited(s); }
+        sep-edited(k, v) => { root.ps-sep-edited(k, v); }
+        reset-sep => { root.ps-reset-sep(); }
+        confirm => { root.ps-confirm(); }
+        cancel => { root.ps-cancel(); }
     }
 
     InputDialog {

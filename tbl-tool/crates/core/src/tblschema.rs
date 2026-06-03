@@ -1,6 +1,7 @@
 use std::path::Path;
 use anyhow::{Result, bail};
 use crate::model::*;
+use crate::types::SeparatorsSection;
 
 #[derive(Debug, Clone, Default)]
 pub struct SchemaMetadata {
@@ -22,6 +23,10 @@ pub struct SchemaMetadata {
 #[derive(Debug, Clone, Default)]
 pub struct TblSchema {
     pub meta: SchemaMetadata,
+    /// 分隔符配置（25 个叶子键，对齐 `SeparatorsSection`）。
+    /// 缺省 = `SeparatorsSection::default()`；schema 中 `# @sep` 行覆写。
+    /// 加载链路把它复制到 `WorkspaceConfig.separators`，作为运行时唯一来源。
+    pub separators: SeparatorsSection,
     pub sections: Vec<SchemaSection>,
 }
 
@@ -84,6 +89,7 @@ pub fn parse_tblschema(content: &str) -> Result<TblSchema> {
     let mut sections = Vec::new();
     let mut current: Option<SchemaSection> = None;
     let mut meta = SchemaMetadata::default();
+    let mut separators = SeparatorsSection::default();
     let mut seen_section = false;
     let mut in_preset = false;
 
@@ -105,7 +111,7 @@ pub fn parse_tblschema(content: &str) -> Result<TblSchema> {
                     continue;
                 }
             }
-            // 仅在第一个 [group/Name] 之前的 `# @meta key: value` 行视作 metadata；
+            // 仅在第一个 [group/Name] 之前的 `# @meta key: value` / `# @sep key = value` 行视作 directive；
             // 之后的 `#` 行一律视作普通注释。
             if !seen_section {
                 if let Some((key, value)) = parse_meta_line(trimmed) {
@@ -120,6 +126,8 @@ pub fn parse_tblschema(content: &str) -> Result<TblSchema> {
                         "has_preset" => meta.has_preset = value.eq_ignore_ascii_case("true"),
                         _ => { /* 未知 key：忽略，前向兼容 */ }
                     }
+                } else if let Some((key, value)) = parse_sep_line(trimmed) {
+                    apply_sep_kv(&mut separators, &key, &value);
                 }
             }
             continue;
@@ -171,7 +179,7 @@ pub fn parse_tblschema(content: &str) -> Result<TblSchema> {
     // has_preset 永远从 sections 重算，忽略 @meta 行声明
     meta.has_preset = sections.iter().any(|s| !s.preset.is_empty());
 
-    Ok(TblSchema { meta, sections })
+    Ok(TblSchema { meta, separators, sections })
 }
 
 /// 解析 `# @meta key: value` 行；返回 (key, value)。
@@ -185,6 +193,50 @@ fn parse_meta_line(line: &str) -> Option<(String, String)> {
     let after = body.strip_prefix("@meta")?.trim_start();
     let (key, value) = after.split_once(':')?;
     Some((key.trim().to_string(), value.trim().to_string()))
+}
+
+/// 解析 `# @sep key = value` 行；返回 (key, value)。
+/// 接受 `# @sep List = ;` / `# @sep Map.entry = ,` / `# @sep Map_Tuple2.kv = :` 形式。
+/// 与 `parse_meta_line` 区别：分隔符值通过 `=` 切（避免与 `Map.kv` 中 ':' 冲突），
+/// 等号两侧 trim，但**值本身不再 trim 内部空格**——保留原样以便支持空白类分隔符。
+fn parse_sep_line(line: &str) -> Option<(String, String)> {
+    let body = line.trim_start_matches('#').trim();
+    let after = body.strip_prefix("@sep")?.trim_start();
+    let (key, value) = after.split_once('=')?;
+    Some((key.trim().to_string(), value.trim_start().trim_end_matches('\n').to_string()))
+}
+
+/// 把单个 `# @sep` 行写入 `SeparatorsSection`。25 个叶子键全枚举；未知 key 忽略。
+fn apply_sep_kv(sep: &mut SeparatorsSection, key: &str, value: &str) {
+    let v = value.to_string();
+    match key {
+        "Tuple2" => sep.tuple2 = v,
+        "Tuple3" => sep.tuple3 = v,
+        "Tuple4" => sep.tuple4 = v,
+        "List" => sep.list = v,
+        "Set" => sep.set = v,
+        "Map.kv" => sep.map.kv = v,
+        "Map.entry" => sep.map.entry = v,
+        "List_Tuple2.tuple" => sep.list_tuple2.tuple = v,
+        "List_Tuple2.list" => sep.list_tuple2.list = v,
+        "List_Tuple3.tuple" => sep.list_tuple3.tuple = v,
+        "List_Tuple3.list" => sep.list_tuple3.list = v,
+        "List_Tuple4.tuple" => sep.list_tuple4.tuple = v,
+        "List_Tuple4.list" => sep.list_tuple4.list = v,
+        "Map_Tuple2.kv" => sep.map_tuple2.kv = v,
+        "Map_Tuple2.tuple" => sep.map_tuple2.tuple = v,
+        "Map_Tuple2.entry" => sep.map_tuple2.entry = v,
+        "Map_Tuple3.kv" => sep.map_tuple3.kv = v,
+        "Map_Tuple3.tuple" => sep.map_tuple3.tuple = v,
+        "Map_Tuple3.entry" => sep.map_tuple3.entry = v,
+        "Map_Tuple4.kv" => sep.map_tuple4.kv = v,
+        "Map_Tuple4.tuple" => sep.map_tuple4.tuple = v,
+        "Map_Tuple4.entry" => sep.map_tuple4.entry = v,
+        "Map_List.kv" => sep.map_list.kv = v,
+        "Map_List.item" => sep.map_list.item = v,
+        "Map_List.entry" => sep.map_list.entry = v,
+        _ => {}
+    }
 }
 
 fn parse_section_header(line: &str, line_num: usize) -> Result<SchemaSection> {
@@ -268,7 +320,7 @@ pub fn merge_schemas(schemas: &[TblSchema]) -> Result<TblSchema> {
     }
 
     // 多文件合并不挂任何 metadata（合并产物没有单一来源 id）。调用方如有需要自行赋 meta。
-    Ok(TblSchema { meta: SchemaMetadata::default(), sections: all_sections })
+    Ok(TblSchema { meta: SchemaMetadata::default(), separators: SeparatorsSection::default(), sections: all_sections })
 }
 
 pub fn serialize_tblschema(schema: &TblSchema) -> String {
@@ -304,6 +356,9 @@ pub fn serialize_tblschema(schema: &TblSchema) -> String {
         writeln!(s, "# @meta has_preset: true").unwrap();
     }
 
+    // separators：仅输出与默认不同的字段，避免普通 schema 满屏 25 行
+    write_sep_diff(&mut s, &schema.separators);
+
     for sec in &schema.sections {
         writeln!(s).unwrap();
         let mode = match sec.mode {
@@ -329,6 +384,42 @@ pub fn serialize_tblschema(schema: &TblSchema) -> String {
         }
     }
     s
+}
+
+/// 把 SeparatorsSection 中与默认不同的字段写成 `# @sep` 行。全部默认 = 不输出。
+fn write_sep_diff(s: &mut String, sep: &SeparatorsSection) {
+    use std::fmt::Write;
+    let d = SeparatorsSection::default();
+    let mut emit = |k: &str, v: &str, dv: &str| {
+        if v != dv {
+            writeln!(s, "# @sep {} = {}", k, v).unwrap();
+        }
+    };
+    emit("Tuple2", &sep.tuple2, &d.tuple2);
+    emit("Tuple3", &sep.tuple3, &d.tuple3);
+    emit("Tuple4", &sep.tuple4, &d.tuple4);
+    emit("List", &sep.list, &d.list);
+    emit("Set", &sep.set, &d.set);
+    emit("Map.kv", &sep.map.kv, &d.map.kv);
+    emit("Map.entry", &sep.map.entry, &d.map.entry);
+    emit("List_Tuple2.tuple", &sep.list_tuple2.tuple, &d.list_tuple2.tuple);
+    emit("List_Tuple2.list", &sep.list_tuple2.list, &d.list_tuple2.list);
+    emit("List_Tuple3.tuple", &sep.list_tuple3.tuple, &d.list_tuple3.tuple);
+    emit("List_Tuple3.list", &sep.list_tuple3.list, &d.list_tuple3.list);
+    emit("List_Tuple4.tuple", &sep.list_tuple4.tuple, &d.list_tuple4.tuple);
+    emit("List_Tuple4.list", &sep.list_tuple4.list, &d.list_tuple4.list);
+    emit("Map_Tuple2.kv", &sep.map_tuple2.kv, &d.map_tuple2.kv);
+    emit("Map_Tuple2.tuple", &sep.map_tuple2.tuple, &d.map_tuple2.tuple);
+    emit("Map_Tuple2.entry", &sep.map_tuple2.entry, &d.map_tuple2.entry);
+    emit("Map_Tuple3.kv", &sep.map_tuple3.kv, &d.map_tuple3.kv);
+    emit("Map_Tuple3.tuple", &sep.map_tuple3.tuple, &d.map_tuple3.tuple);
+    emit("Map_Tuple3.entry", &sep.map_tuple3.entry, &d.map_tuple3.entry);
+    emit("Map_Tuple4.kv", &sep.map_tuple4.kv, &d.map_tuple4.kv);
+    emit("Map_Tuple4.tuple", &sep.map_tuple4.tuple, &d.map_tuple4.tuple);
+    emit("Map_Tuple4.entry", &sep.map_tuple4.entry, &d.map_tuple4.entry);
+    emit("Map_List.kv", &sep.map_list.kv, &d.map_list.kv);
+    emit("Map_List.item", &sep.map_list.item, &d.map_list.item);
+    emit("Map_List.entry", &sep.map_list.entry, &d.map_list.entry);
 }
 
 /// 把 project 反向编码成 TblSchema：
@@ -405,7 +496,7 @@ pub fn schema_from_project(groups: &[Group], with_preset: bool) -> TblSchema {
             });
         }
     }
-    TblSchema { meta: SchemaMetadata::default(), sections }
+    TblSchema { meta: SchemaMetadata::default(), separators: SeparatorsSection::default(), sections }
 }
 
 fn export_to_code(e: &Export) -> String {
@@ -583,6 +674,77 @@ pub fn fill_metadata_defaults(schema: &mut TblSchema, file_stem: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parse_tblschema_with_sep_lines() {
+        // # @sep 行覆写默认；未列出的字段保持默认；未知 key 忽略；列出位置在第一个 [section] 之前。
+        let src = r#"#!tblschema v1
+# @meta id: sep-test
+# @sep Map.entry = ,
+# @sep List = |
+# @sep Map_Tuple3.kv = >
+# @sep Unknown.key = ?
+
+[g/T] table
+id | int | cs | x
+"#;
+        let s = parse_tblschema(src).expect("parse");
+        assert_eq!(s.separators.map.entry, ",");
+        assert_eq!(s.separators.list, "|");
+        assert_eq!(s.separators.map_tuple3.kv, ">");
+        // 未覆写字段 = 默认
+        assert_eq!(s.separators.set, ";");
+        assert_eq!(s.separators.tuple2, ",");
+        assert_eq!(s.separators.map.kv, ":");
+    }
+
+    #[test]
+    fn serialize_tblschema_omits_default_sep() {
+        // 全默认 separators → serialize 不应包含任何 # @sep 行
+        let mut schema = TblSchema::default();
+        schema.meta.id = "no-sep".to_string();
+        schema.sections.push(SchemaSection {
+            group: "g".to_string(),
+            name: "T".to_string(),
+            mode: SchemaMode::Table,
+            fields: vec![SchemaField {
+                name: "id".to_string(), tbl_type: "int".to_string(),
+                export: "cs".to_string(), desc: "x".to_string(),
+            }],
+            preset: vec![],
+        });
+        let out = serialize_tblschema(&schema);
+        assert!(!out.contains("# @sep"), "默认值不应输出 sep 行: {}", out);
+    }
+
+    #[test]
+    fn serialize_tblschema_writes_modified_sep_round_trip() {
+        // 改 Map.entry → 写盘 → 重新 parse → 仍是逗号
+        let mut schema = TblSchema::default();
+        schema.meta.id = "rt".to_string();
+        schema.separators.map.entry = ",".to_string();
+        schema.separators.tuple3 = "/".to_string();
+        schema.sections.push(SchemaSection {
+            group: "g".to_string(),
+            name: "T".to_string(),
+            mode: SchemaMode::Table,
+            fields: vec![SchemaField {
+                name: "id".to_string(), tbl_type: "int".to_string(),
+                export: "cs".to_string(), desc: "x".to_string(),
+            }],
+            preset: vec![],
+        });
+        let out = serialize_tblschema(&schema);
+        assert!(out.contains("# @sep Map.entry = ,"), "应写出 Map.entry: {}", out);
+        assert!(out.contains("# @sep Tuple3 = /"), "应写出 Tuple3: {}", out);
+        // List 是默认值 → 不应该出现
+        assert!(!out.contains("# @sep List ="));
+
+        let parsed = parse_tblschema(&out).expect("re-parse");
+        assert_eq!(parsed.separators.map.entry, ",");
+        assert_eq!(parsed.separators.tuple3, "/");
+        assert_eq!(parsed.separators.list, ";"); // 仍是默认
+    }
 
     #[test]
     fn parses_meta_lines() {
@@ -830,6 +992,7 @@ id | int | cs | x
     fn serialize_round_trips_preset() {
         let schema = TblSchema {
             meta: SchemaMetadata { id: "demo".into(), name: "demo".into(), ..Default::default() },
+            separators: Default::default(),
             sections: vec![
                 SchemaSection {
                     group: "hero".into(),
@@ -885,6 +1048,7 @@ id | int | cs | x
         // 因为新范式 entries 全在项目 .tbl 里）。
         let schema = TblSchema {
             meta: SchemaMetadata::default(),
+            separators: Default::default(),
             sections: vec![
                 SchemaSection {
                     group: "g".into(),

@@ -245,6 +245,7 @@ mod tests {
         meta.version = "0.1.0".to_string();
         TblSchema {
             meta,
+            separators: Default::default(),
             sections: vec![
                 SchemaSection {
                     group: "hero".to_string(),

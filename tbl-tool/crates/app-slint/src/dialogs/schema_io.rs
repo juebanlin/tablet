@@ -372,7 +372,7 @@ fn run_export(state: &Rc<RefCell<AppState>>) {
             sections.push(sec.clone());
         }
     }
-    let schema = TblSchema { meta: Default::default(), sections };
+    let schema = TblSchema { meta: Default::default(), separators: Default::default(), sections };
     let content = serialize_tblschema(&schema);
     let file = rfd::FileDialog::new()
         .add_filter("TblSchema", &["tblschema"])
