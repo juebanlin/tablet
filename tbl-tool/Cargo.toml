@@ -3,11 +3,15 @@ members = ["crates/core", "crates/app-slint", "crates/app-cli"]
 resolver = "2"
 
 [profile.dev]
-opt-level = 1
+# 编译速度优先（agent 默认走 dev，频繁 cargo check / build）
+opt-level = 0
+debug = "line-tables-only"   # 只留行号信息，砍掉变量/类型 debuginfo，链接显著变快
+incremental = true
+codegen-units = 256
 
 [profile.release]
-opt-level = "z"
-lto = "thin"
-codegen-units = 16
-incremental = true
+# 性能优先，体积次之（最终交付 / 性能验证用）
+opt-level = 3
+lto = "fat"
+codegen-units = 1
 strip = true
