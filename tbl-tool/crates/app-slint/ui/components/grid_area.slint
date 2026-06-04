@@ -243,6 +243,8 @@ export component GridArea inherits Rectangle {
                                         color: cell.kind == CellKind.read-only ? Theme.text-readonly : cell.color;
                                         horizontal-alignment: center;
                                         vertical-alignment: center;
+                                        width: parent.width - 4px;
+                                        overflow: elide;
                                     }
                                     if !is-editing && (cell.kind == CellKind.type-enum
                                       || cell.kind == CellKind.export-enum
@@ -381,7 +383,11 @@ export component GridArea inherits Rectangle {
                                     : (row.row-color.alpha > 0 ? row.row-color : (mod(ri, 2) == 0 ? Theme.bg-panel : Theme.bg-row-alt));
                                 border-color: cell.has-error ? Theme.border-error : Theme.border-light;
                                 border-width: cell.has-error ? 1.5px : 0.5px;
-                                // 非编辑态显示文字
+                                property <bool> has-arrow: is-export
+                                  || col-kind == CellKind.type-enum-col
+                                  || col-kind == CellKind.type-enum
+                                  || col-kind == CellKind.ref;
+                                // 非编辑态显示文字（超宽截断 + 省略号，不溢出邻格）
                                 if !is-editing: Text {
                                     text: cell.text;
                                     font-size: Theme.fs-small;
@@ -389,12 +395,11 @@ export component GridArea inherits Rectangle {
                                     horizontal-alignment: left;
                                     vertical-alignment: center;
                                     x: 4px;
+                                    width: parent.width - 4px - (has-arrow ? 16px : 4px);
+                                    overflow: elide;
                                 }
                                 // 下拉箭头（ExportEnumCol / TypeEnumCol / Ref 列）
-                                if !is-editing && (is-export
-                                  || col-kind == CellKind.type-enum-col
-                                  || col-kind == CellKind.type-enum
-                                  || col-kind == CellKind.ref): Text {
+                                if !is-editing && has-arrow: Text {
                                     x: parent.width - 12px;
                                     text: "▼";
                                     font-size: 8px;
