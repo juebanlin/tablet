@@ -34,8 +34,11 @@ export { TreeNode, HeaderCell, DataCell, DataRow, CellKind, LogEntry, RefItem, T
 
 export component AppWindow inherits Window {
     title: "tbl-tool · juebanlin@gmail.com";
-    width: 1280px;
-    height: 800px;
+    // 用 preferred-* 给初始大小，min-* 给下限；不设 width/height（那会锁死缩放与最大化）
+    preferred-width: 1280px;
+    preferred-height: 800px;
+    min-width: 800px;
+    min-height: 500px;
     background: Theme.bg-window;
     // Windows 默认 Segoe UI fallback 链对部分 CJK 字符（如 U+FF09 全角右括号）会
     // 命中无字形的字体导致豆腐框；显式指定 Microsoft YaHei UI 强制走系统中文字体。
