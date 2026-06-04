@@ -3,7 +3,7 @@ use serde_json::{Value, Map, json};
 use crate::model::*;
 use crate::types::*;
 use super::{EmptyStrategy, LineEnding, to_camel_case, parse_base_value};
-use super::sep_meta::{collect_used_sep_keys_constant, collect_used_sep_keys_table, sep_kv_pairs};
+use super::sep_meta::{collect_used_sep_keys_constant, collect_used_sep_keys_table};
 
 fn value_to_json(raw: &str, tbl_type: &TblType) -> Value {
     match tbl_type.paradigm {
@@ -19,14 +19,14 @@ fn is_server_export(export: &Export) -> bool {
 }
 
 /// 按 `used_keys` 裁剪输出 _sep 对象。空集返回 None —— 调用方据此决定是否插入 _sep wrapper。
-fn build_sep_meta(sep: &SeparatorsSection, used_keys: &std::collections::BTreeSet<&'static str>) -> Option<Value> {
+fn build_sep_meta(sep: &SeparatorsSection, used_keys: &std::collections::BTreeSet<SepKey>) -> Option<Value> {
     if used_keys.is_empty() {
         return None;
     }
     let mut obj = Map::new();
-    for (k, v) in sep_kv_pairs(sep) {
-        if used_keys.contains(k) {
-            obj.insert(k.to_string(), json!(v));
+    for k in SepKey::ALL {
+        if used_keys.contains(&k) {
+            obj.insert(k.as_export_key().to_string(), json!(k.get(sep)));
         }
     }
     Some(Value::Object(obj))

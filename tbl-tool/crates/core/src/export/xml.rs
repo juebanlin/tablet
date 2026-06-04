@@ -2,9 +2,9 @@ use std::collections::BTreeSet;
 use std::fmt::Write;
 use anyhow::Result;
 use crate::model::*;
-use crate::types::SeparatorsSection;
+use crate::types::{SepKey, SeparatorsSection};
 use super::{EmptyStrategy, LineEnding, to_camel_case};
-use super::sep_meta::{collect_used_sep_keys_constant, collect_used_sep_keys_table, sep_kv_pairs};
+use super::sep_meta::{collect_used_sep_keys_constant, collect_used_sep_keys_table};
 
 fn xml_escape(s: &str) -> String {
     s.replace('&', "&amp;")
@@ -23,11 +23,11 @@ fn is_server_export(export: &Export) -> bool {
 }
 
 /// 仅按 `used_keys` 输出 sep_* attrs。空集返回空串 —— 根元素不带任何 sep_ attr。
-fn sep_attrs(sep: &SeparatorsSection, used_keys: &BTreeSet<&'static str>) -> String {
+fn sep_attrs(sep: &SeparatorsSection, used_keys: &BTreeSet<SepKey>) -> String {
     let mut s = String::new();
-    for (k, v) in sep_kv_pairs(sep) {
-        if used_keys.contains(k) {
-            write!(s, " sep_{}=\"{}\"", k, attr_escape(v)).unwrap();
+    for k in SepKey::ALL {
+        if used_keys.contains(&k) {
+            write!(s, " sep_{}=\"{}\"", k.as_export_key(), attr_escape(k.get(sep))).unwrap();
         }
     }
     s

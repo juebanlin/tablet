@@ -685,6 +685,197 @@ impl Default for SeparatorsSection {
     }
 }
 
+// --- SepKey ---
+
+/// 25 项分隔符 leaf 的强类型枚举。新增 / 删除分隔符 = 改这一处 + 全部 match 编译期报错。
+///
+/// 两套 wire 格式：
+/// - `as_directive_key()` —— PascalCase 点路径（`Tuple2` / `Map.kv` / `List_Tuple2.tuple`），用于 `.tblschema` 的 `# @sep` 行
+/// - `as_export_key()` —— snake_case（`tuple2` / `map_kv` / `list_tuple2_tuple`），用于 JSON `_sep` 键 / XML `sep_*` attr
+///
+/// 二者都是磁盘格式，**不能改**。
+#[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum SepKey {
+    Tuple2, Tuple3, Tuple4,
+    List, Set,
+    MapKv, MapEntry,
+    ListTuple2Tuple, ListTuple2List,
+    ListTuple3Tuple, ListTuple3List,
+    ListTuple4Tuple, ListTuple4List,
+    MapTuple2Kv, MapTuple2Tuple, MapTuple2Entry,
+    MapTuple3Kv, MapTuple3Tuple, MapTuple3Entry,
+    MapTuple4Kv, MapTuple4Tuple, MapTuple4Entry,
+    MapListKv, MapListItem, MapListEntry,
+}
+
+impl SepKey {
+    /// 全部 25 项；JSON / XML 输出按本顺序遍历。
+    pub const ALL: [SepKey; 25] = [
+        SepKey::List, SepKey::Set,
+        SepKey::Tuple2, SepKey::Tuple3, SepKey::Tuple4,
+        SepKey::MapKv, SepKey::MapEntry,
+        SepKey::ListTuple2Tuple, SepKey::ListTuple2List,
+        SepKey::ListTuple3Tuple, SepKey::ListTuple3List,
+        SepKey::ListTuple4Tuple, SepKey::ListTuple4List,
+        SepKey::MapTuple2Kv, SepKey::MapTuple2Tuple, SepKey::MapTuple2Entry,
+        SepKey::MapTuple3Kv, SepKey::MapTuple3Tuple, SepKey::MapTuple3Entry,
+        SepKey::MapTuple4Kv, SepKey::MapTuple4Tuple, SepKey::MapTuple4Entry,
+        SepKey::MapListKv, SepKey::MapListItem, SepKey::MapListEntry,
+    ];
+
+    /// PascalCase 点路径，对应 `.tblschema` 的 `# @sep <key> = <value>` 行 key。
+    pub fn as_directive_key(self) -> &'static str {
+        match self {
+            SepKey::Tuple2 => "Tuple2",
+            SepKey::Tuple3 => "Tuple3",
+            SepKey::Tuple4 => "Tuple4",
+            SepKey::List => "List",
+            SepKey::Set => "Set",
+            SepKey::MapKv => "Map.kv",
+            SepKey::MapEntry => "Map.entry",
+            SepKey::ListTuple2Tuple => "List_Tuple2.tuple",
+            SepKey::ListTuple2List => "List_Tuple2.list",
+            SepKey::ListTuple3Tuple => "List_Tuple3.tuple",
+            SepKey::ListTuple3List => "List_Tuple3.list",
+            SepKey::ListTuple4Tuple => "List_Tuple4.tuple",
+            SepKey::ListTuple4List => "List_Tuple4.list",
+            SepKey::MapTuple2Kv => "Map_Tuple2.kv",
+            SepKey::MapTuple2Tuple => "Map_Tuple2.tuple",
+            SepKey::MapTuple2Entry => "Map_Tuple2.entry",
+            SepKey::MapTuple3Kv => "Map_Tuple3.kv",
+            SepKey::MapTuple3Tuple => "Map_Tuple3.tuple",
+            SepKey::MapTuple3Entry => "Map_Tuple3.entry",
+            SepKey::MapTuple4Kv => "Map_Tuple4.kv",
+            SepKey::MapTuple4Tuple => "Map_Tuple4.tuple",
+            SepKey::MapTuple4Entry => "Map_Tuple4.entry",
+            SepKey::MapListKv => "Map_List.kv",
+            SepKey::MapListItem => "Map_List.item",
+            SepKey::MapListEntry => "Map_List.entry",
+        }
+    }
+
+    /// snake_case，对应 JSON `_sep` 键 / XML `sep_*` attr 后缀。
+    pub fn as_export_key(self) -> &'static str {
+        match self {
+            SepKey::Tuple2 => "tuple2",
+            SepKey::Tuple3 => "tuple3",
+            SepKey::Tuple4 => "tuple4",
+            SepKey::List => "list",
+            SepKey::Set => "set",
+            SepKey::MapKv => "map_kv",
+            SepKey::MapEntry => "map_entry",
+            SepKey::ListTuple2Tuple => "list_tuple2_tuple",
+            SepKey::ListTuple2List => "list_tuple2_list",
+            SepKey::ListTuple3Tuple => "list_tuple3_tuple",
+            SepKey::ListTuple3List => "list_tuple3_list",
+            SepKey::ListTuple4Tuple => "list_tuple4_tuple",
+            SepKey::ListTuple4List => "list_tuple4_list",
+            SepKey::MapTuple2Kv => "map_tuple2_kv",
+            SepKey::MapTuple2Tuple => "map_tuple2_tuple",
+            SepKey::MapTuple2Entry => "map_tuple2_entry",
+            SepKey::MapTuple3Kv => "map_tuple3_kv",
+            SepKey::MapTuple3Tuple => "map_tuple3_tuple",
+            SepKey::MapTuple3Entry => "map_tuple3_entry",
+            SepKey::MapTuple4Kv => "map_tuple4_kv",
+            SepKey::MapTuple4Tuple => "map_tuple4_tuple",
+            SepKey::MapTuple4Entry => "map_tuple4_entry",
+            SepKey::MapListKv => "map_list_kv",
+            SepKey::MapListItem => "map_list_item",
+            SepKey::MapListEntry => "map_list_entry",
+        }
+    }
+
+    /// 从 directive key（PascalCase）反查 SepKey；未知 key = None。
+    pub fn from_directive_key(s: &str) -> Option<SepKey> {
+        SepKey::ALL.iter().copied().find(|k| k.as_directive_key() == s)
+    }
+
+    /// 从 SeparatorsSection 取该 leaf 的当前值。
+    pub fn get<'a>(self, sep: &'a SeparatorsSection) -> &'a str {
+        match self {
+            SepKey::Tuple2 => &sep.tuple2,
+            SepKey::Tuple3 => &sep.tuple3,
+            SepKey::Tuple4 => &sep.tuple4,
+            SepKey::List => &sep.list,
+            SepKey::Set => &sep.set,
+            SepKey::MapKv => &sep.map.kv,
+            SepKey::MapEntry => &sep.map.entry,
+            SepKey::ListTuple2Tuple => &sep.list_tuple2.tuple,
+            SepKey::ListTuple2List => &sep.list_tuple2.list,
+            SepKey::ListTuple3Tuple => &sep.list_tuple3.tuple,
+            SepKey::ListTuple3List => &sep.list_tuple3.list,
+            SepKey::ListTuple4Tuple => &sep.list_tuple4.tuple,
+            SepKey::ListTuple4List => &sep.list_tuple4.list,
+            SepKey::MapTuple2Kv => &sep.map_tuple2.kv,
+            SepKey::MapTuple2Tuple => &sep.map_tuple2.tuple,
+            SepKey::MapTuple2Entry => &sep.map_tuple2.entry,
+            SepKey::MapTuple3Kv => &sep.map_tuple3.kv,
+            SepKey::MapTuple3Tuple => &sep.map_tuple3.tuple,
+            SepKey::MapTuple3Entry => &sep.map_tuple3.entry,
+            SepKey::MapTuple4Kv => &sep.map_tuple4.kv,
+            SepKey::MapTuple4Tuple => &sep.map_tuple4.tuple,
+            SepKey::MapTuple4Entry => &sep.map_tuple4.entry,
+            SepKey::MapListKv => &sep.map_list.kv,
+            SepKey::MapListItem => &sep.map_list.item,
+            SepKey::MapListEntry => &sep.map_list.entry,
+        }
+    }
+
+    /// 写入 SeparatorsSection 的对应 leaf。
+    pub fn set(self, sep: &mut SeparatorsSection, v: String) {
+        match self {
+            SepKey::Tuple2 => sep.tuple2 = v,
+            SepKey::Tuple3 => sep.tuple3 = v,
+            SepKey::Tuple4 => sep.tuple4 = v,
+            SepKey::List => sep.list = v,
+            SepKey::Set => sep.set = v,
+            SepKey::MapKv => sep.map.kv = v,
+            SepKey::MapEntry => sep.map.entry = v,
+            SepKey::ListTuple2Tuple => sep.list_tuple2.tuple = v,
+            SepKey::ListTuple2List => sep.list_tuple2.list = v,
+            SepKey::ListTuple3Tuple => sep.list_tuple3.tuple = v,
+            SepKey::ListTuple3List => sep.list_tuple3.list = v,
+            SepKey::ListTuple4Tuple => sep.list_tuple4.tuple = v,
+            SepKey::ListTuple4List => sep.list_tuple4.list = v,
+            SepKey::MapTuple2Kv => sep.map_tuple2.kv = v,
+            SepKey::MapTuple2Tuple => sep.map_tuple2.tuple = v,
+            SepKey::MapTuple2Entry => sep.map_tuple2.entry = v,
+            SepKey::MapTuple3Kv => sep.map_tuple3.kv = v,
+            SepKey::MapTuple3Tuple => sep.map_tuple3.tuple = v,
+            SepKey::MapTuple3Entry => sep.map_tuple3.entry = v,
+            SepKey::MapTuple4Kv => sep.map_tuple4.kv = v,
+            SepKey::MapTuple4Tuple => sep.map_tuple4.tuple = v,
+            SepKey::MapTuple4Entry => sep.map_tuple4.entry = v,
+            SepKey::MapListKv => sep.map_list.kv = v,
+            SepKey::MapListItem => sep.map_list.item = v,
+            SepKey::MapListEntry => sep.map_list.entry = v,
+        }
+    }
+}
+
+impl Paradigm {
+    /// 该范式实际用到的分隔符清单。Base / Ref 不需要分隔符。
+    pub fn sep_keys(&self) -> &'static [SepKey] {
+        use SepKey::*;
+        match self {
+            Paradigm::Base | Paradigm::Ref => &[],
+            Paradigm::Tuple2 => &[Tuple2],
+            Paradigm::Tuple3 => &[Tuple3],
+            Paradigm::Tuple4 => &[Tuple4],
+            Paradigm::List => &[List],
+            Paradigm::Set => &[Set],
+            Paradigm::Map => &[MapKv, MapEntry],
+            Paradigm::ListTuple2 => &[ListTuple2Tuple, ListTuple2List],
+            Paradigm::ListTuple3 => &[ListTuple3Tuple, ListTuple3List],
+            Paradigm::ListTuple4 => &[ListTuple4Tuple, ListTuple4List],
+            Paradigm::MapTuple2 => &[MapTuple2Kv, MapTuple2Tuple, MapTuple2Entry],
+            Paradigm::MapTuple3 => &[MapTuple3Kv, MapTuple3Tuple, MapTuple3Entry],
+            Paradigm::MapTuple4 => &[MapTuple4Kv, MapTuple4Tuple, MapTuple4Entry],
+            Paradigm::MapList => &[MapListKv, MapListItem, MapListEntry],
+        }
+    }
+}
+
 fn strip_wrapper<'a>(s: &'a str, prefix: &str, suffix: &str) -> Option<&'a str> {
     s.strip_prefix(prefix)?.strip_suffix(suffix)
 }

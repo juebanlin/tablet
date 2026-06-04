@@ -206,36 +206,10 @@ fn parse_sep_line(line: &str) -> Option<(String, String)> {
     Some((key.trim().to_string(), value.trim_start().trim_end_matches('\n').to_string()))
 }
 
-/// 把单个 `# @sep` 行写入 `SeparatorsSection`。25 个叶子键全枚举；未知 key 忽略。
+/// 把单个 `# @sep` 行写入 `SeparatorsSection`。未知 key 忽略（向前兼容）。
 fn apply_sep_kv(sep: &mut SeparatorsSection, key: &str, value: &str) {
-    let v = value.to_string();
-    match key {
-        "Tuple2" => sep.tuple2 = v,
-        "Tuple3" => sep.tuple3 = v,
-        "Tuple4" => sep.tuple4 = v,
-        "List" => sep.list = v,
-        "Set" => sep.set = v,
-        "Map.kv" => sep.map.kv = v,
-        "Map.entry" => sep.map.entry = v,
-        "List_Tuple2.tuple" => sep.list_tuple2.tuple = v,
-        "List_Tuple2.list" => sep.list_tuple2.list = v,
-        "List_Tuple3.tuple" => sep.list_tuple3.tuple = v,
-        "List_Tuple3.list" => sep.list_tuple3.list = v,
-        "List_Tuple4.tuple" => sep.list_tuple4.tuple = v,
-        "List_Tuple4.list" => sep.list_tuple4.list = v,
-        "Map_Tuple2.kv" => sep.map_tuple2.kv = v,
-        "Map_Tuple2.tuple" => sep.map_tuple2.tuple = v,
-        "Map_Tuple2.entry" => sep.map_tuple2.entry = v,
-        "Map_Tuple3.kv" => sep.map_tuple3.kv = v,
-        "Map_Tuple3.tuple" => sep.map_tuple3.tuple = v,
-        "Map_Tuple3.entry" => sep.map_tuple3.entry = v,
-        "Map_Tuple4.kv" => sep.map_tuple4.kv = v,
-        "Map_Tuple4.tuple" => sep.map_tuple4.tuple = v,
-        "Map_Tuple4.entry" => sep.map_tuple4.entry = v,
-        "Map_List.kv" => sep.map_list.kv = v,
-        "Map_List.item" => sep.map_list.item = v,
-        "Map_List.entry" => sep.map_list.entry = v,
-        _ => {}
+    if let Some(k) = crate::types::SepKey::from_directive_key(key) {
+        k.set(sep, value.to_string());
     }
 }
 
@@ -389,37 +363,14 @@ pub fn serialize_tblschema(schema: &TblSchema) -> String {
 /// 把 SeparatorsSection 中与默认不同的字段写成 `# @sep` 行。全部默认 = 不输出。
 fn write_sep_diff(s: &mut String, sep: &SeparatorsSection) {
     use std::fmt::Write;
+    use crate::types::SepKey;
     let d = SeparatorsSection::default();
-    let mut emit = |k: &str, v: &str, dv: &str| {
-        if v != dv {
-            writeln!(s, "# @sep {} = {}", k, v).unwrap();
+    for k in SepKey::ALL {
+        let v = k.get(sep);
+        if v != k.get(&d) {
+            writeln!(s, "# @sep {} = {}", k.as_directive_key(), v).unwrap();
         }
-    };
-    emit("Tuple2", &sep.tuple2, &d.tuple2);
-    emit("Tuple3", &sep.tuple3, &d.tuple3);
-    emit("Tuple4", &sep.tuple4, &d.tuple4);
-    emit("List", &sep.list, &d.list);
-    emit("Set", &sep.set, &d.set);
-    emit("Map.kv", &sep.map.kv, &d.map.kv);
-    emit("Map.entry", &sep.map.entry, &d.map.entry);
-    emit("List_Tuple2.tuple", &sep.list_tuple2.tuple, &d.list_tuple2.tuple);
-    emit("List_Tuple2.list", &sep.list_tuple2.list, &d.list_tuple2.list);
-    emit("List_Tuple3.tuple", &sep.list_tuple3.tuple, &d.list_tuple3.tuple);
-    emit("List_Tuple3.list", &sep.list_tuple3.list, &d.list_tuple3.list);
-    emit("List_Tuple4.tuple", &sep.list_tuple4.tuple, &d.list_tuple4.tuple);
-    emit("List_Tuple4.list", &sep.list_tuple4.list, &d.list_tuple4.list);
-    emit("Map_Tuple2.kv", &sep.map_tuple2.kv, &d.map_tuple2.kv);
-    emit("Map_Tuple2.tuple", &sep.map_tuple2.tuple, &d.map_tuple2.tuple);
-    emit("Map_Tuple2.entry", &sep.map_tuple2.entry, &d.map_tuple2.entry);
-    emit("Map_Tuple3.kv", &sep.map_tuple3.kv, &d.map_tuple3.kv);
-    emit("Map_Tuple3.tuple", &sep.map_tuple3.tuple, &d.map_tuple3.tuple);
-    emit("Map_Tuple3.entry", &sep.map_tuple3.entry, &d.map_tuple3.entry);
-    emit("Map_Tuple4.kv", &sep.map_tuple4.kv, &d.map_tuple4.kv);
-    emit("Map_Tuple4.tuple", &sep.map_tuple4.tuple, &d.map_tuple4.tuple);
-    emit("Map_Tuple4.entry", &sep.map_tuple4.entry, &d.map_tuple4.entry);
-    emit("Map_List.kv", &sep.map_list.kv, &d.map_list.kv);
-    emit("Map_List.item", &sep.map_list.item, &d.map_list.item);
-    emit("Map_List.entry", &sep.map_list.entry, &d.map_list.entry);
+    }
 }
 
 /// 把 project 反向编码成 TblSchema：

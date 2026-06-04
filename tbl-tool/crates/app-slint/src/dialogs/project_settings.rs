@@ -11,7 +11,7 @@ use std::rc::Rc;
 
 use slint::ComponentHandle;
 use tbl_core::tblschema::is_valid_metadata_id;
-use tbl_core::types::SeparatorsSection;
+use tbl_core::types::{SepKey, SeparatorsSection};
 
 use crate::state::AppState;
 use crate::{refresh, AppWindow};
@@ -109,34 +109,8 @@ pub fn push(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
 
 /// `# @sep` 行 key → 写到 SeparatorsSection 的对应字段。
 fn apply_sep_kv(sep: &mut SeparatorsSection, key: &str, value: &str) {
-    let v = value.to_string();
-    match key {
-        "Tuple2" => sep.tuple2 = v,
-        "Tuple3" => sep.tuple3 = v,
-        "Tuple4" => sep.tuple4 = v,
-        "List" => sep.list = v,
-        "Set" => sep.set = v,
-        "Map.kv" => sep.map.kv = v,
-        "Map.entry" => sep.map.entry = v,
-        "List_Tuple2.tuple" => sep.list_tuple2.tuple = v,
-        "List_Tuple2.list" => sep.list_tuple2.list = v,
-        "List_Tuple3.tuple" => sep.list_tuple3.tuple = v,
-        "List_Tuple3.list" => sep.list_tuple3.list = v,
-        "List_Tuple4.tuple" => sep.list_tuple4.tuple = v,
-        "List_Tuple4.list" => sep.list_tuple4.list = v,
-        "Map_Tuple2.kv" => sep.map_tuple2.kv = v,
-        "Map_Tuple2.tuple" => sep.map_tuple2.tuple = v,
-        "Map_Tuple2.entry" => sep.map_tuple2.entry = v,
-        "Map_Tuple3.kv" => sep.map_tuple3.kv = v,
-        "Map_Tuple3.tuple" => sep.map_tuple3.tuple = v,
-        "Map_Tuple3.entry" => sep.map_tuple3.entry = v,
-        "Map_Tuple4.kv" => sep.map_tuple4.kv = v,
-        "Map_Tuple4.tuple" => sep.map_tuple4.tuple = v,
-        "Map_Tuple4.entry" => sep.map_tuple4.entry = v,
-        "Map_List.kv" => sep.map_list.kv = v,
-        "Map_List.item" => sep.map_list.item = v,
-        "Map_List.entry" => sep.map_list.entry = v,
-        _ => {}
+    if let Some(k) = SepKey::from_directive_key(key) {
+        k.set(sep, value.to_string());
     }
 }
 
