@@ -87,4 +87,113 @@ mod tests {
         let src = BuiltinTemplates::new();
         assert!(src.load_by_id("nonexistent").is_none());
     }
+
+    /// 内置模板 preset 数据必须按 §8.3.1（中文标点拦截规则）合法。
+    /// str 类型可含中文标点；其它类型（int / 复合 / @Ref）不允许。
+    /// 这里逐 section 把 preset 翻译成 Table / Constant / EnumDef 跑 validate_*。
+    #[test]
+    fn builtin_presets_pass_validation() {
+        use std::collections::HashMap;
+
+        use crate::model::{Constant, ConstEntry, EnumDef, EnumEntry, Export, FieldDef, Table, TableSchema};
+        use crate::tblschema::SchemaMode;
+        use crate::types::SeparatorsSection;
+        use crate::validate::{validate_constant, validate_enum, validate_table, RefIndex};
+
+        let src = BuiltinTemplates::new();
+        for tpl in src.list() {
+            let content = src.load_by_id(&tpl.id).expect("load builtin");
+            let schema = &content.schema;
+            let sep = SeparatorsSection::default();
+
+            // 先聚合一份 RefIndex：每个 table/enum 注册其 preset 的全部 id。
+            // ref 校验依赖此索引存在，否则 @Hero/@Faction 等会假报 TypeRefMissing。
+            use crate::model::Group;
+            let mut groups_map: HashMap<String, Group> = HashMap::new();
+            for sec in &schema.sections {
+                let g = groups_map.entry(sec.group.clone()).or_insert_with(|| Group {
+                    name: sec.group.clone(),
+                    dir: std::path::PathBuf::new(),
+                    tables: Vec::new(),
+                    constants: Vec::new(),
+                    enums: Vec::new(),
+                    is_new: false,
+                });
+                match sec.mode {
+                    SchemaMode::Table => {
+                        let fields: Vec<FieldDef> = sec.fields.iter().map(|f| FieldDef {
+                            name: f.name.clone(),
+                            desc: f.desc.clone(),
+                            tbl_type: f.tbl_type.clone(),
+                            export: Export::from_str(&f.export),
+                        }).collect();
+                        g.tables.push(Table {
+                            name: sec.name.clone(),
+                            path: std::path::PathBuf::new(),
+                            schema: TableSchema { fields },
+                            records: sec.preset.clone(),
+                            dirty: false,
+                            deleted: false,
+                            original: String::new(),
+                        });
+                    }
+                    SchemaMode::Constant => {
+                        let entries: Vec<ConstEntry> = sec.preset.iter().map(|row| {
+                            let g = |i: usize| row.get(i).cloned().unwrap_or_default();
+                            ConstEntry {
+                                name: g(0),
+                                tbl_type: g(1),
+                                value: g(2),
+                                export: Export::from_str(&g(3)),
+                                desc: g(4),
+                            }
+                        }).collect();
+                        g.constants.push(Constant {
+                            name: sec.name.clone(),
+                            path: std::path::PathBuf::new(),
+                            entries,
+                            dirty: false,
+                            deleted: false,
+                            original: String::new(),
+                        });
+                    }
+                    SchemaMode::Enum => {
+                        let entries: Vec<EnumEntry> = sec.preset.iter().map(|row| {
+                            let g = |i: usize| row.get(i).cloned().unwrap_or_default();
+                            EnumEntry { id: g(0), name: g(1), desc: g(2) }
+                        }).collect();
+                        g.enums.push(EnumDef {
+                            name: sec.name.clone(),
+                            path: std::path::PathBuf::new(),
+                            entries,
+                            dirty: false,
+                            deleted: false,
+                            original: String::new(),
+                        });
+                    }
+                }
+            }
+            let groups: Vec<Group> = groups_map.into_values().collect();
+            let refs = RefIndex::build(&groups);
+
+            // 跑 validate_*；任何错误都连同模板 id 一起 panic 出来。
+            for g in &groups {
+                for t in &g.tables {
+                    let errs = validate_table(t, &sep, Some(&refs));
+                    assert!(errs.is_empty(),
+                        "[{}] table {}/{} 校验失败: {:?}", tpl.id, g.name, t.name, errs);
+                }
+                for c in &g.constants {
+                    let errs = validate_constant(c, &sep, /*allow_ref=*/true, Some(&refs));
+                    assert!(errs.is_empty(),
+                        "[{}] constant {}/{} 校验失败: {:?}", tpl.id, g.name, c.name, errs);
+                }
+                for e in &g.enums {
+                    let errs = validate_enum(e);
+                    assert!(errs.is_empty(),
+                        "[{}] enum {}/{} 校验失败: {:?}", tpl.id, g.name, e.name, errs);
+                }
+            }
+        }
+    }
 }

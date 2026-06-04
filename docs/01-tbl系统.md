@@ -189,7 +189,7 @@ id 列整列不可删除、不可移动、不可改名（仅 desc 行允许编�
 | 字符串中的换行 | 转义为 `\\n` |
 | 空值 | 写空字符串（`a\|\|c`），含义见 @8.4 |
 | 连续分隔符 | **禁止**（`1;;3` 表示有空元素，验证拒绝） |
-| 中文标点 | **禁止**（`1，2` `a：b` 等） |
+| 中文标点 | 按列类型分流，详见 @8.3.1 |
 | 行尾颜色标记 | 详见 @9 |
 
 ## 7. TblFieldType 类型系统
@@ -396,13 +396,51 @@ Lua 端全部展开为 table 字面量，不降级为 string。
 | 集合元素类型 | List/Set 每元素匹配 | `"1;abc;3"` 作 List\<int\> |
 | Map 格式 | 每条目带 kv 分隔符；K/V 类型匹配 | `"hp100"` 缺 `:` |
 | 空元素 | 不允许连续分隔符 | `"1;;3"` `"1,,2"` |
-| 中文标点 | 不允许 `，；：、` 等 | `"1，2，3"` |
+| 中文标点 | 按列角色分流，见 @8.3.1 | `"1，2，3"` 作 List\<int\> |
 
 错误信息自动附带示例（用当前配置的分隔符）：
 
 ```
 [验证] hero/HeroBase D2: "4,5" 列表元素类型不匹配, 示例: 1;2;3
 ```
+
+#### 8.3.1 中文标点 / 特殊符号拦截规则
+
+中文标点 `，；：、` 等是否拦下来，取决于**该单元格的语义角色**——不一刀切按"是不是字符串"。核心区分：
+
+> **进代码 / 要被分隔符切 → 拦；纯展示文案 → 放开。**
+
+| 位置 | 拦截 | 原因 |
+|------|:---:|------|
+| 表头任意行（desc / export / type / field 行） | ✅ | 字段名进代码生成（变量名 / 类型签名）；type 行进 TblType 解析；export 行进枚举字面 |
+| Table 数据格 — int / long / float / double / bool 类型 | ✅ | 基础类型 parse 错位 |
+| Table 数据格 — 复合类型（Tuple / List / Set / Map / List\<Tuple\> 等） | ✅ | 中文逗号 ≠ ASCII 分隔符，会让 split 错位 |
+| Table 数据格 — `@TableName` / `@EnumName` 引用 | ✅ | 实际值是 int(id)，按 int 校验 |
+| **Table 数据格 — 纯 str 类型**（典型：desc 列、name 列、文案列、读屏文本） | ❌ 放开 | 玩家可见的自由文本，必须允许中文逗号 / 全角空格 / 引号等 |
+| Constant value 列 — 非 str 类型（int / 复合 / Ref） | ✅ | 同上数据格规则 |
+| **Constant value 列 — str 类型** | ❌ 放开 | 同纯 str 列 |
+| Constant name 列 | ✅ | name 生成成代码端常量名（`MAX_LEVEL`），ASCII identifier 约束 |
+| Constant desc 列 | ❌ 不验证 | 注释 / tooltip，不进代码 |
+| Constant export 列 | ❌ 不验证 | 取值固定 `cs/c/s/-`，schema 层兜底 |
+| Enum id 列 | ✅ | 必须是正整数 |
+| Enum name 列 | ✅ | 生成成 enum variant（`enum HeroType { WARRIOR }`），UPPER_SNAKE 严格约束 |
+| Enum desc 列 | ❌ 不验证 | 同 Constant desc |
+
+边界示例：
+
+| 场景 | 列类型 | 值 | 结果 |
+|------|--------|-----|------|
+| Table desc 列填策划文案 | `str` | `步兵基础兵种，克制骑兵` | ✅ 通过 |
+| Table desc 列填 M1 编号 | `str` | `M1：[步兵]` | ✅ 通过 |
+| Table 等级列 | `int` | `１００`（全角数字） | ❌ 拦 |
+| Table 技能 ID 列表写错分隔符 | `List<int>` | `1，2，3`（中文逗号） | ❌ 拦（分隔符错位） |
+| `List<str>` 列写中文逗号 | `List<str>` | `战士，法师，弓手` | ❌ 拦（仍是分隔符错位，应写 `战士;法师;弓手`） |
+| Constant value（str 类型） | `str` | `欢迎来到，主城！` | ✅ 通过 |
+| Enum name 列 | `str` | `战士`（中文） | ❌ 拦（必须 UPPER_SNAKE，前置规则） |
+
+注意 `List<str>` / `Tuple<str, _>` 等**含 str 的复合类型仍然拦中文逗号**——值会按分隔符 split，写错分隔符是真错误，不是文案。豁免只针对"完整自由文本格"形态：`Paradigm::Base + BaseType::Str`。
+
+实现位置：`tbl_core::types::TblType::validate_value`（`types.rs`）入口处 `is_plain_str` 分流；`# @sep` 行的分隔符配置不影响该规则。
 
 ### 8.4 空值规则
 

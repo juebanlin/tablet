@@ -470,7 +470,15 @@ impl TblType {
     /// Validate a cell value against this type. Returns None if valid, Some(error_msg) if invalid.
     pub fn validate_value(&self, value: &str, sep: &SeparatorsSection) -> Option<String> {
         if value.is_empty() { return None; }
-        if let Some(msg) = check_chinese_punctuation(value) { return Some(msg.to_string()); }
+        // 中文标点检查：仅对会被分隔符切 / 按 base 类型 parse 的列做。
+        // 纯 str 列（Paradigm::Base + BaseType::Str）= 自由文本（desc / 描述 / 文案），
+        // 必须放开中文标点。复合类型如 List<str> 仍拦——值形如 `a;b;c` 写成 `a，b，c`
+        // 是分隔符错位，应直接报错。
+        let is_plain_str = self.paradigm == Paradigm::Base
+            && matches!(self.params.first(), Some(BaseType::Str));
+        if !is_plain_str {
+            if let Some(msg) = check_chinese_punctuation(value) { return Some(msg.to_string()); }
+        }
         let p = &self.params;
         let err = match &self.paradigm {
             Paradigm::Base => validate_base(value, p[0]),
@@ -943,5 +951,35 @@ mod tests {
         assert!(t.validate_value("1001", &sep).is_none());
         assert!(t.validate_value("", &sep).is_none()); // 空值合法（视为未引用）
         assert!(t.validate_value("abc", &sep).is_some()); // 非整数非法
+    }
+
+    #[test]
+    fn str_value_allows_chinese_punctuation() {
+        // 纯 str 列（desc / 文案）= 自由文本，必须允许中文标点 + 全角空格
+        let sep = SeparatorsSection::default();
+        let t = TblType::parse("str").unwrap();
+        assert!(t.validate_value("步兵基础兵种，克制骑兵", &sep).is_none());
+        assert!(t.validate_value("M1：[步兵]", &sep).is_none());
+        assert!(t.validate_value("名称、说明、备注", &sep).is_none());
+        assert!(t.validate_value("含全角  空格也行", &sep).is_none());
+    }
+
+    #[test]
+    fn list_str_still_rejects_chinese_punctuation() {
+        // List<str> 的值要按分隔符切，写中文逗号是分隔符错位，仍要拦
+        let sep = SeparatorsSection::default();
+        let t = TblType::parse("List<str>").unwrap();
+        // 正确写法：用 ASCII ;
+        assert!(t.validate_value("战士;法师;弓手", &sep).is_none());
+        // 错误：用中文逗号当分隔符
+        assert!(t.validate_value("战士，法师，弓手", &sep).is_some());
+    }
+
+    #[test]
+    fn int_value_still_rejects_chinese_punctuation() {
+        let sep = SeparatorsSection::default();
+        let t = TblType::parse("int").unwrap();
+        assert!(t.validate_value("100", &sep).is_none());
+        assert!(t.validate_value("１００", &sep).is_some()); // 全角数字非法（含中文标点检查路径外，由 parse::<i64> 兜底）
     }
 }
