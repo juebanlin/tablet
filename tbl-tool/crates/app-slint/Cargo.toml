@@ -6,6 +6,7 @@ build = "build.rs"
 
 [dependencies]
 tbl-core = { path = "../core" }
+tbl-cli = { path = "../app-cli" }
 slint = { version = "1.16.1", default-features = false, features = [
     "std",                  # 桌面环境必需
     "compat-1-2",           # 1.x API 兼容
@@ -21,6 +22,9 @@ anyhow = "1"
 arboard = "3"
 rfd = "0.15"
 open = "5"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = ["Win32_System_Console"] }
 
 [build-dependencies]
 slint-build = "1.16.1"

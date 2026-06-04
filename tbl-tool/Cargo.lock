@@ -4671,7 +4671,9 @@ dependencies = [
  "simplelog",
  "slint",
  "slint-build",
+ "tbl-cli",
  "tbl-core",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]

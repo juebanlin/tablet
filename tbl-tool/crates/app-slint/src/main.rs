@@ -1,7 +1,10 @@
 // 启动壳子（@05.13 跨平台启动约定）
-// - Windows 下隐藏控制台（避免双击/run 带 console；同时抑制 vm3dgl 等 OpenGL 启动日志）
-//   仅 Windows 平台需要这个属性，Linux/macOS 不存在 subsystem 概念
-// - CLI workdir / lock 文件 / 文件日志 / 加载 project
+// - 用 console subsystem（Windows / Linux / macOS 三端统一），CLI 模式下 cmd / 终端
+//   同步等待 stdout，与普通 CLI 工具一致
+// - GUI 分支在 Windows 下显式 FreeConsole() 释放控制台，避免双击启动后黑窗驻留
+//   （仍会有 < 50ms 的初始黑闪，PE 头层无法消除；Linux/macOS 没有 subsystem 概念，零影响）
+// - 同一个 exe 兼任 CLI：classify(args) 决定走 tbl_cli 还是 GUI（@07 三层架构）
+// - workdir 默认 = cwd；`--workdir` 仅作开发期覆盖。lock 文件 / 文件日志 / 加载 project
 // - AppState 持 ProjectEngine + UI 临时态，用 Rc<RefCell<...>> 在 callback 中共享
 //
 // 后端模块布局：
@@ -15,8 +18,6 @@
 //
 // 每个 ui/dialogs 模块统一对外暴露 `wire(ui, state)` + `push(ui, state)`。
 
-#![cfg_attr(target_os = "windows", windows_subsystem = "windows")]
-
 mod state;
 mod theme;
 mod convert;
@@ -27,7 +28,6 @@ mod dialogs;
 use std::cell::RefCell;
 use std::path::PathBuf;
 use std::rc::Rc;
-use clap::Parser;
 use log::info;
 use simplelog::*;
 
@@ -35,22 +35,78 @@ slint::include_modules!();
 
 use state::AppState;
 
-#[derive(Parser)]
-#[command(name = "tbl-tool", version = "0.1.0")]
-struct Cli {
-    #[arg(long)]
-    workdir: Option<PathBuf>,
+/// 三条启动路径：
+/// 1. 零参数 → GUI（双击启动；workdir = cwd）
+/// 2. `--gui [--workdir=...]` → GUI（开发期 / 便携重定位）
+/// 3. 其它任何参数 → CLI（含 `--help` / `--version` / 子命令 / tbl_cli 的 global option）
+enum Route {
+    Gui { workdir: Option<PathBuf> },
+    Cli,
 }
 
-fn main() -> anyhow::Result<()> {
-    let cli = Cli::parse();
+fn classify(args: &[String]) -> Route {
+    if args.len() <= 1 {
+        return Route::Gui { workdir: None };
+    }
+    if !args.iter().skip(1).any(|a| a == "--gui") {
+        return Route::Cli;
+    }
+    // --gui 模式下顺便解析 --workdir=foo / --workdir foo
+    let workdir = args.iter().skip(1).find_map(|a| {
+        a.strip_prefix("--workdir=").map(PathBuf::from)
+    }).or_else(|| {
+        let pos = args.iter().position(|a| a == "--workdir")?;
+        args.get(pos + 1).map(PathBuf::from)
+    });
+    Route::Gui { workdir }
+}
 
-    let workdir = match cli.workdir {
-        Some(p) => std::fs::canonicalize(&p)?,
-        None => {
-            let exe = std::env::current_exe()?;
-            exe.parent().unwrap_or(exe.as_path()).to_path_buf()
+#[cfg(windows)]
+fn detach_console_for_gui() {
+    // GUI 分支释放父 cmd 的 console，避免双击启动 / cmd 调用时黑窗驻留。
+    // console subsystem 仍会在进程启动瞬间分配 console（PE 头决定，无法关闭），
+    // 这里调 FreeConsole 让它尽快消失；初始的 < 50ms 黑闪客观存在。
+    use windows_sys::Win32::System::Console::FreeConsole;
+    unsafe { FreeConsole() };
+}
+
+#[cfg(not(windows))]
+fn detach_console_for_gui() {}
+
+fn main() -> anyhow::Result<()> {
+    let args: Vec<String> = std::env::args().collect();
+    match classify(&args) {
+        Route::Gui { workdir } => {
+            detach_console_for_gui();
+            run_gui(workdir)
         }
+        Route::Cli => {
+            // CLI 模式下 `--gui` 不属于 tbl_cli 的语法，剔除后再转发
+            let forwarded: Vec<String> = args.iter()
+                .filter(|a| a.as_str() != "--gui")
+                .cloned()
+                .collect();
+            match tbl_cli::run_with_args(&forwarded) {
+                Ok(code) => std::process::exit(code),
+                Err(e) => {
+                    if let Some(clap_err) = e.downcast_ref::<clap::Error>() {
+                        clap_err.print().ok();
+                        std::process::exit(clap_err.exit_code());
+                    }
+                    eprintln!("{:#}", e);
+                    std::process::exit(1);
+                }
+            }
+        }
+    }
+}
+
+fn run_gui(workdir_arg: Option<PathBuf>) -> anyhow::Result<()> {
+    // 默认 = 当前工作目录（cmd cwd / 双击启动时即 exe 所在目录）。
+    // `--workdir` 仅作开发期便利覆盖（cargo run -p tbl-slint -- --gui --workdir=...）。
+    let workdir = match workdir_arg {
+        Some(p) => std::fs::canonicalize(&p)?,
+        None => std::env::current_dir()?,
     };
 
     let lock_path = workdir.join(tbl_core::LOCK_FILE);
