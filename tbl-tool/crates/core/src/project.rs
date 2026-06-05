@@ -1,6 +1,6 @@
 //! Project 加载、扫描、迁移。
 //!
-//! 文档对应：@04 Project / @02.3 / @09 S15-D。
+//! 文档对应：@02 Project / @03.4 / @07 S15-D。
 //!
 //! 仓库级 `tbl-tool.toml` 是全局**默认值**（不随 Project 切换）。Project 自己的
 //! 身份元数据存在 `<workdir>/projects/<id>/project.tblschema` 的 `# @meta` 段里
@@ -262,7 +262,7 @@ pub fn load_specific_project(workdir: &Path, project_id: &str) -> Result<Project
     })
 }
 
-/// 加载 workdir 下**全部** Project 到内存（多 Project 同时管理模型，@06.2.0）。
+/// 加载 workdir 下**全部** Project 到内存（多 Project 同时管理模型，@04.2.0）。
 ///
 /// - 多 Project 模式：扫 `<workdir>/projects/` 列出全部 id；每个走 `load_specific_project` 全量加载
 /// - 老布局：复用 `load_project`，得到单个 default Project 包成 Vec

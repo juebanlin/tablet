@@ -14,7 +14,7 @@ tbl-tool/
 │   └── app-cli/      ← 命令行工具（产物 tbl-cli）
 ```
 
-`tbl-core` 持有模型、类型系统、验证、数据操作、文件 I/O；`tbl-slint` 与 `tbl-cli` 都只是它的薄前端。UI 设计和布局见 @06，本篇专注 slint 实现细节。源码组织见 @05.1；启动分流见 @05.7。
+`tbl-core` 持有模型、类型系统、验证、数据操作、文件 I/O；`tbl-slint` 与 `tbl-cli` 都只是它的薄前端。UI 设计和布局见 @06，本篇专注 slint 实现细节。源码组织见 @03.1；启动分流见 @03.12。
 
 > 历史：项目早期为对比 immediate-mode / retained / 声明式三套 GUI 范式，曾并存 `app-egui` / `app-fltk` 两个实验性实现。结论是 slint 在主题完成度、声明式响应式布局、Live Preview 调试体验上综合最好，已向正式版本靠拢；其余两份实验实现已从仓库移除。
 
@@ -272,7 +272,7 @@ GUI（slint）与 CLI 都遵循同一套启动壳，平台差异通过 `cfg_attr
 ### 12.3 工作目录与日志
 
 - 默认 `--workdir` 为可执行文件所在目录；可显式覆盖
-- 当前 Project 由 `tbl-tool.toml` 的 `[app] last_project` 决定；CLI 也支持 `--project <id>` 覆盖（@04 Project / @02.3）
+- 当前 Project 由 `tbl-tool.toml` 的 `[app] last_project` 决定；CLI 也支持 `--project <id>` 覆盖（@02 Project / @03.4）
 - 文件日志写入 `<workdir>/tbl-tool.log`，等级由 `[ui] log_level` 配置项决定
 - 不写 stdout/stderr（subsystem=windows 后两者无效）
 

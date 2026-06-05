@@ -88,7 +88,7 @@ fn enrich_selection(snap: &mut GridSnapshot, state: &AppState) {
             snap.selected_cell_col = c as i32;
             snap.coord = format!("{}{}", col_letter(c), r + 1);
             let kind = snap.column_kinds.get(c);
-            // 公式栏只允许 Text 列编辑；picker / ReadOnly 列只读 + 显示原始存储值（@06.5.3）
+            // 公式栏只允许 Text 列编辑；picker / ReadOnly 列只读 + 显示原始存储值（@04.5.3）
             snap.formula_editable = matches!(kind, Some(ColumnKind::Text));
             snap.formula_display = if matches!(kind, Some(ColumnKind::Text)) {
                 let raw = raw_cell_for(state, r, c);

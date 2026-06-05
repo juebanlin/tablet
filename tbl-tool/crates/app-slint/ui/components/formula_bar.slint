@@ -63,7 +63,7 @@ export component FormulaBar inherits Rectangle {
                 }
                 accepted(s) => { root.commit(); }
             }
-            // idle 态：纯 Text 显示。picker / ReadOnly 列只读 + 显示底层 raw（@06.5.3），
+            // idle 态：纯 Text 显示。picker / ReadOnly 列只读 + 显示底层 raw（@04.5.3），
             // 文字弱化 + 右侧追个 🔒 暗示"不可编辑"
             if !root.editing: Text {
                 x: Theme.sp-2;
