@@ -12,7 +12,7 @@ slint = { version = "1.16.1", default-features = false, features = [
     "compat-1-2",           # 1.x API 兼容
     "backend-winit",        # winit 窗口/事件后端（跨 Win/macOS/Linux）
     "renderer-femtovg",     # OpenGL 硬件加速渲染（默认走这条）
-    "renderer-software",    # CPU 兜底：无 GPU 驱动 / OpenGL 上下文创建失败时降级（@10）
+    "renderer-software",    # CPU 兜底：无 GPU 驱动 / OpenGL 上下文创建失败时降级（@11）
 ] }
 clap = { version = "4", features = ["derive"] }
 log = "0.4"

@@ -1,12 +1,12 @@
 # Excel 桥接
 
-UI 层包装 xlsx 编辑流的工作流文档。**xlsx 文件本身的读 / 写规则属于核心层** —— 详见 @02 "生成 Excel 文件" / "导入 Excel 文件"，本篇不重复。
+UI 层包装 xlsx 编辑流的工作流文档。**xlsx 文件本身的读 / 写规则属于核心层** —— 详见 @04 "生成 Excel 文件" / "导入 Excel 文件"，本篇不重复。
 
 桥接的本质：调起策划机器上的 Excel / WPS 编辑工具核心生成的 xlsx，关闭后把策划改动回写到 .tbl。CLI 不需要这条流程（要批量出 xlsx 直接 `tbl-cli export --xlsx`，要回写直接靠脚本调 import）。
 
 ## 1. 触发方式
 
-UI 树节点右键「用 Excel 打开」时，把当前节点所属的**整个 Group** 生成为一个 xlsx（每个 Table / Constant / Enum 一个 sheet，规则见 @02）。
+UI 树节点右键「用 Excel 打开」时，把当前节点所属的**整个 Group** 生成为一个 xlsx（每个 Table / Constant / Enum 一个 sheet，规则见 @04）。
 
 ## 2. 流程
 
@@ -22,12 +22,12 @@ UI 树节点右键「用 Excel 打开」时，把当前节点所属的**整个 G
        │
        ├─ 4. 调用 core::import_xlsx(path) 解析回内存模型
        ├─ 5. 写入临时文件（各 .tbl.tmp）
-       └─ 6. 进入验证 → 保存流程（@04.4、@01.8）
+       └─ 6. 进入验证 → 保存流程（@06.4、@01.8）
 ```
 
 第 1、4 步是核心层调用；2、3、5、6 步是 UI 层职责。
 
-xlsx 缓存放在**该 Project 自带的** `.tbl-cache/` 子目录下（@02 Project 目录结构），多 Project 同时管理时各自隔离；`.gitignore` 有 `projects/*/.tbl-cache/` 一行兜底（@03.2）。
+xlsx 缓存放在**该 Project 自带的** `.tbl-cache/` 子目录下（@02.1 Project 目录结构），多 Project 同时管理时各自隔离；`.gitignore` 有 `projects/*/.tbl-cache/` 一行兜底（@03.2）。
 
 ## 3. 容错机制
 
@@ -58,6 +58,6 @@ GridArea 单元格 / 选区支持 Excel 风格的复制粘贴：
 
 | 子项 | 状态 |
 |------|------|
-| 核心 xlsx 导出 / 导入 | ⚠️ 待开发，见 @02 |
+| 核心 xlsx 导出 / 导入 | ⚠️ 待开发，见 @04 |
 | UI 桥接流程（调起 / 监控 / 临时文件） | ⚠️ 待开发，留到核心 xlsx 完成后做 |
 | 剪贴板 TSV 复制粘贴 | ✅ 已实现 |

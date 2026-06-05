@@ -1,6 +1,6 @@
 //! 项目模板（Schema Template）模块。
 //!
-//! 文档对应：@02 项目模板 / @08 S15-B。
+//! 文档对应：@04 项目模板 / @09 S15-B。
 //!
 //! 模板 = `.tblschema` 文件（多 section 的结构定义，无数据）。
 //! 该模块定义模板的统一抽象 `TemplateSource`，并提供：
@@ -9,7 +9,7 @@
 //! - 本地模板源（`LocalTemplates`，扫程序根目录 `<binary-dir>/tblschema/`）
 //! - `instantiate_template`：把 schema 翻译为空 .tbl 文件集合 + project.tblschema，落到 target_dir
 //!
-//! UI 端的"模板库"对话框按统一接口列出多个 source，详见 @04.6.6。
+//! UI 端的"模板库"对话框按统一接口列出多个 source，详见 @06.6.6。
 
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};

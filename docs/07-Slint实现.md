@@ -1,4 +1,6 @@
-# UI 实现（Slint）
+# Slint 实现
+
+桌面 GUI（产物 `tbl-slint`）的 slint 实现细节：架构 / 主题 / 编辑态 / 失焦保存 / 滚动同步 / 闪退坑。CLI 实现见 @05；UI 设计与交互见 @06；tbl 系统硬性规则见 @01。
 
 ## 1. 架构
 
@@ -12,7 +14,7 @@ tbl-tool/
 │   └── app-cli/      ← 命令行工具（产物 tbl-cli）
 ```
 
-`tbl-core` 持有模型、类型系统、验证、数据操作、文件 I/O；`tbl-slint` 与 `tbl-cli` 都只是它的薄前端。UI 设计和布局见 [@04 UI 设计](04-UI设计.md)，本篇专注 slint 实现细节与 CLI 模式。
+`tbl-core` 持有模型、类型系统、验证、数据操作、文件 I/O；`tbl-slint` 与 `tbl-cli` 都只是它的薄前端。UI 设计和布局见 @06，本篇专注 slint 实现细节。源码组织见 @05.1；启动分流见 @05.7。
 
 > 历史：项目早期为对比 immediate-mode / retained / 声明式三套 GUI 范式，曾并存 `app-egui` / `app-fltk` 两个实验性实现。结论是 slint 在主题完成度、声明式响应式布局、Live Preview 调试体验上综合最好，已向正式版本靠拢；其余两份实验实现已从仓库移除。
 
@@ -242,42 +244,11 @@ ScrollView {
 
 实现：`crates/app-slint/ui/components/grid_area.slint` + `crates/app-slint/ui/dialogs/ref_picker.slint`。
 
-## 12. CLI 模式
-
-无 GUI 环境（CI/CD、jenkins、容器）下使用，与 GUI 共享同一份 `tbl-core`，行为完全一致。`crates/app-cli`（产物名 `tbl-cli`）是**核心层**功能（@02）的薄入口，不引入任何 UI 渲染依赖。
-
-### 12.1 命令骨架
-
-```
-tbl-cli [-w <workdir>] [-s key=value]... <subcommand>
-```
-
-| 子命令 | 入口 | 详细规则 |
-|--------|------|---------|
-| `export` | 数据 / 代码导出 | @02 导出粒度控制 |
-| `validate` | 全项目离线校验 | @02 验证 |
-| `generate-test` | 灌测试数据 | @02 测试数据生成 |
-
-`-w` 默认当前目录；`-s key=value` 覆盖 `tbl-tool.toml` 任意配置项（@07.4），可重复指定。覆盖键名与 toml 路径一一对应。
-
-### 12.2 退出码
-
-| 码 | 含义 |
-|----|------|
-| 0 | 成功 |
-| 1 | 验证失败 / 解析 schema 失败 / 读取 schema 失败 |
-
-`export` 子命令本身不据错失败，只把每个目标的成功/错误打到 stdout/stderr，便于 CI 收集。
-
-### 12.3 依赖
-
-仅依赖 `tbl-core` + `clap`，不引 UI 渲染依赖；release 体积 ~1 MB（无 LTO）。
-
-## 13. 跨平台启动约定
+## 12. 跨平台启动约定
 
 GUI（slint）与 CLI 都遵循同一套启动壳，平台差异通过 `cfg_attr` / `cfg!` 包起来，**不直接绑死任何平台**。
 
-### 13.1 隐藏控制台窗口
+### 12.1 隐藏控制台窗口
 
 ```rust
 #![cfg_attr(target_os = "windows", windows_subsystem = "windows")]
@@ -287,7 +258,7 @@ GUI（slint）与 CLI 都遵循同一套启动壳，平台差异通过 `cfg_attr
 - 同时抑制部分图形栈在 stderr 输出的初始化日志（如 Mesa `vm3dgl: Failed to initialize svga driver. / Falling back to LLVMPipe.`）——这些日志在 GUI subsystem 下没有 stderr 句柄。
 - Linux/macOS 没有 subsystem 概念，`cfg_attr(target_os = "windows", ...)` 让属性只在 Windows 编译时启用，其它平台无副作用。
 
-### 13.2 进程存活检测（lock 文件防双开）
+### 12.2 进程存活检测（lock 文件防双开）
 
 启动时写 `tbl-tool.lock` 记录 PID；下一次启动若发现 lock 文件，验证 PID 是否还活着：
 
@@ -298,9 +269,47 @@ GUI（slint）与 CLI 都遵循同一套启动壳，平台差异通过 `cfg_attr
 
 代码用 `#[cfg(target_os = "windows")]` 分支隔离两套实现，对调用方透明。
 
-### 13.3 工作目录与日志
+### 12.3 工作目录与日志
 
 - 默认 `--workdir` 为可执行文件所在目录；可显式覆盖
-- 当前 Project 由 `tbl-tool.toml` 的 `[app] last_project` 决定；CLI 也支持 `--project <id>` 覆盖（@02 Project / @07.4）
+- 当前 Project 由 `tbl-tool.toml` 的 `[app] last_project` 决定；CLI 也支持 `--project <id>` 覆盖（@04 Project / @02.3）
 - 文件日志写入 `<workdir>/tbl-tool.log`，等级由 `[ui] log_level` 配置项决定
 - 不写 stdout/stderr（subsystem=windows 后两者无效）
+
+## 13. RefPicker 数据通道
+
+弹窗的 search / manual / strategy 三个 in-out 属性都需要"slint 端写 + Rust 端立刻重 push"才能让筛选 / 列表跟着刷新。仅靠 in-out 双向绑定，slint 写完不会触发 Rust 重新计算 `rows`，列表就不动。所以三处都额外加了 callback：
+
+```slint
+edited(s) => { root.set-search(s); }   // 写值 + 通知 Rust
+```
+
+```rust
+ui.on_rp_search_edited(move |q| {
+    s.borrow_mut().ref_picker.search = q.to_string();
+    if let Some(ui) = weak.upgrade() { push_ref_picker(&ui, &s); }
+});
+```
+
+参考实现 `crates/app-slint/src/main.rs::wire_ref_picker`。
+
+## 14. 其它 slint 语义陷阱
+
+### 14.1 layout 子元素禁止设置 x/y
+
+`HorizontalLayout` / `VerticalLayout` 的直接子元素如果显式设置 `x:` 或 `y:`，编译报：
+
+```
+The property 'x' cannot be set for elements placed in this layout, because the layout is already setting it
+```
+
+所以"行号列固定不水平滚动"不能在数据 ScrollView 内的 row HorizontalLayout 里给 row-num 元素加 `x: -scroll-x` 抵消，必须把行号拆出 layout（如 §11 的独立 clip 容器）。
+
+### 14.2 input property 不能在 callback 内赋值
+
+```slint
+in property <int> rp-strategy-index;
+// set-strategy(i) => { root.rp-strategy-index = i; }   ← 编译报错
+```
+
+编译报 `Assignment on a input property`。需要把声明改成 `in-out property`，或用单独的 callback 让 Rust 端回写。

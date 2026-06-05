@@ -278,7 +278,7 @@ GUI 入口：项目右键 →「项目设置...」→「分隔符」tab（含 25
 
 序列化策略：`serialize_tblschema` **只输出与默认值不同的 leaf**——一个完全使用默认分隔符的项目，schema 里看不到任何 `# @sep` 行，保持文件干净。
 
-支持的 25 个 leaf 见 @07.4.9（`SeparatorsSection` 字段）。键名规则：
+支持的 25 个 leaf 见 @02.3.9（`SeparatorsSection` 字段）。键名规则：
 
 - 顶级键：`Tuple2 / Tuple3 / Tuple4 / List / Set`
 - 嵌套键：`Map.kv / Map.entry / List_Tuple2.tuple / List_Tuple2.list / Map_Tuple2.kv / ... / Map_List.entry`
@@ -292,7 +292,7 @@ GUI 入口：项目右键 →「项目设置...」→「分隔符」tab（含 25
 
 - 名字必须是有效配置项名（PascalCase，详见 @8.1）
 - 数据文件层**永远存 id**（int），不存名字
-- UI 渲染时可切换显示名字（详见 @04.5.2 功能区「枚举显示名字」开关）
+- UI 渲染时可切换显示名字（详见 @06.5.2 功能区「枚举显示名字」开关）
 - 不能引用 constant（无 id 概念）
 - 不能进入嵌套：`List<@HeroType>` `Map<int,@Skill>` 都不合法
 
@@ -370,7 +370,7 @@ Lua 端全部展开为 table 字面量，不降级为 string。
 - Go：`HeroTypeEnum_WARRIOR`
 - Lua：`HeroType.WARRIOR`
 
-> Group 名仅在工具内部使用（树形导航 + 配置目录名），**不出现在生成代码、import 路径、数据文件路径里**——所以允许中文。详见 @02.1「目录扁平化」。
+> Group 名仅在工具内部使用（树形导航 + 配置目录名），**不出现在生成代码、import 路径、数据文件路径里**——所以允许中文。详见 @04.3「目录扁平化」。
 
 ### 8.2 Table 验证
 
@@ -522,7 +522,7 @@ Lua 端全部展开为 table 字面量，不降级为 string。
 | 跟随行 | 插入/删除行时自动跟随，无需 ID 关联 |
 
 工作流：
-- 标色操作仅在 Excel 中进行（设置行背景色，详见 @06）
+- 标色操作仅在 Excel 中进行（设置行背景色，详见 @08）
 - UI 工具只读展示，不提供标色入口
 - Excel 回读时：行背景非白色/无填充 → 写入 `#@c:`；白色/无填充 → 移除标记
 
@@ -564,7 +564,7 @@ Lua 端全部展开为 table 字面量，不降级为 string。
 - key 大小写敏感
 - `# @meta` / `# @sep` directive 行必须出现在第一个 `[group/Name]` 之前；之后的 `#` 行视作普通注释（`# @preset` 例外，见 @10.4）
 
-UI 上是否展示 id 还是 name 由全局开关 `[ui] show_meta_id` 决定（@04.5.x、@07.4.10），默认 false 显示 name。
+UI 上是否展示 id 还是 name 由全局开关 `[ui] show_meta_id` 决定（@06.5.x、@02.3.10），默认 false 显示 name。
 
 ### 10.2 Section 声明
 
@@ -586,7 +586,7 @@ UI 上是否展示 id 还是 name 由全局开关 `[ui] show_meta_id` 决定（@
 - 未列出 / 未识别的 key 静默忽略，前向兼容
 - 序列化时**只输出与 `SeparatorsSection::default()` 不同的 leaf**——默认配置的项目 schema 中不会出现任何 `# @sep` 行
 
-加载链路：每个 Project 用自身 schema 的 separators 覆盖 `Project.config.separators`，运行期校验/导出/示例值生成全部读 config，与 workspace toml 的 `[separators]` 解耦（@7.4 / @07.4.9）。
+加载链路：每个 Project 用自身 schema 的 separators 覆盖 `Project.config.separators`，运行期校验/导出/示例值生成全部读 config，与 workspace toml 的 `[separators]` 解耦（@7.4 / @02.3.9）。
 
 ### 10.4 字段行
 
@@ -671,9 +671,9 @@ start_pos | Tuple2<int,int> | 5,10 | cs | 出生坐标
 | `standard.tblschema` | 标准范式覆盖：所有类型组合 + Constant/Enum，generate-test 默认源 |
 | `sanguo.tblschema` | 三国题材完整 demo：含 10 套枚举 + 8 张 Table + 1 张 Constant，全部带 `# @preset` 数据 |
 
-后续可扩展：文件直接放进 `crates/core/schemas/`，`build.rs` 自动重编。模板加载详见 @02 项目模板章节。
+后续可扩展：文件直接放进 `crates/core/schemas/`，`build.rs` 自动重编。模板加载详见 @04 项目模板章节。
 
-测试流程详见 @09。
+测试流程详见 @10。
 
 ## 附录 A. 验证架构
 
@@ -758,7 +758,7 @@ RefIndex {
 | 删除节点 / 删除 group | 按 key retain 清除残留 entries |
 | 行/列结构操作（insert/delete row+col、粘贴、清空） | `revalidate(group, name)`，仅当 `realtime_validate=true` |
 
-`realtime_validate` 开关行为详见 @07.4.10.1。
+`realtime_validate` 开关行为详见 @02.3.10.2。
 
 ### A.5 日志格式
 
@@ -773,4 +773,4 @@ RefIndex {
   - Constant/Enum 表头无 N：`表头X列:[字段名] -> 原因`
 - 数据行错误：`<列字母><行号>:[内容] -> 原因`，内容超过 16 字符截断为 `xxx...`
 
-UI 上的视觉反馈（红框、树节点 `!`、日志框）见 @04.5.4。验证开关配置见 @07.4.10。
+UI 上的视觉反馈（红框、树节点 `!`、日志框）见 @06.5.4。验证开关配置见 @02.3.10。

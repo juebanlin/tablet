@@ -68,9 +68,9 @@ pub enum Command {
         #[arg(long, default_value = "java")]
         lang: String,
     },
-    /// 列出所有 Project（@02 Project）
+    /// 列出所有 Project（@04 Project）
     ListProjects,
-    /// 列出可用模板（@02 项目模板）
+    /// 列出可用模板（@04 项目模板）
     ListTemplates,
     /// 把根目录 config/ 迁移到 projects/default/
     MigrateLegacy,

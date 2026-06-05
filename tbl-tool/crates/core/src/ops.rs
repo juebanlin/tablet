@@ -149,7 +149,7 @@ fn save_project_files(project: &mut Project) -> (usize, usize) {
 }
 
 pub struct ProjectEngine {
-    /// 顶层 workdir（@04.2.0 多 Project 同时管理）。所有 project 共用。
+    /// 顶层 workdir（@06.2.0 多 Project 同时管理）。所有 project 共用。
     pub workdir: PathBuf,
     /// 扫描 `<workdir>/projects/` 得到的全部 project 元数据（包含未打开的）。
     /// 启动 + rename / delete project 时维护；UI 树根据它渲染所有 project。

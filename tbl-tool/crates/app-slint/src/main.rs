@@ -1,9 +1,9 @@
-// 启动壳子（@05.13 跨平台启动约定）
+// 启动壳子（@07.12 跨平台启动约定）
 // - 用 console subsystem（Windows / Linux / macOS 三端统一），CLI 模式下 cmd / 终端
 //   同步等待 stdout，与普通 CLI 工具一致
 // - GUI 分支在 Windows 下显式 FreeConsole() 释放控制台，避免双击启动后黑窗驻留
 //   （仍会有 < 50ms 的初始黑闪，PE 头层无法消除；Linux/macOS 没有 subsystem 概念，零影响）
-// - 同一个 exe 兼任 CLI：classify(args) 决定走 tbl_cli 还是 GUI（@07 三层架构）
+// - 同一个 exe 兼任 CLI：classify(args) 决定走 tbl_cli 还是 GUI（@05.1 三层架构）
 // - workdir 默认 = cwd；`--workdir` 仅作开发期覆盖。lock 文件 / 文件日志 / 加载 project
 // - AppState 持 ProjectEngine + UI 临时态，用 Rc<RefCell<...>> 在 callback 中共享
 //
