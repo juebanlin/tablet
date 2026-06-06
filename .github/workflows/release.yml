@@ -1,0 +1,83 @@
+name: release
+# 触发: 推 v* tag 自动跑, 或手工 dispatch.
+# 仓库还未推到 GitHub 时此文件不会执行, 推上去自动生效.
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: windows-latest, target: windows,      need_nightly: false }
+          - { os: windows-latest, target: windows-win7, need_nightly: true  }
+          - { os: ubuntu-latest,  target: linux,        need_nightly: false }
+          - { os: macos-latest,   target: macos,        need_nightly: false }
+    runs-on: ${{ matrix.os }}
+    name: build (${{ matrix.target }})
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: install rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: install rust nightly + rust-src
+        if: matrix.need_nightly
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: rust-src
+
+      # Linux 需要的系统依赖: OpenGL + 字体 + xcb (winit)
+      - name: install linux deps
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt update
+          sudo apt install -y \
+            libgl1-mesa-dev libfontconfig1-dev \
+            libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev \
+            libxkbcommon-dev
+
+      - name: cache cargo registry + target
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: tbl-tool
+          key: ${{ matrix.target }}
+
+      - name: build
+        shell: bash
+        run: bash tbl-tool/scripts/release.sh ${{ matrix.target }}
+
+      - name: upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: tbl-tool-${{ matrix.target }}
+          path: tbl-tool/dist/${{ matrix.target }}/
+
+  # tag 触发时聚合所有产物到 GitHub Release
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+      - name: pack
+        run: |
+          cd dist
+          for d in */; do
+            name="${d%/}"
+            (cd "$d" && zip -r "../$name.zip" .)
+          done
+          ls -lh
+      - name: create release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*.zip
+          draft: true
+          generate_release_notes: true

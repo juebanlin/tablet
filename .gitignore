@@ -2,6 +2,9 @@
 target/
 *.exe
 
+# Release artifacts
+tbl-tool/dist/
+
 # IDE
 .idea/
 .vscode/
