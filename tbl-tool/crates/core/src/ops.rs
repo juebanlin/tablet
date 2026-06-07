@@ -79,6 +79,22 @@ fn save_project_files(project: &mut Project) -> (usize, usize) {
         project.root_pending_create = false;
         project.schema_dirty = true;
     }
+    // 项目首次落盘时写一份「全量带注释」的 project.toml 模板，让用户能直接看到
+    // 全部可改键。仅多 Project 模式（project_root != workdir）触发——老布局 fixture
+    // 的 workdir 即 project_root，不该污染那里。已存在则不覆盖（用户改过 / 手写过都保留）。
+    if project.is_multi_project_layout() {
+        let project_toml_path = project.project_root.join(crate::project::PROJECT_TOML_FILE);
+        if !project_toml_path.exists() {
+            match std::fs::write(&project_toml_path, crate::project::default_project_toml_template()) {
+                Ok(()) => count += 1,
+                Err(e) => eprintln!(
+                    "warn: write project.toml failed: {} ({})",
+                    project_toml_path.display(),
+                    e
+                ),
+            }
+        }
+    }
     if project.schema_dirty {
         let txt = crate::tblschema::serialize_tblschema(&project.schema);
         let path = project.project_root.join(crate::project::PROJECT_SCHEMA_FILE);
@@ -2128,3 +2144,90 @@ impl ProjectEngine {
         }
     }
 }
+
+#[cfg(test)]
+mod project_toml_template_tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    fn unique_tmp(label: &str) -> PathBuf {
+        static COUNTER: AtomicUsize = AtomicUsize::new(0);
+        let n = COUNTER.fetch_add(1, Ordering::SeqCst);
+        std::env::temp_dir().join(format!("tbl_save_{}_{}_{}", label, std::process::id(), n))
+    }
+
+    fn make_project(workdir: PathBuf, project_root: PathBuf, id: &str) -> Project {
+        let mut schema = crate::tblschema::TblSchema::default();
+        schema.meta.id = id.to_string();
+        schema.meta.name = id.to_string();
+        let config: WorkspaceConfig = toml::from_str("").expect("empty workspace config");
+        Project {
+            workdir,
+            project_root,
+            config,
+            schema,
+            groups: Vec::new(),
+            schema_dirty: true,
+            root_pending_create: true,
+        }
+    }
+
+    #[test]
+    fn save_project_files_writes_project_toml_on_first_save() {
+        let dir = unique_tmp("first_save");
+        std::fs::create_dir_all(&dir).unwrap();
+        let project_root = dir.join("projects").join("p1");
+        let mut project = make_project(dir.clone(), project_root.clone(), "p1");
+        let (_count, _del) = save_project_files(&mut project);
+
+        let toml_path = project_root.join(crate::project::PROJECT_TOML_FILE);
+        assert!(toml_path.exists(), "project.toml 应当被写入: {}", toml_path.display());
+        let txt = std::fs::read_to_string(&toml_path).unwrap();
+        // 关键段都在
+        assert!(txt.contains("[export.server.cpp]"), "缺少 [export.server.cpp]");
+        assert!(txt.contains("[export.client.csharp_unity]"), "缺少 [export.client.csharp_unity]");
+        assert!(txt.contains("[ui]"), "缺少 [ui]");
+        // 不该写工作区段（banner 注释里允许字面量出现，这里只看真段头）
+        assert!(!txt.lines().any(|l| l.trim() == "[project]"), "项目级 toml 不应有 [project] 段");
+        assert!(!txt.lines().any(|l| l.trim() == "[separators]"), "项目级 toml 不应有 [separators] 段");
+        // 模板本身合法 toml
+        let _: WorkspaceConfig = toml::from_str(&txt).expect("生成的模板必须能解析");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn save_project_files_does_not_overwrite_existing_project_toml() {
+        let dir = unique_tmp("preserve");
+        let project_root = dir.join("projects").join("p1");
+        std::fs::create_dir_all(&project_root).unwrap();
+        let toml_path = project_root.join(crate::project::PROJECT_TOML_FILE);
+        let custom = "[export.server.java]\npackage = \"com.user.kept\"\n";
+        std::fs::write(&toml_path, custom).unwrap();
+
+        let mut project = make_project(dir.clone(), project_root.clone(), "p1");
+        // root 已存在 → 不该再触发 root_pending_create 写盘逻辑会重新建一遍 dir，但写 project.toml 该跳过
+        project.root_pending_create = false;
+        let _ = save_project_files(&mut project);
+
+        let after = std::fs::read_to_string(&toml_path).unwrap();
+        assert_eq!(after, custom, "已有 project.toml 不应被覆盖");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn save_project_files_skips_project_toml_in_legacy_layout() {
+        // 老布局（fixture）：workdir == project_root，save 不该往里写 project.toml
+        let dir = unique_tmp("legacy");
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut project = make_project(dir.clone(), dir.clone(), "default");
+        // 老布局下 root 已存在
+        project.root_pending_create = false;
+        let _ = save_project_files(&mut project);
+
+        let toml_path = dir.join(crate::project::PROJECT_TOML_FILE);
+        assert!(!toml_path.exists(), "老布局不该写 project.toml: {}", toml_path.display());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+

@@ -38,9 +38,82 @@ pub const PROJECTS_DIR: &str = "projects";
 pub const PROJECT_TOML_FILE: &str = "project.toml";
 pub const PROJECT_SCHEMA_FILE: &str = "project.tblschema";
 
+/// 极简 const-time string concat：`concat!` 仅吃字面量，无法直接拼 `&'static str` 常量。
+/// 这里手工实现一份避免新增 crate 依赖。所有参数必须是 `&'static str`。
+macro_rules! const_concat {
+    ($($s:expr),+ $(,)?) => {{
+        const PARTS: &[&str] = &[$($s),+];
+        const TOTAL: usize = {
+            let mut n = 0usize;
+            let mut i = 0;
+            while i < PARTS.len() { n += PARTS[i].len(); i += 1; }
+            n
+        };
+        const BUF: [u8; TOTAL] = {
+            let mut buf = [0u8; TOTAL];
+            let mut pos = 0usize;
+            let mut i = 0;
+            while i < PARTS.len() {
+                let bytes = PARTS[i].as_bytes();
+                let mut j = 0;
+                while j < bytes.len() {
+                    buf[pos] = bytes[j];
+                    pos += 1;
+                    j += 1;
+                }
+                i += 1;
+            }
+            buf
+        };
+        // SAFETY: PARTS 全是合法 UTF-8 &str，按字节顺序拼接后仍为合法 UTF-8。
+        unsafe { std::str::from_utf8_unchecked(&BUF) }
+    }};
+}
+
 const LEGACY_SCHEMA_FILE: &str = "schema.tblschema";
 
-const DEFAULT_CONFIG: &str = r#"[project]
+/// 工作区根 `tbl-tool.toml` banner：说明三类段的作用域差异，避免用户混淆
+/// `[project]`（仓库级）/ `[export][ui]`（项目默认值）/ `[separators]`（仅新建空项目时拷贝）。
+const BANNER_GLOBAL: &str = r#"# ============================================================
+# tbl-tool 工作区配置（仓库共享）
+# ============================================================
+#
+# 本文件分三类段，作用域和覆盖关系不同：
+#
+#   [project]      ← 工作区状态（last_project / opened_projects 等）
+#                     仓库级；不属于任何具体 Project，不会被 Project 覆盖
+#
+#   [export][ui]   ← Project 默认值
+#                     新建 Project 继承本段；Project 用自己的
+#                     projects/<id>/project.toml 按字段 deep-merge 覆盖
+#                     （在这里改 = 影响所有未显式覆盖的 Project）
+#
+#   [separators]   ← 新建空 Project 时的分隔符初值
+#                     拷一次到 project.tblschema 后即与本段无关；
+#                     已有 Project 改分隔符走 GUI「项目右键 → 项目设置 → 分隔符」
+# ============================================================
+
+"#;
+
+/// 项目级 `project.toml` banner：说明覆盖语义、并明确禁止的两段（[project]/[separators]）。
+const BANNER_PROJECT: &str = r#"# ============================================================
+# 项目级配置覆盖（projects/<id>/project.toml）
+# ============================================================
+#
+# 与 <workdir>/tbl-tool.toml 按字段 deep-merge，项目优先；
+# 缺失字段自动回退到全局值。所有键均已声明，照需修改即可。
+#
+# 注意：
+#   - 不要在这里写 [project] 段：那是工作区状态，不属于单个项目
+#   - 不要在这里写 [separators] 段：分隔符以 project.tblschema 的
+#     # @sep 行为准（项目右键 → 项目设置 → 分隔符即编辑那里）
+# ============================================================
+
+"#;
+
+/// 仓库级 `[project]` 段：last_project / opened_projects / 排序状态。
+/// 仅出现在工作区根 toml；项目 toml 不写。
+const PROJECT_SECTION_BLOCK: &str = r#"[project]
 # 启动时进入的 Project id；为空 = 扫到的第一个
 last_project = ""
 # 启动时自动打开的 Project id 列表；为空 = 仅打开 last_project
@@ -50,7 +123,13 @@ project_sort = "id"
 # project_sort = "manual" 时使用：用户拖拽得到的 id 序列
 project_order = []
 
-[export]
+"#;
+
+/// `[export]` 全段共享模板：覆盖 12 种导出 target（json/xml + 5 server + 5 client）。
+/// DEFAULT_CONFIG 与 [`default_project_toml_template`] 共用，避免双份漂移。
+/// 模板里的值与各 export 模块代码里 `unwrap_or(...)` 的 fallback 严格一致——
+/// 改值前请同步 `crates/core/src/export/<lang>.rs`，否则会出现"模板说 X 实际是 Y"的混淆。
+const EXPORT_SECTION_BLOCK: &str = r#"[export]
 # 生成文件编码: utf-8 (默认)
 encoding = "utf-8"
 # 生成文件换行符: lf (默认), crlf
@@ -62,21 +141,73 @@ line_ending = "lf"
 #   "omit" - tbl 空值不写入 JSON，省略该字段
 empty_as = "null"
 
+[export.xml]
+# 导出 XML 时空值表达方式:
+#   "empty" - 输出空标签 <field></field>（默认）
+#   "omit"  - 不写入空字段
+empty_as = "empty"
+
 [export.server]
-# 后端数据文件输出目录
+# 后端数据文件（json / xml）输出目录；具体格式落到 <data_output>/json / <data_output>/xml
 data_output = "gen/server/data"
 
 [export.server.java]
 # Java 包名
 package = "com.game.config"
-# Java 模板类输出目录
+# Java 模板类输出根目录（包路径会自动拼到末尾，如 gen/server/java/com/game/config/...）
 code_output = "gen/server/java"
 
+[export.server.go]
+# Go 包名
+package = "config"
+# Go 输出根目录（实际落 <code_output>/<package>/）
+code_output = "gen/server/go"
+
+[export.server.cpp]
+# C++ 命名空间（支持嵌套，如 game::config::tpl）
+namespace = "game::config"
+# C++ 头文件输出目录（每张表 / 常量 / 枚举一个 .h）
+code_output = "gen/server/cpp"
+
+[export.server.csharp_dotnet]
+# .NET 服务端命名空间
+namespace = "Game.Config.Server"
+# .NET 服务端代码输出目录
+code_output = "gen/server/csharp"
+
+[export.server.typescript]
+# TypeScript Node.js 服务端代码输出目录
+output = "gen/server/typescript"
+
 [export.client.lua]
-# 前端文件输出目录
+# Lua 文件输出目录（每张表 / 常量 / 枚举一个 .lua）
 output = "gen/client"
 
-[ui]
+[export.client.gdscript]
+# GDScript 文件输出目录（每张表 / 常量 / 枚举一个 .gd）
+output = "gen/client/gdscript"
+
+[export.client.typescript]
+# TypeScript 前端代码输出目录
+output = "gen/client/typescript"
+
+[export.client.csharp_unity]
+# Unity 客户端命名空间
+namespace = "Game.Config.Client"
+# Unity 客户端代码输出目录
+code_output = "gen/client/csharp_unity"
+
+[export.client.csharp_godot]
+# Godot 客户端命名空间
+namespace = "Game.Config.Client"
+# Godot 客户端代码输出目录
+code_output = "gen/client/csharp_godot"
+
+"#;
+
+/// `[ui]` 全段共享模板：UiConfig + RefPickerConfig 全部字段。
+/// DEFAULT_CONFIG 与 [`default_project_toml_template`] 共用。
+const UI_SECTION_BLOCK: &str = r#"[ui]
 # 点击空白区域时自动保存当前编辑 (false 则只有回车才保存)
 auto_commit_on_blur = true
 # 编辑单元格时实时验证 (true 则每次修改立即检查)
@@ -107,7 +238,10 @@ constant_ref_allowed = true
 #   "full" - schema 全部字段（除了 export=- 不导出列）
 default_strategy = "auto"
 
-[separators]
+"#;
+
+/// `[separators]` 段：仅工作区根 toml 写。项目级在 .tblschema 的 `# @sep` 行。
+const SEPARATORS_BLOCK: &str = r#"[separators]
 # 程序级默认分隔符：仅在「新建空项目」时拷贝到 schema.separators 作为初值。
 # 已加载项目走各自 .tblschema 的 # @sep 行（GUI「项目右键 → 项目设置 → 分隔符」编辑），
 # 与本段无关。从模板/文件新建则继承 source schema 的 separators。
@@ -153,6 +287,28 @@ kv = ":"
 item = ","
 entry = ";"
 "#;
+
+/// 工作区根 `tbl-tool.toml` 默认模板：首次启动自动落盘到 `<workdir>/tbl-tool.toml`。
+/// banner + [project] + [export] + [ui] + [separators]。
+const DEFAULT_CONFIG: &str = const_concat!(
+    BANNER_GLOBAL,
+    PROJECT_SECTION_BLOCK,
+    EXPORT_SECTION_BLOCK,
+    UI_SECTION_BLOCK,
+    SEPARATORS_BLOCK,
+);
+
+/// 项目级 `project.toml` 默认模板：首次保存时写到 `<project_root>/project.toml`。
+/// 已存在则不覆盖。包含 `[export]` / `[ui]` 两段全字段，不含 `[project]` / `[separators]`。
+const PROJECT_TOML_TEMPLATE: &str = const_concat!(
+    BANNER_PROJECT,
+    EXPORT_SECTION_BLOCK,
+    UI_SECTION_BLOCK,
+);
+
+pub fn default_project_toml_template() -> &'static str {
+    PROJECT_TOML_TEMPLATE
+}
 
 /// 加载 Project（默认走 last_project 或扫描第一个）。
 ///
@@ -1200,5 +1356,67 @@ mod tests {
         // opened_projects 顺序按打开顺序：先 p1（last_project），再 open p2
         assert!(txt.contains("opened_projects = [\"p1\", \"p2\"]"));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn default_config_parses_as_workspace_config() {
+        let cfg: WorkspaceConfig = toml::from_str(DEFAULT_CONFIG)
+            .expect("DEFAULT_CONFIG must parse as WorkspaceConfig");
+        let export = cfg.export.expect("[export] present");
+        let server = export.server.expect("[export.server] present");
+        // 服务端全部 5 项可解析
+        assert!(server.java.is_some());
+        assert!(server.go.is_some());
+        assert!(server.cpp.is_some());
+        assert!(server.csharp_dotnet.is_some());
+        assert!(server.typescript.is_some());
+        let client = export.client.expect("[export.client] present");
+        // 客户端全部 5 项可解析
+        assert!(client.lua.is_some());
+        assert!(client.gdscript.is_some());
+        assert!(client.typescript.is_some());
+        assert!(client.csharp_unity.is_some());
+        assert!(client.csharp_godot.is_some());
+        // 数据导出 2 项
+        assert!(export.json.is_some());
+        assert!(export.xml.is_some());
+        // 默认值与 export 模块代码 fallback 严格一致——任何漂移都让用户复制注释行后的值反而改了行为。
+        assert_eq!(
+            server.java.as_ref().unwrap().package.as_deref(),
+            Some("com.game.config")
+        );
+        assert_eq!(
+            server.cpp.as_ref().unwrap().namespace.as_deref(),
+            Some("game::config")
+        );
+        assert_eq!(
+            client.csharp_unity.as_ref().unwrap().code_output.as_deref(),
+            Some("gen/client/csharp_unity")
+        );
+    }
+
+    #[test]
+    fn default_project_toml_template_parses_as_workspace_config() {
+        // 项目级模板不含 [project] / [separators] 段，但应能被同一个 WorkspaceConfig 反序列化
+        // （deep-merge 路径用同一种类型）。
+        let txt = default_project_toml_template();
+        let _: WorkspaceConfig = toml::from_str(txt)
+            .expect("project.toml template must parse as WorkspaceConfig");
+        // 不应出现 [project] / [separators] 段（顶部 banner 注释里允许字面量出现，这里只看真段头）
+        assert!(!txt.lines().any(|l| l.trim() == "[project]"), "项目级 toml 不应有 [project] 段");
+        assert!(!txt.lines().any(|l| l.trim() == "[separators]"), "项目级 toml 不应有 [separators] 段");
+        // 全量段都在
+        assert!(txt.contains("[export.server.java]"));
+        assert!(txt.contains("[export.server.go]"));
+        assert!(txt.contains("[export.server.cpp]"));
+        assert!(txt.contains("[export.server.csharp_dotnet]"));
+        assert!(txt.contains("[export.server.typescript]"));
+        assert!(txt.contains("[export.client.lua]"));
+        assert!(txt.contains("[export.client.gdscript]"));
+        assert!(txt.contains("[export.client.typescript]"));
+        assert!(txt.contains("[export.client.csharp_unity]"));
+        assert!(txt.contains("[export.client.csharp_godot]"));
+        assert!(txt.contains("[ui]"));
+        assert!(txt.contains("[ui.ref_picker]"));
     }
 }
