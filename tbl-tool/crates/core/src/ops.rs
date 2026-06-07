@@ -2183,12 +2183,12 @@ mod project_toml_template_tests {
         let toml_path = project_root.join(crate::project::PROJECT_TOML_FILE);
         assert!(toml_path.exists(), "project.toml 应当被写入: {}", toml_path.display());
         let txt = std::fs::read_to_string(&toml_path).unwrap();
-        // 关键段都在
+        // 关键 export 段都在
         assert!(txt.contains("[export.server.cpp]"), "缺少 [export.server.cpp]");
         assert!(txt.contains("[export.client.csharp_unity]"), "缺少 [export.client.csharp_unity]");
-        assert!(txt.contains("[ui]"), "缺少 [ui]");
         // 不该写工作区段（banner 注释里允许字面量出现，这里只看真段头）
         assert!(!txt.lines().any(|l| l.trim() == "[project]"), "项目级 toml 不应有 [project] 段");
+        assert!(!txt.lines().any(|l| l.trim() == "[ui]"), "项目级 toml 不应有 [ui] 段（工作区级）");
         assert!(!txt.lines().any(|l| l.trim() == "[separators]"), "项目级 toml 不应有 [separators] 段");
         // 模板本身合法 toml
         let _: WorkspaceConfig = toml::from_str(&txt).expect("生成的模板必须能解析");

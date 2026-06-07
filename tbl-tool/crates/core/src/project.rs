@@ -5,7 +5,10 @@
 //! 仓库级 `tbl-tool.toml` 是全局**默认值**（不随 Project 切换）。Project 自己的
 //! 身份元数据存在 `<workdir>/projects/<id>/project.tblschema` 的 `# @meta` 段里
 //! （id / name / created_at / source_template / source_template_version / category / version）。
-//! 可选的配置覆盖（[export] / [ui] / [separators]）落在同目录下的 `project.toml`：
+//! 可选的配置覆盖（仅 `[export]`）落在同目录下的 `project.toml`：
+//! `[ui]` / `[separators]` / `[project]` 写在项目级会被加载流程剥掉
+//! （`[ui]` 是工作区级；`[separators]` 以 .tblschema `# @sep` 为准；
+//! `[project]` 是仓库状态）。
 //!
 //! ```toml
 //! [export]                     # 可选：覆盖全局 [export]（field-level deep merge）
@@ -72,21 +75,27 @@ macro_rules! const_concat {
 
 const LEGACY_SCHEMA_FILE: &str = "schema.tblschema";
 
-/// 工作区根 `tbl-tool.toml` banner：说明三类段的作用域差异，避免用户混淆
-/// `[project]`（仓库级）/ `[export][ui]`（项目默认值）/ `[separators]`（仅新建空项目时拷贝）。
+/// 工作区根 `tbl-tool.toml` banner：说明四类段的作用域差异，避免用户混淆。
+/// `[project]`（仓库级）/ `[export]`（项目默认值，可被项目级覆盖）/
+/// `[ui]`（仅工作区级，多 Project 共享）/ `[separators]`（仅新建空项目时拷贝）。
 const BANNER_GLOBAL: &str = r#"# ============================================================
 # tbl-tool 工作区配置（仓库共享）
 # ============================================================
 #
-# 本文件分三类段，作用域和覆盖关系不同：
+# 本文件分四类段，作用域和覆盖关系不同：
 #
 #   [project]      ← 工作区状态（last_project / opened_projects 等）
 #                     仓库级；不属于任何具体 Project，不会被 Project 覆盖
 #
-#   [export][ui]   ← Project 默认值
+#   [export]       ← Project 默认值
 #                     新建 Project 继承本段；Project 用自己的
 #                     projects/<id>/project.toml 按字段 deep-merge 覆盖
 #                     （在这里改 = 影响所有未显式覆盖的 Project）
+#
+#   [ui]           ← 工作区级 UI 偏好（仅本文件生效）
+#                     不支持项目级覆盖：多 Project 同时打开时若按项目切换
+#                     UI 策略，"全局保存 / 实时校验"等行为会反复变动，
+#                     反而像 bug。项目级 project.toml 写 [ui] 会被忽略。
 #
 #   [separators]   ← 新建空 Project 时的分隔符初值
 #                     拷一次到 project.tblschema 后即与本段无关；
@@ -95,7 +104,7 @@ const BANNER_GLOBAL: &str = r#"# ===============================================
 
 "#;
 
-/// 项目级 `project.toml` banner：说明覆盖语义、并明确禁止的两段（[project]/[separators]）。
+/// 项目级 `project.toml` banner：说明覆盖语义、并明确禁止的三段（[project]/[ui]/[separators]）。
 const BANNER_PROJECT: &str = r#"# ============================================================
 # 项目级配置覆盖（projects/<id>/project.toml）
 # ============================================================
@@ -103,10 +112,13 @@ const BANNER_PROJECT: &str = r#"# ==============================================
 # 与 <workdir>/tbl-tool.toml 按字段 deep-merge，项目优先；
 # 缺失字段自动回退到全局值。所有键均已声明，照需修改即可。
 #
-# 注意：
-#   - 不要在这里写 [project] 段：那是工作区状态，不属于单个项目
-#   - 不要在这里写 [separators] 段：分隔符以 project.tblschema 的
-#     # @sep 行为准（项目右键 → 项目设置 → 分隔符即编辑那里）
+# 注意：以下三段写在这里会被加载流程剥掉，不会生效——
+#   - [project]    工作区状态（last_project / opened_projects 等），不属于单项目
+#   - [ui]         UI 偏好仅工作区级。多 Project 同时打开时按项目切 UI 策略
+#                   会让"全局保存 / 实时校验"反复变动，反而像 bug。
+#                   要改 UI 偏好请改 <workdir>/tbl-tool.toml [ui]。
+#   - [separators] 分隔符以 project.tblschema 的 # @sep 行为准
+#                   （项目右键 → 项目设置 → 分隔符即编辑那里）
 # ============================================================
 
 "#;
@@ -299,11 +311,11 @@ const DEFAULT_CONFIG: &str = const_concat!(
 );
 
 /// 项目级 `project.toml` 默认模板：首次保存时写到 `<project_root>/project.toml`。
-/// 已存在则不覆盖。包含 `[export]` / `[ui]` 两段全字段，不含 `[project]` / `[separators]`。
+/// 已存在则不覆盖。仅含 `[export]` 段全字段——`[ui]` 是工作区级，写在项目里会被 strip；
+/// `[project]` / `[separators]` 同样只在工作区根 toml 出现。
 const PROJECT_TOML_TEMPLATE: &str = const_concat!(
     BANNER_PROJECT,
     EXPORT_SECTION_BLOCK,
-    UI_SECTION_BLOCK,
 );
 
 pub fn default_project_toml_template() -> &'static str {
@@ -598,10 +610,15 @@ fn merge_project_config(global_text: &str, project_text: Option<&str>) -> Result
     let mut global_val: toml::Value = toml::from_str(global_text)?;
     if let Some(pt) = project_text {
         let mut proj_val: toml::Value = toml::from_str(pt).unwrap_or(toml::Value::Table(Default::default()));
-        // [project] 段在两边语义不同：全局是仓库级 ProjectConfig；
-        // project.toml 里则是 ProjectInstanceMeta（不参与 WorkspaceConfig 反序列化），剥掉
+        // 项目级 toml 不允许覆盖工作区级段：
+        // - [project] = 仓库级 ProjectConfig（last_project / opened_projects 等），不属于单项目
+        // - [ui]      = UI 偏好；进程内 AppState 启动时锁定一次，多 Project 同时打开时
+        //               若按项目切策略会让"全局保存按钮 / 实时校验"行为反复变，反而像 bug
+        // - [separators] = 分隔符配置以 project.tblschema 的 # @sep 为准（项目设置对话框直接编辑那里）
         if let toml::Value::Table(ref mut tbl) = proj_val {
             tbl.remove("project");
+            tbl.remove("ui");
+            tbl.remove("separators");
         }
         deep_merge_toml(&mut global_val, proj_val);
     }
@@ -1203,6 +1220,29 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    #[test]
+    fn project_toml_ui_section_is_stripped() {
+        // 项目级 [ui] / [separators] / [project] 都该被 strip：以全局值为准。
+        let dir = unique_tmp("strip_ui");
+        std::fs::create_dir_all(dir.join("projects/p/config")).unwrap();
+        write_schema(&dir.join("projects/p"), "p", "P");
+        // 项目 toml 里写一个 [ui]，期望被剥掉：全局值（realtime_validate=true）应胜出
+        std::fs::write(
+            dir.join("projects/p/project.toml"),
+            "[ui]\nrealtime_validate = false\npicker_trigger_data = \"single\"\n",
+        ).unwrap();
+        std::fs::write(
+            dir.join("tbl-tool.toml"),
+            "[project]\nlast_project = \"p\"\n\n[ui]\nrealtime_validate = true\npicker_trigger_data = \"double\"\n",
+        ).unwrap();
+        let proj = load_project(&dir).expect("load");
+        let ui = proj.config.ui.as_ref().expect("[ui] present");
+        // 项目 toml 的 [ui] 该被 strip → 全局值留下来
+        assert!(ui.realtime_validate, "项目级 [ui] 应被 strip，全局 realtime_validate=true 留下");
+        assert_eq!(ui.picker_trigger_data, "double", "项目级 picker_trigger_data 应被 strip");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     fn write_project(dir: &Path, id: &str, name: &str) {
         let root = dir.join("projects").join(id);
         std::fs::create_dir_all(root.join("config")).unwrap();
@@ -1397,15 +1437,15 @@ mod tests {
 
     #[test]
     fn default_project_toml_template_parses_as_workspace_config() {
-        // 项目级模板不含 [project] / [separators] 段，但应能被同一个 WorkspaceConfig 反序列化
-        // （deep-merge 路径用同一种类型）。
+        // 项目级模板仅含 [export] 段——[ui] 是工作区级，[project] / [separators] 同。
         let txt = default_project_toml_template();
         let _: WorkspaceConfig = toml::from_str(txt)
             .expect("project.toml template must parse as WorkspaceConfig");
-        // 不应出现 [project] / [separators] 段（顶部 banner 注释里允许字面量出现，这里只看真段头）
+        // 不应出现 [project] / [ui] / [separators] 段（顶部 banner 注释里允许字面量出现，这里只看真段头）
         assert!(!txt.lines().any(|l| l.trim() == "[project]"), "项目级 toml 不应有 [project] 段");
+        assert!(!txt.lines().any(|l| l.trim() == "[ui]"), "项目级 toml 不应有 [ui] 段（工作区级）");
         assert!(!txt.lines().any(|l| l.trim() == "[separators]"), "项目级 toml 不应有 [separators] 段");
-        // 全量段都在
+        // [export] 全量段都在
         assert!(txt.contains("[export.server.java]"));
         assert!(txt.contains("[export.server.go]"));
         assert!(txt.contains("[export.server.cpp]"));
@@ -1416,7 +1456,5 @@ mod tests {
         assert!(txt.contains("[export.client.typescript]"));
         assert!(txt.contains("[export.client.csharp_unity]"));
         assert!(txt.contains("[export.client.csharp_godot]"));
-        assert!(txt.contains("[ui]"));
-        assert!(txt.contains("[ui.ref_picker]"));
     }
 }
