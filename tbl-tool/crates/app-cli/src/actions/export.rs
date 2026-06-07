@@ -16,16 +16,17 @@ pub struct ExportFormats {
     pub go: bool,
     pub lua: bool,
     pub gdscript: bool,
+    pub typescript: bool,
 }
 
 impl ExportFormats {
     pub fn all() -> Self {
-        Self { json: true, xml: true, java: true, go: true, lua: true, gdscript: true }
+        Self { json: true, xml: true, java: true, go: true, lua: true, gdscript: true, typescript: true }
     }
 
     /// 任一 flag 为真 = 用户显式指定子集；全 false = 走 all() 兜底。
     pub fn any(&self) -> bool {
-        self.json || self.xml || self.java || self.go || self.lua || self.gdscript
+        self.json || self.xml || self.java || self.go || self.lua || self.gdscript || self.typescript
     }
 }
 
@@ -70,6 +71,9 @@ pub fn run_export(engine: &mut ProjectEngine, formats: ExportFormats) -> ExportS
     }
     if formats.gdscript {
         summary.per_format.push(("GDScript", outcome(engine.export_gdscript())));
+    }
+    if formats.typescript {
+        summary.per_format.push(("TypeScript", outcome(engine.export_typescript())));
     }
     summary
 }

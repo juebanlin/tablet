@@ -4,6 +4,7 @@ mod xml;
 mod lua;
 mod go;
 mod gdscript;
+mod typescript;
 pub(crate) mod sep_meta;
 
 pub use json::export_all_json;
@@ -12,6 +13,7 @@ pub use xml::export_all_xml;
 pub use lua::export_all_lua;
 pub use go::export_all_go;
 pub use gdscript::export_all_gdscript;
+pub use typescript::export_all_typescript;
 
 use serde_json::Value;
 use crate::types::BaseType;
