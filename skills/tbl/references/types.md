@@ -110,12 +110,12 @@ The parser uses a depth-aware comma split, so commas inside nested `<...>` don't
 
 Generated code uses primitive types (no `Integer`, no `*int32` pointer) — business code does not deal with null. Empty cells deserialize to default values (see `validation.md` empty-value table).
 
-## Field design preferences (project-specific)
+## Field design heuristics
 
-These reflect explicit user feedback in this project — apply by default unless told otherwise:
+Apply these by default unless told otherwise:
 
-1. **Map keys: prefer enum-int over str.** When the keys form a fixed set (attribute name, resource type, building tier), introduce a new enum and use `Map<int,V>`. The Three Kingdoms reference template (`crates/core/schemas/sanguo.tblschema`) does this throughout: `Map<int,int>` for stat bonuses keyed by `@HeroAttr`, costs keyed by `@ResourceKind`, etc.
+1. **Map keys: prefer enum-int over str.** When the keys form a fixed set (attribute name, resource type, building tier), introduce a new enum and use `Map<int,V>`. `Map<int,int>` keyed by `@HeroAttr` for stat bonuses beats `Map<str,int>` with hardcoded `"hp"` / `"mp"` strings — int keys avoid string typos and the enum carries semantic meaning.
 2. **Lists of categorical ids: prefer `List<int>` keyed by enum.** `tags: List<int>` + a `@TagEnum` is preferred over `tags: List<str>`.
-3. **No `Long` for game ids if `int` fits.** Hero/skill/item ids comfortably fit in i32; reserve `long` for timestamps and counters.
-4. **Constant `desc` is informational** — generated code doesn't see desc, so it's free-form Chinese OK.
-5. **Tuples for fixed-arity numeric structs only.** Position (x,y), bounds (min,max), modifier (atk,def). Don't use Tuple for "mixed bag" of unrelated fields — make a sub-table instead.
+3. **No `Long` for ids that fit `int`.** Reserve `long` for timestamps and counters, not entity ids.
+4. **Tuples for fixed-arity numeric structs only.** Position (x,y), bounds (min,max), modifier (atk,def). Don't use Tuple for "mixed bag" of unrelated fields — make a sub-table instead.
+5. **Constant `desc` is informational** — generated code does not see desc, so free-form natural language is fine.

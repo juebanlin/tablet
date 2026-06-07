@@ -1,6 +1,6 @@
 # Validation & Naming Reference
 
-All hard rules tablet-core enforces. When generating schema or preset data, comply by construction — every check here is wired to a validation function that runs at load and save.
+All hard rules the parser enforces. When generating schema or preset data, comply by construction — every check here runs at load and save time.
 
 ## Naming rules
 
@@ -143,20 +143,9 @@ These run on save / export / reload via `ProjectEngine::validate`:
 
 When a referenced section is renamed/deleted, current refs become red but save is NOT blocked — user is expected to fix manually.
 
-## Constant ref switch
+## Constant refs
 
-`tablet.toml` knob:
-
-```toml
-[ui]
-constant_ref_allowed = true   # default since latest
-```
-
-When `true` (default), Constant entries can use `@TableName` / `@EnumName` types. Data file stores int(id), generated code resolves to the referenced object.
-
-When `false`, any Constant entry with `@Xxx` type emits a schema error at load and save. Pre-existing data isn't auto-migrated.
-
-For schema generation, **assume the default (allowed)** — the user has explicitly toggled this on across the project.
+Constant entries can use `@TableName` / `@EnumName` types: the data file stores `int(id)`, and generated code resolves it to the referenced object. When generating new schemas, **emit refs naturally** when the design calls for them. Some toolchains may expose a runtime switch to forbid this — that's a tooling concern, not a content rule.
 
 ## Auto-correction (no error reported)
 

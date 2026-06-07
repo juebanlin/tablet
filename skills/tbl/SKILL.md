@@ -14,7 +14,7 @@ allowed-tools:
 
 Authoritative spec for `.tblschema` (v1) and `.tbl` (v2) file content. Use when generating templates, extending preset data, hand-validating, or reverse-engineering schema from design docs.
 
-**Scope is file content only.** This skill does not cover the `tablet` GUI, the `tablet-cli` binary, the workspace `tablet.toml`, project layout on disk, or the import/export pipeline — those move quickly and are not stable enough to bake into a skill. If a user asks something CLI / UI / pipeline related, decline gracefully and point them at the in-repo docs (`docs/` directory).
+**Scope is file content only.** This skill does not cover the `tablet` GUI / CLI / workspace config / project layout / import-export pipeline — those are tooling concerns and out of scope. If a user asks something tooling-related, decline gracefully and point them at the project's own documentation.
 
 **Do not paraphrase the references from memory** — the files in `references/` are the canonical source for this skill. Read them when you need a rule.
 
@@ -36,9 +36,8 @@ Trigger this skill (with or without explicit `/tbl`) when the user asks to:
 
 Do NOT invoke this skill for:
 
-- "How do I run the export?" / "How do I open the GUI?" — point at in-repo docs.
-- Changing the actual tablet source code in `crates/` — work directly without the skill.
-- Workspace-level config (`tablet.toml [separators]`, `[ui]` toggles, etc.) — out of scope.
+- "How do I run the export?" / "How do I open the GUI?" — out of scope, point at the project's own docs.
+- Anything about specific tooling source code, build pipeline, or workspace config — out of scope.
 
 ---
 
@@ -59,8 +58,6 @@ skills/tbl/
 
 **Read order when generating new content**: `format.md` → `types.md` → `validation.md` → `separators.md` (only if non-default needed) → relevant example.
 
-A canonical full demo also ships in the `tablet` source repo at `crates/core/schemas/sanguo.tblschema` — useful when the user asks for "a realistic full schema demo" so you copy its actual style.
-
 ---
 
 ## Subcommands
@@ -71,7 +68,7 @@ List what the skill can do (schema gen / preset extend / hand-validate / type de
 
 ### `new-schema` — generate a `.tblschema` from a design brief
 
-1. Confirm the **target file path** with the user. The skill doesn't care where it lands — common locations are `crates/core/schemas/<id>.tblschema` (in-repo template) or any path the user names.
+1. Confirm the **target file path** with the user.
 2. Confirm **id / name / category / version** (id must match `[a-z0-9_-]{1,32}`). If user gave a Chinese name, derive id from semantic kebab-case ascii.
 3. Read `references/format.md` and `references/types.md`.
 4. Walk the user's design doc:
@@ -111,7 +108,7 @@ List what the skill can do (schema gen / preset extend / hand-validate / type de
 5. Check `@Xxx` references resolve to a section in the same file (or note "external; assumed valid").
 6. Report findings. Do not edit unless asked.
 
-This is a **content-level check** — for project-level cross-file validation (id uniqueness, ref resolution across many .tbl files), point the user at `tablet-cli validate`.
+This is a **content-level check** — cross-file validation (id uniqueness, ref resolution across many `.tbl` files) belongs to the toolchain, not this skill.
 
 ### `design` — propose schema for a feature without writing files
 
@@ -123,7 +120,7 @@ This is a **content-level check** — for project-level cross-file validation (i
 
 ## Hard rules (apply to every subcommand)
 
-These rules are enforced by `tablet-core::tblschema::parse_tblschema` at file load time. Violating them will fail to parse.
+These rules are enforced by the parser at file load time. Violating them will fail to parse.
 
 ### Identifier rules (full table in `references/validation.md`)
 
@@ -142,12 +139,12 @@ These rules are enforced by `tablet-core::tblschema::parse_tblschema` at file lo
 - Ref target must be a `table` or `enum` section. Ref to `constant` is forbidden (constants have no id).
 - Map key allowed types: `int / long / float / double / str` (no bool).
 - Set element must be a base type (no Set of tuples).
-- **Prefer enum-int keys over str keys for Maps**: `Map<int,int>` keyed by `@AttrEnum`-id beats `Map<str,int>` with hardcoded "hp"/"mp" strings. The user explicitly favors this pattern (see `crates/core/schemas/sanguo.tblschema` for the reference style).
+- **Prefer enum-int keys over str keys for Maps**: `Map<int,int>` keyed by `@AttrEnum`-id beats `Map<str,int>` with hardcoded "hp"/"mp" strings — int keys avoid string typos and let the enum carry semantic meaning.
 
 ### Constant mode rules
 
 - 5 column layout: `name | type | value | export | desc`. Schema main body MUST be empty — write entries only inside `# @preset` blocks.
-- `@Xxx` references are allowed by default. (Some projects toggle this off via workspace config — that's project-level config, out of skill scope. Just generate refs naturally; if a project rejects them at load, the user knows the cause.)
+- `@Xxx` references are allowed by default. (Some toolchains may toggle this off — that's a runtime concern, not a content rule. Just generate refs naturally; if a project rejects them at load, the project owner knows the cause.)
 
 ### Enum mode rules
 
@@ -202,7 +199,7 @@ When the user gives a fuzzy brief, lean toward these defaults:
 | Question | Default choice | Why |
 |----------|---------------|-----|
 | Categorical attribute (5–30 options)? | New `enum` + `@XxxEnum` ref | Type-safe, code-friendly, generates language enum |
-| Map keyed by attribute name (hp/mp/atk)? | `Map<int,int>` keyed by `@AttrEnum` id | int keys avoid str typos; matches user preference |
+| Map keyed by attribute name (hp/mp/atk)? | `Map<int,int>` keyed by `@AttrEnum` id | int keys avoid str typos; enum carries semantic meaning |
 | List of homogeneous structs? | `List<Tuple2/3/4<P,P,...>>` | Tuple paradigms exist for exactly this |
 | Long descriptive text? | `str` | No size limit |
 | Cross-table pointer? | `@TargetTable` | Ref paradigm; data file stores int(id) |

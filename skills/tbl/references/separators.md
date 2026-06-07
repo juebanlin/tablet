@@ -52,15 +52,9 @@ Examples:
 # @sep Map_List.item = +
 ```
 
-## Hierarchy of effective separators
+## Source of truth
 
-For a given project at runtime:
-
-1. **Project `.tblschema`** parses `# @sep` lines into `schema.separators`.
-2. `load_project` copies that into `project.config.separators`.
-3. All validation, export (JSON `_sep` / XML `sep_*` attrs), and example value generation read from `project.config.separators`.
-
-The workspace `tablet.toml [separators]` block is **only** used at startup to populate `engine.default_separators`, which is in turn copied to `schema.separators` when the user creates a brand-new empty project. Templates and file-based new-project flows inherit from the source schema's separators, not from toml.
+The `# @sep` lines inside a `.tblschema` file are the source of truth for that schema's separators. Every reader / writer / validator of the matching `.tbl` data files must use those values; defaults apply when a key is not overridden.
 
 ## When to override defaults
 
