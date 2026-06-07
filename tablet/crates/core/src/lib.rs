@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 juebanlin <juebanlin@gmail.com>
+
 pub mod model;
 pub mod types;
 pub mod tbl;

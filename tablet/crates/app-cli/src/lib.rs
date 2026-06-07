@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 juebanlin <juebanlin@gmail.com>
+
 //! tablet-cli lib：把 CLI 命令处理拆成两层。
 //!
 //! - [`actions`]：业务编排层，无 println / 无 clap / 无 process::exit。

@@ -1,0 +1,19 @@
+tablet
+Copyright 2026 juebanlin <juebanlin@gmail.com>
+
+This product includes software developed by juebanlin
+(https://github.com/juebanlin).
+
+============================================================
+Third-party components
+============================================================
+
+This product depends on the following third-party libraries:
+
+- Slint (https://slint.dev/) — used by the `tablet-slint` crate
+  (the GUI binary `tablet`).
+  Slint is offered under multiple licenses; this project consumes
+  Slint under the GNU General Public License v3 (GPL-3.0). As a
+  result, the GUI binary `tablet` (which statically links Slint)
+  is distributed under GPL-3.0. The CLI binary `tablet-cli` does
+  NOT depend on Slint and is distributed solely under Apache-2.0.

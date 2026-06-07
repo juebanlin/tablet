@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-only
+// Copyright 2026 juebanlin <juebanlin@gmail.com>
+
 // 启动壳子（@05.12 跨平台启动约定）
 // - 用 console subsystem（Windows / Linux / macOS 三端统一），CLI 模式下 cmd / 终端
 //   同步等待 stdout，与普通 CLI 工具一致
