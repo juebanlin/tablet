@@ -78,10 +78,12 @@ build_windows_win7() {
     fi
 
     echo ">>> [windows-win7] cargo +nightly build --release --target=$triple"
-    RUSTFLAGS="-C target-feature=+crt-static" \
+    # 新版 nightly 把 panic_immediate_abort 从 -Z build-std-features 提升为正式 panic 策略,
+    # 旧的 -Z build-std-features=panic_immediate_abort 已被拒绝, 现在通过 -Cpanic=immediate-abort 启用
+    # (仍然需要 -Z build-std 重编 core/std).
+    RUSTFLAGS="-C target-feature=+crt-static -Z unstable-options -C panic=immediate-abort" \
         cargo +nightly build --release \
             -Z build-std=std,panic_abort \
-            -Z build-std-features=panic_immediate_abort \
             --target "$triple" \
             -p tablet-slint -p tablet-cli
 

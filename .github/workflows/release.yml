@@ -27,8 +27,12 @@ jobs:
 
       - name: install rust nightly + rust-src
         if: matrix.need_nightly
-        uses: dtolnay/rust-toolchain@nightly
+        # 钉死 nightly 日期: Tier 3 target 走 -Z build-std, nightly 偶尔会改 flag (例如
+        # 2026-06 把 panic_immediate_abort 从 build-std-features 提升为正式 panic 策略),
+        # 不钉死会反复炸 CI. 验证过没问题再手动 bump.
+        uses: dtolnay/rust-toolchain@master
         with:
+          toolchain: nightly-2026-06-07
           components: rust-src
 
       # Linux GUI target 需要的系统依赖: OpenGL + 字体 + xcb (winit)
