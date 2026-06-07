@@ -117,6 +117,7 @@ pub struct ServerExport {
     pub java: Option<JavaExport>,
     pub go: Option<GoExport>,
     pub cpp: Option<CppExport>,
+    pub csharp_dotnet: Option<CSharpExport>,
     pub line_ending: Option<String>,
     pub encoding: Option<String>,
 }
@@ -146,11 +147,22 @@ pub struct CppExport {
     pub encoding: Option<String>,
 }
 
+/// 三个 runtime（dotnet / unity / godot）共用同一份 schema 定义，仅 Loader 不同。
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct CSharpExport {
+    pub namespace: Option<String>,
+    pub code_output: Option<String>,
+    pub line_ending: Option<String>,
+    pub encoding: Option<String>,
+}
+
 #[derive(Debug, Clone, serde::Deserialize)]
 pub struct ClientConfig {
     pub lua: Option<LuaExport>,
     pub gdscript: Option<GdScriptExport>,
     pub typescript: Option<TypeScriptExport>,
+    pub csharp_unity: Option<CSharpExport>,
+    pub csharp_godot: Option<CSharpExport>,
     pub line_ending: Option<String>,
     pub encoding: Option<String>,
 }

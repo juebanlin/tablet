@@ -18,6 +18,7 @@ pub struct ExportFormats {
     pub gdscript: bool,
     pub typescript: bool,
     pub cpp: bool,
+    pub csharp: bool,
 }
 
 impl ExportFormats {
@@ -25,6 +26,7 @@ impl ExportFormats {
         Self {
             json: true, xml: true, java: true, go: true,
             lua: true, gdscript: true, typescript: true, cpp: true,
+            csharp: true,
         }
     }
 
@@ -32,6 +34,7 @@ impl ExportFormats {
     pub fn any(&self) -> bool {
         self.json || self.xml || self.java || self.go
             || self.lua || self.gdscript || self.typescript || self.cpp
+            || self.csharp
     }
 }
 
@@ -82,6 +85,11 @@ pub fn run_export(engine: &mut ProjectEngine, formats: ExportFormats) -> ExportS
     }
     if formats.cpp {
         summary.per_format.push(("C++", outcome(engine.export_cpp())));
+    }
+    if formats.csharp {
+        summary.per_format.push(("C# (.NET)", outcome(engine.export_csharp_dotnet())));
+        summary.per_format.push(("C# (Unity)", outcome(engine.export_csharp_unity())));
+        summary.per_format.push(("C# (Godot)", outcome(engine.export_csharp_godot())));
     }
     summary
 }

@@ -6,6 +6,7 @@ mod go;
 mod gdscript;
 mod typescript;
 mod cpp;
+mod csharp;
 pub(crate) mod sep_meta;
 
 pub use json::export_all_json;
@@ -16,6 +17,7 @@ pub use go::export_all_go;
 pub use gdscript::export_all_gdscript;
 pub use typescript::export_all_typescript;
 pub use cpp::export_all_cpp;
+pub use csharp::{export_all_csharp, CSharpRuntime};
 
 use serde_json::Value;
 use crate::types::BaseType;

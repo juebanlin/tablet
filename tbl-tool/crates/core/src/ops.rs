@@ -2065,6 +2065,24 @@ impl ProjectEngine {
         Ok(result)
     }
 
+    pub fn export_csharp_dotnet(&mut self) -> anyhow::Result<crate::export::ExportResult> {
+        let result = crate::export::export_all_csharp(self.project(), crate::export::CSharpRuntime::Dotnet)?;
+        self.log_export("C# (.NET)", &result);
+        Ok(result)
+    }
+
+    pub fn export_csharp_unity(&mut self) -> anyhow::Result<crate::export::ExportResult> {
+        let result = crate::export::export_all_csharp(self.project(), crate::export::CSharpRuntime::Unity)?;
+        self.log_export("C# (Unity)", &result);
+        Ok(result)
+    }
+
+    pub fn export_csharp_godot(&mut self) -> anyhow::Result<crate::export::ExportResult> {
+        let result = crate::export::export_all_csharp(self.project(), crate::export::CSharpRuntime::Godot)?;
+        self.log_export("C# (Godot)", &result);
+        Ok(result)
+    }
+
     /// 导出指定 Project（按 id）。给"右键此 project 导出"用。
     pub fn export_project<F>(&mut self, project_id: &str, f: F, label: &str)
         -> anyhow::Result<crate::export::ExportResult>

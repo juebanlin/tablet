@@ -53,6 +53,9 @@ pub enum Command {
         /// 只导出 C++ 服务端代码（头文件）
         #[arg(long)]
         cpp: bool,
+        /// 只导出 C#（dotnet/unity/godot 三套同时生成）
+        #[arg(long)]
+        csharp: bool,
     },
     /// 验证所有 .tbl 文件
     Validate,

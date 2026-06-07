@@ -4,7 +4,7 @@
 //! 未知 / 废弃 key 通过 [`OverrideWarning`] 收集起来交给调用方决定怎么报告。
 
 use tbl_core::model::{
-    ClientConfig, CppExport, ExportConfig, GoExport, JavaExport, JsonExport, LuaExport,
+    ClientConfig, CppExport, CSharpExport, ExportConfig, GoExport, JavaExport, JsonExport, LuaExport,
     ServerExport, WorkspaceConfig, XmlExport,
 };
 use tbl_core::ops::ProjectEngine;
@@ -90,6 +90,30 @@ pub fn apply_overrides(engine: &mut ProjectEngine, overrides: &[String]) -> Over
                 ensure_export_server_cpp(&mut project.config);
                 project.config.export.as_mut().unwrap().server.as_mut().unwrap().cpp.as_mut().unwrap().json_lib = Some(value.to_string());
             }
+            "export.server.csharp_dotnet.namespace" => {
+                ensure_export_server_csharp_dotnet(&mut project.config);
+                project.config.export.as_mut().unwrap().server.as_mut().unwrap().csharp_dotnet.as_mut().unwrap().namespace = Some(value.to_string());
+            }
+            "export.server.csharp_dotnet.code_output" => {
+                ensure_export_server_csharp_dotnet(&mut project.config);
+                project.config.export.as_mut().unwrap().server.as_mut().unwrap().csharp_dotnet.as_mut().unwrap().code_output = Some(value.to_string());
+            }
+            "export.client.csharp_unity.namespace" => {
+                ensure_export_client_csharp_unity(&mut project.config);
+                project.config.export.as_mut().unwrap().client.as_mut().unwrap().csharp_unity.as_mut().unwrap().namespace = Some(value.to_string());
+            }
+            "export.client.csharp_unity.code_output" => {
+                ensure_export_client_csharp_unity(&mut project.config);
+                project.config.export.as_mut().unwrap().client.as_mut().unwrap().csharp_unity.as_mut().unwrap().code_output = Some(value.to_string());
+            }
+            "export.client.csharp_godot.namespace" => {
+                ensure_export_client_csharp_godot(&mut project.config);
+                project.config.export.as_mut().unwrap().client.as_mut().unwrap().csharp_godot.as_mut().unwrap().namespace = Some(value.to_string());
+            }
+            "export.client.csharp_godot.code_output" => {
+                ensure_export_client_csharp_godot(&mut project.config);
+                project.config.export.as_mut().unwrap().client.as_mut().unwrap().csharp_godot.as_mut().unwrap().code_output = Some(value.to_string());
+            }
             "export.client.lua.output" | "export.client.output" => {
                 ensure_export_client_lua(&mut project.config);
                 project.config.export.as_mut().unwrap().client.as_mut().unwrap().lua.as_mut().unwrap().output = Some(value.to_string());
@@ -126,7 +150,7 @@ fn ensure_export_server(config: &mut WorkspaceConfig) {
     ensure_export(config);
     if config.export.as_ref().unwrap().server.is_none() {
         config.export.as_mut().unwrap().server = Some(ServerExport {
-            data_output: None, java: None, go: None, cpp: None,
+            data_output: None, java: None, go: None, cpp: None, csharp_dotnet: None,
             line_ending: None, encoding: None,
         });
     }
@@ -160,11 +184,40 @@ fn ensure_export_server_cpp(config: &mut WorkspaceConfig) {
     }
 }
 
+fn ensure_export_server_csharp_dotnet(config: &mut WorkspaceConfig) {
+    ensure_export_server(config);
+    if config.export.as_ref().unwrap().server.as_ref().unwrap().csharp_dotnet.is_none() {
+        config.export.as_mut().unwrap().server.as_mut().unwrap().csharp_dotnet = Some(CSharpExport {
+            namespace: None, code_output: None, line_ending: None, encoding: None,
+        });
+    }
+}
+
 fn ensure_export_client(config: &mut WorkspaceConfig) {
     ensure_export(config);
     if config.export.as_ref().unwrap().client.is_none() {
         config.export.as_mut().unwrap().client = Some(ClientConfig {
-            lua: None, gdscript: None, typescript: None, line_ending: None, encoding: None,
+            lua: None, gdscript: None, typescript: None,
+            csharp_unity: None, csharp_godot: None,
+            line_ending: None, encoding: None,
+        });
+    }
+}
+
+fn ensure_export_client_csharp_unity(config: &mut WorkspaceConfig) {
+    ensure_export_client(config);
+    if config.export.as_ref().unwrap().client.as_ref().unwrap().csharp_unity.is_none() {
+        config.export.as_mut().unwrap().client.as_mut().unwrap().csharp_unity = Some(CSharpExport {
+            namespace: None, code_output: None, line_ending: None, encoding: None,
+        });
+    }
+}
+
+fn ensure_export_client_csharp_godot(config: &mut WorkspaceConfig) {
+    ensure_export_client(config);
+    if config.export.as_ref().unwrap().client.as_ref().unwrap().csharp_godot.is_none() {
+        config.export.as_mut().unwrap().client.as_mut().unwrap().csharp_godot = Some(CSharpExport {
+            namespace: None, code_output: None, line_ending: None, encoding: None,
         });
     }
 }
