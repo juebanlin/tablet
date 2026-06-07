@@ -60,7 +60,7 @@ For a given project at runtime:
 2. `load_project` copies that into `project.config.separators`.
 3. All validation, export (JSON `_sep` / XML `sep_*` attrs), and example value generation read from `project.config.separators`.
 
-The workspace `tbl-tool.toml [separators]` block is **only** used at startup to populate `engine.default_separators`, which is in turn copied to `schema.separators` when the user creates a brand-new empty project. Templates and file-based new-project flows inherit from the source schema's separators, not from toml.
+The workspace `tablet.toml [separators]` block is **only** used at startup to populate `engine.default_separators`, which is in turn copied to `schema.separators` when the user creates a brand-new empty project. Templates and file-based new-project flows inherit from the source schema's separators, not from toml.
 
 ## When to override defaults
 

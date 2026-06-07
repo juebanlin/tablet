@@ -3,7 +3,7 @@ target/
 *.exe
 
 # Release artifacts
-tbl-tool/dist/
+tablet/dist/
 
 # IDE
 .idea/
@@ -16,19 +16,22 @@ Thumbs.db
 
 # Tool cache
 .tbl-cache/
+.tablet.lock
+tablet.log
+# legacy
 .tbl-tool.lock
 tbl-tool.log
 
 # Test generated artifacts
-tbl-tool/tests/*/gen/
-tbl-tool/tests/*/out/
-tbl-tool/tests/*/config/
-tbl-tool/tests/*/tbl-tool.toml
-tbl-tool/tests/*/actual_output.txt
-tbl-tool/tests/*/TestMain.java
-tbl-tool/tests/*/test_main_go/
-tbl-tool/tests/*/go.mod
-tbl-tool/tests/*/go.sum
+tablet/tests/*/gen/
+tablet/tests/*/out/
+tablet/tests/*/config/
+tablet/tests/*/tablet.toml
+tablet/tests/*/actual_output.txt
+tablet/tests/*/TestMain.java
+tablet/tests/*/test_main_go/
+tablet/tests/*/go.mod
+tablet/tests/*/go.sum
 
 # Claude
 .claude/*

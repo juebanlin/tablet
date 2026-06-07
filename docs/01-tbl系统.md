@@ -194,7 +194,7 @@ id 列整列不可删除、不可移动、不可改名（仅 desc 行允许编�
 
 ## 7. TblFieldType 类型系统
 
-`FieldDef.tbl_type` / `ConstEntry.tbl_type` 存的字符串都叫 **TblFieldType**，对应 Rust 内部 `tbl_core::types::TblType`：
+`FieldDef.tbl_type` / `ConstEntry.tbl_type` 存的字符串都叫 **TblFieldType**，对应 Rust 内部 `tablet_core::types::TblType`：
 
 ```
 TblFieldType ::= 范式
@@ -267,12 +267,12 @@ UI 类型选择器分 [数据类型] / [引用类型] 两个 tab，但只是用�
 
 GUI 入口：项目右键 →「项目设置...」→「分隔符」tab（含 25 个 leaf）。修改后写回项目 `.tblschema` 并触发该项目全表重校验。
 
-`tbl-tool.toml [separators]` 段降级为「程序级默认值」：仅在「新建空项目」时把当前内存中的默认分隔符**拷贝**到新项目 schema 作为初值，之后该项目不再读取 toml；从模板/文件新建项目则继承 source schema 的 separators。
+`tablet.toml [separators]` 段降级为「程序级默认值」：仅在「新建空项目」时把当前内存中的默认分隔符**拷贝**到新项目 schema 作为初值，之后该项目不再读取 toml；从模板/文件新建项目则继承 source schema 的 separators。
 
 | 行为 | 数据来源 |
 |------|---------|
 | 已加载项目运行期 | 该项目 `.tblschema` 的 `# @sep` 行 → `Project.config.separators` |
-| 新建空项目 | 启动时从 `tbl-tool.toml [separators]` 读到内存 `engine.default_separators`，新项目拷贝此对象 |
+| 新建空项目 | 启动时从 `tablet.toml [separators]` 读到内存 `engine.default_separators`，新项目拷贝此对象 |
 | 从模板/文件新建项目 | source schema 的 `separators` |
 | 运行期改分隔符 | 「项目设置 → 分隔符」→ 写回 `.tblschema` → revalidate_all |
 
@@ -440,7 +440,7 @@ Lua 端全部展开为 table 字面量，不降级为 string。
 
 注意 `List<str>` / `Tuple<str, _>` 等**含 str 的复合类型仍然拦中文逗号**——值会按分隔符 split，写错分隔符是真错误，不是文案。豁免只针对"完整自由文本格"形态：`Paradigm::Base + BaseType::Str`。
 
-实现位置：`tbl_core::types::TblType::validate_value`（`types.rs`）入口处 `is_plain_str` 分流；`# @sep` 行的分隔符配置不影响该规则。
+实现位置：`tablet_core::types::TblType::validate_value`（`types.rs`）入口处 `is_plain_str` 分流；`# @sep` 行的分隔符配置不影响该规则。
 
 ### 8.4 空值规则
 

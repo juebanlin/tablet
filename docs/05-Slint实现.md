@@ -1,20 +1,20 @@
 # Slint 实现
 
-桌面 GUI（产物 `tbl-slint`）的 slint 实现细节：架构 / 主题 / 编辑态 / 失焦保存 / 滚动同步 / 闪退坑。CLI 实现见 @05；UI 设计与交互见 @06；tbl 系统硬性规则见 @01。
+桌面 GUI（产物 `tablet`）的 slint 实现细节：架构 / 主题 / 编辑态 / 失焦保存 / 滚动同步 / 闪退坑。CLI 实现见 @05；UI 设计与交互见 @06；tbl 系统硬性规则见 @01。
 
 ## 1. 架构
 
 项目采用 core + 前端架构：
 
 ```
-tbl-tool/
+tablet/
 ├── crates/
-│   ├── core/         ← tbl-core：零 UI 依赖的核心库
-│   ├── app-slint/    ← Slint GUI（产物 tbl-slint）
-│   └── app-cli/      ← 命令行工具（产物 tbl-cli）
+│   ├── core/         ← tablet-core：零 UI 依赖的核心库
+│   ├── app-slint/    ← Slint GUI（产物 tablet）
+│   └── app-cli/      ← 命令行工具（产物 tablet-cli）
 ```
 
-`tbl-core` 持有模型、类型系统、验证、数据操作、文件 I/O；`tbl-slint` 与 `tbl-cli` 都只是它的薄前端。UI 设计和布局见 @06，本篇专注 slint 实现细节。源码组织见 @03.1；启动分流见 @03.12。
+`tablet-core` 持有模型、类型系统、验证、数据操作、文件 I/O；`tablet` 与 `tablet-cli` 都只是它的薄前端。UI 设计和布局见 @06，本篇专注 slint 实现细节。源码组织见 @03.1；启动分流见 @03.12。
 
 > 历史：项目早期为对比 immediate-mode / retained / 声明式三套 GUI 范式，曾并存 `app-egui` / `app-fltk` 两个实验性实现。结论是 slint 在主题完成度、声明式响应式布局、Live Preview 调试体验上综合最好，已向正式版本靠拢；其余两份实验实现已从仓库移除。
 
@@ -260,7 +260,7 @@ GUI（slint）与 CLI 都遵循同一套启动壳，平台差异通过 `cfg_attr
 
 ### 12.2 进程存活检测（lock 文件防双开）
 
-启动时写 `tbl-tool.lock` 记录 PID；下一次启动若发现 lock 文件，验证 PID 是否还活着：
+启动时写 `tablet.lock` 记录 PID；下一次启动若发现 lock 文件，验证 PID 是否还活着：
 
 | 平台 | 实现 |
 |------|------|
@@ -272,8 +272,8 @@ GUI（slint）与 CLI 都遵循同一套启动壳，平台差异通过 `cfg_attr
 ### 12.3 工作目录与日志
 
 - 默认 `--workdir` 为可执行文件所在目录；可显式覆盖
-- 当前 Project 由 `tbl-tool.toml` 的 `[app] last_project` 决定；CLI 也支持 `--project <id>` 覆盖（@02 Project / @03.4）
-- 文件日志写入 `<workdir>/tbl-tool.log`，等级由 `[ui] log_level` 配置项决定
+- 当前 Project 由 `tablet.toml` 的 `[app] last_project` 决定；CLI 也支持 `--project <id>` 覆盖（@02 Project / @03.4）
+- 文件日志写入 `<workdir>/tablet.log`，等级由 `[ui] log_level` 配置项决定
 - 不写 stdout/stderr（subsystem=windows 后两者无效）
 
 ## 13. RefPicker 数据通道

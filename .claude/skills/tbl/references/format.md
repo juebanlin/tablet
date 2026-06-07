@@ -147,7 +147,7 @@ Row separator inside `#desc / #type / #field / #export` is `|` (matching the col
 
 ### Row colour markers (Excel round-trip)
 
-A data row may end with ` #@c:RRGGBB` (uppercase hex, 6 chars, no `#` prefix). This is set by Excel via background colour and round-tripped by tbl-tool. Generation/AI should NOT add colour markers — they're a UI affordance, not part of design.
+A data row may end with ` #@c:RRGGBB` (uppercase hex, 6 chars, no `#` prefix). This is set by Excel via background colour and round-tripped by tablet. Generation/AI should NOT add colour markers — they're a UI affordance, not part of design.
 
 ### Preset → .tbl translation
 

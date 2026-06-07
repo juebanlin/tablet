@@ -1,6 +1,6 @@
 ---
 name: tbl
-description: Generate, extend, and validate tbl-tool .tblschema / .tbl file content. Use when the user asks to create a new schema template, add data / preset rows to an existing schema, design table fields and types, hand-validate .tbl content, or convert a planning doc into a tbl schema. Covers the v1 schema spec (# @meta / # @sep / # @preset directives), 14 type paradigms with separator config, three modes (table / constant / enum), and naming / validation rules. This skill is about file content only — does not cover the tbl-tool CLI / GUI which changes frequently.
+description: Generate, extend, and validate tablet .tblschema / .tbl file content. Use when the user asks to create a new schema template, add data / preset rows to an existing schema, design table fields and types, hand-validate .tbl content, or convert a planning doc into a tbl schema. Covers the v1 schema spec (# @meta / # @sep / # @preset directives), 14 type paradigms with separator config, three modes (table / constant / enum), and naming / validation rules. This skill is about file content only — does not cover the tablet CLI / GUI which changes frequently.
 user-invocable: true
 allowed-tools:
   - Read
@@ -10,11 +10,11 @@ allowed-tools:
   - Grep
 ---
 
-# /tbl — tbl-tool file format skill
+# /tbl — tablet file format skill
 
 Authoritative spec for `.tblschema` (v1) and `.tbl` (v2) file content. Use when generating templates, extending preset data, hand-validating, or reverse-engineering schema from design docs.
 
-**Scope is file content only.** This skill does not cover the `tbl-tool` GUI, the `tbl-cli` binary, the workspace `tbl-tool.toml`, project layout on disk, or the import/export pipeline — those move quickly and are not stable enough to bake into a skill. If a user asks something CLI / UI / pipeline related, decline gracefully and point them at the in-repo docs (`docs/` directory).
+**Scope is file content only.** This skill does not cover the `tablet` GUI, the `tablet-cli` binary, the workspace `tablet.toml`, project layout on disk, or the import/export pipeline — those move quickly and are not stable enough to bake into a skill. If a user asks something CLI / UI / pipeline related, decline gracefully and point them at the in-repo docs (`docs/` directory).
 
 **Do not paraphrase the references from memory** — the files in `references/` are the canonical source for this skill. Read them when you need a rule.
 
@@ -37,8 +37,8 @@ Trigger this skill (with or without explicit `/tbl`) when the user asks to:
 Do NOT invoke this skill for:
 
 - "How do I run the export?" / "How do I open the GUI?" — point at in-repo docs.
-- Changing the actual tbl-tool source code in `tbl-tool/crates/` — work directly without the skill.
-- Workspace-level config (`tbl-tool.toml [separators]`, `[ui]` toggles, etc.) — out of scope.
+- Changing the actual tablet source code in `tablet/crates/` — work directly without the skill.
+- Workspace-level config (`tablet.toml [separators]`, `[ui]` toggles, etc.) — out of scope.
 
 ---
 
@@ -59,7 +59,7 @@ Do NOT invoke this skill for:
 
 **Read order when generating new content**: `format.md` → `types.md` → `validation.md` → `separators.md` (only if non-default needed) → relevant example.
 
-The most recent canonical demo in the repo is `tbl-tool/crates/core/schemas/sanguo.tblschema` — read it whenever the user asks for "a realistic full schema demo" so you copy its actual style.
+The most recent canonical demo in the repo is `tablet/crates/core/schemas/sanguo.tblschema` — read it whenever the user asks for "a realistic full schema demo" so you copy its actual style.
 
 ---
 
@@ -71,7 +71,7 @@ List what the skill can do (schema gen / preset extend / hand-validate / type de
 
 ### `new-schema` — generate a `.tblschema` from a design brief
 
-1. Confirm the **target file path** with the user. The skill doesn't care where it lands — common locations are `tbl-tool/crates/core/schemas/<id>.tblschema` (in-repo template) or any path the user names.
+1. Confirm the **target file path** with the user. The skill doesn't care where it lands — common locations are `tablet/crates/core/schemas/<id>.tblschema` (in-repo template) or any path the user names.
 2. Confirm **id / name / category / version** (id must match `[a-z0-9_-]{1,32}`). If user gave a Chinese name, derive id from semantic kebab-case ascii.
 3. Read `references/format.md` and `references/types.md`.
 4. Walk the user's design doc:
@@ -111,7 +111,7 @@ List what the skill can do (schema gen / preset extend / hand-validate / type de
 5. Check `@Xxx` references resolve to a section in the same file (or note "external; assumed valid").
 6. Report findings. Do not edit unless asked.
 
-This is a **content-level check** — for project-level cross-file validation (id uniqueness, ref resolution across many .tbl files), point the user at `tbl-cli validate`.
+This is a **content-level check** — for project-level cross-file validation (id uniqueness, ref resolution across many .tbl files), point the user at `tablet-cli validate`.
 
 ### `design` — propose schema for a feature without writing files
 
@@ -123,7 +123,7 @@ This is a **content-level check** — for project-level cross-file validation (i
 
 ## Hard rules (apply to every subcommand)
 
-These rules are enforced by `tbl-core::tblschema::parse_tblschema` at file load time. Violating them will fail to parse.
+These rules are enforced by `tablet-core::tblschema::parse_tblschema` at file load time. Violating them will fail to parse.
 
 ### Identifier rules (full table in `references/validation.md`)
 
@@ -142,7 +142,7 @@ These rules are enforced by `tbl-core::tblschema::parse_tblschema` at file load 
 - Ref target must be a `table` or `enum` section. Ref to `constant` is forbidden (constants have no id).
 - Map key allowed types: `int / long / float / double / str` (no bool).
 - Set element must be a base type (no Set of tuples).
-- **Prefer enum-int keys over str keys for Maps**: `Map<int,int>` keyed by `@AttrEnum`-id beats `Map<str,int>` with hardcoded "hp"/"mp" strings. The user explicitly favors this pattern (see `tbl-tool/crates/core/schemas/sanguo.tblschema` for the reference style).
+- **Prefer enum-int keys over str keys for Maps**: `Map<int,int>` keyed by `@AttrEnum`-id beats `Map<str,int>` with hardcoded "hp"/"mp" strings. The user explicitly favors this pattern (see `tablet/crates/core/schemas/sanguo.tblschema` for the reference style).
 
 ### Constant mode rules
 

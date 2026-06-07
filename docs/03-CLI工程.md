@@ -1,23 +1,23 @@
 # CLI 工程
 
-`tbl-tool` 工程的"how"层：源码三层的抽象划分、仓库目录布局、`tbl-tool.toml` 配置、Git 协作约定、`tbl-cli` 二进制的命令骨架与子命令清单。
+`tablet` 工程的"how"层：源码三层的抽象划分、仓库目录布局、`tablet.toml` 配置、Git 协作约定、`tablet-cli` 二进制的命令骨架与子命令清单。
 
-核心层（`tbl-core`）暴露的能力（导出 / 导入 / 验证 / Project / 模板 / 测试数据生成）的语义在 @02；本文聚焦**工程怎么组织代码、仓库怎么放文件、命令行怎么调用**。GUI 共享同一份 `actions/` 业务编排层，行为完全一致，UI 设计见 @04，Slint 实现细节见 @05。
+核心层（`tablet-core`）暴露的能力（导出 / 导入 / 验证 / Project / 模板 / 测试数据生成）的语义在 @02；本文聚焦**工程怎么组织代码、仓库怎么放文件、命令行怎么调用**。GUI 共享同一份 `actions/` 业务编排层，行为完全一致，UI 设计见 @04，Slint 实现细节见 @05。
 
 ## 1. 工具源码三层
 
 整体三层（自下而上）：
 
 ```
-layer 3 (UX 顶层)     tbl-slint.exe    零参数 / --gui → GUI；其它参数 → 转给 tbl-cli lib
+layer 3 (UX 顶层)     tablet.exe    零参数 / --gui → GUI；其它参数 → 转给 tablet-cli lib
                               │ (depends on)
-layer 2 (脚本/Jenkins) tbl-cli.exe  +  tbl-cli (lib)
+layer 2 (脚本/Jenkins) tablet-cli.exe  +  tablet-cli (lib)
                               │ (depends on)
-layer 1 (基础设施)     tbl-core (rlib)  ← 后期可加 cdylib + C ABI 给第三方集成
+layer 1 (基础设施)     tablet-core (rlib)  ← 后期可加 cdylib + C ABI 给第三方集成
 ```
 
 ```
-tbl-tool/
+tablet/
 ├── Cargo.toml                  ← workspace
 └── crates/
     ├── core/                   ← 核心库（无 UI 依赖）
@@ -36,7 +36,7 @@ tbl-tool/
     │   ├── templates/          ← Java/Go/Lua 模板源（生成代码用）
     │   └── schemas/            ← 内置 .tblschema（include_str! 嵌入；@02 项目模板 / @08 测试驱动共用）
     │
-    ├── app-cli/                ← CLI lib + bin 双输出（产物 tbl-cli + libtbl_cli）
+    ├── app-cli/                ← CLI lib + bin 双输出（产物 tablet-cli + libtablet_cli）
     │   └── src/
     │       ├── lib.rs          ← pub mod actions; pub mod cli; re-export run_with_args
     │       ├── actions/        ← 业务编排层：GUI / CLI 共用，无 println / 无 clap / 无 process::exit
@@ -53,19 +53,19 @@ tbl-tool/
     │       │   └── dispatcher.rs    ← run_with_args(&[String]) -> Result<i32>
     │       └── main.rs         ← ~10 行：转发到 dispatcher，把 Result<i32> → process::exit
     │
-    └── app-slint/              ← Slint GUI（产物 tbl-slint，@05）
-        └── src/main.rs         ← 头部分流：classify(args) → Route::Cli 走 tbl_cli::run_with_args
+    └── app-slint/              ← Slint GUI（产物 tablet，@05）
+        └── src/main.rs         ← 头部分流：classify(args) → Route::Cli 走 tablet_cli::run_with_args
                                   零参数 / --gui [--workdir] 走 run_gui()
                                   Windows 下 GUI 分支 FreeConsole() 释放 console（双击启动后无黑窗驻留）
 ```
 
 `core` 不依赖任何 UI 框架，所有前端共享同一份模型与验证逻辑。
 
-**模块路径就是契约**——`tbl_cli::actions::*` = GUI 可复用；`tbl_cli::cli::*` 或后缀 `_cli` 的函数 = 仅 CLI 二进制内部用，GUI 不应引用。新加业务 → 放 `actions/`，签名干净返 `Result<某种 Summary>`；新加屏幕输出 → 放 `cli/output.rs`，函数名带 `_cli` 后缀。
+**模块路径就是契约**——`tablet_cli::actions::*` = GUI 可复用；`tablet_cli::cli::*` 或后缀 `_cli` 的函数 = 仅 CLI 二进制内部用，GUI 不应引用。新加业务 → 放 `actions/`，签名干净返 `Result<某种 Summary>`；新加屏幕输出 → 放 `cli/output.rs`，函数名带 `_cli` 后缀。
 
 `core/src/template/` 模块同时被项目模板库（@02）和 generate-test CLI（@02 测试数据生成）复用。
 
-**未来扩展：core 可加 cdylib + C ABI** —— 当前 `tbl-core` 的 `pub` API 已按"可序列化 / 类型稳定"约束维护，后期若要把核心能力暴露给第三方程序（如 Unity 编辑器插件、定制 IDE 集成），只需追加 `[lib] crate-type = ["rlib", "cdylib"]` 与一份 `ffi.rs` + cbindgen 生成的 .h，无需改动现有调用方。
+**未来扩展：core 可加 cdylib + C ABI** —— 当前 `tablet-core` 的 `pub` API 已按"可序列化 / 类型稳定"约束维护，后期若要把核心能力暴露给第三方程序（如 Unity 编辑器插件、定制 IDE 集成），只需追加 `[lib] crate-type = ["rlib", "cdylib"]` 与一份 `ffi.rs` + cbindgen 生成的 .h，无需改动现有调用方。
 
 ## 2. 仓库布局
 
@@ -92,7 +92,7 @@ game-config/
 │   ├── slg-base.tblschema
 │   └── rpg-base.tblschema
 ├── gen/                        ← 生成产物，详见 @02.23
-├── tbl-tool.toml               ← 工具配置，详见 §4
+├── tablet.toml               ← 工具配置，详见 §4
 └── .gitignore                  ← 详见 §6
 ```
 
@@ -108,9 +108,9 @@ game-config/
 
 Group 名仅在工具内部使用，不进生成代码路径，因此允许中文（@01.8.1、@02.1）。
 
-## 4. tbl-tool.toml 配置
+## 4. tablet.toml 配置
 
-工具配置文件，定义启动展开偏好、导出目标、UI 行为、类型分隔符默认值。所有字段都有默认值，新建项目可只写少量字段。**`tbl-tool.toml` 是仓库全局配置，所有 Project 共享；Project 自身的元数据 + 可选配置覆盖放在 `projects/<id>/project.toml`（@02 Project）**。Project 的 `[export]` / `[ui]` 段按 field-level deep-merge 覆盖全局；缺失字段回退到全局。
+工具配置文件，定义启动展开偏好、导出目标、UI 行为、类型分隔符默认值。所有字段都有默认值，新建项目可只写少量字段。**`tablet.toml` 是仓库全局配置，所有 Project 共享；Project 自身的元数据 + 可选配置覆盖放在 `projects/<id>/project.toml`（@02 Project）**。Project 的 `[export]` / `[ui]` 段按 field-level deep-merge 覆盖全局；缺失字段回退到全局。
 
 `[separators]` 是例外：**不参与 deep-merge**，仅在「新建空项目」时拷贝到新项目 `.tblschema` 作为初值；运行期分隔符以项目自身 schema 的 `# @sep` 行为单一来源（@01.7.4 / §4.9）。
 
@@ -184,7 +184,7 @@ entry = ";"
 |------|------|--------|
 | last_project | 启动时**默认展开**的 Project id；不存在则展开扫描结果中第一个；其它 project 仍同时加载，仅折叠展示 | 空（首次进入）|
 
-Project 列表由启动扫描 `projects/` 目录得出，**不需要**在 `tbl-tool.toml` 里枚举。所有 project 同时加载到内存，`last_project` 仅影响 TreeSection 首屏展开状态（无切换概念）；新建 project 后写入 last_project 让下次启动直接展开。
+Project 列表由启动扫描 `projects/` 目录得出，**不需要**在 `tablet.toml` 里枚举。所有 project 同时加载到内存，`last_project` 仅影响 TreeSection 首屏展开状态（无切换概念）；新建 project 后写入 last_project 让下次启动直接展开。
 
 > 历史命名：旧版本是 `[project] name / config_dir / cache_dir`；S15-D 把 `[project]` 段彻底改名为 `[app]`，且字段语义变为"全仓库级"——name/config_dir/cache_dir 已被 Project 内 `project.toml` + `projects/<id>/` 目录约定取代。
 
@@ -237,8 +237,8 @@ Project 列表由启动扫描 `projects/` 目录得出，**不需要**在 `tbl-t
 
 | 场景 | 行为 |
 |------|-----|
-| 启动加载 | `tbl-tool.toml [separators]` 反序列化为 `engine.default_separators`（toml 没写的字段走代码 default） |
-| 新建空项目（GUI 对话框 / `tbl-cli new-project`） | 拷贝 `engine.default_separators` 给新项目 schema |
+| 启动加载 | `tablet.toml [separators]` 反序列化为 `engine.default_separators`（toml 没写的字段走代码 default） |
+| 新建空项目（GUI 对话框 / `tablet-cli new-project`） | 拷贝 `engine.default_separators` 给新项目 schema |
 | 从模板/文件新建项目 | 继承 source schema 的 `separators`，与 toml 无关 |
 | 已加载项目运行期校验/导出/示例值 | 用 `Project.config.separators`（来自该项目 schema） |
 | 项目设置对话框改分隔符 | 写回项目 `.tblschema`，触发该项目 `revalidate_all`；与 toml 无关 |
@@ -322,7 +322,7 @@ projects/*/.tbl-cache/
 gen/
 
 # 进程锁
-.tbl-tool.lock
+.tablet.lock
 ```
 
 注意：`project.toml` / `project.tblschema` / `config/**/*.tbl` 都需要进版本控制——它们是 Project 的本体。
@@ -331,7 +331,7 @@ gen/
 
 ```
 <repo-root>/
-├── tbl-tool.toml                 # 全局配置（进 git）
+├── tablet.toml                 # 全局配置（进 git）
 ├── projects/                     # 全部 Project（进 git，除 .tbl-cache/）
 │   ├── slg-test/
 │   │   ├── project.toml
@@ -361,14 +361,14 @@ gen/
 ## 7. 命令骨架
 
 ```
-tbl-cli [-w <workdir>] [--project <id>] [-s key=value]... <subcommand>
+tablet-cli [-w <workdir>] [--project <id>] [-s key=value]... <subcommand>
 ```
 
 | 参数 | 作用 | 默认值 |
 |------|------|--------|
 | `-w, --workdir <path>` | 仓库根目录（`projects/` 的父） | `.`（当前目录） |
 | `--project <id>` | 显式指定 Project id；覆盖 `[app] last_project` | 不指定 = 跟随 `[app] last_project`，再不存在则取扫描结果第一个 |
-| `-s, --set KEY=VALUE` | 覆盖 `tbl-tool.toml` 任意配置项；可重复 | — |
+| `-s, --set KEY=VALUE` | 覆盖 `tablet.toml` 任意配置项；可重复 | — |
 
 `-s` 覆盖键名与 toml 路径一一对应，列表见 §9。未知 / 废弃 / 格式错误的 key 会以 warning 形式打到 stderr，但不会让命令失败。
 
@@ -472,11 +472,11 @@ Jenkins 脚本的失败判断完全依赖此码。
 
 ## 11. 依赖与体积
 
-`tbl-cli` 仅依赖 `tbl-core` + `clap`，不引任何 UI 渲染依赖；release 体积约 1 MB（不开 LTO）。lib 形态（`libtbl_cli`）由 `tbl-slint` 在 CLI 分支直接调用，等价于跑了一次 `tbl-cli` 子进程，省掉一次 fork。
+`tablet-cli` 仅依赖 `tablet-core` + `clap`，不引任何 UI 渲染依赖；release 体积约 1 MB（不开 LTO）。lib 形态（`libtablet_cli`）由 `tablet` 在 CLI 分支直接调用，等价于跑了一次 `tablet-cli` 子进程，省掉一次 fork。
 
-## 12. tbl-slint 的 CLI 分流
+## 12. tablet 的 CLI 分流
 
-`tbl-slint.exe` 启动时先做 argv 分类：
+`tablet.exe` 启动时先做 argv 分类：
 
 ```rust
 fn classify(args: &[String]) -> Route {
@@ -490,34 +490,34 @@ fn classify(args: &[String]) -> Route {
 
 | 启动方式 | 行为 |
 |---------|------|
-| 零参数（双击 / `tbl-slint.exe`） | GUI，workdir = exe 所在目录（即 cwd） |
-| `tbl-slint --gui [--workdir=path]` | GUI，workdir 显式指定（开发期 `cargo run -p tbl-slint -- --gui --workdir=...`） |
-| 其它任何参数（含 `--help` / 子命令 / `-w` / `-s`） | CLI：剔除 `--gui` 后转发给 `tbl_cli::run_with_args` |
+| 零参数（双击 / `tablet.exe`） | GUI，workdir = exe 所在目录（即 cwd） |
+| `tablet --gui [--workdir=path]` | GUI，workdir 显式指定（开发期 `cargo run -p tablet-slint -- --gui --workdir=...`） |
+| 其它任何参数（含 `--help` / 子命令 / `-w` / `-s`） | CLI：剔除 `--gui` 后转发给 `tablet_cli::run_with_args` |
 
-CLI 分支和直接跑 `tbl-cli.exe` 行为完全一致；GUI 分支在 Windows 下额外调 `FreeConsole()` 释放 console，避免双击启动后黑窗驻留。
+CLI 分支和直接跑 `tablet-cli.exe` 行为完全一致；GUI 分支在 Windows 下额外调 `FreeConsole()` 释放 console，避免双击启动后黑窗驻留。
 
 ## 13. 用法示例
 
 ```bash
 # 在指定仓库下导出全部格式
-tbl-cli -w D:/work/game-config export
+tablet-cli -w D:/work/game-config export
 
 # 仅导出 Java 模板类，临时切输出目录
-tbl-cli -w D:/work/game-config \
+tablet-cli -w D:/work/game-config \
   -s export.server.java.code_output=tmp/java \
   export --java
 
 # 离线校验某个 Project
-tbl-cli -w D:/work/game-config --project slg-prod validate
+tablet-cli -w D:/work/game-config --project slg-prod validate
 
 # 用模板新建 Project
-tbl-cli -w D:/work/game-config new-project \
+tablet-cli -w D:/work/game-config new-project \
   --template slg-base --id slg-2026 --name "SLG 2026"
 
 # 灌 100 行带空值的测试数据，go 后端
-tbl-cli -w D:/work/game-config generate-test \
+tablet-cli -w D:/work/game-config generate-test \
   --rows 100 --empty --seed 42 --lang go
 
-# Jenkins 风格：通过 tbl-slint.exe 跑 CLI（同一个 exe 兼任）
-tbl-slint.exe -w D:/work/game-config validate
+# Jenkins 风格：通过 tablet.exe 跑 CLI（同一个 exe 兼任）
+tablet.exe -w D:/work/game-config validate
 ```

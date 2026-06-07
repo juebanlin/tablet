@@ -2,7 +2,7 @@
 
 UI 层包装 xlsx 编辑流的工作流文档。**xlsx 文件本身的读 / 写规则属于核心层** —— 详见 @02 "生成 Excel 文件" / "导入 Excel 文件"，本篇不重复。
 
-桥接的本质：调起策划机器上的 Excel / WPS 编辑工具核心生成的 xlsx，关闭后把策划改动回写到 .tbl。CLI 不需要这条流程（要批量出 xlsx 直接 `tbl-cli export --xlsx`，要回写直接靠脚本调 import）。
+桥接的本质：调起策划机器上的 Excel / WPS 编辑工具核心生成的 xlsx，关闭后把策划改动回写到 .tbl。CLI 不需要这条流程（要批量出 xlsx 直接 `tablet-cli export --xlsx`，要回写直接靠脚本调 import）。
 
 ## 1. 触发方式
 

@@ -1,6 +1,6 @@
 # Validation & Naming Reference
 
-All hard rules tbl-core enforces. When generating schema or preset data, comply by construction — every check here is wired to a validation function that runs at load and save.
+All hard rules tablet-core enforces. When generating schema or preset data, comply by construction — every check here is wired to a validation function that runs at load and save.
 
 ## Naming rules
 
@@ -145,7 +145,7 @@ When a referenced section is renamed/deleted, current refs become red but save i
 
 ## Constant ref switch
 
-`tbl-tool.toml` knob:
+`tablet.toml` knob:
 
 ```toml
 [ui]

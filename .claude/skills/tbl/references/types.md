@@ -114,7 +114,7 @@ Generated code uses primitive types (no `Integer`, no `*int32` pointer) — busi
 
 These reflect explicit user feedback in this project — apply by default unless told otherwise:
 
-1. **Map keys: prefer enum-int over str.** When the keys form a fixed set (attribute name, resource type, building tier), introduce a new enum and use `Map<int,V>`. The Three Kingdoms reference template (`tbl-tool/crates/core/schemas/sanguo.tblschema`) does this throughout: `Map<int,int>` for stat bonuses keyed by `@HeroAttr`, costs keyed by `@ResourceKind`, etc.
+1. **Map keys: prefer enum-int over str.** When the keys form a fixed set (attribute name, resource type, building tier), introduce a new enum and use `Map<int,V>`. The Three Kingdoms reference template (`tablet/crates/core/schemas/sanguo.tblschema`) does this throughout: `Map<int,int>` for stat bonuses keyed by `@HeroAttr`, costs keyed by `@ResourceKind`, etc.
 2. **Lists of categorical ids: prefer `List<int>` keyed by enum.** `tags: List<int>` + a `@TagEnum` is preferred over `tags: List<str>`.
 3. **No `Long` for game ids if `int` fits.** Hero/skill/item ids comfortably fit in i32; reserve `long` for timestamps and counters.
 4. **Constant `desc` is informational** — generated code doesn't see desc, so it's free-form Chinese OK.
