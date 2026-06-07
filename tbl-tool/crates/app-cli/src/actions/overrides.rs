@@ -4,8 +4,8 @@
 //! 未知 / 废弃 key 通过 [`OverrideWarning`] 收集起来交给调用方决定怎么报告。
 
 use tbl_core::model::{
-    ClientConfig, ExportConfig, GoExport, JavaExport, JsonExport, LuaExport, ServerExport,
-    WorkspaceConfig, XmlExport,
+    ClientConfig, CppExport, ExportConfig, GoExport, JavaExport, JsonExport, LuaExport,
+    ServerExport, WorkspaceConfig, XmlExport,
 };
 use tbl_core::ops::ProjectEngine;
 
@@ -78,6 +78,18 @@ pub fn apply_overrides(engine: &mut ProjectEngine, overrides: &[String]) -> Over
                 ensure_export_server_go(&mut project.config);
                 project.config.export.as_mut().unwrap().server.as_mut().unwrap().go.as_mut().unwrap().code_output = Some(value.to_string());
             }
+            "export.server.cpp.namespace" => {
+                ensure_export_server_cpp(&mut project.config);
+                project.config.export.as_mut().unwrap().server.as_mut().unwrap().cpp.as_mut().unwrap().namespace = Some(value.to_string());
+            }
+            "export.server.cpp.code_output" => {
+                ensure_export_server_cpp(&mut project.config);
+                project.config.export.as_mut().unwrap().server.as_mut().unwrap().cpp.as_mut().unwrap().code_output = Some(value.to_string());
+            }
+            "export.server.cpp.json_lib" => {
+                ensure_export_server_cpp(&mut project.config);
+                project.config.export.as_mut().unwrap().server.as_mut().unwrap().cpp.as_mut().unwrap().json_lib = Some(value.to_string());
+            }
             "export.client.lua.output" | "export.client.output" => {
                 ensure_export_client_lua(&mut project.config);
                 project.config.export.as_mut().unwrap().client.as_mut().unwrap().lua.as_mut().unwrap().output = Some(value.to_string());
@@ -114,7 +126,8 @@ fn ensure_export_server(config: &mut WorkspaceConfig) {
     ensure_export(config);
     if config.export.as_ref().unwrap().server.is_none() {
         config.export.as_mut().unwrap().server = Some(ServerExport {
-            data_output: None, java: None, go: None, line_ending: None, encoding: None,
+            data_output: None, java: None, go: None, cpp: None,
+            line_ending: None, encoding: None,
         });
     }
 }
@@ -133,6 +146,16 @@ fn ensure_export_server_go(config: &mut WorkspaceConfig) {
     if config.export.as_ref().unwrap().server.as_ref().unwrap().go.is_none() {
         config.export.as_mut().unwrap().server.as_mut().unwrap().go = Some(GoExport {
             package: None, code_output: None, line_ending: None, encoding: None,
+        });
+    }
+}
+
+fn ensure_export_server_cpp(config: &mut WorkspaceConfig) {
+    ensure_export_server(config);
+    if config.export.as_ref().unwrap().server.as_ref().unwrap().cpp.is_none() {
+        config.export.as_mut().unwrap().server.as_mut().unwrap().cpp = Some(CppExport {
+            namespace: None, code_output: None, json_lib: None,
+            line_ending: None, encoding: None,
         });
     }
 }

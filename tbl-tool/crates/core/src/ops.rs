@@ -2059,6 +2059,12 @@ impl ProjectEngine {
         Ok(result)
     }
 
+    pub fn export_cpp(&mut self) -> anyhow::Result<crate::export::ExportResult> {
+        let result = crate::export::export_all_cpp(self.project())?;
+        self.log_export("C++", &result);
+        Ok(result)
+    }
+
     /// 导出指定 Project（按 id）。给"右键此 project 导出"用。
     pub fn export_project<F>(&mut self, project_id: &str, f: F, label: &str)
         -> anyhow::Result<crate::export::ExportResult>

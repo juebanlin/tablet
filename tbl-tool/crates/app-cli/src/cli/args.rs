@@ -50,6 +50,9 @@ pub enum Command {
         /// 只导出 TypeScript 前端文件
         #[arg(long)]
         typescript: bool,
+        /// 只导出 C++ 服务端代码（头文件）
+        #[arg(long)]
+        cpp: bool,
     },
     /// 验证所有 .tbl 文件
     Validate,

@@ -116,6 +116,7 @@ pub struct ServerExport {
     pub data_output: Option<String>,
     pub java: Option<JavaExport>,
     pub go: Option<GoExport>,
+    pub cpp: Option<CppExport>,
     pub line_ending: Option<String>,
     pub encoding: Option<String>,
 }
@@ -132,6 +133,15 @@ pub struct JavaExport {
 pub struct GoExport {
     pub package: Option<String>,
     pub code_output: Option<String>,
+    pub line_ending: Option<String>,
+    pub encoding: Option<String>,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct CppExport {
+    pub namespace: Option<String>,
+    pub code_output: Option<String>,
+    pub json_lib: Option<String>,
     pub line_ending: Option<String>,
     pub encoding: Option<String>,
 }
