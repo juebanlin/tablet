@@ -49,18 +49,17 @@ jobs:
       - name: cache cargo registry + target
         uses: Swatinem/rust-cache@v2
         with:
-          workspaces: tablet
           key: ${{ matrix.target }}
 
       - name: build
         shell: bash
-        run: bash tablet/scripts/release.sh ${{ matrix.target }}
+        run: bash scripts/release.sh ${{ matrix.target }}
 
       - name: upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: tablet-${{ matrix.target }}
-          path: tablet/dist/${{ matrix.target }}/
+          path: dist/${{ matrix.target }}/
 
   # tag 触发时聚合所有产物到 GitHub Release
   release:

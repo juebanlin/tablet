@@ -30,11 +30,11 @@
 #     - { os: ubuntu-latest,  target: linux }
 #     - { os: ubuntu-latest,  target: linux-cli-musl }
 #     - { os: macos-latest,   target: macos }
-#   再 run: bash tablet/scripts/release.sh ${{ matrix.target }}
+#   再 run: bash scripts/release.sh ${{ matrix.target }}
 
 set -euo pipefail
 
-# 切到 tablet/ workspace
+# 切到仓库根
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WS_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 cd "$WS_DIR"

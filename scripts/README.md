@@ -1,4 +1,4 @@
-# tablet/scripts
+# scripts
 
 ## release.sh
 
@@ -57,11 +57,11 @@ jobs:
         run: sudo apt update && sudo apt install -y musl-tools
       - name: build
         shell: bash
-        run: bash tablet/scripts/release.sh ${{ matrix.target }}
+        run: bash scripts/release.sh ${{ matrix.target }}
       - uses: actions/upload-artifact@v4
         with:
           name: tablet-${{ matrix.target }}
-          path: tablet/dist/${{ matrix.target }}/
+          path: dist/${{ matrix.target }}/
 ```
 
 注意点：

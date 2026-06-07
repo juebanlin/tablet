@@ -3,7 +3,7 @@ target/
 *.exe
 
 # Release artifacts
-tablet/dist/
+dist/
 
 # IDE
 .idea/
@@ -23,15 +23,15 @@ tablet.log
 tbl-tool.log
 
 # Test generated artifacts
-tablet/tests/*/gen/
-tablet/tests/*/out/
-tablet/tests/*/config/
-tablet/tests/*/tablet.toml
-tablet/tests/*/actual_output.txt
-tablet/tests/*/TestMain.java
-tablet/tests/*/test_main_go/
-tablet/tests/*/go.mod
-tablet/tests/*/go.sum
+tests/*/gen/
+tests/*/out/
+tests/*/config/
+tests/*/tablet.toml
+tests/*/actual_output.txt
+tests/*/TestMain.java
+tests/*/test_main_go/
+tests/*/go.mod
+tests/*/go.sum
 
 # Claude
 .claude/
