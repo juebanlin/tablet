@@ -20,7 +20,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     name: build (${{ matrix.target }})
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: install rust stable
         uses: dtolnay/rust-toolchain@stable
@@ -60,12 +60,13 @@ jobs:
         run: bash scripts/release.sh ${{ matrix.target }}
 
       - name: upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: tablet-${{ matrix.target }}
           path: dist/${{ matrix.target }}/
 
   # tag 触发时聚合所有产物到 GitHub Release
+  # 命名规则: {二进制}-{平台}[.exe], 不再打 zip, 直接挂裸文件
   release:
     if: startsWith(github.ref, 'refs/tags/v')
     needs: build
@@ -73,20 +74,75 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0   # 算 changelog 要历史
+
+      - uses: actions/download-artifact@v5
         with:
           path: dist
-      - name: pack
+
+      - name: rename binaries
+        # download-artifact 把每个 matrix 产物放到 dist/tablet-<target>/ 下,
+        # 里面是原始文件名 (tablet[.exe] / tablet-cli[.exe]).
+        # 这一步把它们摊平到 dist/release/ 并按 {二进制}-{平台}[.exe] 重命名.
         run: |
-          cd dist
-          for d in */; do
-            name="${d%/}"
-            (cd "$d" && zip -r "../$name.zip" .)
+          set -euo pipefail
+          mkdir -p dist/release
+          for d in dist/tablet-*/; do
+            target="${d#dist/tablet-}"; target="${target%/}"
+            for f in "$d"*; do
+              base="$(basename "$f")"
+              case "$base" in
+                tablet.exe)     out="tablet-${target}.exe" ;;
+                tablet-cli.exe) out="tablet-cli-${target}.exe" ;;
+                tablet)         out="tablet-${target}" ;;
+                tablet-cli)     out="tablet-cli-${target}" ;;
+                *) echo "未知产物: $f" >&2; exit 1 ;;
+              esac
+              cp "$f" "dist/release/$out"
+            done
           done
-          ls -lh
+          chmod +x dist/release/* || true
+          ls -lh dist/release/
+
+      - name: build release notes
+        # 上半: 自上一个 tag 起的 commit 列表 (无前序 tag 时退化为最近 50 条)
+        # 下半: 9 个产物的固定说明表格
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF#refs/tags/}"
+          prev="$(git describe --tags --abbrev=0 "$tag^" 2>/dev/null || true)"
+          {
+            echo "## 改动 (${prev:-初始}..${tag})"
+            echo
+            if [ -n "$prev" ]; then
+              git log --pretty=format:'- %s (%h)' "$prev..$tag"
+            else
+              git log -50 --pretty=format:'- %s (%h)'
+            fi
+            echo
+            echo
+            echo "## 产物说明"
+            echo
+            echo "| 文件 | 平台 | 类型 | 备注 |"
+            echo "|---|---|---|---|"
+            echo "| tablet-windows.exe | Windows 10/11 x64 | GUI | VC++ runtime 静态链, 用户机器免装 VC 可再发行包 |"
+            echo "| tablet-cli-windows.exe | Windows 10/11 x64 | CLI | 同上 |"
+            echo "| tablet-windows-win7.exe | Windows 7 SP1 x64 | GUI | Tier 3 target, nightly + build-std 编出, 无 CI 长期保证 |"
+            echo "| tablet-cli-windows-win7.exe | Windows 7 SP1 x64 | CLI | 同上 |"
+            echo "| tablet-linux | x86_64 Linux (glibc) | GUI | 需 libgl1 / libfontconfig1 / fonts-noto-cjk |"
+            echo "| tablet-cli-linux | x86_64 Linux (glibc) | CLI | 动态链, 跟随 GUI 包发布 |"
+            echo "| tablet-cli-linux-musl | x86_64 Linux (any) | CLI | 全静态链, 老 glibc / Alpine / scratch 容器直接跑 |"
+            echo "| tablet-macos | macOS 10.13+ universal | GUI | x86_64 + aarch64 lipo, 未签名, 首次启动需在系统设置允许 |"
+            echo "| tablet-cli-macos | macOS 10.13+ universal | CLI | 同上 |"
+          } > release-notes.md
+          cat release-notes.md
+
       - name: create release
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/*.zip
-          draft: true
-          generate_release_notes: true
+          files: dist/release/*
+          body_path: release-notes.md
+          draft: false
+          prerelease: ${{ contains(github.ref_name, '-') }}
