@@ -70,10 +70,10 @@ fn run(cli: Cli) -> Result<i32> {
     output::print_override_warnings_cli(&warns);
 
     match cli.command {
-        Command::Export { json, xml, java, go, lua } => {
+        Command::Export { json, xml, java, go, lua, gdscript } => {
             let summary: ExportSummary = run_export(
                 &mut engine,
-                ExportFormats { json, xml, java, go, lua },
+                ExportFormats { json, xml, java, go, lua, gdscript },
             );
             output::print_export_summary_cli(&summary);
             // 与原行为一致：单格式失败仅 eprintln，整体仍返 0

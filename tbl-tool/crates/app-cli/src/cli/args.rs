@@ -44,6 +44,9 @@ pub enum Command {
         /// 只导出 Lua 前端文件
         #[arg(long)]
         lua: bool,
+        /// 只导出 GDScript 前端文件
+        #[arg(long)]
+        gdscript: bool,
     },
     /// 验证所有 .tbl 文件
     Validate,

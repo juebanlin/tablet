@@ -139,12 +139,20 @@ pub struct GoExport {
 #[derive(Debug, Clone, serde::Deserialize)]
 pub struct ClientConfig {
     pub lua: Option<LuaExport>,
+    pub gdscript: Option<GdScriptExport>,
     pub line_ending: Option<String>,
     pub encoding: Option<String>,
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]
 pub struct LuaExport {
+    pub output: Option<String>,
+    pub line_ending: Option<String>,
+    pub encoding: Option<String>,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct GdScriptExport {
     pub output: Option<String>,
     pub line_ending: Option<String>,
     pub encoding: Option<String>,

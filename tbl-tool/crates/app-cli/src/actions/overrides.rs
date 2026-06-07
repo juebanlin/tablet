@@ -141,7 +141,7 @@ fn ensure_export_client(config: &mut WorkspaceConfig) {
     ensure_export(config);
     if config.export.as_ref().unwrap().client.is_none() {
         config.export.as_mut().unwrap().client = Some(ClientConfig {
-            lua: None, line_ending: None, encoding: None,
+            lua: None, gdscript: None, line_ending: None, encoding: None,
         });
     }
 }
