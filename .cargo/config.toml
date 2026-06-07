@@ -1,0 +1,22 @@
+# Cargo 构建配置 (workspace 范围, 自动加载)
+# ------------------------------------------------------------
+# 关于 +crt-static (Windows 静态链 C runtime)
+#
+# 默认: 不开 → 编出来的 tablet.exe 动态依赖 vcruntime140 / ucrtbase / msvcp140
+#       (msvc) 或 libgcc_s_seh-1 / libwinpthread-1 (gnu). dev 体验好, 增量
+#       链接快; 但二进制不能直接发给陌生 Windows 用户, 缺 DLL 会报错.
+#
+# 想本地编"零部署"二进制 (跟 CI release 产物一致), 二选一:
+#
+#   1. 临时环境变量 [推荐, 只影响一次构建]:
+#      $ RUSTFLAGS="-C target-feature=+crt-static" cargo build --release -p tablet-slint
+#      或直接调发布脚本 (脚本里已经设好):
+#      $ bash scripts/release.sh windows
+#
+#   2. 取消下面 rustflags 注释 [影响所有 cargo 调用, dev 也会被拖, 不推荐]:
+#
+# [target.x86_64-pc-windows-msvc]
+# rustflags = ["-C", "target-feature=+crt-static"]
+#
+# [target.x86_64-pc-windows-gnu]
+# rustflags = ["-C", "target-feature=+crt-static"]

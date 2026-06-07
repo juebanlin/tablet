@@ -20,7 +20,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     name: build (${{ matrix.target }})
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
 
       - name: install rust stable
         uses: dtolnay/rust-toolchain@stable
@@ -60,7 +60,7 @@ jobs:
         run: bash scripts/release.sh ${{ matrix.target }}
 
       - name: upload artifact
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v7
         with:
           name: tablet-${{ matrix.target }}
           path: dist/${{ matrix.target }}/
@@ -74,11 +74,11 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0   # 算 changelog 要历史
 
-      - uses: actions/download-artifact@v5
+      - uses: actions/download-artifact@v8
         with:
           path: dist
 
