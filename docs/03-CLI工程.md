@@ -398,9 +398,11 @@ tbl-cli [-w <workdir>] [--project <id>] [-s key=value]... <subcommand>
 
 > 这些子命令先按 `--project` / `[app] last_project` / 扫描第一个的优先级选 Project，加载后才执行。
 
-#### `export [--json] [--xml] [--java] [--go] [--lua]`
+#### `export [--json] [--xml] [--java] [--go] [--lua] [--gdscript] [--typescript] [--cpp] [--csharp]`
 
 不带任何 flag = 全格式导出；指定其中一项或多项 = 仅导出这些格式。每项产物的具体路径派生规则见 @02.23 与 @02 各导出章节。
+
+`--csharp` 一次同时生成 dotnet / unity / godot 三套 Loader（schema 类共享，配置以 `csharp_dotnet` / `csharp_unity` / `csharp_godot` 三个独立 key 区分）。
 
 退出码恒为 0；单格式失败仅 eprintln 错误，不影响其它格式继续，便于 CI 收集。
 
@@ -444,6 +446,15 @@ tbl-cli [-w <workdir>] [--project <id>] [-s key=value]... <subcommand>
 | `export.server.code_output` / `export.server.java.code_output` | `[export.server.java] code_output`（兼容历史命名） |
 | `export.server.go.package` | `[export.server.go] package` |
 | `export.server.go.code_output` | `[export.server.go] code_output` |
+| `export.server.cpp.namespace` | `[export.server.cpp] namespace` |
+| `export.server.cpp.code_output` | `[export.server.cpp] code_output` |
+| `export.server.cpp.json_lib` | `[export.server.cpp] json_lib`（`nlohmann` / `rapidjson`） |
+| `export.server.csharp_dotnet.namespace` | `[export.server.csharp_dotnet] namespace` |
+| `export.server.csharp_dotnet.code_output` | `[export.server.csharp_dotnet] code_output` |
+| `export.client.csharp_unity.namespace` | `[export.client.csharp_unity] namespace` |
+| `export.client.csharp_unity.code_output` | `[export.client.csharp_unity] code_output` |
+| `export.client.csharp_godot.namespace` | `[export.client.csharp_godot] namespace` |
+| `export.client.csharp_godot.code_output` | `[export.client.csharp_godot] code_output` |
 | `export.client.lua.output` / `export.client.output` | `[export.client.lua] output`（兼容历史命名） |
 
 废弃键：`export.server.lang`（§4.6 拆分了 java/go 后不再使用），命中后只 warning 不写入。
