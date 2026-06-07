@@ -195,12 +195,19 @@ export component AppWindow inherits Window {
 
     // ── Dialog: Schema 导出 ─────────────────────────────────
     in-out property <bool> dlg-schema-export-open: false;
+    /// "schema" = 导出 .tblschema（rfd 选路径）；"template" = 保存到本地模板目录
+    in property <string> sx-mode: "schema";
     in property <[SchemaItem]> sx-items;
     in-out property <bool> sx-all-checked: false;
     in property <int> sx-selected-count: 0;
     in property <int> sx-total-count: 0;
     /// 是否把当前数据作为 # @preset 块写进导出文件
     in-out property <bool> sx-with-preset: false;
+    // metadata 覆写（两种模式都可填）
+    in-out property <string> sx-meta-id: "";
+    in-out property <string> sx-meta-name: "";
+    in-out property <string> sx-meta-category: "";
+    in-out property <string> sx-meta-version: "";
     callback sx-toggle-all(bool);
     callback sx-toggle-item(int);
     callback sx-confirm();
@@ -646,11 +653,16 @@ export component AppWindow inherits Window {
 
     SchemaExportDialog {
         open: root.dlg-schema-export-open;
+        mode: root.sx-mode;
         items: root.sx-items;
         all-checked <=> root.sx-all-checked;
         selected-count: root.sx-selected-count;
         total-count: root.sx-total-count;
         with-preset <=> root.sx-with-preset;
+        meta-id <=> root.sx-meta-id;
+        meta-name <=> root.sx-meta-name;
+        meta-category <=> root.sx-meta-category;
+        meta-version <=> root.sx-meta-version;
         toggle-all(c) => { root.sx-toggle-all(c); }
         toggle-item(i) => { root.sx-toggle-item(i); }
         confirm => { root.sx-confirm(); root.dlg-schema-export-open = false; }

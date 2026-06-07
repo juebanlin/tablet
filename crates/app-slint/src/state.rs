@@ -526,6 +526,8 @@ impl Default for DataExportState {
 #[derive(Default)]
 pub struct SchemaExportState {
     pub open: bool,
+    /// schema = 导出 .tblschema（rfd 选路径）；template = 保存到本地模板目录。
+    pub mode: SchemaExportMode,
     /// 扁平 items：每项 (group_name, name_opt, is_table)。组节点 name_opt = None。
     pub items: Vec<SchemaExportItem>,
     /// items 同步长度的 checked。组节点 checked 由子节点聚合，不直接读写。
@@ -533,6 +535,19 @@ pub struct SchemaExportState {
     /// 是否把当前 records / entries 作为 `# @preset` 块写入导出文件。
     /// 默认 false：导出"结构骨架"用于复用；true 用于"结构 + 数据"打包迁移。
     pub with_preset: bool,
+    /// metadata 覆写（两种模式都可填；默认从当前 project 预填）。
+    /// template 模式下 meta_id 必填，schema 模式下留空则不写 # @meta 块。
+    pub meta_id: String,
+    pub meta_name: String,
+    pub meta_category: String,
+    pub meta_version: String,
+}
+
+#[derive(Default, Clone, PartialEq)]
+pub enum SchemaExportMode {
+    #[default]
+    Schema,    // 导出 .tblschema，rfd 选路径
+    Template,  // 保存到本地模板目录
 }
 
 #[derive(Clone, Debug)]

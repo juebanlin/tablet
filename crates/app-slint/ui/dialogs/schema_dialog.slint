@@ -81,31 +81,45 @@ export component SchemaItemList inherits Rectangle {
     }
 }
 
-// ── 导出 Schema ─────────────────────────────────────
+// ── 导出 Schema / 保存为本地模板 ──────────────────────
+// mode = "schema"   → 标题「导出 Schema」，确认弹 rfd 选路径，metadata 可选
+// mode = "template" → 标题「保存为本地模板」d 必填
 export component SchemaExportDialog inherits Rectangle {
     in property <bool> open: false;
+    in property <string> mode: "schema";   // "schema" | "template"
     in property <[SchemaItem]> items;
     in-out property <bool> all-checked: false;
     in property <bool> all-tristate: false;
     in property <int> selected-count: 0;
     in property <int> total-count: 0;
     in-out property <bool> with-preset: false;
+    // metadata（两种模式均可填；默认由 Rust 端从当前 project 预填）
+    in-out property <string> meta-id: "";
+    in-out property <string> meta-name: "";
+    in-out property <string> meta-category: "";
+    in-out property <string> meta-version: "";
 
     callback toggle-all(bool);
     callback toggle-item(int);
     callback confirm();
     callback cancel();
 
+    pure function is-template() -> bool { root.mode == "template" }
+    pure function primary-ok() -> bool {
+        root.selected-count > 0
+        && (!root.is-template() || root.meta-id != "")
+    }
+
     visible: root.open;
     width: 100%;
     height: 100%;
 
     DialogChrome {
-        title: "导出 Schema";
+        title: root.is-template() ? "保存为本地模板" : "导出 Schema";
         dialog-w: 480px;
-        dialog-h: 460px;
-        primary-text: "导出...";
-        primary-enabled: root.selected-count > 0;
+        dialog-h: root.is-template() ? 580px : 520px;
+        primary-text: root.is-template() ? "保存到本地模板" : "导出...";
+        primary-enabled: root.primary-ok();
         primary-clicked => { root.confirm(); }
         cancel-clicked => { root.cancel(); }
         scrim-clicked => { root.cancel(); }
@@ -114,7 +128,78 @@ export component SchemaExportDialog inherits Rectangle {
             padding: Theme.sp-4;
             spacing: Theme.sp-3;
 
-            // 全选
+            // ── metadata 区 ──────────────────────────────
+            VerticalLayout {
+                spacing: Theme.sp-2;
+                HorizontalLayout {
+                    spacing: Theme.sp-2;
+                    alignment: start;
+                    Text {
+                        text: root.is-template() ? "模板 ID *" : "ID";
+                        font-size: Theme.fs-small;
+                        color: root.is-template() ? Theme.text-primary : Theme.text-secondary;
+                        width: 80px;
+                        vertical-alignment: center;
+                    }
+                    LineEdit {
+                        horizontal-stretch: 1;
+                        text <=> root.meta-id;
+                        placeholder-text: root.is-template() ? "小写字母/数字/下划线/连字符" : "留空则不写 # @meta";
+                    }
+                }
+                HorizontalLayout {
+                    spacing: Theme.sp-2;
+                    alignment: start;
+                    Text {
+                        text: "名称";
+                        font-size: Theme.fs-small;
+                        color: Theme.text-secondary;
+                        width: 80px;
+                        vertical-alignment: center;
+                    }
+                    LineEdit {
+                        horizontal-stretch: 1;
+                        text <=> root.meta-name;
+                        placeholder-text: "显示名（可含中文），留空同 ID";
+                    }
+                }
+                HorizontalLayout {
+                    spacing: Theme.sp-2;
+                    alignment: start;
+                    Text {
+                        text: "分类";
+                        font-size: Theme.fs-small;
+                        color: Theme.text-secondary;
+                        width: 80px;
+                        vertical-alignment: center;
+                    }
+                    LineEdit {
+                        horizontal-stretch: 1;
+                        text <=> root.meta-category;
+                        placeholder-text: "如 game / mmo / tool";
+                    }
+                }
+                HorizontalLayout {
+                    spacing: Theme.sp-2;
+                    alignment: start;
+                    Text {
+                        text: "版本";
+                        font-size: Theme.fs-small;
+                        color: Theme.text-secondary;
+                        width: 80px;
+                        vertical-alignment: center;
+                    }
+                    LineEdit {
+                        horizontal-stretch: 1;
+                        text <=> root.meta-version;
+                        placeholder-text: "如 1.0.0";
+                    }
+                }
+            }
+
+            Rectangle { height: 1px; background: Theme.border-light; }
+
+            // ── 全选 + 预设 ──────────────────────────────
             HorizontalLayout {
                 spacing: Theme.sp-2;
                 CheckBox {
@@ -139,7 +224,7 @@ export component SchemaExportDialog inherits Rectangle {
             }
             Rectangle { height: 1px; background: Theme.border-light; }
 
-            // 列表
+            // ── 列表 ─────────────────────────────────────
             Rectangle {
                 vertical-stretch: 1;
                 SchemaItemList {
@@ -150,15 +235,24 @@ export component SchemaExportDialog inherits Rectangle {
             }
 
             Rectangle { height: 1px; background: Theme.border-light; }
-            Text {
-                text: "已选: " + root.selected-count + "/" + root.total-count + " 项";
-                font-size: Theme.fs-tiny;
-                color: Theme.text-secondary;
+            HorizontalLayout {
+                spacing: Theme.sp-2;
+                Text {
+                    text: "已选: " + root.selected-count + "/" + root.total-count + " 项";
+                    font-size: Theme.fs-tiny;
+                    color: Theme.text-secondary;
+                    vertical-alignment: center;
+                }
+                if root.is-template() && root.meta-id == "": Text {
+                    text: "  ← 模板 ID 必填";
+                    font-size: Theme.fs-tiny;
+                    color: Theme.mark-modified;
+                    vertical-alignment: center;
+                }
             }
         }
     }
 }
-
 // ── 导入 Schema ─────────────────────────────────────
 export component SchemaImportDialog inherits Rectangle {
     in property <bool> open: false;

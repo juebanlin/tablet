@@ -11,6 +11,8 @@ use crate::{refresh, ui, AppWindow, SchemaItem};
 
 /// 把当前 project 的 groups/tables/constants/enums 扁平化为 SchemaExportItem 列表，
 /// 默认勾选全部（Schema 导出对话框打开时调用）。
+/// metadata 字段从当前 project schema 预填，用户可在对话框里改。
+/// mode 由调用方在打开对话框前单独设置（默认 Schema）。
 pub(crate) fn rebuild_export_items(st: &mut AppState) {
     let mut items: Vec<state::SchemaExportItem> = Vec::new();
     for g in &st.engine.project().groups {
@@ -35,6 +37,12 @@ pub(crate) fn rebuild_export_items(st: &mut AppState) {
     st.schema_export.items = items;
     // 每次打开对话框默认不带预设：导出"结构骨架"是更常见路径
     st.schema_export.with_preset = false;
+    // metadata 预填当前项目值，用户可改
+    let meta = &st.engine.project().schema.meta;
+    st.schema_export.meta_id = meta.id.clone();
+    st.schema_export.meta_name = meta.name.clone();
+    st.schema_export.meta_category = meta.category.clone();
+    st.schema_export.meta_version = meta.version.clone();
 }
 
 /// 把 SchemaExportState 推到 slint 端：组节点 tristate 由其下子节点聚合。
@@ -93,6 +101,14 @@ pub fn push_export(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
     ui_h.set_sx_selected_count(selected);
     ui_h.set_sx_total_count(total);
     ui_h.set_sx_with_preset(sx.with_preset);
+    ui_h.set_sx_mode(match sx.mode {
+        state::SchemaExportMode::Schema => "schema".into(),
+        state::SchemaExportMode::Template => "template".into(),
+    });
+    ui_h.set_sx_meta_id(sx.meta_id.clone().into());
+    ui_h.set_sx_meta_name(sx.meta_name.clone().into());
+    ui_h.set_sx_meta_category(sx.meta_category.clone().into());
+    ui_h.set_sx_meta_version(sx.meta_version.clone().into());
 }
 
 /// 把 SchemaImportState 推到 slint 端：file_loaded / items / 冲突计数。
@@ -242,9 +258,14 @@ pub fn wire(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
         let s = state.clone();
         let weak = ui_h.as_weak();
         ui_h.on_sx_confirm(move || {
-            // 把 slint 端 with-preset 的最新值同步回 Rust state，再跑 export
+            // 把 slint 端的最新值同步回 Rust state，再跑 export
             if let Some(ui_h) = weak.upgrade() {
-                s.borrow_mut().schema_export.with_preset = ui_h.get_sx_with_preset();
+                let mut st = s.borrow_mut();
+                st.schema_export.with_preset = ui_h.get_sx_with_preset();
+                st.schema_export.meta_id = ui_h.get_sx_meta_id().to_string();
+                st.schema_export.meta_name = ui_h.get_sx_meta_name().to_string();
+                st.schema_export.meta_category = ui_h.get_sx_meta_category().to_string();
+                st.schema_export.meta_version = ui_h.get_sx_meta_version().to_string();
             }
             run_export(&s);
             s.borrow_mut().schema_export.open = false;
@@ -354,34 +375,98 @@ pub fn wire(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
     }
 }
 
-/// Schema 导出：把当前勾选项 → SchemaSection → serialize → rfd save。
+/// Schema 导出：把当前勾选项 → SchemaSection → serialize → 落盘。
+/// - mode=Schema   → rfd 选路径保存（meta 留空时不写 # @meta 块）
+/// - mode=Template → 写到 default_local_dir()/<id>.tblschema（id 必填，已在 UI 层校验）
 fn run_export(state: &Rc<RefCell<AppState>>) {
-    use tablet_core::tblschema::{TblSchema, schema_from_project, serialize_tblschema};
-    let (selected, full_schema) = {
+    use tablet_core::tblschema::{
+        is_valid_metadata_id, schema_from_project, serialize_tblschema,
+        SchemaMetadata, TblSchema,
+    };
+    use tablet_core::template::default_local_dir;
+
+    let (selected, full_schema, mode, meta) = {
         let st = state.borrow();
         let full = schema_from_project(&st.engine.project().groups, st.schema_export.with_preset);
         let selected: Vec<(String, String)> = st.schema_export.items.iter().enumerate()
             .filter(|(i, it)| it.indent == 1 && st.schema_export.checked.get(*i).copied().unwrap_or(false))
             .map(|(_, it)| (it.group.clone(), it.name.clone()))
             .collect();
-        (selected, full)
+        let mut meta = SchemaMetadata::default();
+        meta.id = st.schema_export.meta_id.trim().to_string();
+        meta.name = st.schema_export.meta_name.trim().to_string();
+        meta.category = st.schema_export.meta_category.trim().to_string();
+        meta.version = st.schema_export.meta_version.trim().to_string();
+        // name 缺省：用 id 兜底（与 tblschema 解析侧默认行为一致）
+        if meta.name.is_empty() && !meta.id.is_empty() {
+            meta.name = meta.id.clone();
+        }
+        (selected, full, st.schema_export.mode.clone(), meta)
     };
+
     let mut sections = Vec::new();
     for (g, n) in &selected {
         if let Some(sec) = full_schema.sections.iter().find(|s| &s.group == g && &s.name == n) {
             sections.push(sec.clone());
         }
     }
-    let schema = TblSchema { meta: Default::default(), separators: Default::default(), sections };
+    let schema = TblSchema {
+        meta: meta.clone(),
+        separators: Default::default(),
+        sections,
+    };
     let content = serialize_tblschema(&schema);
-    let file = rfd::FileDialog::new()
-        .add_filter("TblSchema", &["tblschema"])
-        .set_file_name("export.tblschema")
-        .save_file();
-    if let Some(path) = file {
-        match std::fs::write(&path, &content) {
-            Ok(_) => state.borrow_mut().engine.log(format!("[导出Schema] 已保存到 {}", path.display())),
-            Err(e) => state.borrow_mut().engine.log(format!("[导出Schema] 写入失败: {}", e)),
+
+    match mode {
+        state::SchemaExportMode::Schema => {
+            let suggested = if meta.id.is_empty() {
+                "export.tblschema".to_string()
+            } else {
+                format!("{}.tblschema", meta.id)
+            };
+            let file = rfd::FileDialog::new()
+                .add_filter("TblSchema", &["tblschema"])
+                .set_file_name(&suggested)
+                .save_file();
+            if let Some(path) = file {
+                match std::fs::write(&path, &content) {
+                    Ok(_) => state.borrow_mut().engine.log(format!("[导出Schema] 已保存到 {}", path.display())),
+                    Err(e) => state.borrow_mut().engine.log(format!("[导出Schema] 写入失败: {}", e)),
+                }
+            }
+        }
+        state::SchemaExportMode::Template => {
+            // id 必填且需合法（UI 层只校验非空，这里再把字符集卡一次）
+            if meta.id.is_empty() {
+                state.borrow_mut().engine.log("[导出为本地模板] 失败：模板 ID 为空".to_string());
+                return;
+            }
+            if !is_valid_metadata_id(&meta.id) {
+                state.borrow_mut().engine.log(format!(
+                    "[导出为本地模板] 失败：模板 ID '{}' 非法（仅小写字母/数字/下划线/连字符，长度 1-32）",
+                    meta.id
+                ));
+                return;
+            }
+            let dir = default_local_dir();
+            if let Err(e) = std::fs::create_dir_all(&dir) {
+                state.borrow_mut().engine.log(format!(
+                    "[导出为本地模板] 创建目录失败 {}: {}", dir.display(), e
+                ));
+                return;
+            }
+            let path = dir.join(format!("{}.tblschema", meta.id));
+            let existed = path.exists();
+            match std::fs::write(&path, &content) {
+                Ok(_) => state.borrow_mut().engine.log(format!(
+                    "[导出为本地模板] 已{}保存到 {}",
+                    if existed { "覆盖" } else { "" },
+                    path.display()
+                )),
+                Err(e) => state.borrow_mut().engine.log(format!(
+                    "[导出为本地模板] 写入失败 {}: {}", path.display(), e
+                )),
+            }
         }
     }
 }

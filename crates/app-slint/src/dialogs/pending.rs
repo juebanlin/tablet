@@ -153,6 +153,15 @@ pub(crate) fn handle_project_root_action(state: &Rc<RefCell<AppState>>, project_
             // Schema 导出对话框同样走 active project
             let mut st = state.borrow_mut();
             st.engine.set_active_by_id(project_id);
+            st.schema_export.mode = crate::state::SchemaExportMode::Schema;
+            st.schema_export.open = true;
+            crate::dialogs::schema_io::rebuild_export_items(&mut st);
+        }
+        "tree.proj-export-template" => {
+            // 与「导出 Schema...」共用对话框，仅 mode 不同：写到本地模板目录而非 rfd 选路径
+            let mut st = state.borrow_mut();
+            st.engine.set_active_by_id(project_id);
+            st.schema_export.mode = crate::state::SchemaExportMode::Template;
             st.schema_export.open = true;
             crate::dialogs::schema_io::rebuild_export_items(&mut st);
         }
