@@ -1,4 +1,4 @@
-// 数据导出对话框：选择 JSON/XML/Java/Go/Lua 子集，再导出。
+// 数据导出对话框：服务端 4 + 客户端 5 + 数据 2 共 11 个勾选 + 4 个预设。
 // 对应 docs/04-导出功能.md。
 
 import { Theme } from "../theme.slint";
@@ -10,9 +10,17 @@ export component ExportDialog inherits Rectangle {
 
     in-out property <bool> json-checked: true;
     in-out property <bool> xml-checked: true;
+
     in-out property <bool> java-checked: true;
-    in-out property <bool> go-checked: false;
+    in-out property <bool> go-checked: true;
+    in-out property <bool> cpp-checked: true;
+    in-out property <bool> csharp-dotnet-checked: true;
+
     in-out property <bool> lua-checked: true;
+    in-out property <bool> gdscript-checked: true;
+    in-out property <bool> typescript-checked: true;
+    in-out property <bool> csharp-unity-checked: true;
+    in-out property <bool> csharp-godot-checked: true;
 
     callback preset-all();
     callback preset-data();
@@ -27,10 +35,14 @@ export component ExportDialog inherits Rectangle {
 
     DialogChrome {
         title: "导出";
-        dialog-w: 320px;
-        dialog-h: 280px;
+        dialog-w: 420px;
+        dialog-h: 460px;
         primary-text: "导出";
-        primary-enabled: root.json-checked || root.xml-checked || root.java-checked || root.go-checked || root.lua-checked;
+        primary-enabled:
+               root.json-checked || root.xml-checked
+            || root.java-checked || root.go-checked || root.cpp-checked || root.csharp-dotnet-checked
+            || root.lua-checked || root.gdscript-checked || root.typescript-checked
+            || root.csharp-unity-checked || root.csharp-godot-checked;
         primary-clicked => { root.confirm(); }
         cancel-clicked => { root.cancel(); }
         scrim-clicked => { root.cancel(); }
@@ -55,44 +67,49 @@ export component ExportDialog inherits Rectangle {
 
             Rectangle { height: 1px; background: Theme.border-light; }
 
+            // 数据格式
             Text {
-                text: "选择导出格式";
+                text: "数据";
                 font-size: Theme.fs-tiny;
                 color: Theme.text-secondary;
             }
-
-            // 数据格式
             HorizontalLayout {
                 spacing: Theme.sp-4;
-                CheckBox {
-                    text: "JSON";
-                    checked <=> root.json-checked;
-                }
-                CheckBox {
-                    text: "XML";
-                    checked <=> root.xml-checked;
-                }
+                CheckBox { text: "JSON"; checked <=> root.json-checked; }
+                CheckBox { text: "XML"; checked <=> root.xml-checked; }
             }
 
             // 服务端
+            Text {
+                text: "服务端";
+                font-size: Theme.fs-tiny;
+                color: Theme.text-secondary;
+            }
             HorizontalLayout {
                 spacing: Theme.sp-4;
-                CheckBox {
-                    text: "Java";
-                    checked <=> root.java-checked;
-                }
-                CheckBox {
-                    text: "Go";
-                    checked <=> root.go-checked;
-                }
+                CheckBox { text: "Java"; checked <=> root.java-checked; }
+                CheckBox { text: "Go"; checked <=> root.go-checked; }
+                CheckBox { text: "C++"; checked <=> root.cpp-checked; }
+                CheckBox { text: "C# (.NET)"; checked <=> root.csharp-dotnet-checked; }
             }
 
             // 客户端
-            HorizontalLayout {
+            Text {
+                text: "客户端";
+                font-size: Theme.fs-tiny;
+                color: Theme.text-secondary;
+            }
+            GridLayout {
                 spacing: Theme.sp-4;
-                CheckBox {
-                    text: "Lua";
-                    checked <=> root.lua-checked;
+                Row {
+                    CheckBox { text: "Lua"; checked <=> root.lua-checked; }
+                    CheckBox { text: "GDScript"; checked <=> root.gdscript-checked; }
+                    CheckBox { text: "TypeScript"; checked <=> root.typescript-checked; }
+                }
+                Row {
+                    CheckBox { text: "C# (Unity)"; checked <=> root.csharp-unity-checked; }
+                    CheckBox { text: "C# (Godot)"; checked <=> root.csharp-godot-checked; }
+                    Rectangle {}
                 }
             }
 
@@ -104,7 +121,7 @@ export component ExportDialog inherits Rectangle {
 export component ExportDialogPreview inherits Window {
     title: "ExportDialog Preview";
     width: 540px;
-    height: 420px;
+    height: 540px;
 
     ExportDialog {
         open: true;

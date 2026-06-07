@@ -181,8 +181,14 @@ export component AppWindow inherits Window {
     in-out property <bool> ex-json: true;
     in-out property <bool> ex-xml: true;
     in-out property <bool> ex-java: true;
-    in-out property <bool> ex-go: false;
+    in-out property <bool> ex-go: true;
+    in-out property <bool> ex-cpp: true;
+    in-out property <bool> ex-csharp-dotnet: true;
     in-out property <bool> ex-lua: true;
+    in-out property <bool> ex-gdscript: true;
+    in-out property <bool> ex-typescript: true;
+    in-out property <bool> ex-csharp-unity: true;
+    in-out property <bool> ex-csharp-godot: true;
     callback ex-confirm();
     callback ex-cancel();
 
@@ -601,11 +607,37 @@ export component AppWindow inherits Window {
         xml-checked <=> root.ex-xml;
         java-checked <=> root.ex-java;
         go-checked <=> root.ex-go;
+        cpp-checked <=> root.ex-cpp;
+        csharp-dotnet-checked <=> root.ex-csharp-dotnet;
         lua-checked <=> root.ex-lua;
-        preset-all => { root.ex-json = true; root.ex-xml = true; root.ex-java = true; root.ex-go = true; root.ex-lua = true; }
-        preset-data => { root.ex-json = true; root.ex-xml = true; root.ex-java = false; root.ex-go = false; root.ex-lua = false; }
-        preset-server => { root.ex-json = true; root.ex-xml = true; root.ex-java = true; root.ex-go = true; root.ex-lua = false; }
-        preset-client => { root.ex-json = false; root.ex-xml = false; root.ex-java = false; root.ex-go = false; root.ex-lua = true; }
+        gdscript-checked <=> root.ex-gdscript;
+        typescript-checked <=> root.ex-typescript;
+        csharp-unity-checked <=> root.ex-csharp-unity;
+        csharp-godot-checked <=> root.ex-csharp-godot;
+        preset-all => {
+            root.ex-json = true; root.ex-xml = true;
+            root.ex-java = true; root.ex-go = true; root.ex-cpp = true; root.ex-csharp-dotnet = true;
+            root.ex-lua = true; root.ex-gdscript = true; root.ex-typescript = true;
+            root.ex-csharp-unity = true; root.ex-csharp-godot = true;
+        }
+        preset-data => {
+            root.ex-json = true; root.ex-xml = true;
+            root.ex-java = false; root.ex-go = false; root.ex-cpp = false; root.ex-csharp-dotnet = false;
+            root.ex-lua = false; root.ex-gdscript = false; root.ex-typescript = false;
+            root.ex-csharp-unity = false; root.ex-csharp-godot = false;
+        }
+        preset-server => {
+            root.ex-json = true; root.ex-xml = true;
+            root.ex-java = true; root.ex-go = true; root.ex-cpp = true; root.ex-csharp-dotnet = true;
+            root.ex-lua = false; root.ex-gdscript = false; root.ex-typescript = false;
+            root.ex-csharp-unity = false; root.ex-csharp-godot = false;
+        }
+        preset-client => {
+            root.ex-json = false; root.ex-xml = false;
+            root.ex-java = false; root.ex-go = false; root.ex-cpp = false; root.ex-csharp-dotnet = false;
+            root.ex-lua = true; root.ex-gdscript = true; root.ex-typescript = true;
+            root.ex-csharp-unity = true; root.ex-csharp-godot = true;
+        }
         confirm => { root.ex-confirm(); root.dlg-export-open = false; }
         cancel => { root.ex-cancel(); root.dlg-export-open = false; }
     }

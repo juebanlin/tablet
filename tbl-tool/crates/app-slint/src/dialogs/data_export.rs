@@ -1,4 +1,4 @@
-// 数据导出对话框：5 个格式勾选框 + 确认。
+// 数据导出对话框：12 个格式勾选框 + 确认。
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -16,7 +16,13 @@ pub fn push(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
     ui_h.set_ex_xml(de.xml);
     ui_h.set_ex_java(de.java);
     ui_h.set_ex_go(de.go);
+    ui_h.set_ex_cpp(de.cpp);
+    ui_h.set_ex_csharp_dotnet(de.csharp_dotnet);
     ui_h.set_ex_lua(de.lua);
+    ui_h.set_ex_gdscript(de.gdscript);
+    ui_h.set_ex_typescript(de.typescript);
+    ui_h.set_ex_csharp_unity(de.csharp_unity);
+    ui_h.set_ex_csharp_godot(de.csharp_godot);
 }
 
 pub fn wire(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
@@ -24,21 +30,27 @@ pub fn wire(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
         let s = state.clone();
         let weak = ui_h.as_weak();
         ui_h.on_ex_confirm(move || {
-            let (json, xml, java, go, lua) = match weak.upgrade() {
+            let snapshot = match weak.upgrade() {
                 Some(ui_h) => (
-                    ui_h.get_ex_json(), ui_h.get_ex_xml(), ui_h.get_ex_java(),
-                    ui_h.get_ex_go(), ui_h.get_ex_lua(),
+                    ui_h.get_ex_json(), ui_h.get_ex_xml(),
+                    ui_h.get_ex_java(), ui_h.get_ex_go(),
+                    ui_h.get_ex_cpp(), ui_h.get_ex_csharp_dotnet(),
+                    ui_h.get_ex_lua(), ui_h.get_ex_gdscript(),
+                    ui_h.get_ex_typescript(),
+                    ui_h.get_ex_csharp_unity(), ui_h.get_ex_csharp_godot(),
                 ),
                 None => return,
             };
             {
                 let mut st = s.borrow_mut();
-                st.data_export.json = json;
-                st.data_export.xml = xml;
-                st.data_export.java = java;
-                st.data_export.go = go;
-                st.data_export.lua = lua;
-                st.data_export.open = false;
+                let d = &mut st.data_export;
+                d.json = snapshot.0; d.xml = snapshot.1;
+                d.java = snapshot.2; d.go = snapshot.3;
+                d.cpp = snapshot.4; d.csharp_dotnet = snapshot.5;
+                d.lua = snapshot.6; d.gdscript = snapshot.7;
+                d.typescript = snapshot.8;
+                d.csharp_unity = snapshot.9; d.csharp_godot = snapshot.10;
+                d.open = false;
             }
             run(&s);
             if let Some(ui_h) = weak.upgrade() {
@@ -86,10 +98,46 @@ fn run(state: &Rc<RefCell<AppState>>) {
             Err(e) => st.engine.log(format!("[Go] 错误: {}", e)),
         }
     }
+    if opts.cpp {
+        match st.engine.export_cpp() {
+            Ok(r) => log_result(&mut st, "C++", &r),
+            Err(e) => st.engine.log(format!("[C++] 错误: {}", e)),
+        }
+    }
+    if opts.csharp_dotnet {
+        match st.engine.export_csharp_dotnet() {
+            Ok(r) => log_result(&mut st, "C# (.NET)", &r),
+            Err(e) => st.engine.log(format!("[C# (.NET)] 错误: {}", e)),
+        }
+    }
     if opts.lua {
         match st.engine.export_lua() {
             Ok(r) => log_result(&mut st, "Lua", &r),
             Err(e) => st.engine.log(format!("[Lua] 错误: {}", e)),
+        }
+    }
+    if opts.gdscript {
+        match st.engine.export_gdscript() {
+            Ok(r) => log_result(&mut st, "GDScript", &r),
+            Err(e) => st.engine.log(format!("[GDScript] 错误: {}", e)),
+        }
+    }
+    if opts.typescript {
+        match st.engine.export_typescript() {
+            Ok(r) => log_result(&mut st, "TypeScript", &r),
+            Err(e) => st.engine.log(format!("[TypeScript] 错误: {}", e)),
+        }
+    }
+    if opts.csharp_unity {
+        match st.engine.export_csharp_unity() {
+            Ok(r) => log_result(&mut st, "C# (Unity)", &r),
+            Err(e) => st.engine.log(format!("[C# (Unity)] 错误: {}", e)),
+        }
+    }
+    if opts.csharp_godot {
+        match st.engine.export_csharp_godot() {
+            Ok(r) => log_result(&mut st, "C# (Godot)", &r),
+            Err(e) => st.engine.log(format!("[C# (Godot)] 错误: {}", e)),
         }
     }
 }

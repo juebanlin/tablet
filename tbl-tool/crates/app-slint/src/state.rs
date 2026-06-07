@@ -498,12 +498,24 @@ pub struct DataExportState {
     pub xml: bool,
     pub java: bool,
     pub go: bool,
+    pub cpp: bool,
+    pub csharp_dotnet: bool,
     pub lua: bool,
+    pub gdscript: bool,
+    pub typescript: bool,
+    pub csharp_unity: bool,
+    pub csharp_godot: bool,
 }
 
 impl Default for DataExportState {
     fn default() -> Self {
-        Self { open: false, json: true, xml: true, java: true, go: false, lua: true }
+        Self {
+            open: false,
+            json: true, xml: true,
+            java: true, go: true, cpp: true, csharp_dotnet: true,
+            lua: true, gdscript: true, typescript: true,
+            csharp_unity: true, csharp_godot: true,
+        }
     }
 }
 
