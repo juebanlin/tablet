@@ -20,6 +20,12 @@
 - [08-测试](docs/08-测试.md) — 测试体系
 - [09-平台发布](docs/09-平台发布.md) — 跨平台发布策略
 
+## AI 辅助技能
+
+[`skills/`](skills/) 目录下提供面向用户的 AI 编程技能包，让 AI 助手按 tablet 规则生成 / 校验 `.tbl` 与 `.tblschema` 文件内容。当前包含：
+
+- [`skills/tbl/`](skills/tbl/) — `.tblschema` 文件格式权威说明 + 工作流
+
 ## 构建
 
 详细发布脚本见 [`scripts/README.md`](scripts/README.md)。
