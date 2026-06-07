@@ -642,11 +642,6 @@ impl CreateProjectState {
         *self = Self::default();
     }
 
-    /// 当前 tab 是否需要 sections-picker（仅 FromFile / FromTemplate）
-    pub fn needs_picker(&self) -> bool {
-        self.tab == 1 || self.tab == 2
-    }
-
     /// 当前 tab 决定的 source schema（FromFile / FromTemplate 共享 picker 与 with_preset）
     pub fn source_schema(&self) -> Option<&tbl_core::tblschema::TblSchema> {
         match self.tab {

@@ -99,7 +99,6 @@ impl BaseType {
             (BaseType::Double, 0) => "3.14", (BaseType::Double, 1) => "6.28", (BaseType::Double, _) => "9.42",
             (BaseType::Str, 0) => "abc", (BaseType::Str, 1) => "def", (BaseType::Str, _) => "ghi",
             (BaseType::Bool, 0) => "true", (BaseType::Bool, _) => "false",
-            _ => "?",
         }
     }
 
