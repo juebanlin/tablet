@@ -34,5 +34,4 @@ tablet/tests/*/go.mod
 tablet/tests/*/go.sum
 
 # Claude
-.claude/*
-!.claude/skills/
+.claude/
