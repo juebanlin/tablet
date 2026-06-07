@@ -500,6 +500,7 @@ pub struct DataExportState {
     pub go: bool,
     pub cpp: bool,
     pub csharp_dotnet: bool,
+    pub typescript_server: bool,
     pub lua: bool,
     pub gdscript: bool,
     pub typescript: bool,
@@ -512,7 +513,7 @@ impl Default for DataExportState {
         Self {
             open: false,
             json: true, xml: true,
-            java: true, go: true, cpp: true, csharp_dotnet: true,
+            java: true, go: true, cpp: true, csharp_dotnet: true, typescript_server: true,
             lua: true, gdscript: true, typescript: true,
             csharp_unity: true, csharp_godot: true,
         }

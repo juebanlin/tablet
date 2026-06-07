@@ -118,6 +118,7 @@ pub struct ServerExport {
     pub go: Option<GoExport>,
     pub cpp: Option<CppExport>,
     pub csharp_dotnet: Option<CSharpExport>,
+    pub typescript: Option<TypeScriptExport>,
     pub line_ending: Option<String>,
     pub encoding: Option<String>,
 }

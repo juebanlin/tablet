@@ -15,7 +15,7 @@ pub use xml::export_all_xml;
 pub use lua::export_all_lua;
 pub use go::export_all_go;
 pub use gdscript::export_all_gdscript;
-pub use typescript::export_all_typescript;
+pub use typescript::{export_all_typescript, TypeScriptSide};
 pub use cpp::export_all_cpp;
 pub use csharp::{export_all_csharp, CSharpRuntime};
 

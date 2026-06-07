@@ -1,4 +1,8 @@
 // 数据导出对话框：12 个格式勾选框 + 确认。
+//
+// TypeScript 拆双 side：
+// - 客户端 → `[export.client.typescript]`，对应勾选「TypeScript (前端)」
+// - Node.js → `[export.server.typescript]`，对应勾选「TypeScript (Node.js)」
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -18,6 +22,7 @@ pub fn push(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
     ui_h.set_ex_go(de.go);
     ui_h.set_ex_cpp(de.cpp);
     ui_h.set_ex_csharp_dotnet(de.csharp_dotnet);
+    ui_h.set_ex_typescript_server(de.typescript_server);
     ui_h.set_ex_lua(de.lua);
     ui_h.set_ex_gdscript(de.gdscript);
     ui_h.set_ex_typescript(de.typescript);
@@ -30,33 +35,27 @@ pub fn wire(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
         let s = state.clone();
         let weak = ui_h.as_weak();
         ui_h.on_ex_confirm(move || {
-            let snapshot = match weak.upgrade() {
-                Some(ui_h) => (
-                    ui_h.get_ex_json(), ui_h.get_ex_xml(),
-                    ui_h.get_ex_java(), ui_h.get_ex_go(),
-                    ui_h.get_ex_cpp(), ui_h.get_ex_csharp_dotnet(),
-                    ui_h.get_ex_lua(), ui_h.get_ex_gdscript(),
-                    ui_h.get_ex_typescript(),
-                    ui_h.get_ex_csharp_unity(), ui_h.get_ex_csharp_godot(),
-                ),
-                None => return,
-            };
+            let Some(ui_h) = weak.upgrade() else { return; };
             {
                 let mut st = s.borrow_mut();
                 let d = &mut st.data_export;
-                d.json = snapshot.0; d.xml = snapshot.1;
-                d.java = snapshot.2; d.go = snapshot.3;
-                d.cpp = snapshot.4; d.csharp_dotnet = snapshot.5;
-                d.lua = snapshot.6; d.gdscript = snapshot.7;
-                d.typescript = snapshot.8;
-                d.csharp_unity = snapshot.9; d.csharp_godot = snapshot.10;
+                d.json = ui_h.get_ex_json();
+                d.xml = ui_h.get_ex_xml();
+                d.java = ui_h.get_ex_java();
+                d.go = ui_h.get_ex_go();
+                d.cpp = ui_h.get_ex_cpp();
+                d.csharp_dotnet = ui_h.get_ex_csharp_dotnet();
+                d.typescript_server = ui_h.get_ex_typescript_server();
+                d.lua = ui_h.get_ex_lua();
+                d.gdscript = ui_h.get_ex_gdscript();
+                d.typescript = ui_h.get_ex_typescript();
+                d.csharp_unity = ui_h.get_ex_csharp_unity();
+                d.csharp_godot = ui_h.get_ex_csharp_godot();
                 d.open = false;
             }
             run(&s);
-            if let Some(ui_h) = weak.upgrade() {
-                push(&ui_h, &s);
-                refresh::after_log(&ui_h, &s);
-            }
+            push(&ui_h, &s);
+            refresh::after_log(&ui_h, &s);
         });
     }
     {
@@ -110,6 +109,12 @@ fn run(state: &Rc<RefCell<AppState>>) {
             Err(e) => st.engine.log(format!("[C# (.NET)] 错误: {}", e)),
         }
     }
+    if opts.typescript_server {
+        match st.engine.export_typescript_server() {
+            Ok(r) => log_result(&mut st, "TypeScript (Node.js)", &r),
+            Err(e) => st.engine.log(format!("[TypeScript (Node.js)] 错误: {}", e)),
+        }
+    }
     if opts.lua {
         match st.engine.export_lua() {
             Ok(r) => log_result(&mut st, "Lua", &r),
@@ -123,9 +128,9 @@ fn run(state: &Rc<RefCell<AppState>>) {
         }
     }
     if opts.typescript {
-        match st.engine.export_typescript() {
-            Ok(r) => log_result(&mut st, "TypeScript", &r),
-            Err(e) => st.engine.log(format!("[TypeScript] 错误: {}", e)),
+        match st.engine.export_typescript_client() {
+            Ok(r) => log_result(&mut st, "TypeScript (前端)", &r),
+            Err(e) => st.engine.log(format!("[TypeScript (前端)] 错误: {}", e)),
         }
     }
     if opts.csharp_unity {

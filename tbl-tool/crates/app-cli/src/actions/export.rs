@@ -81,7 +81,8 @@ pub fn run_export(engine: &mut ProjectEngine, formats: ExportFormats) -> ExportS
         summary.per_format.push(("GDScript", outcome(engine.export_gdscript())));
     }
     if formats.typescript {
-        summary.per_format.push(("TypeScript", outcome(engine.export_typescript())));
+        summary.per_format.push(("TypeScript (前端)", outcome(engine.export_typescript_client())));
+        summary.per_format.push(("TypeScript (Node.js)", outcome(engine.export_typescript_server())));
     }
     if formats.cpp {
         summary.per_format.push(("C++", outcome(engine.export_cpp())));

@@ -1,5 +1,9 @@
-// 数据导出对话框：服务端 4 + 客户端 5 + 数据 2 共 11 个勾选 + 4 个预设。
+// 数据导出对话框：服务端 5 + 客户端 5 + 数据 2 共 12 个勾选 + 4 个预设。
 // 对应 docs/04-导出功能.md。
+//
+// TypeScript 拆双 side：
+// - 客户端 → typescript-checked，对应 [export.client.typescript]
+// - Node.js → typescript-server-checked，对应 [export.server.typescript]
 
 import { Theme } from "../theme.slint";
 import { DialogChrome } from "dialog_chrome.slint";
@@ -15,6 +19,7 @@ export component ExportDialog inherits Rectangle {
     in-out property <bool> go-checked: true;
     in-out property <bool> cpp-checked: true;
     in-out property <bool> csharp-dotnet-checked: true;
+    in-out property <bool> typescript-server-checked: true;
 
     in-out property <bool> lua-checked: true;
     in-out property <bool> gdscript-checked: true;
@@ -35,12 +40,13 @@ export component ExportDialog inherits Rectangle {
 
     DialogChrome {
         title: "导出";
-        dialog-w: 420px;
-        dialog-h: 460px;
+        dialog-w: 460px;
+        dialog-h: 500px;
         primary-text: "导出";
         primary-enabled:
                root.json-checked || root.xml-checked
             || root.java-checked || root.go-checked || root.cpp-checked || root.csharp-dotnet-checked
+            || root.typescript-server-checked
             || root.lua-checked || root.gdscript-checked || root.typescript-checked
             || root.csharp-unity-checked || root.csharp-godot-checked;
         primary-clicked => { root.confirm(); }
@@ -79,21 +85,27 @@ export component ExportDialog inherits Rectangle {
                 CheckBox { text: "XML"; checked <=> root.xml-checked; }
             }
 
-            // 服务端
+            // 服务端：5 项，3 + 2 列对齐
             Text {
                 text: "服务端";
                 font-size: Theme.fs-tiny;
                 color: Theme.text-secondary;
             }
-            HorizontalLayout {
+            GridLayout {
                 spacing: Theme.sp-4;
-                CheckBox { text: "Java"; checked <=> root.java-checked; }
-                CheckBox { text: "Go"; checked <=> root.go-checked; }
-                CheckBox { text: "C++"; checked <=> root.cpp-checked; }
-                CheckBox { text: "C# (.NET)"; checked <=> root.csharp-dotnet-checked; }
+                Row {
+                    CheckBox { text: "Java"; checked <=> root.java-checked; }
+                    CheckBox { text: "Go"; checked <=> root.go-checked; }
+                    CheckBox { text: "C++"; checked <=> root.cpp-checked; }
+                }
+                Row {
+                    CheckBox { text: "C# (.NET)"; checked <=> root.csharp-dotnet-checked; }
+                    CheckBox { text: "TypeScript (Node.js)"; checked <=> root.typescript-server-checked; }
+                    Rectangle {}
+                }
             }
 
-            // 客户端
+            // 客户端：5 项，3 + 2 列对齐
             Text {
                 text: "客户端";
                 font-size: Theme.fs-tiny;
@@ -104,7 +116,7 @@ export component ExportDialog inherits Rectangle {
                 Row {
                     CheckBox { text: "Lua"; checked <=> root.lua-checked; }
                     CheckBox { text: "GDScript"; checked <=> root.gdscript-checked; }
-                    CheckBox { text: "TypeScript"; checked <=> root.typescript-checked; }
+                    CheckBox { text: "TypeScript (前端)"; checked <=> root.typescript-checked; }
                 }
                 Row {
                     CheckBox { text: "C# (Unity)"; checked <=> root.csharp-unity-checked; }

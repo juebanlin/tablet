@@ -2053,9 +2053,15 @@ impl ProjectEngine {
         Ok(result)
     }
 
-    pub fn export_typescript(&mut self) -> anyhow::Result<crate::export::ExportResult> {
-        let result = crate::export::export_all_typescript(self.project())?;
-        self.log_export("TypeScript", &result);
+    pub fn export_typescript_client(&mut self) -> anyhow::Result<crate::export::ExportResult> {
+        let result = crate::export::export_all_typescript(self.project(), crate::export::TypeScriptSide::Client)?;
+        self.log_export("TypeScript (前端)", &result);
+        Ok(result)
+    }
+
+    pub fn export_typescript_server(&mut self) -> anyhow::Result<crate::export::ExportResult> {
+        let result = crate::export::export_all_typescript(self.project(), crate::export::TypeScriptSide::Server)?;
+        self.log_export("TypeScript (Node.js)", &result);
         Ok(result)
     }
 

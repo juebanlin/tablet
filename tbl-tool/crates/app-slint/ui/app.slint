@@ -184,6 +184,7 @@ export component AppWindow inherits Window {
     in-out property <bool> ex-go: true;
     in-out property <bool> ex-cpp: true;
     in-out property <bool> ex-csharp-dotnet: true;
+    in-out property <bool> ex-typescript-server: true;
     in-out property <bool> ex-lua: true;
     in-out property <bool> ex-gdscript: true;
     in-out property <bool> ex-typescript: true;
@@ -609,6 +610,7 @@ export component AppWindow inherits Window {
         go-checked <=> root.ex-go;
         cpp-checked <=> root.ex-cpp;
         csharp-dotnet-checked <=> root.ex-csharp-dotnet;
+        typescript-server-checked <=> root.ex-typescript-server;
         lua-checked <=> root.ex-lua;
         gdscript-checked <=> root.ex-gdscript;
         typescript-checked <=> root.ex-typescript;
@@ -616,25 +618,25 @@ export component AppWindow inherits Window {
         csharp-godot-checked <=> root.ex-csharp-godot;
         preset-all => {
             root.ex-json = true; root.ex-xml = true;
-            root.ex-java = true; root.ex-go = true; root.ex-cpp = true; root.ex-csharp-dotnet = true;
+            root.ex-java = true; root.ex-go = true; root.ex-cpp = true; root.ex-csharp-dotnet = true; root.ex-typescript-server = true;
             root.ex-lua = true; root.ex-gdscript = true; root.ex-typescript = true;
             root.ex-csharp-unity = true; root.ex-csharp-godot = true;
         }
         preset-data => {
             root.ex-json = true; root.ex-xml = true;
-            root.ex-java = false; root.ex-go = false; root.ex-cpp = false; root.ex-csharp-dotnet = false;
+            root.ex-java = false; root.ex-go = false; root.ex-cpp = false; root.ex-csharp-dotnet = false; root.ex-typescript-server = false;
             root.ex-lua = false; root.ex-gdscript = false; root.ex-typescript = false;
             root.ex-csharp-unity = false; root.ex-csharp-godot = false;
         }
         preset-server => {
             root.ex-json = true; root.ex-xml = true;
-            root.ex-java = true; root.ex-go = true; root.ex-cpp = true; root.ex-csharp-dotnet = true;
+            root.ex-java = true; root.ex-go = true; root.ex-cpp = true; root.ex-csharp-dotnet = true; root.ex-typescript-server = true;
             root.ex-lua = false; root.ex-gdscript = false; root.ex-typescript = false;
             root.ex-csharp-unity = false; root.ex-csharp-godot = false;
         }
         preset-client => {
             root.ex-json = false; root.ex-xml = false;
-            root.ex-java = false; root.ex-go = false; root.ex-cpp = false; root.ex-csharp-dotnet = false;
+            root.ex-java = false; root.ex-go = false; root.ex-cpp = false; root.ex-csharp-dotnet = false; root.ex-typescript-server = false;
             root.ex-lua = true; root.ex-gdscript = true; root.ex-typescript = true;
             root.ex-csharp-unity = true; root.ex-csharp-godot = true;
         }

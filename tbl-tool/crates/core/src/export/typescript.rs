@@ -5,6 +5,10 @@
 //! - Constant → `export const Xxx = { ... } as const`
 //! - Enum → `export enum XxxEnum { ... }` + `export const XxxEnumDesc: Record<XxxEnum, string> = { ... }`
 //!
+//! 双 side：
+//! - [`TypeScriptSide::Client`] → `[export.client.typescript]`，字段 `Export::ClientServer | ClientOnly`
+//! - [`TypeScriptSide::Server`] → `[export.server.typescript]`（Node.js 服务端），字段 `Export::ClientServer | ServerOnly`
+//!
 //! 类型映射：
 //! - int/long/float/double → number（long 不做溢出检测，文档说明限制）
 //! - str → string
@@ -19,8 +23,27 @@ use crate::model::*;
 use crate::types::*;
 use super::LineEnding;
 
-fn is_client_export(export: &Export) -> bool {
-    matches!(export, Export::ClientServer | Export::ClientOnly)
+/// TypeScript 双 side 拆分点：决定字段可见性与默认输出路径。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TypeScriptSide {
+    Client,
+    Server,
+}
+
+impl TypeScriptSide {
+    fn default_output(self) -> &'static str {
+        match self {
+            TypeScriptSide::Client => "gen/client/typescript",
+            TypeScriptSide::Server => "gen/server/typescript",
+        }
+    }
+}
+
+fn export_visible(export: &Export, side: TypeScriptSide) -> bool {
+    match side {
+        TypeScriptSide::Client => matches!(export, Export::ClientServer | Export::ClientOnly),
+        TypeScriptSide::Server => matches!(export, Export::ClientServer | Export::ServerOnly),
+    }
 }
 
 fn ts_escape(s: &str) -> String {
@@ -241,10 +264,10 @@ fn value_to_ts(raw: &str, tbl_type_str: &str, sep: &SeparatorsSection) -> String
     }
 }
 
-pub fn export_table_ts(table: &Table) -> String {
+pub fn export_table_ts(table: &Table, side: TypeScriptSide) -> String {
     let fields = &table.schema.fields;
     let export_cols: Vec<(usize, &FieldDef)> = fields.iter().enumerate()
-        .filter(|(_, f)| is_client_export(&f.export))
+        .filter(|(_, f)| export_visible(&f.export, side))
         .collect();
 
     let index_col = fields.iter().position(|f| f.name == "id").unwrap_or(0);
@@ -306,12 +329,12 @@ fn default_for_field(tbl_type_str: &str) -> String {
     }
 }
 
-pub fn export_constant_ts(constant: &Constant, sep: &SeparatorsSection) -> String {
+pub fn export_constant_ts(constant: &Constant, sep: &SeparatorsSection, side: TypeScriptSide) -> String {
     let mut s = String::new();
     writeln!(s, "export const {} = {{", constant.name).unwrap();
 
     for entry in &constant.entries {
-        if !is_client_export(&entry.export) { continue; }
+        if !export_visible(&entry.export, side) { continue; }
         if entry.name.is_empty() { continue; }
         if entry.value.is_empty() { continue; }
 
@@ -348,23 +371,41 @@ pub fn export_enum_ts(enum_def: &EnumDef) -> String {
     s
 }
 
-pub fn export_all_typescript(project: &Project) -> Result<super::ExportResult> {
+pub fn export_all_typescript(project: &Project, side: TypeScriptSide) -> Result<super::ExportResult> {
     let export_cfg = project.config.export.as_ref();
-    let client = export_cfg.and_then(|e| e.client.as_ref());
-    let ts = client.and_then(|c| c.typescript.as_ref());
+
+    // 按 side 取对应段；fall-back 串：side 段 → 父段（client/server）→ 顶层 export → 默认
+    let (ts, parent_line_ending, parent_encoding) = match side {
+        TypeScriptSide::Client => {
+            let parent = export_cfg.and_then(|e| e.client.as_ref());
+            (
+                parent.and_then(|c| c.typescript.as_ref()),
+                parent.and_then(|c| c.line_ending.as_deref()),
+                parent.and_then(|c| c.encoding.as_deref()),
+            )
+        }
+        TypeScriptSide::Server => {
+            let parent = export_cfg.and_then(|e| e.server.as_ref());
+            (
+                parent.and_then(|s| s.typescript.as_ref()),
+                parent.and_then(|s| s.line_ending.as_deref()),
+                parent.and_then(|s| s.encoding.as_deref()),
+            )
+        }
+    };
 
     let output = ts
         .and_then(|t| t.output.as_deref())
-        .unwrap_or("gen/client/typescript");
+        .unwrap_or(side.default_output());
 
     let line_ending = LineEnding::from_config(
         ts.and_then(|t| t.line_ending.as_deref())
-            .or_else(|| client.and_then(|c| c.line_ending.as_deref()))
+            .or(parent_line_ending)
             .or_else(|| export_cfg.and_then(|e| e.line_ending.as_deref()))
             .unwrap_or("lf")
     );
     let encoding = ts.and_then(|t| t.encoding.as_deref())
-        .or_else(|| client.and_then(|c| c.encoding.as_deref()))
+        .or(parent_encoding)
         .or_else(|| export_cfg.and_then(|e| e.encoding.as_deref()))
         .unwrap_or("utf-8").to_string();
     let opts = super::ExportOptions { line_ending, encoding };
@@ -376,14 +417,14 @@ pub fn export_all_typescript(project: &Project) -> Result<super::ExportResult> {
     for group in &project.groups {
         for table in &group.tables {
             if table.deleted { continue; }
-            let src = export_table_ts(table);
+            let src = export_table_ts(table, side);
             let file_path = output_dir.join(format!("{}.ts", &table.name));
             collected.push((file_path, opts.encode(&src)));
         }
 
         for constant in &group.constants {
             if constant.deleted { continue; }
-            let src = export_constant_ts(constant, sep);
+            let src = export_constant_ts(constant, sep, side);
             let file_path = output_dir.join(format!("{}.ts", &constant.name));
             collected.push((file_path, opts.encode(&src)));
         }

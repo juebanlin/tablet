@@ -4,8 +4,8 @@
 //! 未知 / 废弃 key 通过 [`OverrideWarning`] 收集起来交给调用方决定怎么报告。
 
 use tbl_core::model::{
-    ClientConfig, CppExport, CSharpExport, ExportConfig, GoExport, JavaExport, JsonExport, LuaExport,
-    ServerExport, WorkspaceConfig, XmlExport,
+    ClientConfig, CppExport, CSharpExport, ExportConfig, GoExport, JavaExport, JsonExport,
+    LuaExport, ServerExport, TypeScriptExport, WorkspaceConfig, XmlExport,
 };
 use tbl_core::ops::ProjectEngine;
 
@@ -118,6 +118,22 @@ pub fn apply_overrides(engine: &mut ProjectEngine, overrides: &[String]) -> Over
                 ensure_export_client_lua(&mut project.config);
                 project.config.export.as_mut().unwrap().client.as_mut().unwrap().lua.as_mut().unwrap().output = Some(value.to_string());
             }
+            "export.client.typescript.output" => {
+                ensure_export_client_typescript(&mut project.config);
+                project.config.export.as_mut().unwrap().client.as_mut().unwrap().typescript.as_mut().unwrap().output = Some(value.to_string());
+            }
+            "export.client.typescript.module_kind" => {
+                ensure_export_client_typescript(&mut project.config);
+                project.config.export.as_mut().unwrap().client.as_mut().unwrap().typescript.as_mut().unwrap().module_kind = Some(value.to_string());
+            }
+            "export.server.typescript.output" => {
+                ensure_export_server_typescript(&mut project.config);
+                project.config.export.as_mut().unwrap().server.as_mut().unwrap().typescript.as_mut().unwrap().output = Some(value.to_string());
+            }
+            "export.server.typescript.module_kind" => {
+                ensure_export_server_typescript(&mut project.config);
+                project.config.export.as_mut().unwrap().server.as_mut().unwrap().typescript.as_mut().unwrap().module_kind = Some(value.to_string());
+            }
             other => out.warnings.push(OverrideWarning::Unknown(other.to_string())),
         }
     }
@@ -151,6 +167,7 @@ fn ensure_export_server(config: &mut WorkspaceConfig) {
     if config.export.as_ref().unwrap().server.is_none() {
         config.export.as_mut().unwrap().server = Some(ServerExport {
             data_output: None, java: None, go: None, cpp: None, csharp_dotnet: None,
+            typescript: None,
             line_ending: None, encoding: None,
         });
     }
@@ -227,6 +244,24 @@ fn ensure_export_client_lua(config: &mut WorkspaceConfig) {
     if config.export.as_ref().unwrap().client.as_ref().unwrap().lua.is_none() {
         config.export.as_mut().unwrap().client.as_mut().unwrap().lua = Some(LuaExport {
             output: None, line_ending: None, encoding: None,
+        });
+    }
+}
+
+fn ensure_export_client_typescript(config: &mut WorkspaceConfig) {
+    ensure_export_client(config);
+    if config.export.as_ref().unwrap().client.as_ref().unwrap().typescript.is_none() {
+        config.export.as_mut().unwrap().client.as_mut().unwrap().typescript = Some(TypeScriptExport {
+            output: None, module_kind: None, line_ending: None, encoding: None,
+        });
+    }
+}
+
+fn ensure_export_server_typescript(config: &mut WorkspaceConfig) {
+    ensure_export_server(config);
+    if config.export.as_ref().unwrap().server.as_ref().unwrap().typescript.is_none() {
+        config.export.as_mut().unwrap().server.as_mut().unwrap().typescript = Some(TypeScriptExport {
+            output: None, module_kind: None, line_ending: None, encoding: None,
         });
     }
 }
