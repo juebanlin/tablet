@@ -16,7 +16,6 @@
 import { Theme } from "theme.slint";
 import { Button } from "std-widgets.slint";
 import { Toolbar } from "components/toolbar.slint";
-import { MenuBar } from "components/menu_bar.slint";
 import { TreeSection, TreeNode } from "components/tree_section.slint";
 import { GridSection } from "components/grid_section.slint";
 import { GridArea, HeaderCell, DataCell, DataRow, CellKind } from "components/grid_area.slint";
@@ -49,10 +48,22 @@ export component AppWindow inherits Window {
     // macOS / Linux 找不到这个名字会回退到平台默认（PingFang SC / Noto Sans CJK）。
     default-font-family: "Microsoft YaHei UI";
 
+    // ── 系统级菜单栏（Slint 原生 MenuBar，平台风格）─────────
+    // macOS：渲染到顶部全局菜单栏；Windows / Linux：渲染在窗口顶部。
+    MenuBar {
+        Menu {
+            title: "关于";
+            MenuItem {
+                title: "检查更新";
+                activated => { root.check-update-clicked(); }
+            }
+        }
+    }
+
     // ── Toolbar ─────────────────────────────────────────────
     callback toolbar-btn-clicked(string);
 
-    // ── MenuBar ─────────────────────────────────────────────
+    // ── MenuBar 回调 ────────────────────────────────────────
     /// 「关于」菜单 → 「检查更新」点击触发；Rust 端用 open::that 跳 GitHub 仓库。
     callback check-update-clicked();
 
@@ -446,10 +457,6 @@ export component AppWindow inherits Window {
     // ── 主布局 ──────────────────────────────────────────────
     VerticalLayout {
         spacing: 0;
-
-        MenuBar {
-            check-update-clicked => { root.check-update-clicked(); }
-        }
 
         Toolbar {
             btn-clicked(id) => {
