@@ -677,6 +677,11 @@ pub fn list_projects(workdir: &Path) -> Vec<ProjectListEntry> {
     scan_projects_dir(&projects_dir)
 }
 
+/// 扫 `<workdir>/projects/` 找出合法的 Project 目录。
+///
+/// **合法性判定**：目录里必须有 `project.tblschema` 文件——否则跳过。这能过滤掉
+/// "Excel 编辑创建的孤儿 .tbl-cache 目录"（用户新建项目未保存就关程序，cache 目录留下
+/// 但 schema 没落盘 → 下次启动会被误识别为空 Project）。
 fn scan_projects_dir(projects_dir: &Path) -> Vec<ProjectListEntry> {
     if !projects_dir.is_dir() {
         return Vec::new();
@@ -696,6 +701,11 @@ fn scan_projects_dir(projects_dir: &Path) -> Vec<ProjectListEntry> {
             None => continue,
         };
         if id.starts_with('.') {
+            continue;
+        }
+        // 仅当目录含 project.tblschema 时才视为合法 Project。
+        // 跳过仅有 .tbl-cache（Excel 编辑残留）/ 空 / 其它垃圾目录。
+        if !path.join(PROJECT_SCHEMA_FILE).is_file() {
             continue;
         }
         let meta = read_project_meta_short(&path);
@@ -1199,9 +1209,35 @@ mod tests {
         std::fs::create_dir_all(dir.join("projects/zeta")).unwrap();
         std::fs::create_dir_all(dir.join("projects/alpha")).unwrap();
         std::fs::create_dir_all(dir.join("projects/beta")).unwrap();
+        write_schema(&dir.join("projects/zeta"), "zeta", "Z");
+        write_schema(&dir.join("projects/alpha"), "alpha", "A");
+        write_schema(&dir.join("projects/beta"), "beta", "B");
         let list = list_projects(&dir);
         let ids: Vec<_> = list.iter().map(|e| e.id.as_str()).collect();
         assert_eq!(ids, vec!["alpha", "beta", "zeta"]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 孤儿目录（缺 project.tblschema 但有 .tbl-cache 之类残留）应被 list_projects 跳过。
+    /// 防止"新建项目未保存就关程序，cache 目录留下"导致下次启动加载空 Project 的 bug。
+    #[test]
+    fn list_projects_skips_dirs_without_schema() {
+        let dir = unique_tmp("orphan");
+        // 合法 project：有 project.tblschema
+        std::fs::create_dir_all(dir.join("projects/real/config")).unwrap();
+        write_schema(&dir.join("projects/real"), "real", "真项目");
+        // 孤儿 project：仅有 .tbl-cache 残留，无 project.tblschema
+        std::fs::create_dir_all(dir.join("projects/orphan/.tbl-cache")).unwrap();
+        std::fs::write(
+            dir.join("projects/orphan/.tbl-cache/hero-1234567890.xlsx"),
+            b"PK\x03\x04 fake xlsx",
+        ).unwrap();
+        // 完全空目录（用户手动建的或系统删了 schema）
+        std::fs::create_dir_all(dir.join("projects/empty")).unwrap();
+
+        let list = list_projects(&dir);
+        let ids: Vec<_> = list.iter().map(|e| e.id.as_str()).collect();
+        assert_eq!(ids, vec!["real"], "应仅识别有 project.tblschema 的目录");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
