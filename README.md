@@ -5,6 +5,78 @@
 - **`tablet`**（GUI）：Slint 写的桌面端，零参数 / `--gui` 走 GUI；其它参数转 CLI fallback
 - **`tablet-cli`**：纯命令行工具，Jenkins / 自动化批处理用
 
+## GUI
+
+![tablet 主界面](res/ui_main.png)
+
+四大区域：
+
+- **顶部菜单栏 + 工具栏** —— 「关于」→「检查更新」跳转 GitHub 仓库；「保存全部」一次性提交所有 Project 的内存改动到 .tbl 文件，「重新加载」丢弃改动从磁盘重读。
+- **左侧 TreeSection** —— 多 Project 树根管理：
+  - 项目列表区：新建项目（模板 / 文件 / 空白三 tab） + 排序模式下拉（ID / Name / 创建时间 / 手工拖拽）
+  - 搜索框支持名称 + 拼音首字母匹配；过滤下拉按状态筛（全部 / 改动 / 新增 / 修改 / 删除）
+  - 节点三层：Project（🏠）→ Group（📁）→ Table（📊）/ Constant（📋）/ Enum（🔤）
+  - 状态 chip：`+` 新增（绿） / `*` 修改（黄） / `-` 删除（红） / `!` 验证错（红）
+- **中间 GridSection** —— Excel 风格表格编辑：
+  - GridRibbon：`Excel 编辑`（调起外部 Excel/WPS/LibreOffice）+ 枚举显示名字开关
+  - Table 4 行表头（desc 描述 / export 导出方向 / type 类型 / field 字段名）+ 数据区直接编辑
+  - 单击进选区，双击进编辑，Ctrl+C/X/V 与 Excel 完全互通；列右键插入/删除列；行号右键插入/删除行
+  - 类型选择器 / 引用选择器弹窗，支持 14 种范式（List / Set / Map / Tuple2-4 / @ref ...）
+- **底部 LogPanel** —— 操作日志、验证错误、Excel 桥接事件、覆盖配置警告统一打到这里。
+
+完整交互细节见 [docs/04-UI设计.md](docs/04-UI设计.md)。
+
+## CLI
+
+`tablet-cli` 是 Jenkins / CI / 终端脚本的入口，业务逻辑与 GUI 共享同一份 core。
+
+```bash
+$ tablet-cli --help
+tablet-cli v1.1.0 — TBL 配置管理工具（命令行模式）
+
+Usage: tablet-cli [OPTIONS] <COMMAND>
+
+Commands:
+  export          导出数据文件和代码
+  validate        验证所有 .tbl 文件
+  generate-test   生成测试配置数据
+  list-projects   列出所有 Project
+  list-templates  列出可用模板
+  migrate-legacy  把根目录 config/ 迁移到 projects/default/
+  new-project     用模板新建 Project
+  excel           Excel 桥接相关
+  help            Print this message or the help of the given subcommand(s)
+
+Options:
+  -w, --workdir <WORKDIR>  工作目录（默认当前目录） [default: .]
+      --project <PROJECT>  显式指定 Project id（覆盖 [app] last_project）
+  -s, --set <KEY=VALUE>    覆盖配置项（格式: key=value，可多次使用）
+  -h, --help               Print help
+  -V, --version            Print version
+```
+
+子命令速查：
+
+| 命令 | 用途 | 关键 flag |
+|---|---|---|
+| `export` | 跑全部已配置导出（JSON/XML/Java/Go/Lua/C++/C# dotnet+unity+godot/GDScript/TypeScript） | `--json` / `--java` / `--csharp` 等单独限定一种 |
+| `validate` | 全 Project 离线验证；CI 用，错则非零 exit | — |
+| `generate-test` | 按 schema + seed 灌测试数据 | `--schema <path>` / `--rows N` / `--seed S` / `--lang java\|go\|none` |
+| `list-projects` | 列出 `projects/` 下所有 Project（id + name） | — |
+| `list-templates` | 列出内置 + 本地（`%APPDATA%/tablet/templates/`）模板 | — |
+| `new-project` | 用模板新建 Project 并切为 last_project | `--template <id>` `--id <id>` `--name <name>` |
+| `migrate-legacy` | 把老布局 `config/` 一次性迁移到 `projects/default/` | — |
+| `excel export` | 把 group（或子集）导出为多 sheet xlsx 给策划离线编辑 | `--group <g>` `--include t1,t2` `-o <path>` |
+
+**典型 Jenkins 流水线**：
+
+```bash
+tablet-cli validate || exit 1            # 验证不通过中断
+tablet-cli export                         # 验证通过才生成产物
+```
+
+完整子命令清单 + 实现细节见 [docs/03-CLI工程.md](docs/03-CLI工程.md)。
+
 ## 文档
 
 完整设计与使用文档在 [`docs/`](docs/)：
