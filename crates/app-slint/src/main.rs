@@ -27,6 +27,7 @@ mod convert;
 mod refresh;
 mod ui;
 mod dialogs;
+mod excel_bridge;
 
 use std::cell::RefCell;
 use std::path::PathBuf;
@@ -181,8 +182,14 @@ fn run_gui(workdir_arg: Option<PathBuf>) -> anyhow::Result<()> {
     dialogs::create_project::wire(&app_window, &app_state);
     dialogs::clone_project::wire(&app_window, &app_state);
     dialogs::project_settings::wire(&app_window, &app_state);
+    excel_bridge::wire(&app_window, &app_state);
+
+    // 启动时扫描 Excel 编辑残留（@plans §5.6）：上次崩溃 / kill 留下的 .tbl-cache/*.xlsx
+    excel_bridge::scan_residuals_on_startup(&app_state);
 
     let result = app_window.run().map_err(|e| anyhow::anyhow!("{}", e));
+    // 退出清理（@plans §5.7）：清掉所有 Project 的 .tbl-cache/*.xlsx
+    excel_bridge::cleanup_all_caches_on_exit(&app_state);
     let _ = std::fs::remove_file(&lock_path);
     result
 }

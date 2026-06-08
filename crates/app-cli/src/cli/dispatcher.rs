@@ -14,9 +14,10 @@ use clap::Parser;
 use tablet_core::ops::ProjectEngine;
 use tablet_core::project::{load_project, load_specific_project};
 
-use super::args::{Cli, Command};
+use super::args::{Cli, Command, ExcelAction};
 use super::output;
 use crate::actions::{
+    excel::{run_excel_export, ExcelTarget},
     export::{run_export, ExportFormats, ExportSummary},
     generate_test::{run_generate_test, GenerateTestOptions},
     list_projects::list_projects,
@@ -96,6 +97,14 @@ fn run(cli: Cli) -> Result<i32> {
             output::print_generate_test_done_cli();
             Ok(0)
         }
+        Command::Excel(ea) => match ea.action {
+            ExcelAction::Export { group, include, output: out } => {
+                let target = ExcelTarget::Group { name: group, include };
+                let summary = run_excel_export(&engine, target, out.as_deref())?;
+                output::print_excel_export_summary_cli(&summary);
+                Ok(0)
+            }
+        },
         // 顶部已 dispatch
         Command::ListProjects | Command::ListTemplates
         | Command::MigrateLegacy | Command::NewProject { .. } => {

@@ -41,11 +41,17 @@ pub fn push(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
         state.borrow().selected,
         Some(SelectedNode::Table { .. } | SelectedNode::Constant { .. })
     ));
-    // 「Excel 编辑」绑定具体节点（Table / Constant / Enum 都接受），未选中时禁用
-    ui_h.set_excel_edit_enabled(matches!(
-        state.borrow().selected,
-        Some(SelectedNode::Table { .. } | SelectedNode::Constant { .. } | SelectedNode::Enum { .. })
-    ));
+    // 「Excel 编辑」绑定具体节点（Table / Constant / Enum 都接受）；
+    // - 未选中或选 Project / Group → disabled
+    // - 已有 Excel 编辑会话进行中 → disabled（@plans §2.4 全局锁）
+    {
+        let st = state.borrow();
+        let leaf_selected = matches!(
+            st.selected,
+            Some(SelectedNode::Table { .. } | SelectedNode::Constant { .. } | SelectedNode::Enum { .. })
+        );
+        ui_h.set_excel_edit_enabled(leaf_selected && st.excel_session.is_none());
+    }
     ui_h.set_grid_col_count(snap.col_count);
     ui_h.set_grid_header_rows(slint::ModelRc::new(slint::VecModel::from(
         snap.header_rows.into_iter()
@@ -112,19 +118,43 @@ pub fn wire(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
             if let Some(ui_h) = weak.upgrade() { push(&ui_h, &s); }
         });
     }
-    // 「Excel 编辑」按钮：暂未实现，先打 log，避免按钮看着哑
-    //
-    // TODO(excel-edit): 点击后弹窗让用户选「单项 / 整组」两种模式，再走对应导出 + 外部编辑回填流程：
-    //   - 单项导出：选中某个 Table/Constant/Enum，生成单 sheet xlsx 让用户在外部 Excel 里编辑
-    //   - 整组导出：选中某 Group 节点（届时要把 excel-edit-enabled 扩到 Group 选中态）
-    //     → 生成多 sheet xlsx，组内每个 Table/Constant/Enum 一个 sheet
-    // 编辑完成后监听 xlsx 变化，反序列化回 records / entries 并写回 state；最后清理临时文件。
+    // 「Excel 编辑」按钮：选中叶节点（Table/Constant/Enum）时调起单 sheet xlsx
+    // 编辑流程（@docs/06-Excel桥接.md §1）。等价于
+    // `ExcelTarget::Group { name: 节点所属 group, include: vec![当前节点 name] }`。
     {
         let s = state.clone();
         let weak = ui_h.as_weak();
         ui_h.on_excel_edit_clicked(move || {
-            s.borrow_mut().engine.log("[Excel 编辑] 功能尚未实现".to_string());
-            if let Some(ui_h) = weak.upgrade() { crate::refresh::after_log(&ui_h, &s); }
+            let target = {
+                let st = s.borrow();
+                match &st.selected {
+                    Some(SelectedNode::Table { project_id, group, name }
+                        | SelectedNode::Constant { project_id, group, name }
+                        | SelectedNode::Enum { project_id, group, name }) => {
+                        Some((project_id.clone(), group.clone(), name.clone()))
+                    }
+                    _ => None,
+                }
+            };
+            let (pid, group, name) = match target {
+                Some(t) => t,
+                None => {
+                    s.borrow_mut().engine.log("[Excel] 未选中可编辑节点".to_string());
+                    if let Some(ui_h) = weak.upgrade() { crate::refresh::after_log(&ui_h, &s); }
+                    return;
+                }
+            };
+            let result = crate::excel_bridge::launch_excel_edit(
+                &s, weak.clone(), &pid, &group, vec![name],
+            );
+            if let Err(e) = result {
+                s.borrow_mut().engine.log(format!("[Excel] 调起失败: {}", e));
+            }
+            if let Some(ui_h) = weak.upgrade() {
+                crate::excel_bridge::push(&ui_h, &s);
+                push(&ui_h, &s);
+                crate::refresh::after_log(&ui_h, &s);
+            }
         });
     }
     // 单元格点击 → 行为按 ColumnKind + picker_trigger_data 配置分发：

@@ -10,6 +10,7 @@
 //! GUI 拿 Summary 自行塞进 LogPanel / 弹窗。
 
 pub mod export;
+pub mod excel;
 pub mod generate_test;
 pub mod list_projects;
 pub mod list_templates;

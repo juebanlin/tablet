@@ -833,6 +833,9 @@ pub struct AppState {
     pub project_sort: String,
     /// sort=manual 时使用；UI 拖拽顺序持久化到 [project] project_order。
     pub project_order: Vec<String>,
+    /// 当前 Excel 编辑会话（@plans §2.4）；同一时刻全局只允许一个。
+    /// `Some` = 编辑中（GUI 写入禁用）；`None` = 空闲。
+    pub excel_session: Option<crate::excel_bridge::ExcelSession>,
 }
 
 impl AppState {
@@ -911,6 +914,7 @@ impl AppState {
             project_settings: ProjectSettingsState::default(),
             project_sort,
             project_order,
+            excel_session: None,
         })
     }
 

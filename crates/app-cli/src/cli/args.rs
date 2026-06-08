@@ -4,7 +4,7 @@
 
 use std::path::PathBuf;
 
-use clap::{Parser, Subcommand};
+use clap::{Args, Parser, Subcommand};
 
 #[derive(Parser, Debug)]
 #[command(name = "tablet-cli", version, about = "TBL 配置管理工具 - 命令行模式")]
@@ -101,4 +101,30 @@ pub enum Command {
         #[arg(long, default_value_t = true)]
         switch_after: bool,
     },
+    /// Excel 桥接相关
+    Excel(ExcelArgs),
+}
+
+/// `excel` 子命令容器，给未来 `excel import ...` 留位。
+#[derive(Args, Debug)]
+pub struct ExcelArgs {
+    #[command(subcommand)]
+    pub action: ExcelAction,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum ExcelAction {
+    /// 导出 .tbl 分组（或子集）为 xlsx（表头锁定，仅数据区可改）
+    Export {
+        /// 分组名
+        #[arg(long)]
+        group: String,
+        /// 仅导出指定节点（逗号分隔）；缺省 = 整组全部
+        #[arg(long, value_delimiter = ',')]
+        include: Vec<String>,
+        /// 输出 xlsx 路径（缺省 = ./{group}.xlsx）
+        #[arg(short = 'o', long)]
+        output: Option<PathBuf>,
+    },
+    // 占位（@docs/06-Excel桥接.md §1）：未来 `excel import ...` 走这里
 }

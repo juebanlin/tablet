@@ -78,6 +78,7 @@ export component GridSection inherits Rectangle {
     // ── 状态栏 ──
     in property <string> selection-info;
     in property <string> hover-info;
+    in property <string> excel-session-status: "";
 
     background: Theme.bg-panel;
 
@@ -148,6 +149,7 @@ export component GridSection inherits Rectangle {
         StatusBar {
             selection-info: root.selection-info;
             hover-info: root.hover-info;
+            excel-session-status: root.excel-session-status;
         }
     }
 }

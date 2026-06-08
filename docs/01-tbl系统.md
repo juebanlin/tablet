@@ -108,7 +108,7 @@ gm_password|str            |xxx  |s  |GM密码
 
 | 维度 | Table | Constant | Enum |
 |------|-------|----------|------|
-| 表头行 | 4 行（desc/type/export/field） | 0 行（5 列固定语义） | 0 行（3 列固定语义） |
+| 表头行 | 4 行（desc/export/type/field） | 0 行（5 列固定语义） | 0 行（3 列固定语义） |
 | 主键 | 第一列必须是 `id: int` | 无（每行一个 name） | 第一列 `id: int+`（不为 0） |
 | 引用 `@Xxx` | 允许 | 允许（默认开；`[ui] constant_ref_allowed` 关） | 不适用 |
 | 数据导出 | JSON / XML | JSON / XML | 不导出（写入代码） |

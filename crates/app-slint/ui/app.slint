@@ -14,6 +14,7 @@
 //   - 弹窗状态以 dlg-<name>-open 暴露给上层 Rust
 
 import { Theme } from "theme.slint";
+import { Button } from "std-widgets.slint";
 import { Toolbar } from "components/toolbar.slint";
 import { TreeSection, TreeNode } from "components/tree_section.slint";
 import { GridSection } from "components/grid_section.slint";
@@ -74,6 +75,18 @@ export component AppWindow inherits Window {
     in property <bool> excel-edit-enabled: false;
     callback show-enum-name-toggled(bool);
     callback excel-edit-clicked();
+
+    // ── Excel 编辑会话状态（@docs/06-Excel桥接.md §1 / §2）─────
+    // active = true 时全局应禁用所有写操作（编辑按钮 / 右键写菜单 / 单元格编辑等）；
+    // status = 状态栏文案，空表示未在编辑。
+    in property <bool> excel-session-active: false;
+    in property <string> excel-session-status: "";
+    /// 监控线程检测到 xlsx 被外部 Excel 释放时通过 `slint::Weak::upgrade_in_event_loop`
+    /// 触发本回调，主线程在 wire() 里挂的 handler 调 `excel_bridge::on_excel_closed`。
+    callback excel-closed-detected();
+    /// 模态弹窗里「强制放弃」按钮：终止监控线程 + 删 xlsx + 不合并任何改动。
+    /// 4h 超时也会自动调（@plans §5.5 简化版）。
+    callback excel-modal-cancel-clicked();
 
     in property <string> coord;
     in property <string> formula-display: "";
@@ -534,6 +547,7 @@ export component AppWindow inherits Window {
                 header-export-selected(c, i) => { root.grid-header-export-selected(c, i); }
                 selection-info: root.selection-info;
                 hover-info: root.hover-info;
+                excel-session-status: root.excel-session-status;
             }
         }
 
@@ -822,6 +836,63 @@ export component AppWindow inherits Window {
         items: root.ctx-menu-items;
         action(id) => { root.ctx-menu-action(id); }
         dismiss => { root.ctx-menu-dismiss(); }
+    }
+
+    // Excel 编辑模式弹窗（@docs/06-Excel桥接.md §2 / §3）：
+    // session 进行中显示全屏 overlay，屏蔽所有背景 UI 操作（防止用户在内存模型上
+    // 改动 → xlsx 关闭后 patch 覆盖 = 数据丢失）。放在 ContextMenu 之后保证 z 最高。
+    if root.excel-session-active: Rectangle {
+        width: 100%;
+        height: 100%;
+        background: Theme.scrim;
+        // 全屏 TouchArea：吃掉所有点击 / 拖拽事件，不响应——纯屏蔽。
+        TouchArea {
+            width: 100%;
+            height: 100%;
+        }
+        Rectangle {
+            x: (parent.width - 480px) / 2;
+            y: (parent.height - 240px) / 2;
+            width: 480px;
+            height: 240px;
+            background: Theme.bg-panel;
+            border-color: Theme.border;
+            border-width: 1px;
+            drop-shadow-blur: 8px;
+            drop-shadow-color: #00000040;
+
+            VerticalLayout {
+                padding: Theme.sp-6;
+                spacing: Theme.sp-5;
+
+                Text {
+                    text: "正在 Excel 中编辑";
+                    font-size: Theme.fs-heading;
+                    font-weight: 700;
+                    color: Theme.text-primary;
+                }
+                Text {
+                    text: root.excel-session-status;
+                    font-size: Theme.fs-normal;
+                    color: Theme.text-secondary;
+                    wrap: word-wrap;
+                }
+                Text {
+                    text: "请在外部 Excel 中完成编辑后关闭文件，工具会自动合并改动。\n4 小时后未关闭将自动放弃本次编辑。";
+                    font-size: Theme.fs-small;
+                    color: Theme.text-secondary;
+                    wrap: word-wrap;
+                }
+                Rectangle { vertical-stretch: 1; }
+                HorizontalLayout {
+                    alignment: end;
+                    Button {
+                        text: "强制放弃（不合并）";
+                        clicked => { root.excel-modal-cancel-clicked(); }
+                    }
+                }
+            }
+        }
     }
 }
 

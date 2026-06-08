@@ -366,7 +366,7 @@ pub fn load_project(workdir: &Path) -> Result<Project> {
     };
 
     let mut config = merge_project_config(&global_text, project_text.as_deref())?;
-    // 分隔符以 schema.separators 为单一来源（@docs/plans 方案）：
+    // 分隔符以 schema.separators 为单一来源：
     // workspace tablet.toml [separators] 与 project.toml [separators] 都被 schema 覆盖。
     config.separators = schema.separators.clone();
 

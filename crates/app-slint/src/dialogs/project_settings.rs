@@ -3,8 +3,6 @@
 // id 改 → 复用 engine ProjectAction::RenameProject（含目录 rename + schema 写盘）；
 // 其它身份字段 + 分隔符 → 直接落 schema.meta + schema.separators，schema_dirty=true，
 // serialize_tblschema 写盘 + revalidate_all。
-//
-// 对应 plan §7（docs/plans/分隔符配置内嵌schema-与项目设置对话框.md）。
 
 use std::cell::RefCell;
 use std::rc::Rc;

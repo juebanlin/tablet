@@ -64,4 +64,5 @@ pub fn initial(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
     dialogs::context_menu::push(ui_h, state);
     dialogs::pending::push_input(ui_h, state);
     dialogs::pending::push_confirm(ui_h, state);
+    crate::excel_bridge::push(ui_h, state);
 }

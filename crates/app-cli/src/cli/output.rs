@@ -3,6 +3,7 @@
 //! 全部函数后缀 `_cli`，强提示"仅 CLI 二进制使用，GUI 别调"。
 
 use crate::actions::export::{ExportSummary, FormatOutcome};
+use crate::actions::excel::{ExcelExportSummary, ExcelTarget};
 use crate::actions::list_templates::TemplateList;
 use crate::actions::overrides::{OverrideOutcome, OverrideWarning};
 use crate::actions::validate::ValidationSummary;
@@ -87,6 +88,16 @@ pub fn print_new_project_outcome_cli(project_root: &std::path::Path) {
 
 pub fn print_generate_test_done_cli() {
     println!("已生成测试配置");
+}
+
+pub fn print_excel_export_summary_cli(s: &ExcelExportSummary) {
+    let label = match &s.target {
+        ExcelTarget::Group { name, include } if include.is_empty() => format!("分组 {}", name),
+        ExcelTarget::Group { name, include } => {
+            format!("分组 {}（{} 个子节点）", name, include.len())
+        }
+    };
+    println!("[Excel] {} → {} ({} bytes)", label, s.output.display(), s.bytes);
 }
 
 pub fn print_override_warnings_cli(out: &OverrideOutcome) {

@@ -85,6 +85,14 @@ pub(crate) fn items_for(kind: &CtxMenuKind, state: &AppState) -> Vec<CtxMenuItem
             item("新建 Constant", "tree.new-constant", false),
             item("新建 Enum", "tree.new-enum", false),
             sep(),
+            // 「用 Excel 打开」：有任何 ExcelSession 进行中时禁用（@plans §5.1.2 全局锁）。
+            // tooltip / 文案不动态变，避免 items_for 复杂化；用户可从日志窗看到当前会话。
+            item(
+                "用 Excel 打开（整组）",
+                "tree.excel-open-group",
+                state.excel_session.is_some(),
+            ),
+            sep(),
             item("复制 Group（含全部内容）", "tree.copy-group", false),
             item_owned(paste_node_label.clone(), "tree.paste-node", !has_node_cb),
             item_owned(paste_group_label, "tree.paste-group", !has_group_cb),
@@ -196,6 +204,19 @@ pub fn wire(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
                 }
                 (Some(CtxMenuKind::TreeGroup { project_id, name }), "tree.delete-group") => {
                     s.borrow_mut().pending.open(PendingAction::DeleteGroup { project_id, group: name });
+                }
+                (Some(CtxMenuKind::TreeGroup { project_id, name }), "tree.excel-open-group") => {
+                    // 整组 Excel 编辑：include 空 vec → core 侧 None（@plans §5.1.2）
+                    let weak_ui = weak.clone();
+                    let result = crate::excel_bridge::launch_excel_edit(
+                        &s, weak_ui, &project_id, &name, vec![],
+                    );
+                    if let Err(e) = result {
+                        s.borrow_mut().engine.log(format!("[Excel] 调起失败: {}", e));
+                    }
+                    if let Some(ui_h) = weak.upgrade() {
+                        crate::excel_bridge::push(&ui_h, &s);
+                    }
                 }
                 (Some(CtxMenuKind::TreeGroup { project_id, name }), "tree.copy-group") => {
                     s.borrow_mut().engine.clipboard_copy_group(&project_id, &name);

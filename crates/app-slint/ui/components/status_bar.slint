@@ -6,6 +6,9 @@ import { Theme } from "../theme.slint";
 export component StatusBar inherits Rectangle {
     in property <string> selection-info: "";
     in property <string> hover-info: "";
+    /// Excel 编辑会话提示（@docs/06-Excel桥接.md §2）。
+    /// 非空时优先显示在状态栏左侧并染色，提醒用户当前处于编辑中。
+    in property <string> excel-session-status: "";
 
     height: Theme.status-h;
     background: Theme.bg-toolbar;
@@ -17,6 +20,12 @@ export component StatusBar inherits Rectangle {
         padding-right: Theme.sp-3;
         spacing: Theme.sp-5;
         alignment: start;
+        if root.excel-session-status != "": Text {
+            text: root.excel-session-status;
+            font-size: Theme.fs-tiny;
+            color: Theme.text-primary;
+            vertical-alignment: center;
+        }
         Text {
             text: root.selection-info;
             font-size: Theme.fs-tiny;

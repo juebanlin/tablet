@@ -10,6 +10,7 @@ pub mod project;
 pub mod validate;
 pub mod ops;
 pub mod export;
+pub mod excel;
 pub mod search;
 pub mod test_util;
 
