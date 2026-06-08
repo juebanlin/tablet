@@ -16,6 +16,7 @@
 import { Theme } from "theme.slint";
 import { Button } from "std-widgets.slint";
 import { Toolbar } from "components/toolbar.slint";
+import { MenuBar } from "components/menu_bar.slint";
 import { TreeSection, TreeNode } from "components/tree_section.slint";
 import { GridSection } from "components/grid_section.slint";
 import { GridArea, HeaderCell, DataCell, DataRow, CellKind } from "components/grid_area.slint";
@@ -34,7 +35,9 @@ import { ConfirmDialog } from "dialogs/confirm_dialog.slint";
 export { TreeNode, HeaderCell, DataCell, DataRow, CellKind, LogEntry, RefItem, TsParamSlot, RefRow, RefHeader, SchemaItem, CtxMenuItem, TemplateItem }
 
 export component AppWindow inherits Window {
-    title: "tablet · juebanlin@gmail.com";
+    /// 应用版本号，启动时由 Rust 端从 env!("CARGO_PKG_VERSION") 注入。
+    in property <string> app-version: "";
+    title: "tablet" + (root.app-version != "" ? " v" + root.app-version : "");
     // 用 preferred-* 给初始大小，min-* 给下限；不设 width/height（那会锁死缩放与最大化）
     preferred-width: 1280px;
     preferred-height: 800px;
@@ -48,6 +51,10 @@ export component AppWindow inherits Window {
 
     // ── Toolbar ─────────────────────────────────────────────
     callback toolbar-btn-clicked(string);
+
+    // ── MenuBar ─────────────────────────────────────────────
+    /// 「关于」菜单 → 「检查更新」点击触发；Rust 端用 open::that 跳 GitHub 仓库。
+    callback check-update-clicked();
 
     // ── TreeSection ─────────────────────────────────────────
     in property <[TreeNode]> tree-nodes;
@@ -439,6 +446,10 @@ export component AppWindow inherits Window {
     // ── 主布局 ──────────────────────────────────────────────
     VerticalLayout {
         spacing: 0;
+
+        MenuBar {
+            check-update-clicked => { root.check-update-clicked(); }
+        }
 
         Toolbar {
             btn-clicked(id) => {

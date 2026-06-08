@@ -157,11 +157,28 @@ fn run_gui(workdir_arg: Option<PathBuf>) -> anyhow::Result<()> {
     );
 
     let app_window = AppWindow::new()?;
+    app_window.set_app_version(env!("CARGO_PKG_VERSION").into());
     {
         let st = app_state.borrow();
         app_window.set_picker_trigger_header_single(st.picker_trigger_header_single);
         app_window.set_picker_trigger_data_single(st.picker_trigger_data_single);
         app_window.set_tree_sort_index(ui::tree::sort_to_index(&st.project_sort));
+    }
+
+    // 「关于」→「检查更新」：跳 GitHub 仓库
+    {
+        let s = app_state.clone();
+        let weak = app_window.as_weak();
+        app_window.on_check_update_clicked(move || {
+            const REPO_URL: &str = "https://github.com/juebanlin/tablet";
+            match open::that(REPO_URL) {
+                Ok(_) => s.borrow_mut().engine.log(format!("[关于] 已打开 {}", REPO_URL)),
+                Err(e) => s.borrow_mut().engine.log(format!("[关于] 打开 GitHub 失败: {}", e)),
+            }
+            if let Some(ui_h) = weak.upgrade() {
+                refresh::after_log(&ui_h, &s);
+            }
+        });
     }
 
     // 初次 push（首屏数据 + 各对话框默认关闭态）
