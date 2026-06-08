@@ -24,6 +24,34 @@
   - 类型选择器 / 引用选择器弹窗，支持 14 种范式（List / Set / Map / Tuple2-4 / @ref ...）
 - **底部 LogPanel** —— 操作日志、验证错误、Excel 桥接事件、覆盖配置警告统一打到这里。
 
+### 主要功能 / 操作入口
+
+- **新建项目**：项目列表区「新建项目」按钮 → 三 tab 对话框
+  - 「模板」：内置（`schemas/standard.tblschema` 等）+ 本地（`%APPDATA%/tablet/templates/`）+ 网络（占位）
+  - 「文件」：导入本地 `.tblschema` 文件骨架
+  - 「空白」：从零起项目
+- **TreeSection 右键菜单**（按节点类型分流）：
+  - **Project**（已打开）：保存 / 导出（多语言代码 + 数据）/ 导出 Schema / 导出为本地模板 / 合并 Schema / 新建 Group / 复制（克隆）/ 项目设置（id/name/category/version/分隔符）/ 关闭 / 删除 / 在文件管理器打开
+  - **Project**（未打开）：打开 / 项目设置 / 在文件管理器打开 / 删除
+  - **Group**：新建 Table / 新建 Constant / 新建 Enum / 用 Excel 打开（整组多 sheet xlsx）/ 复制 Group（含全部内容）/ 粘贴节点 / 粘贴 Group / 重命名 / 删除
+  - **叶节点**（Table / Constant / Enum）：复制 / 粘贴 / 重命名 / 删除
+  - **空白处**：新建 Group
+- **GridSection 右键菜单**：
+  - **列字母**（A/B/C ...）：左侧插入列 / 右侧插入列 / 删除列
+  - **行号**（1/2/3 ...）：上方插入行 / 下方插入行 / 删除行
+  - **单元格**：picker 弹窗（Ref / Type 列）/ 复制 / 剪切 / 粘贴 / 清空内容
+- **Excel 桥接**（@06）：
+  - 叶节点选中 → GridRibbon「Excel 编辑」按钮 → 单 sheet xlsx
+  - Group 右键「用 Excel 打开（整组）」→ 多 sheet xlsx
+  - 调起逻辑：系统默认 → 平台候选链兜底（Win Excel/WPS/LO；macOS open -a；Linux PATH）
+  - 关闭探测三层降级：lock 文件 → Linux /proc fd → OS write
+  - 编辑期间全屏 modal 屏蔽 UI 防止数据丢失；4h 超时自动放弃；用户可点「强制放弃」终止
+- **保存与并发**：
+  - 延迟写盘——编辑全部在内存，按「保存全部」才落 .tbl 文件
+  - 进程锁 `.tablet.lock` + PID 检查，防多实例并发改同一 workspace
+  - 树过滤器（全部 / 改动 / 新增 / 修改 / 删除）方便提交前 review
+- **导出**：通过 Project 右键「导出」一次跑全部已配置的目标——12 平台（Java / Go / C++ / C# .NET / Unity / Godot / GDScript / TypeScript / Lua / JSON / XML / xlsx）；导出前自动跑验证，错则中断
+
 完整交互细节见 [docs/04-UI设计.md](docs/04-UI设计.md)。
 
 ## CLI
