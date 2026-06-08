@@ -7,7 +7,13 @@ use std::path::PathBuf;
 use clap::{Args, Parser, Subcommand};
 
 #[derive(Parser, Debug)]
-#[command(name = "tablet-cli", version, about = "TBL 配置管理工具 - 命令行模式")]
+#[command(
+    name = "tablet-cli",
+    version,
+    // about 出现在 --help 顶部 banner（version 选项行只写 "Print version"，banner 不带版本）
+    // 用 concat! 把版本号拼进 banner，让 --help 一眼能看到。
+    about = concat!("tablet-cli v", env!("CARGO_PKG_VERSION"), " — TBL 配置管理工具（命令行模式）")
+)]
 pub struct Cli {
     /// 工作目录（默认当前目录）
     #[arg(short = 'w', long, default_value = ".")]
