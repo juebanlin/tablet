@@ -3,7 +3,7 @@
 //! 设计要点：
 //! - 单文件：一个 .tbl → 单 sheet xlsx（[`export_table_book`] 等）
 //! - 整组：一个 Group → 多 sheet xlsx（[`export_group_book`]）
-//! - 表头锁定：开 sheet protection，数据区用 `unprotect_range` 整段解锁
+//! - 表头锁定：开 sheet protection，数据区用 `unprotect_range` 整段解锁；允许调整行高列宽、插入行
 //! - 不带密码：防手滑而非防恶意
 //! - 回读：[`import_xlsx_into_group`] 把策划改完的 xlsx 解析成 [`GroupPatch`]，调用方负责 apply。
 //!   严格 header 校验：表头 / sheet 名 / 列数任一不对 → 整次拒绝（@docs/02-核心功能.md §20）。
@@ -20,11 +20,12 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 use calamine::{open_workbook, Data, Range, Reader, Xlsx};
-use rust_xlsxwriter::{Format, FormatBorder, Workbook, Worksheet};
+use rust_xlsxwriter::{Format, FormatBorder, ProtectionOptions, Workbook, Worksheet};
 
 use crate::model::{ConstEntry, Constant, EnumDef, EnumEntry, Export, Group, Table};
 
 const HEADER_BG: &str = "#E0E0E0";
+const EXCEL_MAX_ROW: u32 = 1_048_575;
 
 fn header_format() -> Format {
     Format::new()
@@ -35,6 +36,15 @@ fn header_format() -> Format {
 
 fn body_format() -> Format {
     Format::new().set_border(FormatBorder::Thin)
+}
+
+fn sheet_protection() -> ProtectionOptions {
+    ProtectionOptions {
+        format_columns: true,
+        format_rows: true,
+        insert_rows: true,
+        ..ProtectionOptions::default()
+    }
 }
 
 /// Excel 工作表名约束：≤ 31 字符 + 禁止 `\ / ? * [ ] :`。
@@ -81,10 +91,9 @@ pub fn write_table(ws: &mut Worksheet, table: &Table) -> Result<()> {
     }
 
     ws.set_freeze_panes(4, 0)?;
-    ws.protect();
-    if !table.records.is_empty() && col_count > 0 {
-        let last_row = (table.records.len() + 3) as u32;
-        ws.unprotect_range(4, 0, last_row, col_count - 1)?;
+    ws.protect_with_options(&sheet_protection());
+    if col_count > 0 {
+        ws.unprotect_range(4, 0, EXCEL_MAX_ROW, col_count - 1)?;
     }
     Ok(())
 }
@@ -109,11 +118,8 @@ pub fn write_constant(ws: &mut Worksheet, constant: &Constant) -> Result<()> {
     }
 
     ws.set_freeze_panes(1, 0)?;
-    ws.protect();
-    if !constant.entries.is_empty() {
-        let last_row = constant.entries.len() as u32;
-        ws.unprotect_range(1, 0, last_row, 4)?;
-    }
+    ws.protect_with_options(&sheet_protection());
+    ws.unprotect_range(1, 0, EXCEL_MAX_ROW, 4)?;
     Ok(())
 }
 
@@ -135,11 +141,8 @@ pub fn write_enum(ws: &mut Worksheet, enum_def: &EnumDef) -> Result<()> {
     }
 
     ws.set_freeze_panes(1, 0)?;
-    ws.protect();
-    if !enum_def.entries.is_empty() {
-        let last_row = enum_def.entries.len() as u32;
-        ws.unprotect_range(1, 0, last_row, 2)?;
-    }
+    ws.protect_with_options(&sheet_protection());
+    ws.unprotect_range(1, 0, EXCEL_MAX_ROW, 2)?;
     Ok(())
 }
 
