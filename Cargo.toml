@@ -5,7 +5,7 @@ resolver = "2"
 # workspace 级版本号：单一真理源（@docs/03 / docs/00）。
 # 三个 crate 都用 `version.workspace = true` 继承本字段；改版本只需在这里改一次。
 [workspace.package]
-version = "1.2.1"
+version = "1.2.2"
 
 [profile.dev]
 # 编译速度优先（agent 默认走 dev，频繁 cargo check / build）
