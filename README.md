@@ -60,50 +60,53 @@
 
 ```bash
 $ tablet-cli --help
-tablet-cli v1.1.0 — TBL 配置管理工具（命令行模式）
+tablet-cli v1.2.0 — TBL 配置管理工具（命令行模式）
 
 Usage: tablet-cli [OPTIONS] <COMMAND>
 
 Commands:
-  export          导出数据文件和代码
-  validate        验证所有 .tbl 文件
+  project         项目管理 (list/info/new/rename/delete/clone)
+  schema          结构操作 (show/add-*/rename-*/delete-*)
+  export          导出数据/代码 (data/code/all)
+  validate        验证 .tbl 文件（支持五级粒度过滤）
   generate-test   生成测试配置数据
-  list-projects   列出所有 Project
+  excel           Excel 桥接 (export/import)
+  workspace       工作区操作 (save/reload/clear)
+  sep             分隔符查询
+  util            底层工具（无需项目上下文）
   list-templates  列出可用模板
-  migrate-legacy  把根目录 config/ 迁移到 projects/default/
-  new-project     用模板新建 Project
-  excel           Excel 桥接相关
-  help            Print this message or the help of the given subcommand(s)
+  migrate-legacy  迁移旧 config/ 到 projects/default/
 
 Options:
-  -w, --workdir <WORKDIR>  工作目录（默认当前目录） [default: .]
-      --project <PROJECT>  显式指定 Project id（覆盖 [app] last_project）
-  -s, --set <KEY=VALUE>    覆盖配置项（格式: key=value，可多次使用）
-  -h, --help               Print help
-  -V, --version            Print version
+  -w, --workdir <WORKDIR>  工作目录 [default: .]
+      --project <PROJECT>  指定 Project id（对 util 无效）
+  -s, --set <KEY=VALUE>    覆盖配置项（对 util 无效）
+      --fmt <FORMAT>       输出格式（json = 结构化 JSON，适用查询类命令）
 ```
 
-子命令速查：
+主要功能：
 
-| 命令 | 用途 | 关键 flag |
-|---|---|---|
-| `export` | 跑全部已配置导出（JSON/XML/Java/Go/Lua/C++/C# dotnet+unity+godot/GDScript/TypeScript） | `--json` / `--java` / `--csharp` 等单独限定一种 |
-| `validate` | 全 Project 离线验证；CI 用，错则非零 exit | — |
-| `generate-test` | 按 schema + seed 灌测试数据 | `--schema <path>` / `--rows N` / `--seed S` / `--lang java\|go\|none` |
-| `list-projects` | 列出 `projects/` 下所有 Project（id + name） | — |
-| `list-templates` | 列出内置 + 本地（`%APPDATA%/tablet/templates/`）模板 | — |
-| `new-project` | 用模板新建 Project 并切为 last_project | `--template <id>` `--id <id>` `--name <name>` |
-| `migrate-legacy` | 把老布局 `config/` 一次性迁移到 `projects/default/` | — |
-| `excel export` | 把 group（或子集）导出为多 sheet xlsx 给策划离线编辑 | `--group <g>` `--include t1,t2` `-o <path>` |
+| 命令组 | 用途 |
+|--------|------|
+| `project list/info/new/clone/rename/delete` | 多项目管理（类似 docker container 管理） |
+| `schema show/add-*/rename-*/delete-*` | 项目结构增删改查 |
+| `export data --json/--xml [--group/--node]` | 数据导出（支持 group/node 粒度过滤） |
+| `export code --java/--go/... [--package/--namespace]` | 代码导出（支持 package/namespace 覆盖） |
+| `export all` | 全量导出（CI 一把梭） |
+| `validate [--group/--node/--col/--row]` | 五级粒度验证 |
+| `excel export/import` | Excel 桥接（导出 xlsx 给策划编辑后回读） |
+| `workspace save/reload/clear` | 工作区状态管理 |
+| `sep show` | 分隔符配置查询（25 键 + 来源标注） |
+| `util parse-*/validate-*/diff/fmt/stat/...` | 无上下文的单文件工具 |
 
-**典型 Jenkins 流水线**：
+**典型 CI 流水线**：
 
 ```bash
-tablet-cli validate || exit 1            # 验证不通过中断
-tablet-cli export                         # 验证通过才生成产物
+tablet-cli --project slg-prod validate || exit 1
+tablet-cli --project slg-prod export all
 ```
 
-完整子命令清单 + 实现细节见 [docs/03-CLI工程.md](docs/03-CLI工程.md)。
+完整子命令清单 + 示例见 [docs/03-CLI工程.md](docs/03-CLI工程.md)。
 
 ## 文档
 

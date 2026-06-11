@@ -361,8 +361,12 @@ gen/
 ## 7. 命令骨架
 
 ```
-tablet-cli [-w <workdir>] [--project <id>] [-s key=value]... <subcommand>
+tablet-cli [全局选项] <命令>
 ```
+
+### 7.1 项目上下文选项
+
+以下选项仅对需要项目上下文的命令生效（project / schema / export / validate / excel / workspace / generate-test / sep）。`util` 子命令不接受这些选项（传了也会忽略）。
 
 | 参数 | 作用 | 默认值 |
 |------|------|--------|
@@ -370,63 +374,790 @@ tablet-cli [-w <workdir>] [--project <id>] [-s key=value]... <subcommand>
 | `--project <id>` | 显式指定 Project id；覆盖 `[app] last_project` | 不指定 = 跟随 `[app] last_project`，再不存在则取扫描结果第一个 |
 | `-s, --set KEY=VALUE` | 覆盖 `tablet.toml` 任意配置项；可重复 | — |
 
-`-s` 覆盖键名与 toml 路径一一对应，列表见 §9。未知 / 废弃 / 格式错误的 key 会以 warning 形式打到 stderr，但不会让命令失败。
+### 7.2 通用选项
+
+| 参数 | 作用 | 适用范围 |
+|------|------|---------|
+| `--fmt <FORMAT>` | 输出格式。`json` = JSON 结构化输出（默认人类可读文本） | 查询类命令：`project list`/`info`、`schema show`、`validate`、`export data`/`code`/`all`、`sep show`、`util parse-*`/`stat` |
+| `--help` | 显示帮助信息 | 所有命令 |
+| `--version` | 显示版本号 | 顶层 |
+
+### 7.3 util 专属配置选项
+
+`util` 子命令中需要分隔符的命令（`validate-tbl` / `validate-type`）有独立的配置体系：
+
+| 参数 | 作用 |
+|------|------|
+| `--config <tablet.toml>` | 从全局配置文件读取分隔符 |
+| `--schema <.tblschema>` | 从 schema 文件读取分隔符（优先级高于 config） |
+| `--sep <KEY=VALUE>` | 手动指定单个分隔符（最高优先级，可多次） |
+
+合并优先级：`--sep` > `--schema` > `--config` > 内置默认值
 
 ## 8. 子命令
 
-按是否需要先加载 Project 分两组。
+### 8.1 project — 项目管理
 
-### 8.1 不需要加载 Project
+需要工作区上下文（`-w` 指定 workdir，扫描 `projects/` 目录）。写操作执行后自动保存。
 
-| 子命令 | 作用 | 输出 |
-|--------|------|------|
-| `list-templates` | 列出可用模板（内置 + `<workdir>/tblschema/` 本地模板库） | id / name / version / source 表 |
-| `list-projects` | 列出 `<workdir>/projects/` 下所有 Project（id / name / created_at / source_template） | 表 |
-| `migrate-legacy` | 把根目录 `config/` + `project.tblschema` 迁移到 `projects/default/` | 迁移结果摘要；@02 老结构迁移 |
-| `new-project --template <id> --id <pid> [--name <n>] [--switch-after <bool>]` | 用模板新建 Project | 新建后的 `project_root` 路径 |
+#### `project list`
 
-`new-project` 参数：
+列出工作区内所有 Project。
+
+```bash
+# 基本用法
+tablet-cli project list
+
+# 指定工作目录
+tablet-cli -w D:/work/game-config project list
+
+# JSON 输出（脚本消费）
+tablet-cli -w D:/work/game-config --fmt json project list
+```
+
+输出示例：
+```
+slg-test                 SLG 测试项目
+slg-prod                 SLG 正式项目
+rpg-demo                 RPG Demo
+```
+
+#### `project info`
+
+显示项目详情。
+
+| 参数 | 说明 | 默认 |
+|------|------|------|
+| `--id <id>` | 目标项目 id | 当前活跃项目 |
+
+```bash
+# 当前活跃项目
+tablet-cli project info
+
+# 指定项目
+tablet-cli project info --id slg-test
+
+# JSON 格式
+tablet-cli --fmt json project info --id slg-test
+```
+
+输出示例：
+```
+Project: slg-test (SLG 测试项目)
+  Groups:    3
+  Tables:    8
+  Constants: 3
+  Enums:     2
+  总数据行:  1,245
+  Dirty:     否
+```
+
+#### `project new`
+
+从模板创建新 Project。
 
 | 参数 | 说明 | 默认 |
 |------|------|------|
 | `--template <id>` | 模板 id（来自 `list-templates`），必填 | — |
 | `--id <pid>` | Project id，约束 `[a-z0-9_-]{1,32}` | — |
 | `--name <n>` | Project 显示名 | = id |
-| `--switch-after <bool>` | 创建后写入 `[app] last_project` | true |
+| `--switch-after` | 创建后写入 `[app] last_project` | true |
 
-### 8.2 需要加载 Project
+```bash
+# 最小用法
+tablet-cli project new --template slg-base --id slg-2026
 
-> 这些子命令先按 `--project` / `[app] last_project` / 扫描第一个的优先级选 Project，加载后才执行。
+# 完整参数
+tablet-cli -w D:/work/game-config project new \
+  --template slg-base --id slg-2026 --name "SLG 2026" --switch-after
 
-#### `export [--json] [--xml] [--java] [--go] [--lua] [--gdscript] [--typescript] [--cpp] [--csharp]`
+# 不切换活跃项目
+tablet-cli project new --template empty --id temp-test --switch-after false
+```
 
-不带任何 flag = 全格式导出；指定其中一项或多项 = 仅导出这些格式。每项产物的具体路径派生规则见 @02.23 与 @02 各导出章节。
+#### `project rename`
 
-`--csharp` 一次同时生成 dotnet / unity / godot 三套 Loader（schema 类共享，配置以 `csharp_dotnet` / `csharp_unity` / `csharp_godot` 三个独立 key 区分）。
-
-退出码恒为 0；单格式失败仅 eprintln 错误，不影响其它格式继续，便于 CI 收集。
-
-#### `validate`
-
-全项目离线校验：cell / row / schema / project 四层（@01 附录 A）。
-
-- 通过 → 退出码 0
-- 任一节点失败 → 退出码 1，错误明细打到 stderr
-
-#### `generate-test [...]`
-
-灌测试数据，详细规则见 @02 测试数据生成。参数：
+重命名 Project（id 和/或显示名）。自动保存。
 
 | 参数 | 说明 | 默认 |
 |------|------|------|
-| `--empty` | 在测试数据里穿插空值列样本，覆盖 schema 的可空场景 | false |
-| `--schema <path>` | 用外部 `.tblschema` 文件代替 Project 内的 schema | — |
-| `--rows <n>` | 数据行数；`0` 表示走内置固定数据 | 0 |
-| `--seed <u64>` | 随机种子；`0` 表示固定数据，非 0 启用伪随机 | 0 |
-| `--format json\|xml` | TestMain 的初始化方式 | json |
-| `--lang java\|go\|none` | 生成 TestMain 的语言；`none` 表示只生成数据不生成 TestMain | java |
+| `--id <id>` | 目标项目 id，必填 | — |
+| `--new-id <id>` | 新 id（会迁移目录） | 不改 |
+| `--new-name <name>` | 新显示名 | 不改 |
 
-退出码 0 = 成功；I/O / 解析失败 → 抛错由 main 翻成 1。
+```bash
+# 改显示名
+tablet-cli project rename --id slg-test --new-name "SLG 测试环境"
+
+# 改 id（迁移 projects/slg-test/ → projects/slg-staging/）
+tablet-cli project rename --id slg-test --new-id slg-staging
+
+# 同时改
+tablet-cli project rename --id slg-test --new-id slg-v2 --new-name "SLG V2"
+```
+
+#### `project delete`
+
+删除 Project（不可逆）。
+
+| 参数 | 说明 |
+|------|------|
+| `--id <id>` | 目标项目 id，必填 |
+| `--confirm` | 确认删除，必填 |
+
+```bash
+# 安全删除
+tablet-cli project delete --id temp-test --confirm
+
+# 不带 --confirm 拒绝执行（exit 1）
+tablet-cli project delete --id temp-test
+# → 错误: 删除操作不可逆，请添加 --confirm 确认
+```
+
+#### `project clone`
+
+深拷贝已有 Project 为新 Project。自动保存。
+
+| 参数 | 说明 | 默认 |
+|------|------|------|
+| `--source <id>` | 源项目 id，必填 | — |
+| `--id <new_id>` | 新项目 id，必填 | — |
+| `--name <name>` | 新项目显示名 | = id |
+
+```bash
+tablet-cli project clone --source slg-test --id slg-test-backup
+
+tablet-cli project clone --source slg-prod --id slg-hotfix --name "SLG 热修复"
+```
+
+---
+
+### 8.2 schema — 结构操作
+
+需要单项目上下文。所有写操作执行后自动保存。
+
+#### `schema show`
+
+显示当前项目的 schema 结构树。
+
+```bash
+tablet-cli schema show
+
+tablet-cli --project slg-test schema show
+
+tablet-cli --fmt json schema show
+```
+
+输出示例：
+```
+hero/
+  ├── HeroBase      (table, 5 fields, 120 rows)
+  ├── HeroSkill     (table, 3 fields, 45 rows)
+  ├── HeroConst     (constant, 8 entries)
+  └── HeroType      (enum, 6 entries)
+item/
+  ├── ItemBase      (table, 6 fields, 200 rows)
+  └── ItemDrop      (table, 4 fields, 80 rows)
+global/
+  └── GlobalConst   (constant, 15 entries)
+```
+
+#### `schema add-group`
+
+```bash
+tablet-cli schema add-group --name skill
+tablet-cli --project rpg-demo schema add-group --name quest
+```
+
+#### `schema add-table` / `add-constant` / `add-enum`
+
+```bash
+tablet-cli schema add-table --group hero --name HeroLevel
+tablet-cli schema add-constant --group global --name ServerConfig
+tablet-cli schema add-enum --group hero --name HeroRarity
+```
+
+#### `schema rename-group`
+
+```bash
+tablet-cli schema rename-group --old hero --new character
+```
+
+#### `schema rename-node`
+
+```bash
+tablet-cli schema rename-node --group hero --old HeroBase --new CharacterBase
+```
+
+#### `schema delete-group`
+
+```bash
+tablet-cli schema delete-group --name temp
+```
+
+#### `schema delete-node`
+
+```bash
+tablet-cli schema delete-node --group hero --name HeroOld
+```
+
+---
+
+### 8.3 export — 数据导出
+
+拆分为三个子命令，职责分离：
+
+| 子命令 | 职责 | 粒度控制 |
+|--------|------|---------|
+| `export data` | 导出数据文件（JSON/XML） | 支持 --group/--node 过滤 |
+| `export code` | 导出代码文件（Java/Go/Lua/...） | 全项目，选语言 |
+| `export all` | 全量导出（data + code） | CI 一把梭 |
+
+退出码恒为 0；单格式失败仅 eprintln，不影响其它格式。
+
+#### `export data`
+
+导出数据文件（JSON/XML），支持按组/节点过滤。
+
+| 参数 | 说明 | 默认 |
+|------|------|------|
+| `--json` | 导出 JSON 数据 | — |
+| `--xml` | 导出 XML 数据 | — |
+| `--group <g>` | 仅导出指定组 | 全部 |
+| `--node <n>` | 仅导出指定节点（依赖 --group） | 全部 |
+| `-o, --output <path>` | 覆盖数据输出目录 | config 中的 data_output |
+
+不指定 `--json`/`--xml` 则两者都导出。
+
+```bash
+# 全项目 JSON 数据
+tablet-cli --project slg-test export data --json
+
+# 仅 hero 组的 JSON 数据
+tablet-cli --project slg-test export data --json --group hero
+
+# 仅一张表的 JSON 数据
+tablet-cli --project slg-test export data --json --group hero --node HeroBase
+
+# XML 数据 + 自定义输出目录
+tablet-cli --project slg-test export data --xml --group item -o ./tmp/data/
+
+# JSON + XML 全部（不指定格式 = 全部）
+tablet-cli --project slg-test export data
+```
+
+#### `export code`
+
+导出代码文件，必须全项目（代码引用关系需要完整）。
+
+| 参数 | 说明 |
+|------|------|
+| `--java` / `--go` / `--lua` / `--gdscript` / `--typescript` / `--cpp` / `--csharp` | 选择语言 |
+| `--all` | 全部语言 |
+| `--package <pkg>` | 覆盖 Java/Go 的 package 名 |
+| `--namespace <ns>` | 覆盖 C++/C# 的 namespace |
+| `-o, --output <path>` | 覆盖代码输出目录 |
+
+至少选一种语言或 `--all`。`--csharp` 同时生成 dotnet/unity/godot 三套。
+
+```bash
+# 仅 Java
+tablet-cli --project slg-test export code --java
+
+# Java + 临时覆盖 package
+tablet-cli --project slg-test export code --java --package com.test.config
+
+# C++ + 覆盖 namespace
+tablet-cli --project slg-test export code --cpp --namespace test::config
+
+# C# + 覆盖 namespace
+tablet-cli --project slg-test export code --csharp --namespace Test.Config
+
+# 多语言同时导出
+tablet-cli --project slg-test export code --java --go
+
+# 多语言 + 统一输出目录
+tablet-cli --project slg-test export code --java --go -o ./tmp/
+
+# 全部语言
+tablet-cli --project slg-test export code --all
+
+# 全部语言 + 覆盖输出
+tablet-cli --project slg-test export code --all -o ./release/code/
+```
+
+#### `export all`
+
+全量导出（= data 全部 + code 全部），CI 流水线一把梭。
+
+| 参数 | 说明 |
+|------|------|
+| `-o, --output <path>` | 覆盖公共输出根目录（各子目录结构不变） |
+
+```bash
+# 全量导出
+tablet-cli --project slg-test export all
+
+# 全量 + 自定义根目录
+tablet-cli --project slg-prod export all -o ./release/
+
+# Jenkins 典型用法
+tablet-cli --project slg-prod validate && \
+tablet-cli --project slg-prod export all
+```
+
+---
+
+### 8.4 validate — 验证（五级粒度）
+
+全项目离线校验，支持通过参数逐级缩小验证范围。
+
+| 参数 | 说明 | 依赖 |
+|------|------|------|
+| `--group <g>` | 验证指定组 | — |
+| `--node <n>` | 验证指定节点 | 依赖 --group |
+| `--col <c>` | 验证指定列（从 0 开始） | 依赖 --node |
+| `--row <r>` | 验证指定行（从 0 开始） | 依赖 --col |
+
+```bash
+# 全项目验证
+tablet-cli validate
+
+# 指定项目
+tablet-cli --project slg-prod validate
+
+# 验证单个 group
+tablet-cli validate --group hero
+
+# 验证单个节点
+tablet-cli validate --group hero --node HeroBase
+
+# 验证指定列
+tablet-cli validate --group hero --node HeroBase --col 2
+
+# 验证单个单元格
+tablet-cli validate --group hero --node HeroBase --row 5 --col 2
+
+# JSON 输出错误列表
+tablet-cli --fmt json validate --group hero
+```
+
+输出示例（失败时 exit 1）：
+```
+发现 3 个验证错误:
+  [slg-test] hero/HeroBase C6:[abc] -> 不是合法的 int 值
+  [slg-test] hero/HeroBase D12:[] -> 必填字段不能为空
+  [slg-test] hero/HeroSkill B3:[99999] -> 引用 id 不存在于 HeroBase
+```
+
+退出码：通过 → 0；任一错误 → 1。
+
+---
+
+### 8.5 excel — Excel 桥接
+
+#### `excel export`
+
+导出分组为 xlsx（表头锁定，数据区可编辑）。
+
+| 参数 | 说明 | 默认 |
+|------|------|------|
+| `--group <g>` | 分组名，必填 | — |
+| `--include <a,b>` | 仅导出指定节点（逗号分隔） | 整组全部 |
+| `-o, --output <path>` | 输出路径 | `./{group}.xlsx` |
+
+```bash
+# 整组导出
+tablet-cli excel export --group hero
+
+# 部分节点
+tablet-cli excel export --group hero --include HeroBase,HeroSkill
+
+# 自定义路径
+tablet-cli excel export --group hero -o output/hero_config.xlsx
+```
+
+#### `excel import`
+
+将策划编辑过的 xlsx 回读到 .tbl（严格 header 校验）。
+
+| 参数 | 说明 |
+|------|------|
+| `--group <g>` | 目标分组名，必填 |
+| `--file <path>` | xlsx 文件路径，必填 |
+
+```bash
+tablet-cli excel import --group hero --file hero.xlsx
+
+tablet-cli excel import --group item --file D:/shared/item_update.xlsx
+```
+
+---
+
+### 8.6 workspace — 工作区操作
+
+#### `workspace save`
+
+保存所有 dirty 节点到磁盘。
+
+```bash
+tablet-cli workspace save
+tablet-cli --project slg-test workspace save
+```
+
+#### `workspace reload`
+
+从磁盘重新加载（丢弃内存中未保存的修改）。
+
+```bash
+tablet-cli workspace reload
+```
+
+#### `workspace clear`
+
+清空所有 .tbl 数据文件（危险操作，需 `--confirm`）。
+
+```bash
+tablet-cli workspace clear --confirm
+
+# 不带 --confirm 拒绝执行
+tablet-cli workspace clear
+# → 错误: 此操作将删除所有数据文件，请添加 --confirm 确认
+```
+
+---
+
+### 8.7 generate-test — 测试数据生成
+
+| 参数 | 说明 | 默认 |
+|------|------|------|
+| `--empty` | 穿插空值列样本 | false |
+| `--schema <path>` | 用外部 .tblschema 代替项目内 schema | — |
+| `--rows <n>` | 数据行数；0 = 内置固定数据 | 0 |
+| `--seed <u64>` | 随机种子；0 = 固定数据 | 0 |
+| `--format json\|xml` | 数据格式 | json |
+| `--lang java\|go\|none` | TestMain 语言；none = 不生成 | java |
+
+```bash
+# 默认：固定数据 + JSON + Java TestMain
+tablet-cli generate-test
+
+# 100 行随机数据，XML 格式，Go TestMain
+tablet-cli generate-test --rows 100 --seed 42 --format xml --lang go
+
+# 含空值测试
+tablet-cli generate-test --empty --format json --lang java
+
+# 使用外部 schema
+tablet-cli generate-test --schema custom.tblschema --rows 50
+
+# 仅生成数据，不生成 TestMain
+tablet-cli generate-test --format json --lang none
+
+# Jenkins 批量验证用
+tablet-cli -w D:/work/game-config generate-test \
+  --rows 100 --empty --seed 42 --lang go
+```
+
+---
+
+### 8.8 sep — 分隔符查询
+
+展示全部 25 个分隔符键的生效值及来源。可带项目上下文也可独立使用。
+
+| 参数 | 说明 |
+|------|------|
+| `--defaults` | 仅展示内置默认值（不读任何文件） |
+| `--config <path>` | 从指定 tablet.toml 读取 `[separators]` |
+| `--schema <path>` | 从指定 .tblschema 读取 `# @sep` |
+
+合并优先级（从低到高）：内置默认 → tablet.toml `[separators]` → .tblschema `# @sep`
+
+```bash
+# 展示当前项目合并后的生效分隔符
+tablet-cli sep show
+
+# 仅展示内置默认值
+tablet-cli sep show --defaults
+
+# 展示指定 config 合并后的值
+tablet-cli sep show --config D:/work/game-config/tablet.toml
+
+# 展示指定 schema 合并后的值
+tablet-cli sep show --schema D:/work/game-config/projects/slg-test/project.tblschema
+
+# 同时指定（schema 优先级高于 config）
+tablet-cli sep show --config tablet.toml --schema project.tblschema
+
+# JSON 输出
+tablet-cli --fmt json sep show
+```
+
+输出示例（标注来源）：
+```
+分隔符配置（合并后生效值）:
+  list                = ;         [默认]
+  set                 = ;         [默认]
+  tuple2              = ,         [默认]
+  tuple3              = ,         [默认]
+  tuple4              = ,         [默认]
+  map.kv              = :         [默认]
+  map.entry           = ;         [默认]
+  list_tuple2.tuple   = ,         [默认]
+  list_tuple2.list    = |         [schema]
+  map_tuple2.kv       = =         [config]
+  map_tuple2.tuple    = ,         [默认]
+  map_tuple2.entry    = ;         [默认]
+  ...（全 25 键）
+```
+
+---
+
+### 8.9 util — 底层工具
+
+纯文件操作工具，不接受 `-w`/`--project`/`-s`。直接操作指定文件，无需加载完整项目。
+
+#### `util parse-tbl`
+
+解析 .tbl 文件，输出结构化 JSON。
+
+```bash
+tablet-cli util parse-tbl config/hero/HeroBase.tbl
+
+tablet-cli util parse-tbl HeroBase.tbl > hero_base.json
+```
+
+输出示例：
+```json
+{
+  "type": "table",
+  "name": "HeroBase",
+  "fields": [
+    {"name": "id", "type": "int", "export": "cs", "desc": "英雄ID"},
+    {"name": "name", "type": "str", "export": "cs", "desc": "英雄名"}
+  ],
+  "records": [
+    ["1001", "亚瑟"],
+    ["1002", "兰斯洛特"]
+  ]
+}
+```
+
+#### `util parse-schema`
+
+解析 .tblschema 文件，输出结构信息。
+
+```bash
+tablet-cli util parse-schema project.tblschema
+tablet-cli util parse-schema custom.tblschema > schema.json
+```
+
+#### `util merge-schema`
+
+合并多个 .tblschema 文件（sections 合并，meta 取第一个）。
+
+```bash
+tablet-cli util merge-schema base.tblschema addon.tblschema
+
+tablet-cli util merge-schema a.tblschema b.tblschema c.tblschema > merged.tblschema
+```
+
+#### `util validate-tbl`
+
+验证单个 .tbl 文件（类型校验 + 命名规则）。
+
+```bash
+# 使用内置默认分隔符
+tablet-cli util validate-tbl HeroBase.tbl
+
+# 指定 schema 获取分隔符
+tablet-cli util validate-tbl HeroBase.tbl --schema project.tblschema
+
+# 同时指定 config + schema
+tablet-cli util validate-tbl HeroBase.tbl \
+  --config tablet.toml --schema project.tblschema
+
+# 手动覆盖特定分隔符
+tablet-cli util validate-tbl HeroBase.tbl \
+  --schema project.tblschema --sep list="|" --sep map.kv="="
+
+# JSON 输出
+tablet-cli --fmt json util validate-tbl HeroBase.tbl
+```
+
+#### `util validate-type`
+
+验证单个值是否匹配指定类型。通过 → exit 0 无输出；失败 → 输出错误 + exit 1。
+
+```bash
+# ── 基础类型 ──
+tablet-cli util validate-type int 42
+tablet-cli util validate-type str "hello world"
+tablet-cli util validate-type bool true
+tablet-cli util validate-type float 3.14
+
+# ── 列表类型（默认分隔符 ;）──
+tablet-cli util validate-type "List<int>" "1;2;3"
+tablet-cli util validate-type "List<str>" "苹果;香蕉;橘子"
+tablet-cli util validate-type "Set<int>" "1;2;3"
+
+# ── Map 类型（默认 kv=: entry=;）──
+tablet-cli util validate-type "Map<str,int>" "name:10;age:20"
+tablet-cli util validate-type "Map<int,str>" "1:苹果;2:香蕉"
+
+# ── Tuple 类型（默认分隔符 ,）──
+tablet-cli util validate-type "Tuple2<int,str>" "1001,亚瑟"
+tablet-cli util validate-type "Tuple3<int,int,str>" "1,2,hello"
+
+# ── 复合类型 ──
+tablet-cli util validate-type "List<Tuple2<int,str>>" "1,a;2,b;3,c"
+tablet-cli util validate-type "Map<str,List<int>>" "skills:1,2,3;items:4,5"
+
+# ── 自定义分隔符 ──
+tablet-cli util validate-type "List<int>" "1|2|3" --sep list="|"
+
+tablet-cli util validate-type "Map<str,int>" "name=10;age=20" \
+  --sep map.kv="="
+
+# ── 从文件读分隔符 ──
+tablet-cli util validate-type "List<int>" "1|2|3" \
+  --schema project.tblschema
+
+tablet-cli util validate-type "Map<str,int>" "name=10;age=20" \
+  --config tablet.toml --schema project.tblschema
+
+# ── 三级合并：config + schema + 手动覆盖 ──
+tablet-cli util validate-type "List<Tuple2<int,str>>" "1:a|2:b" \
+  --config tablet.toml --schema project.tblschema \
+  --sep list="|" --sep list_tuple2.tuple=":"
+
+# ── 失败示例 ──
+tablet-cli util validate-type "List<int>" "1;abc;3"
+# → 错误: 第2项 "abc" 不是合法的 int 值
+# exit 1
+
+tablet-cli util validate-type "Map<str,int>" "name:abc"
+# → 错误: key "name" 的 value "abc" 不是合法的 int 值
+# exit 1
+```
+
+#### `util tbl-to-xlsx`
+
+单个 .tbl 文件转换为 xlsx。
+
+```bash
+tablet-cli util tbl-to-xlsx HeroBase.tbl -o HeroBase.xlsx
+tablet-cli util tbl-to-xlsx config/hero/HeroBase.tbl -o output/hero.xlsx
+```
+
+#### `util xlsx-to-tbl`
+
+xlsx 转换回 .tbl（需要 schema 做 header 校验）。
+
+```bash
+tablet-cli util xlsx-to-tbl hero.xlsx --schema project.tblschema -o config/hero/
+```
+
+#### `util scaffold`
+
+从 .tblschema 生成项目骨架（空 .tbl 文件，含表头无数据）。
+
+```bash
+tablet-cli util scaffold project.tblschema -o new_project/config/
+tablet-cli util scaffold custom.tblschema -o /tmp/skeleton/
+```
+
+#### `util diff`
+
+对比两个 .tbl 文件的结构和数据差异。
+
+```bash
+tablet-cli util diff old/HeroBase.tbl new/HeroBase.tbl
+tablet-cli util diff v1/GlobalConst.tbl v2/GlobalConst.tbl
+```
+
+输出示例：
+```
+结构差异:
+  + col 5: List<int> "skills" (新增列)
+  ~ col 2: type int → float (类型变更)
+
+数据差异 (3 行):
+  行 3:  [1003, "兰斯洛特", ...] → [1003, "兰斯", ...]
+  行 8:  (新增) [1008, "莫德雷德", ...]
+  行 12: (删除) [1012, "临时测试", ...]
+```
+
+#### `util fmt`
+
+格式化 .tbl 文件（解析后重新序列化，统一风格）。
+
+```bash
+# 输出到 stdout（预览）
+tablet-cli util fmt HeroBase.tbl
+
+# 原地修改
+tablet-cli util fmt HeroBase.tbl -i
+
+# 批量格式化目录下所有 .tbl
+tablet-cli util fmt config/ -i
+```
+
+#### `util stat`
+
+统计 .tbl 文件或目录的信息。
+
+```bash
+# 单文件
+tablet-cli util stat HeroBase.tbl
+
+# 目录递归
+tablet-cli util stat config/
+
+# JSON 格式
+tablet-cli --fmt json util stat config/
+```
+
+单文件输出示例：
+```
+文件: HeroBase.tbl
+类型: table
+字段: 6 (int×2, str×3, List<int>×1)
+数据行: 120
+空值: 14 (1.9%)
+```
+
+目录输出示例：
+```
+目录: config/ (3 groups)
+文件: 12 (table×8, constant×3, enum×1)
+总字段: 45
+总数据行: 890
+总空值: 52 (1.3%)
+```
+
+---
+
+### 8.10 模板与迁移
+
+#### `list-templates`
+
+列出可用模板（内置 + `<workdir>/tblschema/` 本地模板库）。
+
+```bash
+tablet-cli list-templates
+tablet-cli -w D:/work/game-config list-templates
+tablet-cli --fmt json list-templates
+```
+
+#### `migrate-legacy`
+
+把根目录 `config/` + `project.tblschema` 迁移到 `projects/default/`。
+
+```bash
+tablet-cli migrate-legacy
+tablet-cli -w D:/old-project migrate-legacy
+```
 
 ## 9. `-s` 覆盖键
 
@@ -498,26 +1229,146 @@ CLI 分支和直接跑 `tablet-cli.exe` 行为完全一致；GUI 分支在 Windo
 
 ## 13. 用法示例
 
+### 13.1 日常开发
+
 ```bash
-# 在指定仓库下导出全部格式
-tablet-cli -w D:/work/game-config export
+# 查看当前项目结构
+tablet-cli schema show
 
-# 仅导出 Java 模板类，临时切输出目录
-tablet-cli -w D:/work/game-config \
-  -s export.server.java.code_output=tmp/java \
-  export --java
+# 验证当前项目
+tablet-cli validate
 
-# 离线校验某个 Project
-tablet-cli -w D:/work/game-config --project slg-prod validate
+# 仅验证某个表
+tablet-cli validate --group hero --node HeroBase
 
-# 用模板新建 Project
-tablet-cli -w D:/work/game-config new-project \
-  --template slg-base --id slg-2026 --name "SLG 2026"
+# 导出全部（数据 + 代码）
+tablet-cli export all
 
-# 灌 100 行带空值的测试数据，go 后端
-tablet-cli -w D:/work/game-config generate-test \
-  --rows 100 --empty --seed 42 --lang go
+# 仅导出 JSON 数据
+tablet-cli export data --json
+
+# 仅导出 hero 组的 JSON 数据
+tablet-cli export data --json --group hero
+
+# 仅导出 Java 代码
+tablet-cli export code --java
+```
+
+### 13.2 项目管理
+
+```bash
+# 列出所有项目
+tablet-cli project list
+
+# 新建项目
+tablet-cli project new --template slg-base --id slg-2026 --name "SLG 2026"
+
+# 克隆项目做热修复
+tablet-cli project clone --source slg-prod --id slg-hotfix --name "热修复"
+
+# 项目详情
+tablet-cli project info --id slg-test
+
+# 重命名
+tablet-cli project rename --id slg-test --new-name "SLG 测试服"
+
+# 删除（需确认）
+tablet-cli project delete --id temp-test --confirm
+```
+
+### 13.3 结构操作
+
+```bash
+# 添加分组和表
+tablet-cli schema add-group --name skill
+tablet-cli schema add-table --group skill --name SkillBase
+tablet-cli schema add-enum --group skill --name SkillType
+tablet-cli schema add-constant --group global --name BalanceConfig
+
+# 重命名
+tablet-cli schema rename-group --old hero --new character
+tablet-cli schema rename-node --group hero --old HeroBase --new CharBase
+
+# 删除
+tablet-cli schema delete-node --group temp --name TestTable
+tablet-cli schema delete-group --name temp
+```
+
+### 13.4 Excel 桥接
+
+```bash
+# 导出给策划编辑
+tablet-cli excel export --group hero -o hero_edit.xlsx
+
+# 策划改完后回读
+tablet-cli excel import --group hero --file hero_edit.xlsx
+```
+
+### 13.5 分隔符查询
+
+```bash
+# 查看当前项目的生效分隔符
+tablet-cli sep show
+
+# 查看内置默认值
+tablet-cli sep show --defaults
+
+# 查看某 schema 覆盖后的值
+tablet-cli sep show --schema projects/slg-test/project.tblschema
+```
+
+### 13.6 底层工具
+
+```bash
+# 解析 .tbl 文件
+tablet-cli util parse-tbl config/hero/HeroBase.tbl
+
+# 验证单个值
+tablet-cli util validate-type "List<int>" "1;2;3"
+tablet-cli util validate-type "Map<str,int>" "name:10;age:20" --sep map.kv="="
+
+# 对比两个版本
+tablet-cli util diff old/HeroBase.tbl new/HeroBase.tbl
+
+# 格式化
+tablet-cli util fmt config/ -i
+
+# 统计
+tablet-cli util stat config/
+
+# 转换
+tablet-cli util tbl-to-xlsx HeroBase.tbl -o HeroBase.xlsx
+tablet-cli util scaffold new_schema.tblschema -o skeleton/
+```
+
+### 13.7 CI / Jenkins
+
+```bash
+# 标准 CI 流水线：验证 + 全量导出
+tablet-cli -w D:/work/game-config --project slg-prod validate && \
+tablet-cli -w D:/work/game-config --project slg-prod export all
+
+# 全量导出到指定目录
+tablet-cli --project slg-prod export all -o ./artifacts/
+
+# 仅导出代码到临时目录（临时覆盖 package）
+tablet-cli --project slg-prod export code --java --package com.release -o ./release/java/
+
+# 仅导出数据
+tablet-cli --project slg-prod export data --json -o ./release/data/
+
+# 生成测试数据 + 验证
+tablet-cli generate-test --rows 100 --seed 42 --lang go --format json
+
+# JSON 输出供脚本解析
+tablet-cli --fmt json validate
+tablet-cli --fmt json project list
+
+# 批量导出多项目（脚本遍历）
+for p in slg-test slg-prod rpg-demo; do
+  tablet-cli --project $p export all -o ./artifacts/$p/
+done
 
 # Jenkins 风格：通过 tablet.exe 跑 CLI（同一个 exe 兼任）
-tablet.exe -w D:/work/game-config validate
+tablet.exe -w D:/work/game-config --project slg-prod export all
 ```

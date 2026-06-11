@@ -1959,14 +1959,6 @@ impl ProjectEngine {
         errors
     }
 
-    pub fn generate_test_config(&mut self) {
-        let config_dir = self.project().data_dir();
-        let opts = crate::test_util::TestGenOptions::full();
-        crate::test_util::generate_test_config(&config_dir, &opts);
-        self.log("已生成测试配置文件".to_string());
-        self.reload();
-    }
-
     pub fn clear_all_config(&mut self) {
         let config_dir = self.project().data_dir();
         if config_dir.is_dir() {
@@ -2039,8 +2031,20 @@ impl ProjectEngine {
         Ok(result)
     }
 
+    pub fn export_json_filtered(&mut self, filter: &crate::export::DataFilter) -> anyhow::Result<crate::export::ExportResult> {
+        let result = crate::export::export_json_filtered(self.project(), filter)?;
+        self.log_export("JSON", &result);
+        Ok(result)
+    }
+
     pub fn export_xml(&mut self) -> anyhow::Result<crate::export::ExportResult> {
         let result = crate::export::export_all_xml(self.project())?;
+        self.log_export("XML", &result);
+        Ok(result)
+    }
+
+    pub fn export_xml_filtered(&mut self, filter: &crate::export::DataFilter) -> anyhow::Result<crate::export::ExportResult> {
+        let result = crate::export::export_xml_filtered(self.project(), filter)?;
         self.log_export("XML", &result);
         Ok(result)
     }

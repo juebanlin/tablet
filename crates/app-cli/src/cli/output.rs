@@ -6,6 +6,7 @@ use crate::actions::export::{ExportSummary, FormatOutcome};
 use crate::actions::excel::{ExcelExportSummary, ExcelTarget};
 use crate::actions::list_templates::TemplateList;
 use crate::actions::overrides::{OverrideOutcome, OverrideWarning};
+use crate::actions::project_info::ProjectInfoSummary;
 use crate::actions::validate::ValidationSummary;
 use tablet_core::export::{ExportResult, FileStatus};
 use tablet_core::project::ProjectListEntry;
@@ -86,10 +87,6 @@ pub fn print_new_project_outcome_cli(project_root: &std::path::Path) {
     println!("已创建 Project: {}", project_root.display());
 }
 
-pub fn print_generate_test_done_cli() {
-    println!("已生成测试配置");
-}
-
 pub fn print_excel_export_summary_cli(s: &ExcelExportSummary) {
     let label = match &s.target {
         ExcelTarget::Group { name, include } if include.is_empty() => format!("分组 {}", name),
@@ -112,6 +109,41 @@ pub fn print_override_warnings_cli(out: &OverrideOutcome) {
             OverrideWarning::Unknown(key) => {
                 eprintln!("警告: 未知配置项 '{}'", key);
             }
+        }
+    }
+}
+
+pub fn print_project_info_cli(s: &ProjectInfoSummary) {
+    println!("Project: {} ({})", s.id, s.name);
+    println!("  Groups:    {}", s.groups);
+    println!("  Tables:    {}", s.tables);
+    println!("  Constants: {}", s.constants);
+    println!("  Enums:     {}", s.enums);
+    println!("  总数据行:  {}", s.total_rows);
+    println!("  Dirty:     {}", if s.dirty { "是" } else { "否" });
+}
+
+pub fn print_sep_show_cli(s: &crate::actions::sep::SepShowSummary) {
+    println!("分隔符配置（合并后生效值）:");
+    for e in &s.entries {
+        println!("  {:<22}= {:<10}[{}]", e.key, e.value, e.source);
+    }
+}
+
+pub fn print_schema_show_cli(entries: &[crate::actions::schema::SchemaShowEntry]) {
+    if entries.is_empty() {
+        println!("(空项目，无 Group)");
+        return;
+    }
+    for (gi, g) in entries.iter().enumerate() {
+        println!("{}/", g.group);
+        for (ni, n) in g.nodes.iter().enumerate() {
+            let is_last = ni == g.nodes.len() - 1;
+            let prefix = if is_last { "  └── " } else { "  ├── " };
+            println!("{}{:<16}({}, {})", prefix, n.name, n.kind, n.detail);
+        }
+        if gi < entries.len() - 1 {
+            println!();
         }
     }
 }

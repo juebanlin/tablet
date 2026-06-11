@@ -11,10 +11,17 @@
 
 pub mod export;
 pub mod excel;
-pub mod generate_test;
 pub mod list_projects;
 pub mod list_templates;
 pub mod migrate;
 pub mod new_project;
 pub mod overrides;
+pub mod project_clone;
+pub mod project_delete;
+pub mod project_info;
+pub mod project_rename;
+pub mod schema;
+pub mod sep;
+pub mod util;
 pub mod validate;
+pub mod workspace;

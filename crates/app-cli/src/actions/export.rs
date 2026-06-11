@@ -55,6 +55,27 @@ impl ExportSummary {
     pub fn has_error(&self) -> bool {
         self.per_format.iter().any(|(_, o)| matches!(o, FormatOutcome::Err(_)))
     }
+
+    pub fn to_json_value(&self) -> serde_json::Value {
+        let formats: Vec<serde_json::Value> = self.per_format.iter().map(|(label, outcome)| {
+            match outcome {
+                FormatOutcome::Ok(r) => serde_json::json!({
+                    "format": label,
+                    "status": "ok",
+                    "added": r.added(),
+                    "modified": r.modified(),
+                    "deleted": r.deleted(),
+                    "unchanged": r.unchanged(),
+                }),
+                FormatOutcome::Err(msg) => serde_json::json!({
+                    "format": label,
+                    "status": "error",
+                    "message": msg,
+                }),
+            }
+        }).collect();
+        serde_json::json!({ "formats": formats })
+    }
 }
 
 /// 按 formats 的 flag 跑导出；空选集 = 全跑。
@@ -91,6 +112,32 @@ pub fn run_export(engine: &mut ProjectEngine, formats: ExportFormats) -> ExportS
         summary.per_format.push(("C# (.NET)", outcome(engine.export_csharp_dotnet())));
         summary.per_format.push(("C# (Unity)", outcome(engine.export_csharp_unity())));
         summary.per_format.push(("C# (Godot)", outcome(engine.export_csharp_godot())));
+    }
+    summary
+}
+
+/// 带 group/node 过滤的数据导出（仅 JSON/XML）。
+pub fn run_export_data(
+    engine: &mut ProjectEngine,
+    json: bool,
+    xml: bool,
+    group: Option<&str>,
+    node: Option<&str>,
+) -> ExportSummary {
+    use tablet_core::export::DataFilter;
+    let filter = DataFilter {
+        group: group.map(|s| s.to_string()),
+        node: node.map(|s| s.to_string()),
+    };
+    let do_json = json || (!json && !xml);
+    let do_xml = xml || (!json && !xml);
+    let mut summary = ExportSummary::default();
+
+    if do_json {
+        summary.per_format.push(("JSON", outcome(engine.export_json_filtered(&filter))));
+    }
+    if do_xml {
+        summary.per_format.push(("XML", outcome(engine.export_xml_filtered(&filter))));
     }
     summary
 }

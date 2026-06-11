@@ -10,8 +10,10 @@ mod csharp;
 pub(crate) mod sep_meta;
 
 pub use json::export_all_json;
+pub use json::export_json_filtered;
 pub use java::export_all_java;
 pub use xml::export_all_xml;
+pub use xml::export_xml_filtered;
 pub use lua::export_all_lua;
 pub use go::export_all_go;
 pub use gdscript::export_all_gdscript;
@@ -21,6 +23,22 @@ pub use csharp::{export_all_csharp, CSharpRuntime};
 
 use serde_json::Value;
 use crate::types::BaseType;
+
+/// 数据导出过滤：可选限定 group 和 node。
+#[derive(Debug, Clone, Default)]
+pub struct DataFilter {
+    pub group: Option<String>,
+    pub node: Option<String>,
+}
+
+impl DataFilter {
+    pub fn matches_group(&self, group_name: &str) -> bool {
+        self.group.as_ref().map_or(true, |g| g == group_name)
+    }
+    pub fn matches_node(&self, node_name: &str) -> bool {
+        self.node.as_ref().map_or(true, |n| n == node_name)
+    }
+}
 
 pub enum EmptyStrategy {
     Null,

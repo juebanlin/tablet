@@ -148,3 +148,67 @@ pub fn export_all_json(project: &Project) -> Result<super::ExportResult> {
 
     super::sync_export_dir(&output_dir, "json", collected)
 }
+
+pub fn export_json_filtered(project: &Project, filter: &super::DataFilter) -> Result<super::ExportResult> {
+    let export_cfg = project.config.export.as_ref();
+
+    let data_output = export_cfg
+        .and_then(|e| e.server.as_ref())
+        .and_then(|s| s.data_output.as_deref())
+        .unwrap_or("gen/server/data");
+
+    let strategy_str = export_cfg
+        .and_then(|e| e.json.as_ref())
+        .and_then(|j| j.empty_as.as_deref())
+        .unwrap_or("null");
+    let strategy = EmptyStrategy::from_json_config(strategy_str);
+
+    let line_ending = LineEnding::from_config(
+        export_cfg.and_then(|e| e.json.as_ref()).and_then(|j| j.line_ending.as_deref())
+            .or_else(|| export_cfg.and_then(|e| e.line_ending.as_deref()))
+            .unwrap_or("lf")
+    );
+    let encoding = export_cfg.and_then(|e| e.json.as_ref()).and_then(|j| j.encoding.as_deref())
+        .or_else(|| export_cfg.and_then(|e| e.encoding.as_deref()))
+        .unwrap_or("utf-8").to_string();
+    let opts = super::ExportOptions { line_ending, encoding };
+
+    let sep = &project.config.separators;
+    let output_dir = project.export_root().join(data_output).join("json");
+    let mut collected = Vec::new();
+
+    for group in &project.groups {
+        if !filter.matches_group(&group.name) { continue; }
+        for table in &group.tables {
+            if table.deleted { continue; }
+            if !filter.matches_node(&table.name) { continue; }
+            let data = export_table(table, &strategy);
+            let used = collect_used_sep_keys_table(table);
+            let mut wrapper = Map::new();
+            if let Some(meta) = build_sep_meta(sep, &used) {
+                wrapper.insert("_sep".to_string(), meta);
+            }
+            wrapper.insert("data".to_string(), data);
+            let file_path = output_dir.join(format!("{}.json", &table.name));
+            let content = serde_json::to_string_pretty(&Value::Object(wrapper))?;
+            collected.push((file_path, opts.encode(&content)));
+        }
+
+        for constant in &group.constants {
+            if constant.deleted { continue; }
+            if !filter.matches_node(&constant.name) { continue; }
+            let data = export_constant(constant, &strategy);
+            let used = collect_used_sep_keys_constant(constant);
+            let mut wrapper = Map::new();
+            if let Some(meta) = build_sep_meta(sep, &used) {
+                wrapper.insert("_sep".to_string(), meta);
+            }
+            wrapper.insert("data".to_string(), data);
+            let file_path = output_dir.join(format!("{}.json", &constant.name));
+            let content = serde_json::to_string_pretty(&Value::Object(wrapper))?;
+            collected.push((file_path, opts.encode(&content)));
+        }
+    }
+
+    super::sync_export_dir(&output_dir, "json", collected)
+}

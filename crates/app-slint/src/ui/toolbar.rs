@@ -17,16 +17,6 @@ pub fn wire(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
         let id = id.to_string();
         let mut full_refresh = false;
         match id.as_str() {
-            "generate-test" => {
-                s.borrow_mut().engine.generate_test_config();
-                reset_view_after_reload(&s);
-                full_refresh = true;
-            }
-            "clear" => {
-                s.borrow_mut().engine.clear_all_config();
-                reset_view_after_reload(&s);
-                full_refresh = true;
-            }
             "save" => {
                 s.borrow_mut().engine.save_all_projects();
                 // save_all_projects 内部跑 revalidate_all_projects 重算 validation_errors，

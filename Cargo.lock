@@ -4675,18 +4675,20 @@ dependencies = [
 
 [[package]]
 name = "tablet-cli"
-version = "1.1.0"
+version = "1.2.0"
 dependencies = [
  "anyhow",
  "chrono",
  "clap",
+ "serde",
+ "serde_json",
  "tablet-core",
  "toml 0.8.23",
 ]
 
 [[package]]
 name = "tablet-core"
-version = "1.1.0"
+version = "1.2.0"
 dependencies = [
  "anyhow",
  "calamine",
@@ -4702,7 +4704,7 @@ dependencies = [
 
 [[package]]
 name = "tablet-slint"
-version = "1.1.0"
+version = "1.2.0"
 dependencies = [
  "anyhow",
  "arboard",
