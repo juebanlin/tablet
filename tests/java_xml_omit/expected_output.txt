@@ -1,3 +1,0 @@
-=== HeroBase ===
-id=1001 name=战士 hp=100 desc=
-id=1002 name=法师 hp=0 desc=测试空血量

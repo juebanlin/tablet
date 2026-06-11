@@ -69,7 +69,6 @@ Commands:
   schema          结构操作 (show/add-*/rename-*/delete-*)
   export          导出数据/代码 (data/code/all)
   validate        验证 .tbl 文件（支持五级粒度过滤）
-  generate-test   生成测试配置数据
   excel           Excel 桥接 (export/import)
   workspace       工作区操作 (save/reload/clear)
   sep             分隔符查询

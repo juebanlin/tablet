@@ -63,7 +63,7 @@ tablet/
 
 **模块路径就是契约**——`tablet_cli::actions::*` = GUI 可复用；`tablet_cli::cli::*` 或后缀 `_cli` 的函数 = 仅 CLI 二进制内部用，GUI 不应引用。新加业务 → 放 `actions/`，签名干净返 `Result<某种 Summary>`；新加屏幕输出 → 放 `cli/output.rs`，函数名带 `_cli` 后缀。
 
-`core/src/template/` 模块同时被项目模板库（@02）和 generate-test CLI（@02 测试数据生成）复用。
+`core/src/template/` 模块同时被项目模板库（@02）和 `util gen-test` CLI（测试代码生成）复用。
 
 **未来扩展：core 可加 cdylib + C ABI** —— 当前 `tablet-core` 的 `pub` API 已按"可序列化 / 类型稳定"约束维护，后期若要把核心能力暴露给第三方程序（如 Unity 编辑器插件、定制 IDE 集成），只需追加 `[lib] crate-type = ["rlib", "cdylib"]` 与一份 `ffi.rs` + cbindgen 生成的 .h，无需改动现有调用方。
 
@@ -366,7 +366,7 @@ tablet-cli [全局选项] <命令>
 
 ### 7.1 项目上下文选项
 
-以下选项仅对需要项目上下文的命令生效（project / schema / export / validate / excel / workspace / generate-test / sep）。`util` 子命令不接受这些选项（传了也会忽略）。
+以下选项仅对需要项目上下文的命令生效（project / schema / export / validate / excel / workspace / sep）。`util` 子命令不接受这些选项（传了也会忽略）。
 
 | 参数 | 作用 | 默认值 |
 |------|------|--------|
@@ -827,36 +827,31 @@ tablet-cli workspace clear
 
 ---
 
-### 8.7 generate-test — 测试数据生成
+### 8.7 util gen-test — 生成测试运行代码
+
+从 schema 文件生成语言对应的测试运行代码（TestMain.java / main.go）。纯文件操作，无需项目上下文。
 
 | 参数 | 说明 | 默认 |
 |------|------|------|
-| `--empty` | 穿插空值列样本 | false |
-| `--schema <path>` | 用外部 .tblschema 代替项目内 schema | — |
-| `--rows <n>` | 数据行数；0 = 内置固定数据 | 0 |
-| `--seed <u64>` | 随机种子；0 = 固定数据 | 0 |
-| `--format json\|xml` | 数据格式 | json |
-| `--lang java\|go\|none` | TestMain 语言；none = 不生成 | java |
+| `--lang <lang>` | 测试语言（java / go），必填 | — |
+| `--format <fmt>` | 数据格式（决定 init 方式） | json |
+| `--schema <path>` | schema 文件路径，必填 | — |
+| `-o, --output <dir>` | 输出目录，必填 | — |
+| `--package <pkg>` | Java package / Go package 名 | com.game.config |
+| `--code-output <path>` | Go 的 code_output 路径（构造 import path） | gen/server/go |
 
 ```bash
-# 默认：固定数据 + JSON + Java TestMain
-tablet-cli generate-test
+# 生成 Java 测试代码
+tablet-cli util gen-test --lang java --format json \
+  --schema project.tblschema -o ./test/java/
 
-# 100 行随机数据，XML 格式，Go TestMain
-tablet-cli generate-test --rows 100 --seed 42 --format xml --lang go
+# 生成 Go 测试代码
+tablet-cli util gen-test --lang go --format xml \
+  --schema project.tblschema -o ./test/go/
 
-# 含空值测试
-tablet-cli generate-test --empty --format json --lang java
-
-# 使用外部 schema
-tablet-cli generate-test --schema custom.tblschema --rows 50
-
-# 仅生成数据，不生成 TestMain
-tablet-cli generate-test --format json --lang none
-
-# Jenkins 批量验证用
-tablet-cli -w D:/work/game-config generate-test \
-  --rows 100 --empty --seed 42 --lang go
+# 自定义 package
+tablet-cli util gen-test --lang java --format json \
+  --schema project.tblschema --package com.test.config -o ./test/
 ```
 
 ---
@@ -1358,7 +1353,7 @@ tablet-cli --project slg-prod export code --java --package com.release -o ./rele
 tablet-cli --project slg-prod export data --json -o ./release/data/
 
 # 生成测试数据 + 验证
-tablet-cli generate-test --rows 100 --seed 42 --lang go --format json
+tablet-cli util gen-test --lang go --format json --schema project.tblschema -o ./test/
 
 # JSON 输出供脚本解析
 tablet-cli --fmt json validate

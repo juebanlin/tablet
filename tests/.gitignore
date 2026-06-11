@@ -1,0 +1,6 @@
+# 测试临时产物（不应提交）
+*.tmp
+actual_output.txt
+tmp/
+__pycache__/
+*.pyc
