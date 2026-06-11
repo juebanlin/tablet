@@ -98,12 +98,15 @@ jobs:
                 tablet-cli.exe) out="tablet-cli-${target}.exe" ;;
                 tablet)         out="tablet-${target}" ;;
                 tablet-cli)     out="tablet-cli-${target}" ;;
-                *) echo "未知产物: $f" >&2; exit 1 ;;
+                *.deb)          out="$base" ;;
+                *.dmg)          out="$base" ;;
+                *.app)          continue ;;
+                *) echo "跳过: $f" >&2; continue ;;
               esac
-              cp "$f" "dist/release/$out"
+              cp -r "$f" "dist/release/$out"
             done
           done
-          chmod +x dist/release/* || true
+          chmod +x dist/release/tablet-* 2>/dev/null || true
           ls -lh dist/release/
 
       - name: build release notes
@@ -134,8 +137,10 @@ jobs:
             echo "| tablet-linux | x86_64 Linux (glibc) | GUI | 需 libgl1 / libfontconfig1 / fonts-noto-cjk |"
             echo "| tablet-cli-linux | x86_64 Linux (glibc) | CLI | 动态链, 跟随 GUI 包发布 |"
             echo "| tablet-cli-linux-musl | x86_64 Linux (any) | CLI | 全静态链, 老 glibc / Alpine / scratch 容器直接跑 |"
+            echo "| tablet_*.deb | x86_64 Linux (Debian/Ubuntu) | GUI+CLI | apt 安装, 含 .desktop 图标和菜单集成 |"
             echo "| tablet-macos | macOS 10.13+ universal | GUI | x86_64 + aarch64 lipo, 未签名, 首次启动需在系统设置允许 |"
             echo "| tablet-cli-macos | macOS 10.13+ universal | CLI | 同上 |"
+            echo "| Tablet-*.dmg | macOS 10.13+ universal | GUI 安装包 | 拖入 Applications 即可, 含应用图标 |"
           } > release-notes.md
           cat release-notes.md
 

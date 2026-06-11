@@ -103,6 +103,48 @@ build_linux() {
 
     cp "target/$triple/release/tablet"     "$out/"
     cp "target/$triple/release/tablet-cli" "$out/"
+
+    # .deb 打包
+    echo ">>> [linux] 构建 .deb 包"
+    local version
+    version=$(grep '^version' Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/')
+    local arch="amd64"
+    local pkg_dir="$out/tablet_${version}_${arch}"
+    rm -rf "$pkg_dir"
+    mkdir -p "$pkg_dir/DEBIAN"
+    mkdir -p "$pkg_dir/usr/bin"
+    mkdir -p "$pkg_dir/usr/share/applications"
+    mkdir -p "$pkg_dir/usr/share/icons/hicolor/256x256/apps"
+
+    cp "$out/tablet"     "$pkg_dir/usr/bin/"
+    cp "$out/tablet-cli" "$pkg_dir/usr/bin/"
+    strip "$pkg_dir/usr/bin/tablet" "$pkg_dir/usr/bin/tablet-cli" 2>/dev/null || true
+    cp "$WS_DIR/res/icon-256.png" "$pkg_dir/usr/share/icons/hicolor/256x256/apps/tablet.png"
+    cp "$WS_DIR/packaging/linux/tablet.desktop" "$pkg_dir/usr/share/applications/"
+
+    local installed_size
+    installed_size=$(du -sk "$pkg_dir" | cut -f1)
+    cat > "$pkg_dir/DEBIAN/control" << CTRL
+Package: tablet
+Version: $version
+Architecture: $arch
+Maintainer: juebanlin <juebanlin@gmail.com>
+Installed-Size: $installed_size
+Depends: libgl1, libx11-6, libxcursor1, libxrandr2, libxi6
+Section: devel
+Priority: optional
+Homepage: https://github.com/juebanlin/tablet
+Description: TBL 配置管理工具
+ 游戏/应用配置表编辑工具，支持多 Project 管理、
+ 12 种语言平台导出、Excel 桥接、可视化编辑。
+CTRL
+
+    dpkg-deb --build "$pkg_dir" 2>/dev/null && \
+        mv "${pkg_dir}.deb" "$out/" && \
+        echo ">>> [linux] .deb -> $out/tablet_${version}_${arch}.deb" || \
+        echo ">>> [linux] dpkg-deb 不可用，跳过 .deb 打包"
+    rm -rf "$pkg_dir"
+
     echo ">>> [linux] OK -> $out"
     echo "    用户机器可能需要: apt install libgl1 libfontconfig1 fonts-noto-cjk"
 }
@@ -132,7 +174,6 @@ build_macos() {
     rustup target add x86_64-apple-darwin aarch64-apple-darwin >/dev/null
 
     # 最低部署目标 10.13 (High Sierra, 2017): 覆盖 ~99% 仍在用的 mac.
-    # 不设的话默认跟宿主走, runner 是 13.x → 10.13 用户启动时 dyld 报错.
     export MACOSX_DEPLOYMENT_TARGET=10.13
 
     echo ">>> [macos] build x86_64-apple-darwin (min 10.13)"
@@ -148,6 +189,31 @@ build_macos() {
             "target/aarch64-apple-darwin/release/$bin"
         chmod +x "$out/$bin"
     done
+
+    # .app 包
+    echo ">>> [macos] 构建 Tablet.app"
+    local version
+    version=$(grep '^version' Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/')
+    local app_dir="$out/Tablet.app"
+    rm -rf "$app_dir"
+    mkdir -p "$app_dir/Contents/MacOS" "$app_dir/Contents/Resources"
+    cp "$out/tablet" "$app_dir/Contents/MacOS/tablet"
+    cp "$WS_DIR/res/icon.icns" "$app_dir/Contents/Resources/icon.icns"
+    sed "s/1.2.1/$version/g" "$WS_DIR/packaging/macos/Info.plist" > "$app_dir/Contents/Info.plist"
+
+    # .dmg
+    echo ">>> [macos] 构建 .dmg"
+    local dmg_path="$out/Tablet-${version}.dmg"
+    rm -f "$dmg_path"
+    if command -v create-dmg &>/dev/null; then
+        create-dmg --volname "Tablet" --window-size 600 400 \
+            --icon "Tablet.app" 150 200 --app-drop-link 450 200 \
+            "$dmg_path" "$app_dir"
+    else
+        hdiutil create -volname "Tablet" -srcfolder "$app_dir" -ov -format UDZO "$dmg_path" 2>/dev/null || \
+            echo ">>> [macos] hdiutil 不可用，跳过 .dmg"
+    fi
+
     echo ">>> [macos] OK -> $out (universal, intel + arm64, min 10.13)"
     echo "    正式发布需 Apple Developer ID 签名 + 公证, 否则 Gatekeeper 拦截"
 }
