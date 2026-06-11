@@ -37,6 +37,7 @@ export component AppWindow inherits Window {
     /// 应用版本号，启动时由 Rust 端从 env!("CARGO_PKG_VERSION") 注入。
     in property <string> app-version: "";
     title: "tablet" + (root.app-version != "" ? " v" + root.app-version : "");
+    icon: @image-url("../../../res/icon-256.png");
     // 用 preferred-* 给初始大小，min-* 给下限；不设 width/height（那会锁死缩放与最大化）
     preferred-width: 1280px;
     preferred-height: 800px;

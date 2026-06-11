@@ -11,6 +11,9 @@
 //
 // 用户也可以用环境变量 SLINT_STYLE 显式覆盖，跳过这段映射。
 fn main() {
+    println!("cargo:rerun-if-changed=../../res/icon.ico");
+    println!("cargo:rerun-if-changed=../../res/icon-256.png");
+
     let style = std::env::var("SLINT_STYLE").ok().unwrap_or_else(|| {
         match std::env::var("CARGO_CFG_TARGET_OS").as_deref() {
             Ok("windows") => "fluent".to_string(),
@@ -24,4 +27,11 @@ fn main() {
         slint_build::CompilerConfiguration::new().with_style(style),
     )
     .expect("Slint build failed");
+
+    // Windows: 嵌入 exe 图标
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
+        let mut res = winresource::WindowsResource::new();
+        res.set_icon("../../res/icon.ico");
+        res.compile().expect("winresource failed");
+    }
 }
