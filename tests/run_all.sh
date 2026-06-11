@@ -31,7 +31,7 @@ if [ ! -f "$CLI" ]; then
 fi
 
 echo "CLI: $CLI"
-echo "$(\"$CLI\" --version)"
+"$CLI" --version
 echo ""
 
 # 收集测试文件

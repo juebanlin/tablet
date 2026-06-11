@@ -4,8 +4,35 @@
 
 set -euo pipefail
 
-# CLI 二进制路径（由 run_all.sh 设置）
-CLI="${CLI:-$(dirname "$0")/../../target/release/tablet-cli}"
+# CLI 二进制路径：
+# - run_all.sh 设置 CLI 环境变量（已编译好的路径）
+# - 单独执行时，传 --build 参数触发编译
+CLI="${CLI:-}"
+TESTS_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+PROJECT_ROOT="$(cd "$TESTS_ROOT/.." && pwd)"
+
+# Python 路径
+if command -v python3 &>/dev/null && python3 --version &>/dev/null; then
+    PYTHON="${PYTHON:-python3}"
+else
+    PYTHON="${PYTHON:-python}"
+fi
+
+# 单独执行时的自编译支持
+_ensure_cli() {
+    if [ -n "$CLI" ] && [ -f "$CLI" ]; then
+        return
+    fi
+    # 检查是否有 --build 参数（单独执行模式）
+    if [[ "${1:-}" == "--build" ]] || [ -z "$CLI" ]; then
+        local bin="$PROJECT_ROOT/target/release/tablet-cli"
+        if [ ! -f "$bin" ]; then
+            echo "编译 tablet-cli (release)..."
+            cargo build -p tablet-cli --release --manifest-path "$PROJECT_ROOT/Cargo.toml" >/dev/null 2>&1
+        fi
+        CLI="$bin"
+    fi
+}
 
 # 颜色
 RED='\033[0;31m'
@@ -27,13 +54,13 @@ trap 'cleanup' EXIT
 
 setup_workspace() {
     local template="${1:-standard}"
-    cleanup  # 清理上一次残留
+    cleanup
     WORK_DIR=$(mktemp -d)
     "$CLI" -w "$WORK_DIR" project new --template "$template" --id test >/dev/null 2>&1
 }
 
 setup_empty_workspace() {
-    cleanup  # 清理上一次残留
+    cleanup
     WORK_DIR=$(mktemp -d)
 }
 
@@ -144,6 +171,8 @@ _fail() {
 
 begin_test() {
     _TEST_NAME="$1"
+    cd "$(dirname "${BASH_SOURCE[1]}")"
+    _ensure_cli "${2:-}"
 }
 
 # 测试文件结尾调用，输出结果

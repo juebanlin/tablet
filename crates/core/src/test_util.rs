@@ -350,15 +350,19 @@ fn build_test_main(schema: &TblSchema, pkg: &str, format: &str) -> String {
 
                 writeln!(s, "        var gc = TplHolder.getConst({}.class);", cls).unwrap();
 
-                let mut fmt_parts = Vec::new();
-                let mut arg_parts = Vec::new();
-                for f in &server_entries {
-                    fmt_parts.push(format!("{}={}", to_camel(&f.name), java_format_spec(&f.tbl_type)));
-                    arg_parts.push(format!("gc.get{}()", to_pascal(&f.name)));
-                }
+                if !server_entries.is_empty() {
+                    let mut fmt_parts = Vec::new();
+                    let mut arg_parts = Vec::new();
+                    for f in &server_entries {
+                        fmt_parts.push(format!("{}={}", to_camel(&f.name), java_format_spec(&f.tbl_type)));
+                        arg_parts.push(format!("gc.get{}()", to_pascal(&f.name)));
+                    }
 
-                writeln!(s, "        System.out.printf(\"{}%n\",", fmt_parts.join(" ")).unwrap();
-                writeln!(s, "            {});", arg_parts.join(", ")).unwrap();
+                    writeln!(s, "        System.out.printf(\"{}%n\",", fmt_parts.join(" ")).unwrap();
+                    writeln!(s, "            {});", arg_parts.join(", ")).unwrap();
+                } else {
+                    writeln!(s, "        System.out.println(\"(no server fields)\");").unwrap();
+                }
             }
             SchemaMode::Enum => {
                 // 枚举打印：列出所有条目 (id, name, desc)
@@ -451,17 +455,22 @@ fn build_test_main_go(schema: &TblSchema, pkg: &str, import_path: &str, format: 
                 writeln!(s, "\t{{").unwrap();
                 writeln!(s, "\t\tc := cfg.Get{}()", sec.name).unwrap();
 
-                let mut fmt_parts = Vec::new();
-                let mut arg_parts = Vec::new();
-                for f in &server_entries {
-                    fmt_parts.push(format!("{}={}", to_camel(&f.name), go_format_spec(&f.tbl_type)));
-                    arg_parts.push(format!("c.{}", to_pascal(&f.name)));
-                }
+                if !server_entries.is_empty() {
+                    let mut fmt_parts = Vec::new();
+                    let mut arg_parts = Vec::new();
+                    for f in &server_entries {
+                        fmt_parts.push(format!("{}={}", to_camel(&f.name), go_format_spec(&f.tbl_type)));
+                        arg_parts.push(format!("c.{}", to_pascal(&f.name)));
+                    }
 
-                writeln!(s, "\t\tfmt.Printf(\"{}\\n\", {})",
+                    writeln!(s, "\t\tfmt.Printf(\"{}\\n\", {})",
                     fmt_parts.join(" "),
                     arg_parts.join(", ")
                 ).unwrap();
+                } else {
+                    writeln!(s, "\t\t_ = c").unwrap();
+                    writeln!(s, "\t\tfmt.Println(\"(no server fields)\")").unwrap();
+                }
                 writeln!(s, "\t}}").unwrap();
             }
             SchemaMode::Enum => {
