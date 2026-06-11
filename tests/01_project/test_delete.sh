@@ -4,8 +4,11 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "$SCRIPT_DIR/../helpers/common.sh"
 begin_test "project/delete"
 
+# ── 测试配置 ──
+TEMPLATE="standard"
+
 # ── 无 --confirm 拒绝 ──
-setup_workspace "standard"
+setup_workspace "$TEMPLATE"
 run_cli project delete --id test
 assert_exit 1
 assert_stderr_contains "confirm"

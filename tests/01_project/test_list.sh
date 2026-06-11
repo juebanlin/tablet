@@ -4,6 +4,9 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "$SCRIPT_DIR/../helpers/common.sh"
 begin_test "project/list"
 
+# ── 测试配置 ──
+TEMPLATE="standard"
+
 # ── 空 workspace ──
 setup_empty_workspace
 run_cli project list
@@ -12,7 +15,7 @@ assert_contains "无 Project"
 cleanup
 
 # ── 有项目时列出 ──
-setup_workspace "standard"
+setup_workspace "$TEMPLATE"
 run_cli project list
 assert_exit 0
 assert_contains "test"

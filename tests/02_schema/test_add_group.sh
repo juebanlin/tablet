@@ -4,7 +4,10 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "$SCRIPT_DIR/../helpers/common.sh"
 begin_test "schema/add-group"
 
-setup_workspace "standard"
+# ── 测试配置 ──
+TEMPLATE="standard"
+
+setup_workspace "$TEMPLATE"
 
 # 添加新 group 成功
 run_cli schema add-group --name newgroup

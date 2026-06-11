@@ -4,7 +4,10 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "$SCRIPT_DIR/../helpers/common.sh"
 begin_test "util/diff"
 
-setup_workspace "standard"
+# ── 测试配置 ──
+TEMPLATE="standard"
+
+setup_workspace "$TEMPLATE"
 TBL_FILE="$WORK_DIR/projects/test/config/hero/HeroBase.tbl"
 
 # 自己和自己对比 → 无差异

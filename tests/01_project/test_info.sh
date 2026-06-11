@@ -4,8 +4,11 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "$SCRIPT_DIR/../helpers/common.sh"
 begin_test "project/info"
 
+# ── 测试配置 ──
+TEMPLATE="standard"
+
 # ── 正常查询 ──
-setup_workspace "standard"
+setup_workspace "$TEMPLATE"
 run_cli project info
 assert_exit 0
 assert_contains "Project:"

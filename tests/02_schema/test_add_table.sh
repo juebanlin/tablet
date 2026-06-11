@@ -4,7 +4,10 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "$SCRIPT_DIR/../helpers/common.sh"
 begin_test "schema/add-table"
 
-setup_workspace "standard"
+# ── 测试配置 ──
+TEMPLATE="standard"
+
+setup_workspace "$TEMPLATE"
 
 # 添加到已有 group
 run_cli schema add-table --group hero --name HeroSkill

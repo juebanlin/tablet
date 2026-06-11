@@ -4,7 +4,10 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "$SCRIPT_DIR/../helpers/common.sh"
 begin_test "misc/fmt-json"
 
-setup_workspace "standard"
+# ── 测试配置 ──
+TEMPLATE="standard"
+
+setup_workspace "$TEMPLATE"
 
 # project list --fmt json
 run_cli --fmt json project list
