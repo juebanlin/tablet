@@ -124,9 +124,14 @@ tablet-cli --project slg-prod export all
 
 ## AI 辅助技能
 
-[`skills/`](skills/) 目录下提供面向用户的 AI 编程技能包，让 AI 助手按 tablet 规则生成 / 校验 `.tbl` 与 `.tblschema` 文件内容。当前包含：
+[`skills/`](skills/) 目录下提供可分发的 AI 编程技能包，拷贝到你的项目 `.claude/skills/` 目录即可让 AI 助手操作 tablet 工具链。
 
-- [`skills/tbl/`](skills/tbl/) — `.tblschema` 文件格式权威说明 + 工作流
+| 技能 | 用途 |
+|------|------|
+| [`skills/tbl/`](skills/tbl/) | `.tblschema` / `.tbl` 文件格式规范 + 生成/校验/扩展工作流 |
+| [`skills/tbl-cli/`](skills/tbl-cli/) | `tablet-cli` / `tablet` 全部 CLI 命令操作参考 |
+
+`tbl` 管文件内容格式，`tbl-cli` 管命令行操作，两者互补。详见 [`skills/README.md`](skills/README.md)。
 
 ## 构建
 

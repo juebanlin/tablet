@@ -14,7 +14,12 @@ allowed-tools:
 
 Authoritative spec for `.tblschema` (v1) and `.tbl` (v2) file content. Use when generating templates, extending preset data, hand-validating, or reverse-engineering schema from design docs.
 
-**Scope is file content only.** This skill does not cover the `tablet` GUI / CLI / workspace config / project layout / import-export pipeline — those are tooling concerns and out of scope. If a user asks something tooling-related, decline gracefully and point them at the project's own documentation.
+**Naming clarification:**
+- `.tbl` / `.tblschema` = tablet 的数据文件格式（本技能覆盖）
+- `tablet-cli` / `tablet` = 命令行工具（由 `tbl-cli` 技能覆盖）
+- 本技能管**怎么写文件内容**，`tbl-cli` 管**怎么调命令操作文件**
+
+**Scope is file content only.** This skill does not cover the `tablet` GUI / CLI / workspace config / project layout / import-export pipeline — those are tooling concerns covered by the `tbl-cli` skill. If a user asks something CLI/tooling-related, point them to `/tbl-cli`.
 
 **Do not paraphrase the references from memory** — the files in `references/` are the canonical source for this skill. Read them when you need a rule.
 
