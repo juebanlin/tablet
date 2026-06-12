@@ -83,24 +83,22 @@ jobs:
           path: dist
 
       - name: rename binaries
-        # download-artifact 把每个 matrix 产物放到 dist/tablet-<target>/ 下,
-        # 里面是原始文件名 (tablet[.exe] / tablet-cli[.exe]).
-        # 这一步把它们摊平到 dist/release/ 并按 {二进制}-{平台}[.exe] 重命名.
         run: |
           set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
           mkdir -p dist/release
           for d in dist/tablet-*/; do
             target="${d#dist/tablet-}"; target="${target%/}"
             for f in "$d"*; do
               base="$(basename "$f")"
               case "$base" in
-                tablet.exe)     out="tablet-${target}.exe" ;;
-                tablet-cli.exe) out="tablet-cli-${target}.exe" ;;
-                tablet)         out="tablet-${target}" ;;
-                tablet-cli)     out="tablet-cli-${target}" ;;
+                tablet.exe)     out="tablet-${version}-${target}.exe" ;;
+                tablet-cli.exe) out="tablet-cli-${version}-${target}.exe" ;;
+                tablet)         out="tablet-${version}-${target}" ;;
+                tablet-cli)     out="tablet-cli-${version}-${target}" ;;
                 *.deb)          out="$base" ;;
                 *.dmg)          out="$base" ;;
-                *.app)          continue ;;
+                *.app.zip)      out="$base" ;;
                 *) echo "跳过: $f" >&2; continue ;;
               esac
               cp -r "$f" "dist/release/$out"
@@ -130,17 +128,18 @@ jobs:
             echo
             echo "| 文件 | 平台 | 类型 | 备注 |"
             echo "|---|---|---|---|"
-            echo "| tablet-windows.exe | Windows 10/11 x64 | GUI | VC++ runtime 静态链, 用户机器免装 VC 可再发行包 |"
-            echo "| tablet-cli-windows.exe | Windows 10/11 x64 | CLI | 同上 |"
-            echo "| tablet-windows-win7.exe | Windows 7 SP1 x64 | GUI | Tier 3 target, nightly + build-std 编出, 无 CI 长期保证 |"
-            echo "| tablet-cli-windows-win7.exe | Windows 7 SP1 x64 | CLI | 同上 |"
-            echo "| tablet-linux | x86_64 Linux (glibc) | GUI | 需 libgl1 / libfontconfig1 / fonts-noto-cjk |"
-            echo "| tablet-cli-linux | x86_64 Linux (glibc) | CLI | 动态链, 跟随 GUI 包发布 |"
-            echo "| tablet-cli-linux-musl | x86_64 Linux (any) | CLI | 全静态链, 老 glibc / Alpine / scratch 容器直接跑 |"
-            echo "| tablet_*.deb | x86_64 Linux (Debian/Ubuntu) | GUI+CLI | apt 安装, 含 .desktop 图标和菜单集成 |"
-            echo "| tablet-macos | macOS 10.13+ universal | GUI | x86_64 + aarch64 lipo, 未签名, 首次启动需在系统设置允许 |"
-            echo "| tablet-cli-macos | macOS 10.13+ universal | CLI | 同上 |"
-            echo "| Tablet-*.dmg | macOS 10.13+ universal | GUI 安装包 | 拖入 Applications 即可, 含应用图标 |"
+            echo "| tablet-{ver}-windows.exe | Windows 10/11 x64 | GUI | VC++ runtime 静态链, 免装可再发行包 |"
+            echo "| tablet-cli-{ver}-windows.exe | Windows 10/11 x64 | CLI | 同上 |"
+            echo "| tablet-{ver}-windows-win7.exe | Windows 7 SP1 x64 | GUI | Tier 3, nightly + build-std |"
+            echo "| tablet-cli-{ver}-windows-win7.exe | Windows 7 SP1 x64 | CLI | 同上 |"
+            echo "| tablet-{ver}-linux | x86_64 Linux (glibc) | GUI | 需 libgl1 / libfontconfig1 / fonts-noto-cjk |"
+            echo "| tablet-cli-{ver}-linux | x86_64 Linux (glibc) | CLI | 动态链 |"
+            echo "| tablet-cli-{ver}-linux-cli-musl | x86_64 Linux (any) | CLI | 全静态链, 任意 Linux 直接跑 |"
+            echo "| tablet_{ver}_amd64.deb | Debian/Ubuntu x64 | GUI+CLI | apt 安装, 含 .desktop + 图标 |"
+            echo "| tablet-{ver}-macos | macOS 10.13+ universal | GUI | intel + arm64, 未签名 |"
+            echo "| tablet-cli-{ver}-macos | macOS 10.13+ universal | CLI | 同上 |"
+            echo "| Tablet-{ver}.app.zip | macOS 10.13+ universal | GUI 便携包 | 解压直接运行 |"
+            echo "| Tablet-{ver}.dmg | macOS 10.13+ universal | GUI 安装包 | 拖入 Applications |"
           } > release-notes.md
           cat release-notes.md
 

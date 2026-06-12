@@ -201,6 +201,10 @@ build_macos() {
     cp "$WS_DIR/res/icon.icns" "$app_dir/Contents/Resources/icon.icns"
     sed "s/1.2.1/$version/g" "$WS_DIR/packaging/macos/Info.plist" > "$app_dir/Contents/Info.plist"
 
+    # .app → zip（直接解压即可运行）
+    echo ">>> [macos] 压缩 Tablet.app.zip"
+    (cd "$out" && zip -r "Tablet-${version}.app.zip" Tablet.app)
+
     # .dmg
     echo ">>> [macos] 构建 .dmg"
     local dmg_path="$out/Tablet-${version}.dmg"
@@ -213,6 +217,9 @@ build_macos() {
         hdiutil create -volname "Tablet" -srcfolder "$app_dir" -ov -format UDZO "$dmg_path" 2>/dev/null || \
             echo ">>> [macos] hdiutil 不可用，跳过 .dmg"
     fi
+
+    # 清理 .app 目录（zip 和 dmg 已包含）
+    rm -rf "$app_dir"
 
     echo ">>> [macos] OK -> $out (universal, intel + arm64, min 10.13)"
     echo "    正式发布需 Apple Developer ID 签名 + 公证, 否则 Gatekeeper 拦截"
