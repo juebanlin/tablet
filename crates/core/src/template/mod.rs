@@ -172,12 +172,18 @@ fn render_table_skeleton(sec: &SchemaSection) -> String {
     )
     .unwrap();
     writeln!(s, "---").unwrap();
-    // 预设 records：按列序补齐到 fields.len()
+    // 预设 records：按列序补齐到 fields.len()；按列类型 encode（str 走转义，atom 原样）
     let n = sec.fields.len();
     for row in &sec.preset {
         let mut cells: Vec<String> = row.iter().cloned().collect();
         cells.resize(n, String::new());
-        writeln!(s, "{}", cells.join("|")).unwrap();
+        let encoded: Vec<String> = cells.iter().enumerate().map(|(i, v)| {
+            let kind = sec.fields.get(i)
+                .map(|f| crate::tbl_str::classify(&f.tbl_type))
+                .unwrap_or(crate::tbl_str::FieldKind::Str);
+            crate::tbl_str::encode(v, kind)
+        }).collect();
+        writeln!(s, "{}", encoded.join("|")).unwrap();
     }
     s
 }
@@ -187,15 +193,24 @@ fn render_constant_skeleton(sec: &SchemaSection) -> String {
     writeln!(s, "#!tbl v2").unwrap();
     writeln!(s, "#mode constant").unwrap();
     writeln!(s, "---").unwrap();
-    // 新范式：constant 段头不带 fields，行数据全在 preset。
-    // preset 行：name | type | value | export(code) | desc
+    // Constant preset 行：name | type | value | export(code) | desc
+    // name/type/export 是原子标识符（无特殊字符），走 Atom；value 按声明类型 classify；desc 走 Str
     for row in &sec.preset {
         let name     = row.first()  .map(String::as_str).unwrap_or("");
         let tbl_type = row.get(1)   .map(String::as_str).unwrap_or("");
         let value    = row.get(2)   .map(String::as_str).unwrap_or("");
         let export   = row.get(3)   .map(String::as_str).unwrap_or("cs");
         let desc     = row.get(4)   .map(String::as_str).unwrap_or("");
-        writeln!(s, "{}|{}|{}|{}|{}", name, tbl_type, value, display_export(export), desc).unwrap();
+        let value_kind = crate::tbl_str::classify(tbl_type);
+        writeln!(
+            s,
+            "{}|{}|{}|{}|{}",
+            crate::tbl_str::encode(name, crate::tbl_str::FieldKind::Atom),
+            crate::tbl_str::encode(tbl_type, crate::tbl_str::FieldKind::Atom),
+            crate::tbl_str::encode(value, value_kind),
+            display_export(export),
+            crate::tbl_str::encode(desc, crate::tbl_str::FieldKind::Str),
+        ).unwrap();
     }
     s
 }
@@ -205,13 +220,18 @@ fn render_enum_skeleton(sec: &SchemaSection) -> String {
     writeln!(s, "#!tbl v2").unwrap();
     writeln!(s, "#mode enum").unwrap();
     writeln!(s, "---").unwrap();
-    // 新范式：enum 段头不带 fields，行数据全在 preset。
-    // preset 行：id | name | desc
+    // Enum preset 行：id | name | desc；id 是原子数字，name/desc 走 Str
     for row in &sec.preset {
         let id   = row.first().map(String::as_str).unwrap_or("");
         let name = row.get(1) .map(String::as_str).unwrap_or("");
         let desc = row.get(2) .map(String::as_str).unwrap_or("");
-        writeln!(s, "{}|{}|{}", id, name, desc).unwrap();
+        writeln!(
+            s,
+            "{}|{}|{}",
+            crate::tbl_str::encode(id, crate::tbl_str::FieldKind::Atom),
+            crate::tbl_str::encode(name, crate::tbl_str::FieldKind::Str),
+            crate::tbl_str::encode(desc, crate::tbl_str::FieldKind::Str),
+        ).unwrap();
     }
     s
 }

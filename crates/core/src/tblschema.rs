@@ -1,6 +1,7 @@
 use std::path::Path;
 use anyhow::{Result, bail};
 use crate::model::*;
+use crate::tbl_str;
 use crate::types::SeparatorsSection;
 
 #[derive(Debug, Clone, Default)]
@@ -143,8 +144,13 @@ pub fn parse_tblschema(content: &str) -> Result<TblSchema> {
             current = Some(parse_section_header(trimmed, line_num)?);
         } else if let Some(ref mut sec) = current {
             if in_preset {
-                // preset 行：按 `|` 切，trim 单元格。空行已在外层过滤。
-                let cells: Vec<String> = trimmed.split('|').map(|s| s.trim().to_string()).collect();
+                // preset 行：按 `|` 切并 decode，trim 单元格。空行已在外层过滤。
+                // 走 tbl_str：让用户在 schema 里用 `\|` 表示字面竖线、`\n` 表示换行等。
+                // 这里统一按 Str 类型 decode（Atom 类型的值不含转义字符，decode 是零成本 fast-path）。
+                let cells: Vec<String> = tbl_str::split_row(trimmed)
+                    .into_iter()
+                    .map(|s| tbl_str::decode(s.trim(), tbl_str::FieldKind::Str))
+                    .collect();
                 sec.preset.push(cells);
             } else {
                 match sec.mode {

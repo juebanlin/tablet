@@ -53,11 +53,31 @@ public class SimpleJsonParser implements IJsonParser {
 
     private String parseStr(String s, int[] pos) {
         pos[0]++;
-        int start = pos[0];
-        while (s.charAt(pos[0]) != '"') pos[0]++;
-        String r = s.substring(start, pos[0]);
-        pos[0]++;
-        return r;
+        StringBuilder sb = new StringBuilder();
+        while (true) {
+            char c = s.charAt(pos[0]);
+            if (c == '"') { pos[0]++; return sb.toString(); }
+            if (c == '\\') {
+                char n = s.charAt(pos[0] + 1);
+                switch (n) {
+                    case '"':  sb.append('"');  pos[0] += 2; break;
+                    case '\\': sb.append('\\'); pos[0] += 2; break;
+                    case '/':  sb.append('/');  pos[0] += 2; break;
+                    case 'n':  sb.append('\n'); pos[0] += 2; break;
+                    case 'r':  sb.append('\r'); pos[0] += 2; break;
+                    case 't':  sb.append('\t'); pos[0] += 2; break;
+                    case 'b':  sb.append('\b'); pos[0] += 2; break;
+                    case 'f':  sb.append('\f'); pos[0] += 2; break;
+                    case 'u':
+                        sb.append((char) Integer.parseInt(s.substring(pos[0] + 2, pos[0] + 6), 16));
+                        pos[0] += 6; break;
+                    default:   sb.append(n); pos[0] += 2; break;
+                }
+            } else {
+                sb.append(c);
+                pos[0]++;
+            }
+        }
     }
 
     private Number parseNum(String s, int[] pos) {

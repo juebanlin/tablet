@@ -55,6 +55,10 @@ init_items    | List<int>               | 1001;1002;1003  | cs | 初始物品 ID
 unique_skills | Set<int>                | 100;200;300     | cs | 技能 ID 集合
 attr_caps     | Map<str,int>            | hp:9999;mp:5000 | s  | 属性上限
 default_hero  | @HeroType               | 1               | cs | 默认英雄类型
+notice_json   | str                     | {"title":"公告","content":"欢迎登录","level":2,"tags":["new","hot"]} | cs | JSON 格式公告
+banner_html   | str                     | <div class="banner" style="color:red">Hello\n<b>World</b></div>      | cs | HTML 富文本示例
+config_xml    | str                     | <config><item id="1" value="a\|b"/><item id="2" value="c\nd"/></config> | cs | XML 复杂配置示例
+error_regex   | str                     | ^(?P<year>\d{4})-(?P<month>\d{2})\|error:(.+)$                        | s  | 正则表达式示例
 
 # ──────────────── Table 段 ────────────────
 # Table 段在 schema 里写列声明（结构）；预设 records 写在 # @preset 里。
