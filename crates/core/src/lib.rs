@@ -4,6 +4,7 @@
 pub mod model;
 pub mod types;
 pub mod tbl;
+pub mod tbl_str;
 pub mod tblschema;
 pub mod template;
 pub mod project;
