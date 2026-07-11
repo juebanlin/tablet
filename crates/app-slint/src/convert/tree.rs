@@ -106,7 +106,7 @@ pub fn build_tree_nodes(state: &mut AppState) -> Vec<TreeNode> {
 
         // 项目根节点 marker 聚合
         let project_obj = state.engine.find_project(pid);
-        let root_pending = project_obj.map(|p| p.root_pending_create).unwrap_or(false);
+        let root_pending = project_obj.map(|p| p.state.is_pending()).unwrap_or(false);
         let schema_dirty = project_obj.map(|p| p.schema_dirty).unwrap_or(false);
         let mut all_deleted_self = false;
         let mut all_deleted = true;

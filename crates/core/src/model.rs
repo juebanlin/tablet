@@ -2,6 +2,25 @@ use std::path::PathBuf;
 
 use crate::tblschema::TblSchema;
 
+/// 项目状态：区分已落盘 vs 未落盘
+#[derive(Debug, Clone, PartialEq)]
+pub enum ProjectState {
+    /// 从磁盘加载的已存盘项目
+    Loaded,
+    /// 新建的未落盘项目（待保存）
+    Pending,
+}
+
+impl ProjectState {
+    pub fn is_loaded(&self) -> bool {
+        matches!(self, ProjectState::Loaded)
+    }
+
+    pub fn is_pending(&self) -> bool {
+        matches!(self, ProjectState::Pending)
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct Project {
     /// CLI 的 `-w` workdir：`tablet.toml` 与 `gen/` 所在目录。仓库级，全局共享。
@@ -20,9 +39,9 @@ pub struct Project {
     pub groups: Vec<Group>,
     /// schema 是否需要写盘：rename / 结构变动时置 true，save 时落 project.tblschema 后清零。
     pub schema_dirty: bool,
-    /// project_root 是否还没在磁盘上创建（克隆出的内存项目 = true）。
-    /// save 时先 create_dir_all 再写文件，最后清零。
-    pub root_pending_create: bool,
+    /// 项目状态：Loaded（已落盘）或 Pending（待保存）。
+    /// save 时 Pending 项目会先 create_dir_all，然后切换为 Loaded。
+    pub state: ProjectState,
 }
 
 impl Project {

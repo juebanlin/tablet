@@ -406,7 +406,7 @@ fn load_specific_project_impl(
         schema,
         groups,
         schema_dirty: false,
-        root_pending_create: false,
+        state: crate::model::ProjectState::Loaded,
     })
 }
 

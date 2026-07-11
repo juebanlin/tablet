@@ -71,12 +71,12 @@ fn save_project_files(project: &mut Project) -> (usize, usize) {
     let mut count = 0;
     let mut deleted = 0;
     // 第一步：克隆出来但未落盘的项目，先建 root 目录 + 让 schema 一并落地
-    if project.root_pending_create {
+    if project.state.is_pending() {
         if let Err(e) = std::fs::create_dir_all(&project.project_root) {
             eprintln!("warn: create project root failed: {} ({})", project.project_root.display(), e);
             return (0, 0);
         }
-        project.root_pending_create = false;
+        project.state = crate::model::ProjectState::Loaded;
         project.schema_dirty = true;
     }
     // 项目首次落盘时写一份「全量带注释」的 project.toml 模板，让用户能直接看到
@@ -556,7 +556,7 @@ impl ProjectEngine {
     }
 
     /// 内存模式创建新 Project：与 clone_project_in_memory 行为对齐。
-    /// - 不立即落盘；root_pending_create=true、schema_dirty=true
+    /// - 不立即落盘；state=Pending、schema_dirty=true
     /// - sections 展开为 group.is_new=true、节点 original="" → 树面板 `+` 标记
     /// - config 借用现有任意 opened project 的 ProjectConfig，否则用默认 fallback
     /// - 同时加进 available_projects（未保存前目录还不存在，但 UI 树要展示）
@@ -593,7 +593,7 @@ impl ProjectEngine {
             schema: schema.clone(),
             groups: Vec::new(),
             schema_dirty: true,
-            root_pending_create: true,
+            state: crate::model::ProjectState::Pending,
         };
 
         // 用 apply_schema_to_project 把 sections 展开为 groups+nodes：
@@ -624,7 +624,7 @@ impl ProjectEngine {
     }
 
     /// 内存深拷贝克隆：把 source_project_id 的当前状态（含未保存改动）整体复制为新 project，
-    /// 加进 self.projects 但**不立即落盘**（root_pending_create=true，schema_dirty=true，
+    /// 加进 self.projects 但**不立即落盘**（state=Pending，schema_dirty=true，
     /// 全部 group is_new=true，所有节点 dirty=true / original=""）。用户保存时才会落盘。
     /// - source 必须是 opened（在 self.projects 里）
     /// - 同时把新 project 加进 available_projects（未保存前目录还不存在，但 UI 树要展示）
@@ -653,7 +653,7 @@ impl ProjectEngine {
             chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
         // source_template* 沿用源（克隆来源最早还是那个 template）
         new_project.schema_dirty = true;
-        new_project.root_pending_create = true;
+        new_project.state = crate::model::ProjectState::Pending;
 
         let new_data_dir = new_project.data_dir();
         for g in &mut new_project.groups {
@@ -1377,7 +1377,7 @@ impl ProjectEngine {
     /// 全部关闭时返回 false。
     pub fn is_dirty(&self) -> bool {
         let Some(p) = self.active() else { return false; };
-        if p.root_pending_create || p.schema_dirty { return true; }
+        if p.state.is_pending() || p.schema_dirty { return true; }
         for g in &p.groups {
             if g.is_new { return true; }
             for t in &g.tables { if t.dirty || t.deleted { return true; } }
@@ -1390,7 +1390,7 @@ impl ProjectEngine {
     /// 任一 Project 有未保存改动。退出工具 / 全保存判空用。
     pub fn is_dirty_any(&self) -> bool {
         for p in &self.projects {
-            if p.root_pending_create || p.schema_dirty { return true; }
+            if p.state.is_pending() || p.schema_dirty { return true; }
             for g in &p.groups {
                 if g.is_new { return true; }
                 for t in &g.tables { if t.dirty || t.deleted { return true; } }
@@ -1819,7 +1819,7 @@ impl ProjectEngine {
         let project = &mut self.projects[idx];
         let only_name_change = old_id == new_id;
         // 未保存的内存项目（目录还没落盘）：只改内存，不碰文件系统。
-        let pending = project.root_pending_create;
+        let pending = project.state.is_pending();
         if !only_name_change {
             // 检查 new_id 不存在（含 closed 的 available）
             if self.available_projects.iter().any(|a| a.id == new_id) {
@@ -1885,9 +1885,9 @@ impl ProjectEngine {
     /// `DeleteProject` 的实际逻辑（拆出便于阅读）。
     /// 用户允许删到 0 个 project（DBeaver-style 全部关闭）。
     fn execute_delete_project(&mut self, project_id: &str) {
-        // 找到要删的盘上根 + 是否仅在内存中（root_pending_create）
+        // 找到要删的盘上根 + 是否仅在内存中（state.is_pending()）
         let (project_root, in_memory_only) = if let Some(idx) = self.projects.iter().position(|p| p.schema.meta.id == project_id) {
-            (self.projects[idx].project_root.clone(), self.projects[idx].root_pending_create)
+            (self.projects[idx].project_root.clone(), self.projects[idx].state.is_pending())
         } else if let Some(ap) = self.available_projects.iter().find(|a| a.id == project_id) {
             (ap.root.clone(), false)
         } else {
@@ -1928,7 +1928,7 @@ impl ProjectEngine {
         let Some(project) = self.find_project(project_id) else { return false; };
         // 内存模式新建 / 克隆出来的项目：root 还没落盘 / schema 还没落盘 → 一定 dirty。
         // 即便 groups 为空也算（空 Empty 项目也不能"关掉就没了"）
-        if project.root_pending_create || project.schema_dirty { return true; }
+        if project.state.is_pending() || project.schema_dirty { return true; }
         for g in &project.groups {
             if g.is_new { return true; }
             for t in &g.tables { if t.dirty || t.deleted { return true; } }
@@ -2222,7 +2222,7 @@ mod project_toml_template_tests {
             schema,
             groups: Vec::new(),
             schema_dirty: true,
-            root_pending_create: true,
+            state: crate::model::ProjectState::Pending,
         }
     }
 
@@ -2260,8 +2260,8 @@ mod project_toml_template_tests {
         std::fs::write(&toml_path, custom).unwrap();
 
         let mut project = make_project(dir.clone(), project_root.clone(), "p1");
-        // root 已存在 → 不该再触发 root_pending_create 写盘逻辑会重新建一遍 dir，但写 project.toml 该跳过
-        project.root_pending_create = false;
+        // root 已存在 → 不该再触发 state=Pending 写盘逻辑会重新建一遍 dir，但写 project.toml 该跳过
+        project.state = crate::model::ProjectState::Loaded;
         let _ = save_project_files(&mut project);
 
         let after = std::fs::read_to_string(&toml_path).unwrap();
@@ -2271,13 +2271,13 @@ mod project_toml_template_tests {
 
     #[test]
     fn rename_unsaved_project_only_touches_memory() {
-        // 回归：未保存的内存项目（root_pending_create=true，目录不存在）改身份信息
+        // 回归：未保存的内存项目（state=Pending，目录不存在）改身份信息
         // 不应因目录不存在而报错——只改内存，等 save 时统一落盘。
         let dir = unique_tmp("rename_unsaved");
         let project_root = dir.join("projects").join("p1");
         // 注意：故意不创建 project_root 目录，模拟"新建未保存"场景
         let project = make_project(dir.clone(), project_root.clone(), "p1");
-        assert!(project.root_pending_create, "make_project 默认 pending");
+        assert!(project.state.is_pending(), "make_project 默认 pending");
         let mut engine = ProjectEngine::new(project);
 
         // 改 id + name
@@ -2291,7 +2291,7 @@ mod project_toml_template_tests {
         let p = engine.find_project("p2").expect("p2 应存在于内存");
         assert_eq!(p.schema.meta.id, "p2");
         assert_eq!(p.schema.meta.name, "新名字");
-        assert!(p.root_pending_create, "仍未落盘");
+        assert!(p.state.is_pending(), "仍未落盘");
         assert!(p.schema_dirty, "schema 标记为 dirty，等 save 落盘");
         // 磁盘上不应有任何文件（目录都没建）
         assert!(!project_root.exists(), "旧目录不该被创建");

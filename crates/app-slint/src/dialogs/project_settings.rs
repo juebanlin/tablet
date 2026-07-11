@@ -27,7 +27,7 @@ pub fn open_for(state: &Rc<RefCell<AppState>>, project_id: &str) {
     let version = p.schema.meta.version.clone();
     let sep = p.schema.separators.clone();
     // 仅未落盘项目（克隆 / 新建的内存项目）允许改 id；已存盘项目 id 固定。
-    let id_editable = p.root_pending_create;
+    let id_editable = p.state.is_pending();
     let ps = &mut st.project_settings;
     ps.open = true;
     ps.tab = 0;
