@@ -80,19 +80,16 @@ fn save_project_files(project: &mut Project) -> (usize, usize) {
         project.schema_dirty = true;
     }
     // 项目首次落盘时写一份「全量带注释」的 project.toml 模板，让用户能直接看到
-    // 全部可改键。仅多 Project 模式（project_root != workdir）触发——老布局 fixture
-    // 的 workdir 即 project_root，不该污染那里。已存在则不覆盖（用户改过 / 手写过都保留）。
-    if project.is_multi_project_layout() {
-        let project_toml_path = project.project_root.join(crate::project::PROJECT_TOML_FILE);
-        if !project_toml_path.exists() {
-            match std::fs::write(&project_toml_path, crate::project::default_project_toml_template()) {
-                Ok(()) => count += 1,
-                Err(e) => eprintln!(
-                    "warn: write project.toml failed: {} ({})",
-                    project_toml_path.display(),
-                    e
-                ),
-            }
+    // 全部可改键。已存在则不覆盖（用户改过 / 手写过都保留）。
+    let project_toml_path = project.project_root.join(crate::project::PROJECT_TOML_FILE);
+    if !project_toml_path.exists() {
+        match std::fs::write(&project_toml_path, crate::project::default_project_toml_template()) {
+            Ok(()) => count += 1,
+            Err(e) => eprintln!(
+                "warn: write project.toml failed: {} ({})",
+                project_toml_path.display(),
+                e
+            ),
         }
     }
     if project.schema_dirty {
@@ -301,7 +298,7 @@ pub enum ProjectAction {
 }
 
 impl ProjectEngine {
-    /// 老接口：单 Project 构造（兼容 fixture / CLI）。
+    /// 构造单个 Project 实例（用于测试和简单场景）。
     /// available_projects 仅含该 project；workdir 取自该 project。
     pub fn new(project: Project) -> Self {
         let workdir = project.workdir.clone();
@@ -2216,21 +2213,6 @@ mod project_toml_template_tests {
 
         let after = std::fs::read_to_string(&toml_path).unwrap();
         assert_eq!(after, custom, "已有 project.toml 不应被覆盖");
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn save_project_files_skips_project_toml_in_legacy_layout() {
-        // 老布局（fixture）：workdir == project_root，save 不该往里写 project.toml
-        let dir = unique_tmp("legacy");
-        std::fs::create_dir_all(&dir).unwrap();
-        let mut project = make_project(dir.clone(), dir.clone(), "default");
-        // 老布局下 root 已存在
-        project.root_pending_create = false;
-        let _ = save_project_files(&mut project);
-
-        let toml_path = dir.join(crate::project::PROJECT_TOML_FILE);
-        assert!(!toml_path.exists(), "老布局不该写 project.toml: {}", toml_path.display());
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

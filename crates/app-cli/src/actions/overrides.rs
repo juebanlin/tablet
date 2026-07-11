@@ -33,9 +33,24 @@ pub fn apply_overrides(engine: &mut ProjectEngine, overrides: &[String]) -> Over
             continue;
         };
         match key.trim() {
-            "project.config_dir" | "app.config_dir" => project.config.project.config_dir = value.to_string(),
-            "project.cache_dir" | "app.cache_dir" => project.config.project.cache_dir = value.to_string(),
-            "app.last_project" | "project.last_project" => project.config.project.last_project = value.to_string(),
+            "project.config_dir" | "app.config_dir" => {
+                out.warnings.push(OverrideWarning::Deprecated {
+                    key: key.to_string(),
+                    hint: "config_dir 已废弃，多项目模式下固定使用 <project_root>/config/",
+                });
+            }
+            "project.cache_dir" | "app.cache_dir" => {
+                out.warnings.push(OverrideWarning::Deprecated {
+                    key: key.to_string(),
+                    hint: "cache_dir 已废弃，多项目模式下固定使用 <project_root>/.tbl-cache/",
+                });
+            }
+            "app.last_project" | "project.last_project" => {
+                out.warnings.push(OverrideWarning::Deprecated {
+                    key: key.to_string(),
+                    hint: "请直接修改 tablet.toml 的 [project] last_project 字段",
+                });
+            }
             "export.encoding" => {
                 ensure_export(&mut project.config);
                 project.config.export.as_mut().unwrap().encoding = Some(value.to_string());

@@ -72,8 +72,6 @@ pub enum Command {
     Util(UtilArgs),
     /// 列出可用模板
     ListTemplates,
-    /// 迁移旧 config/ 到 projects/default/
-    MigrateLegacy,
 }
 
 // ─── project ───────────────────────────────────────────────────────────────

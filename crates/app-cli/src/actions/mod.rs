@@ -13,7 +13,6 @@ pub mod export;
 pub mod excel;
 pub mod list_projects;
 pub mod list_templates;
-pub mod migrate;
 pub mod new_project;
 pub mod overrides;
 pub mod project_clone;

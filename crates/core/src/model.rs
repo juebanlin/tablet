@@ -8,7 +8,6 @@ pub struct Project {
     pub workdir: PathBuf,
     /// 当前 Project 的根目录：`project.tblschema` / `config/` 在它下面。
     /// - 多 Project 模式：`<workdir>/projects/<id>/`
-    /// - 老布局（test fixture / 历史仓库）：`<workdir>` 自身
     pub project_root: PathBuf,
     pub config: WorkspaceConfig,
     /// `project.tblschema` 解析结果，承担"项目身份 + 结构骨架"双职：
@@ -24,39 +23,19 @@ pub struct Project {
 }
 
 impl Project {
-    /// 数据目录：当前 Project 的 .tbl 根目录。
-    /// - 多 Project 模式：`<project_root>/config/`
-    /// - 老布局：`<project_root>/<config_dir>`（即 `<workdir>/<config_dir>`）
+    /// 数据目录：当前 Project 的 .tbl 根目录 `<project_root>/config/`
     pub fn data_dir(&self) -> PathBuf {
-        if self.is_multi_project_layout() {
-            self.project_root.join("config")
-        } else {
-            self.project_root.join(&self.config.project.config_dir)
-        }
+        self.project_root.join("config")
     }
 
-    /// 缓存目录：当前 Project 的 .tbl-cache。
+    /// 缓存目录：当前 Project 的 .tbl-cache 目录 `<project_root>/.tbl-cache/`
     pub fn cache_dir(&self) -> PathBuf {
-        if self.is_multi_project_layout() {
-            self.project_root.join(".tbl-cache")
-        } else {
-            self.project_root.join(&self.config.project.cache_dir)
-        }
+        self.project_root.join(".tbl-cache")
     }
 
-    /// 是否为多 Project 布局（`<workdir>/projects/<id>/`）。
-    pub fn is_multi_project_layout(&self) -> bool {
-        self.project_root != self.workdir
-    }
-
-    /// 导出根：多 Project 模式 = `<project_root>`（每个 Project 独立 gen/...，避免互相覆盖），
-    /// 老布局 = `<workdir>`（保持 fixture / 历史仓库行为）。
+    /// 导出根：Project 导出目录 `<project_root>/`（每个 Project 独立 gen/，避免互相覆盖）
     pub fn export_root(&self) -> &std::path::Path {
-        if self.is_multi_project_layout() {
-            self.project_root.as_path()
-        } else {
-            self.workdir.as_path()
-        }
+        self.project_root.as_path()
     }
 }
 
@@ -82,8 +61,6 @@ fn default_project_section() -> ProjectConfig {
         opened_projects: Vec::new(),
         project_sort: String::new(),
         project_order: Vec::new(),
-        config_dir: default_config_dir(),
-        cache_dir: default_cache_dir(),
     }
 }
 
@@ -252,19 +229,6 @@ pub struct ProjectConfig {
     /// project_sort = "manual" 时使用：用户拖拽得到的 id 序列。
     #[serde(default)]
     pub project_order: Vec<String>,
-    /// 历史字段：老布局 `<workdir>/<config_dir>/`。S15-D 之后 Project 用 `<project_root>/config/`，
-    /// 该字段仅在迁移期 / 老 fixture 使用，新版本写出时不再带它。
-    #[serde(default = "default_config_dir")]
-    pub config_dir: String,
-    /// 历史字段：同 config_dir 一样保留兼容；新版本走 `<project_root>/.tbl-cache/`。
-    #[serde(default = "default_cache_dir")]
-    pub cache_dir: String,
-}
-
-fn default_config_dir() -> String { "config".to_string() }
-
-fn default_cache_dir() -> String {
-    ".tbl-cache".to_string()
 }
 
 #[derive(Debug, Clone)]

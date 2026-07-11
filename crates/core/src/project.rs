@@ -1,4 +1,4 @@
-//! Project 加载、扫描、迁移。
+//! Project 加载、扫描、配置合并。
 //!
 //! 文档对应：@02 Project / @03.4 / @07 S15-D。
 //!
@@ -18,21 +18,15 @@
 //!
 //! 加载顺序：项目 toml > 全局 toml > 内置默认。
 //!
-//! 老仓库的根 `config/` 在 `load_project` 时**自动迁移**到 `projects/default/config/`，
-//! 不保留双结构。
-//!
-//! 历史文件名 `schema.tblschema` 在 load 时一次性 rename 为 `project.tblschema`，
-//! 保持代码路径单一。
-//!
-//! 测试 fixtures（`tests/<scenario>/`）保持兼容：当 `<workdir>/projects/` 不存在
-//! 但 `<workdir>/<config_dir>/` 存在时，把 workdir 自身当 project_root（"老布局模式"），
-//! 这样 `tablet-cli generate-test` 在 fixtures 里仍可写 `config/` 平铺。
-//! 新建项目 / GUI 启动一律走 projects/<id>/ 结构。
+//! **历史兼容**：
+//! - 历史文件名 `schema.tblschema` 在 load 时一次性 rename 为 `project.tblschema`
+//! - 配置文件 `tbl-tool.toml` 在 load 时一次性 rename 为 `tablet.toml`
+//! - 不再支持单项目模式（`<workdir>/config/` 直接存放数据），
+//!   旧仓库需要手动迁移到 `projects/default/` 结构
 
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
-use chrono::Utc;
 
 use crate::model::*;
 use crate::tbl::{self, TblFile};
@@ -326,13 +320,10 @@ pub fn default_project_toml_template() -> &'static str {
 ///
 /// 流程：
 /// 1. 解析 `<workdir>/tablet.toml`（不存在则写默认）—— 全局 fallback
-/// 2. 老布局迁移：若 `<workdir>/projects/` 不存在但 `<workdir>/<config_dir>/` 是非空目录，
-///    把它视作 default project（不动盘上文件，仅在内存里把 project_root=workdir）。
-///    GUI 端可在确认后调 [`migrate_legacy_to_default`] 真正搬目录。
-/// 3. 多 Project 模式：从 `last_project` / 扫描结果挑一个，project_root = `<workdir>/projects/<id>/`
-/// 4. 加载文件名迁移（schema.tblschema → project.tblschema）
-/// 5. 解析 project.tblschema：meta → 项目身份；其它段（[export]/[ui]/...）由 project.toml deep-merge 到全局 config 上
-/// 6. 扫 config/ 加载 groups
+/// 2. 从 `<workdir>/projects/` 扫描，从 `last_project` 或第一个挑选
+/// 3. 加载文件名迁移（schema.tblschema → project.tblschema）
+/// 4. 解析 project.tblschema：meta → 项目身份；其它段（[export]/[ui]/...）由 project.toml deep-merge 到全局 config 上
+/// 5. 扫 config/ 加载 groups
 pub fn load_project(workdir: &Path) -> Result<Project> {
     let config_path = workdir.join(crate::CONFIG_FILE);
 
@@ -343,41 +334,31 @@ pub fn load_project(workdir: &Path) -> Result<Project> {
 
     let global_text = std::fs::read_to_string(&config_path)?;
 
-    // 决定 project_root
+    // 必须有 projects/ 目录
     let projects_dir = workdir.join(PROJECTS_DIR);
-    let (project_root, schema, project_text) = if projects_dir.is_dir() {
-        // 多 Project 模式：从 last_project 或扫描结果挑一个
-        let candidates = scan_projects_dir(&projects_dir);
-        // 先解析全局，仅为读 last_project；project.toml 的 overlay 一会再做
-        let temp_cfg: WorkspaceConfig = toml::from_str(&global_text)?;
-        let chosen = pick_project(&candidates, &temp_cfg.project.last_project)
-            .with_context(|| format!("projects/ 目录下没有可用 Project: {}", projects_dir.display()))?;
-        let root = projects_dir.join(&chosen.id);
-        migrate_legacy_files(&root);
-        let proj_text = std::fs::read_to_string(root.join(PROJECT_TOML_FILE)).ok();
-        let schema = read_project_schema_with_fallback(&root, &chosen.id);
-        (root, schema, proj_text)
-    } else {
-        // 老布局：workdir 自身就是 project_root，<config_dir> 即数据目录
-        let mut schema = crate::tblschema::TblSchema::default();
-        schema.meta.id = "default".to_string();
-        schema.meta.name = "默认项目".to_string();
-        (workdir.to_path_buf(), schema, None)
-    };
+    if !projects_dir.is_dir() {
+        anyhow::bail!(
+            "projects/ 目录不存在。请使用 'tablet-cli project new' 创建项目，\
+             或参考文档将旧仓库结构迁移到多项目模式。"
+        );
+    }
 
-    let mut config = merge_project_config(&global_text, project_text.as_deref())?;
+    let candidates = scan_projects_dir(&projects_dir);
+    let temp_cfg: WorkspaceConfig = toml::from_str(&global_text)?;
+    let chosen = pick_project(&candidates, &temp_cfg.project.last_project)
+        .with_context(|| format!("projects/ 目录下没有可用 Project: {}", projects_dir.display()))?;
+
+    let project_root = projects_dir.join(&chosen.id);
+    migrate_legacy_files(&project_root);
+    let proj_text = std::fs::read_to_string(project_root.join(PROJECT_TOML_FILE)).ok();
+    let schema = read_project_schema_with_fallback(&project_root, &chosen.id);
+
+    let mut config = merge_project_config(&global_text, proj_text.as_deref())?;
     // 分隔符以 schema.separators 为单一来源：
     // workspace tablet.toml [separators] 与 project.toml [separators] 都被 schema 覆盖。
     config.separators = schema.separators.clone();
 
-    // 决定 config 数据目录：多 Project 模式恒为 `<project_root>/config/`；
-    // 老布局走 `<project_root>/<config_dir>`（即 `<workdir>/<config_dir>`）
-    let data_dir = if projects_dir.is_dir() {
-        project_root.join("config")
-    } else {
-        project_root.join(&config.project.config_dir)
-    };
-
+    let data_dir = project_root.join("config");
     let groups = if data_dir.is_dir() {
         load_groups_in(&data_dir)?
     } else {
@@ -432,22 +413,20 @@ pub fn load_specific_project(workdir: &Path, project_id: &str) -> Result<Project
 
 /// 加载 workdir 下**全部** Project 到内存（多 Project 同时管理模型，@04.2.0）。
 ///
-/// - 多 Project 模式：扫 `<workdir>/projects/` 列出全部 id；每个走 `load_specific_project` 全量加载
-/// - 老布局：复用 `load_project`，得到单个 default Project 包成 Vec
-/// - 没有 projects/ 也没有老 config/ 时 → load_project 会创建空 default
-///
-/// 返回的 Vec 顺序：按 project id 字典序（与 `list_projects` 一致）。
+/// - 扫描 `<workdir>/projects/` 列出全部 id；每个走 `load_specific_project` 全量加载
+/// - 返回的 Vec 顺序：按 project id 字典序（与 `list_projects` 一致）
 pub fn load_all_projects(workdir: &Path) -> Result<Vec<Project>> {
     let projects_dir = workdir.join(PROJECTS_DIR);
     if !projects_dir.is_dir() {
-        let p = load_project(workdir)?;
-        return Ok(vec![p]);
+        anyhow::bail!(
+            "projects/ 目录不存在。请使用 'tablet-cli project new' 创建项目，\
+             或参考文档将旧仓库结构迁移到多项目模式。"
+        );
     }
 
     let candidates = scan_projects_dir(&projects_dir);
     if candidates.is_empty() {
-        let p = load_project(workdir)?;
-        return Ok(vec![p]);
+        anyhow::bail!("projects/ 下没有可加载的 Project");
     }
 
     let config_path = workdir.join(crate::CONFIG_FILE);
@@ -471,13 +450,12 @@ pub fn load_all_projects(workdir: &Path) -> Result<Vec<Project>> {
 /// DBeaver-style 启动加载：扫描 available + 仅按 `[project] opened_projects` 加载若干个。
 ///
 /// 决策逻辑：
-/// 1. 若 `<workdir>/projects/` 不存在 → 走老 `load_project` 单 project 路径，available = 1 条 default。
-/// 2. 否则扫 `<workdir>/projects/` 得到 `Vec<AvailableProject>`，按 id 字典序。
-/// 3. 决定 `to_open`：
+/// 1. 扫描 `<workdir>/projects/` 得到 `Vec<AvailableProject>`，按 id 字典序
+/// 2. 决定 `to_open`：
 ///    - `opened_projects` 非空：用它过滤掉不存在的 id（保持顺序）
 ///    - 否则若 `last_project` 非空且存在：仅打开它
 ///    - 否则打开 available 第一个（保持兼容，确保启动有内容）
-/// 4. active = `last_project`（不在 opened 里则 fallback opened[0]）
+/// 3. active = `last_project`（不在 opened 里则 fallback opened[0]）
 pub fn load_workspace(workdir: &Path) -> Result<crate::ops::ProjectEngine> {
     use crate::ops::{AvailableProject, ProjectEngine};
 
@@ -499,7 +477,7 @@ pub fn load_workspace(workdir: &Path) -> Result<crate::ops::ProjectEngine> {
     let workspace_cfg: WorkspaceConfig = toml::from_str(&global_text)?;
 
     if !projects_dir.is_dir() {
-        // projects/ 不存在 = 空仓库；不再隐式落地 default project / 老布局兜底。
+        // projects/ 不存在 = 空仓库
         return Ok(ProjectEngine::new_workspace(
             workdir.to_path_buf(),
             Vec::new(),
@@ -581,30 +559,12 @@ pub fn persist_workspace_state(
 ) -> Result<()> {
     let path = engine.workdir.join(crate::CONFIG_FILE);
     let original = std::fs::read_to_string(&path).unwrap_or_default();
-    // 取 config_dir / cache_dir：优先从已加载 project 的 config 拿，全关时反序列化原 toml
-    let (config_dir, cache_dir) = if let Some(p) = engine.active() {
-        (
-            p.config.project.config_dir.clone(),
-            p.config.project.cache_dir.clone(),
-        )
-    } else if let Some(p) = engine.projects.first() {
-        (
-            p.config.project.config_dir.clone(),
-            p.config.project.cache_dir.clone(),
-        )
-    } else {
-        match toml::from_str::<WorkspaceConfig>(&original) {
-            Ok(c) => (c.project.config_dir, c.project.cache_dir),
-            Err(_) => ("config".to_string(), ".tbl-cache".to_string()),
-        }
-    };
+
     let project_cfg = ProjectConfig {
         last_project: engine.active_project_id().unwrap_or("").to_string(),
         opened_projects: engine.opened_ids(),
         project_sort: project_sort.to_string(),
         project_order: project_order.to_vec(),
-        config_dir,
-        cache_dir,
     };
     let updated = upsert_project_config_section(&original, &project_cfg);
     std::fs::write(&path, updated)?;
@@ -779,75 +739,10 @@ fn read_project_created_at(project_root: &Path) -> String {
 /// - 修改 `tablet.toml` 的 `[project] last_project = "default"`。
 ///
 /// 不会复制额外的 schema/缓存（不在迁移范围）。
-pub fn migrate_legacy_to_default(workdir: &Path) -> Result<bool> {
-    let projects_dir = workdir.join(PROJECTS_DIR);
-    if projects_dir.is_dir() {
-        return Ok(false); // 已有 projects/，不迁移
-    }
-    let config_path = workdir.join(crate::CONFIG_FILE);
-    let config_str = std::fs::read_to_string(&config_path)?;
-    let mut config: WorkspaceConfig = toml::from_str(&config_str)?;
-
-    let legacy_data = workdir.join(&config.project.config_dir);
-    if !legacy_data.is_dir() {
-        return Ok(false);
-    }
-
-    // 移动目录
-    let target_root = projects_dir.join("default");
-    let target_data = target_root.join("config");
-    std::fs::create_dir_all(&target_root)?;
-    rename_dir(&legacy_data, &target_data)
-        .with_context(|| format!("迁移失败: {} → {}", legacy_data.display(), target_data.display()))?;
-
-    // 写元数据：直接写 project.tblschema（meta 段，sections 留空）
-    let mut schema = crate::tblschema::TblSchema::default();
-    schema.meta.id = "default".to_string();
-    schema.meta.name = "默认项目".to_string();
-    schema.meta.created_at = Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
-    let schema_path = target_root.join(PROJECT_SCHEMA_FILE);
-    std::fs::write(&schema_path, crate::tblschema::serialize_tblschema(&schema))?;
-
-    // 更新 last_project
-    config.project.last_project = "default".to_string();
-    write_tool_config(&config_path, &config)?;
-
-    println!("已迁移老配置目录到 projects/default/");
-    Ok(true)
-}
-
-fn rename_dir(from: &Path, to: &Path) -> Result<()> {
-    // 同卷直接 rename，跨卷或失败时回退到逐文件复制 + 删除原。
-    match std::fs::rename(from, to) {
-        Ok(()) => Ok(()),
-        Err(_) => {
-            copy_dir_all(from, to)?;
-            std::fs::remove_dir_all(from)?;
-            Ok(())
-        }
-    }
-}
-
-fn copy_dir_all(src: &Path, dst: &Path) -> Result<()> {
-    std::fs::create_dir_all(dst)?;
-    for entry in std::fs::read_dir(src)? {
-        let entry = entry?;
-        let path = entry.path();
-        let target = dst.join(entry.file_name());
-        if path.is_dir() {
-            copy_dir_all(&path, &target)?;
-        } else {
-            std::fs::copy(&path, &target)?;
-        }
-    }
-    Ok(())
-}
-
 /// 重写 tablet.toml（保留所有段，仅刷新 [project]）。
-/// 这里走简单方案：用 toml::to_string_pretty 整体序列化。
+/// 这里走简单方案：读原文件，按行 upsert [project] 段字段。既保住注释又改对字段。
+#[allow(dead_code)]
 fn write_tool_config(path: &Path, config: &WorkspaceConfig) -> Result<()> {
-    // serde::Serialize 不在 WorkspaceConfig 上：手工写 [project] + 透传其它内容会丢评论。
-    // 简化方案：读原文件，按行 upsert [project] 段字段。既保住注释又改对字段。
     let original = std::fs::read_to_string(path)?;
     let updated = upsert_project_config_section(&original, &config.project);
     std::fs::write(path, updated)?;
@@ -1020,32 +915,6 @@ mod tests {
         std::env::temp_dir().join(format!("tblproj_{}_{}_{}", label, std::process::id(), n))
     }
 
-    #[test]
-    fn legacy_layout_loads_workdir_as_root() {
-        let dir = unique_tmp("legacy");
-        std::fs::create_dir_all(dir.join("config/hero")).unwrap();
-        std::fs::write(dir.join("tablet.toml"), "[project]\nname = \"x\"\nlast_project = \"\"\nconfig_dir = \"config\"\ncache_dir = \".tbl-cache\"\n").unwrap();
-        let proj = load_project(&dir).expect("load");
-        assert_eq!(proj.project_root, dir);
-        assert_eq!(proj.schema.meta.id, "default");
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn project_section_round_trip() {
-        let dir = unique_tmp("alias");
-        std::fs::create_dir_all(dir.join("config")).unwrap();
-        std::fs::write(
-            dir.join("tablet.toml"),
-            "[project]\nconfig_dir = \"config\"\ncache_dir = \".tbl-cache\"\n",
-        )
-        .unwrap();
-        let proj = load_project(&dir).expect("load");
-        assert_eq!(proj.config.project.config_dir, "config");
-        assert_eq!(proj.config.project.cache_dir, ".tbl-cache");
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
     fn write_schema(root: &Path, id: &str, name: &str) {
         std::fs::write(
             root.join(PROJECT_SCHEMA_FILE),
@@ -1089,53 +958,6 @@ mod tests {
     }
 
     #[test]
-    fn migrate_moves_legacy_config_to_projects_default() {
-        let dir = unique_tmp("migrate");
-        std::fs::create_dir_all(dir.join("config/hero")).unwrap();
-        std::fs::write(dir.join("config/hero/HeroBase.tbl"), "#!tbl v2\n").unwrap();
-        std::fs::write(
-            dir.join("tablet.toml"),
-            "[project]\nname = \"x\"\nlast_project = \"\"\nconfig_dir = \"config\"\n",
-        )
-        .unwrap();
-
-        let migrated = migrate_legacy_to_default(&dir).expect("migrate");
-        assert!(migrated);
-
-        // 新位置存在
-        assert!(dir.join("projects/default/config/hero/HeroBase.tbl").exists());
-        // 元数据写好（schema 文件而非 toml）
-        assert!(dir.join("projects/default/project.tblschema").exists());
-        // 老 config 已清掉
-        assert!(!dir.join("config").exists());
-
-        // tablet.toml 的 last_project 被刷新
-        let cfg = std::fs::read_to_string(dir.join("tablet.toml")).unwrap();
-        assert!(cfg.contains("last_project = \"default\""));
-
-        // 后续 load 从 projects/default 加载
-        let proj = load_project(&dir).expect("load");
-        assert_eq!(proj.schema.meta.id, "default");
-        assert_eq!(proj.project_root, dir.join("projects/default"));
-
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn migrate_noop_when_projects_dir_already_exists() {
-        let dir = unique_tmp("nomigrate");
-        std::fs::create_dir_all(dir.join("projects/x/config")).unwrap();
-        std::fs::write(
-            dir.join("tablet.toml"),
-            "[project]\nname = \"x\"\nlast_project = \"\"\nconfig_dir = \"config\"\n",
-        )
-        .unwrap();
-        let result = migrate_legacy_to_default(&dir).expect("migrate");
-        assert!(!result);
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
     fn upsert_project_config_keeps_section_header() {
         let original = "[project]\nname = \"x\"\n\n[ui]\nlog_level = \"debug\"\n";
         let project = ProjectConfig {
@@ -1143,8 +965,6 @@ mod tests {
             opened_projects: Vec::new(),
             project_sort: String::new(),
             project_order: Vec::new(),
-            config_dir: "config".to_string(),
-            cache_dir: ".tbl-cache".to_string(),
         };
         let result = upsert_project_config_section(original, &project);
         assert!(result.contains("[project]"));
@@ -1161,8 +981,6 @@ mod tests {
             opened_projects: Vec::new(),
             project_sort: String::new(),
             project_order: Vec::new(),
-            config_dir: "config".to_string(),
-            cache_dir: ".tbl-cache".to_string(),
         };
         let result = upsert_project_config_section(original, &project);
         assert!(result.contains("last_project = \"new\""));
@@ -1177,8 +995,6 @@ mod tests {
             opened_projects: Vec::new(),
             project_sort: String::new(),
             project_order: Vec::new(),
-            config_dir: "config".to_string(),
-            cache_dir: ".tbl-cache".to_string(),
         };
         let result = upsert_project_config_section(original, &project);
         assert!(result.starts_with("[project]"));
@@ -1194,8 +1010,6 @@ mod tests {
             opened_projects: vec!["p1".to_string(), "p2".to_string()],
             project_sort: "manual".to_string(),
             project_order: vec!["p2".to_string(), "p1".to_string()],
-            config_dir: "config".to_string(),
-            cache_dir: ".tbl-cache".to_string(),
         };
         let result = upsert_project_config_section(original, &project);
         assert!(result.contains("opened_projects = [\"p1\", \"p2\"]"));

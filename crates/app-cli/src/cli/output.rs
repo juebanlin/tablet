@@ -75,14 +75,6 @@ pub fn print_project_list_cli(projects: &[ProjectListEntry]) {
     }
 }
 
-pub fn print_migrate_outcome_cli(migrated: bool) {
-    if migrated {
-        println!("已迁移老 config/ 到 projects/default/");
-    } else {
-        println!("无需迁移：projects/ 已存在或老 config/ 不存在");
-    }
-}
-
 pub fn print_new_project_outcome_cli(project_root: &std::path::Path) {
     println!("已创建 Project: {}", project_root.display());
 }

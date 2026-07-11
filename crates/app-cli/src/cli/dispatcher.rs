@@ -21,7 +21,6 @@ use crate::actions::{
     export::{run_export, ExportFormats},
     list_projects::list_projects,
     list_templates::list_templates,
-    migrate::run_migrate,
     new_project::run_new_project,
     overrides::apply_overrides,
     project_clone::run_project_clone,
@@ -42,11 +41,6 @@ fn run(cli: Cli) -> Result<i32> {
         // 不需要加载 Project 的命令
         Command::ListTemplates => {
             output::print_template_list_cli(&list_templates());
-            return Ok(0);
-        }
-        Command::MigrateLegacy => {
-            let migrated = run_migrate(&cli.workdir)?;
-            output::print_migrate_outcome_cli(migrated);
             return Ok(0);
         }
         Command::Project(pa) => return dispatch_project(&cli, pa),
@@ -346,8 +340,7 @@ fn run(cli: Cli) -> Result<i32> {
             }
         }
         // 已在上方 dispatch
-        Command::ListTemplates | Command::MigrateLegacy
-        | Command::Project(_) | Command::Util(_) => {
+        Command::ListTemplates | Command::Project(_) | Command::Util(_) => {
             unreachable!()
         }
     }

@@ -60,8 +60,6 @@ pub fn run_new_project(
             opened_projects: Vec::new(),
             project_sort: String::new(),
             project_order: Vec::new(),
-            config_dir: "config".to_string(),
-            cache_dir: ".tbl-cache".to_string(),
         };
         let updated = tablet_core::project::upsert_project_config_section(&original, &project_cfg);
         std::fs::write(&config_path, updated)?;
