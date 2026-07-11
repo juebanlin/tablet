@@ -272,7 +272,7 @@ GUI（slint）与 CLI 都遵循同一套启动壳，平台差异通过 `cfg_attr
 ### 12.3 工作目录与日志
 
 - 默认 `--workdir` 为可执行文件所在目录；可显式覆盖
-- 当前 Project 由 `tablet.toml` 的 `[app] last_project` 决定；CLI 也支持 `--project <id>` 覆盖（@02 Project / @03.4）
+- 当前 Project 由 `tablet.toml` 的 `[project] last_project` 决定；CLI 也支持 `--project <id>` 覆盖（@02 Project / @03.4）
 - 文件日志写入 `<workdir>/tablet.log`，等级由 `[ui] log_level` 配置项决定
 - 不写 stdout/stderr（subsystem=windows 后两者无效）
 

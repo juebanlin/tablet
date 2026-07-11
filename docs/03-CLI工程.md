@@ -73,8 +73,8 @@ tablet/
 game-config/
 ├── projects/                   ← 全部 Project，按 id 分目录
 │   ├── slg-test/               ← 一个 Project
-│   │   ├── project.toml        ← Project 元数据（[project]）+ 可选配置覆盖（[export]/[ui]）
-│   │   ├── project.tblschema   ← 该 Project 的 schema（多表合并）
+│   │   ├── project.toml        ← Project 可选配置覆盖（仅 [export] 段，字段级 deep merge）
+│   │   ├── project.tblschema   ← 该 Project 的元数据（id/name/category/version）+ 结构骨架 + separators
 │   │   ├── config/             ← .tbl 文件，Group = 子目录
 │   │   │   ├── hero/
 │   │   │   │   ├── HeroBase.tbl       ← Table
@@ -96,7 +96,7 @@ game-config/
 └── .gitignore                  ← 详见 §6
 ```
 
-`projects/<id>/` 自包含一个 Project 全部所需（schema + 数据 + 元数据 + Excel 缓存）。同一仓库可并存多个 Project，启动时 UI 默认进入 `[app] last_project` 指定的那个；不存在则进入扫描结果中第一个。
+`projects/<id>/` 自包含一个 Project 全部所需（schema + 数据 + 元数据 + Excel 缓存）。同一仓库可并存多个 Project，启动时 UI 默认进入 `[project] last_project` 指定的那个；不存在则进入扫描结果中第一个。
 
 老仓库的根目录 `config/` 在新版本启动时**自动迁移**到 `projects/default/`（@02 Project / 老结构迁移），不保留双结构。
 
@@ -110,15 +110,21 @@ Group 名仅在工具内部使用，不进生成代码路径，因此允许中�
 
 ## 4. tablet.toml 配置
 
-工具配置文件，定义启动展开偏好、导出目标、UI 行为、类型分隔符默认值。所有字段都有默认值，新建项目可只写少量字段。**`tablet.toml` 是仓库全局配置，所有 Project 共享；Project 自身的元数据 + 可选配置覆盖放在 `projects/<id>/project.toml`（@02 Project）**。Project 的 `[export]` / `[ui]` 段按 field-level deep-merge 覆盖全局；缺失字段回退到全局。
+工具配置文件（`GlobalConfig`），定义启动展开偏好、导出目标、UI 行为、类型分隔符默认值。所有字段都有默认值，新建项目可只写少量字段。**`tablet.toml` 是仓库全局配置，所有 Project 共享；Project 自身的元数据放在 `projects/<id>/project.tblschema`，可选的导出配置覆盖放在 `projects/<id>/project.toml`（@02 Project）**。
 
-`[separators]` 是例外：**不参与 deep-merge**，仅在「新建空项目」时拷贝到新项目 `.tblschema` 作为初值；运行期分隔符以项目自身 schema 的 `# @sep` 行为单一来源（@01.7.4 / §4.9）。
+**配置分层与合并规则**：
+- **export**：Project 的 `[export]` 段按 **field-level deep-merge** 覆盖全局；缺失字段回退到全局（例如：项目只写 `[export.server.cpp]`，其它语言用全局配置）
+- **ui**：直接用全局，Project 级不允许覆盖（UI 偏好是用户级，不应按项目切换）
+- **separators**：用 Project 自身 schema 的 `# @sep` 行（优先级最高）；仅在「新建空项目」时从全局拷贝初值（@01.7.4 / §4.9）
+
+最终合并：`GlobalConfig` + `ProjectConfig.raw` (project.toml) + `schema.separators` → `ProjectConfig.config`（业务逻辑使用）。
 
 ### 4.1 完整示例
 
 ```toml
-[app]
-last_project = "slg-test"     # 启动时进入的 Project id；为空 = 扫到的第一个
+[project]
+last_project = "slg-test"     # 启动时默认展开的 Project id
+opened_projects = ["slg-test", "slg-prod"]  # 启动时自动打开的项目列表
 
 [export]
 encoding = "utf-8"
@@ -178,15 +184,18 @@ item = ","
 entry = ";"
 ```
 
-### 4.2 [app]
+### 4.2 [project]
 
 | 字段 | 说明 | 默认值 |
 |------|------|--------|
 | last_project | 启动时**默认展开**的 Project id；不存在则展开扫描结果中第一个；其它 project 仍同时加载，仅折叠展示 | 空（首次进入）|
+| opened_projects | 启动时自动打开的 Project id 列表；UI 层会自动维护（打开/关闭项目时更新） | [] |
+| project_sort | Project 排序方式：`"name"` / `"created"` / `""` (字典序) | "" |
+| project_order | 手动排序时的 id 顺序列表 | [] |
 
-Project 列表由启动扫描 `projects/` 目录得出，**不需要**在 `tablet.toml` 里枚举。所有 project 同时加载到内存，`last_project` 仅影响 TreeSection 首屏展开状态（无切换概念）；新建 project 后写入 last_project 让下次启动直接展开。
+Project 列表由启动扫描 `projects/` 目录得出，**不需要**在 `tablet.toml` 里枚举。所有打开的 project 同时加载到内存，`last_project` 仅影响 TreeSection 首屏展开状态（无切换概念）；新建 project 后写入 last_project 让下次启动直接展开。
 
-> 历史命名：旧版本是 `[project] name / config_dir / cache_dir`；S15-D 把 `[project]` 段彻底改名为 `[app]`，且字段语义变为"全仓库级"——name/config_dir/cache_dir 已被 Project 内 `project.toml` + `projects/<id>/` 目录约定取代。
+> 历史命名：旧版本是 `[app]`，S16 改名为 `[project]`（与 ProjectManagementConfig 类型对应），语义不变——仍是"全仓库级"项目管理配置。
 
 ### 4.3 [export]（全局）
 
@@ -371,7 +380,7 @@ tablet-cli [全局选项] <命令>
 | 参数 | 作用 | 默认值 |
 |------|------|--------|
 | `-w, --workdir <path>` | 仓库根目录（`projects/` 的父） | `.`（当前目录） |
-| `--project <id>` | 显式指定 Project id；覆盖 `[app] last_project` | 不指定 = 跟随 `[app] last_project`，再不存在则取扫描结果第一个 |
+| `--project <id>` | 显式指定 Project id；覆盖 `[project] last_project` | 不指定 = 跟随 `[project] last_project`，再不存在则取扫描结果第一个 |
 | `-s, --set KEY=VALUE` | 覆盖 `tablet.toml` 任意配置项；可重复 | — |
 
 ### 7.2 通用选项
@@ -461,7 +470,7 @@ Project: slg-test (SLG 测试项目)
 | `--template <id>` | 模板 id（来自 `list-templates`），必填 | — |
 | `--id <pid>` | Project id，约束 `[a-z0-9_-]{1,32}` | — |
 | `--name <n>` | Project 显示名 | = id |
-| `--switch-after` | 创建后写入 `[app] last_project` | true |
+| `--switch-after` | 创建后写入 `[project] last_project` | true |
 
 ```bash
 # 最小用法
@@ -534,7 +543,7 @@ tablet-cli project clone --source slg-prod --id slg-hotfix --name "SLG 热修复
 
 ### 8.2 schema — 结构操作
 
-需要单项目上下文。所有写操作执行后自动保存。
+需要指定项目上下文（通过 `--project` 或当前活跃项目）。所有写操作执行后自动保存。
 
 #### `schema show`
 
@@ -1160,7 +1169,7 @@ tablet-cli -w D:/old-project migrate-legacy
 
 | 键 | 覆盖到 |
 |----|--------|
-| `app.last_project` / `project.last_project` | `[app] last_project` |
+| `app.last_project` / `project.last_project` | `[project] last_project` |
 | `app.config_dir` / `project.config_dir` | `[project] config_dir`（兼容历史命名） |
 | `app.cache_dir` / `project.cache_dir` | `[project] cache_dir`（兼容历史命名） |
 | `export.encoding` | `[export] encoding` |
