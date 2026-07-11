@@ -26,6 +26,8 @@ pub fn open_for(state: &Rc<RefCell<AppState>>, project_id: &str) {
     let category = p.schema.meta.category.clone();
     let version = p.schema.meta.version.clone();
     let sep = p.schema.separators.clone();
+    // 仅未落盘项目（克隆 / 新建的内存项目）允许改 id；已存盘项目 id 固定。
+    let id_editable = p.root_pending_create;
     let ps = &mut st.project_settings;
     ps.open = true;
     ps.tab = 0;
@@ -35,6 +37,7 @@ pub fn open_for(state: &Rc<RefCell<AppState>>, project_id: &str) {
     ps.category_buf = category;
     ps.version_buf = version;
     ps.id_error.clear();
+    ps.id_editable = id_editable;
     ps.sep = sep;
 }
 
@@ -74,6 +77,7 @@ pub fn push(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
     ui_h.set_ps_category_buf(ps.category_buf.clone().into());
     ui_h.set_ps_version_buf(ps.version_buf.clone().into());
     ui_h.set_ps_id_error(id_err.clone().into());
+    ui_h.set_ps_id_editable(ps.id_editable);
     let can_confirm = id_err.is_empty();
     ui_h.set_ps_can_confirm(can_confirm);
 
@@ -159,7 +163,6 @@ fn run(state: &Rc<RefCell<AppState>>) {
 
     // 改 category / version / separators，并写盘
     let mut wrote = false;
-    let mut write_err: Option<String> = None;
     {
         let mut st = state.borrow_mut();
         if let Some(p) = st.engine.find_project_mut(&effective_id) {
@@ -178,23 +181,16 @@ fn run(state: &Rc<RefCell<AppState>>) {
                 dirty = true;
             }
             if dirty {
+                // 配置分层原则：项目设置只改内存 + 标记 dirty，
+                // 由项目保存（save_project_files）统一负责写盘。
                 p.schema_dirty = true;
-                let schema_path = p.project_root.join(tablet_core::project::PROJECT_SCHEMA_FILE);
-                let txt = tablet_core::tblschema::serialize_tblschema(&p.schema);
-                match std::fs::write(&schema_path, txt) {
-                    Ok(_) => {
-                        p.schema_dirty = false;
-                        wrote = true;
-                    }
-                    Err(e) => {
-                        write_err = Some(format!("[项目设置] 写 project.tblschema 失败: {}", e));
-                    }
-                }
+                wrote = true;
             }
         }
-    }
-    if let Some(msg) = write_err {
-        state.borrow_mut().engine.log(msg);
+        // schema 改了（特别是 separators）→ 重新生成合并后的 ProjectConfig
+        if wrote {
+            st.engine.remerge_project_config(&effective_id);
+        }
     }
 
     if wrote {
@@ -208,7 +204,7 @@ fn run(state: &Rc<RefCell<AppState>>) {
             Some(id) => { st.engine.set_active_by_id(&id); }
             None => st.engine.set_active_none(),
         }
-        st.engine.log(format!("[项目设置] 已保存 {}", effective_id));
+        st.engine.log(format!("[项目设置] 已应用修改: {}（需保存项目才写盘）", effective_id));
     }
 }
 

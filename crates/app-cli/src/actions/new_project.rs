@@ -55,7 +55,7 @@ pub fn run_new_project(
             let _ = tablet_core::project::load_project(workdir);
         }
         let original = std::fs::read_to_string(&config_path)?;
-        let project_cfg = tablet_core::model::ProjectConfig {
+        let project_cfg = tablet_core::model::ProjectManagementConfig {
             last_project: project_id.to_string(),
             opened_projects: Vec::new(),
             project_sort: String::new(),

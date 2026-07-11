@@ -26,7 +26,8 @@ pub struct TblSchema {
     pub meta: SchemaMetadata,
     /// 分隔符配置（25 个叶子键，对齐 `SeparatorsSection`）。
     /// 缺省 = `SeparatorsSection::default()`；schema 中 `# @sep` 行覆写。
-    /// 加载链路把它复制到 `WorkspaceConfig.separators`，作为运行时唯一来源。
+    /// 加载链路把它复制到 `ProjectConfig.separators`（`merge_config` 时以 schema 为准），
+    /// 作为运行时唯一来源。
     pub separators: SeparatorsSection,
     pub sections: Vec<SchemaSection>,
 }

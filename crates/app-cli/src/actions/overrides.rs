@@ -5,7 +5,7 @@
 
 use tablet_core::model::{
     ClientConfig, CppExport, CSharpExport, ExportConfig, GoExport, JavaExport, JsonExport,
-    LuaExport, ServerExport, TypeScriptExport, WorkspaceConfig, XmlExport,
+    LuaExport, ProjectConfig, ServerExport, TypeScriptExport, XmlExport,
 };
 use tablet_core::ops::ProjectEngine;
 
@@ -155,7 +155,7 @@ pub fn apply_overrides(engine: &mut ProjectEngine, overrides: &[String]) -> Over
     out
 }
 
-fn ensure_export(config: &mut WorkspaceConfig) {
+fn ensure_export(config: &mut ProjectConfig) {
     if config.export.is_none() {
         config.export = Some(ExportConfig {
             json: None, xml: None, server: None, client: None, encoding: None, line_ending: None,
@@ -163,21 +163,21 @@ fn ensure_export(config: &mut WorkspaceConfig) {
     }
 }
 
-fn ensure_export_json(config: &mut WorkspaceConfig) {
+fn ensure_export_json(config: &mut ProjectConfig) {
     ensure_export(config);
     if config.export.as_ref().unwrap().json.is_none() {
         config.export.as_mut().unwrap().json = Some(JsonExport { empty_as: None, line_ending: None, encoding: None });
     }
 }
 
-fn ensure_export_xml(config: &mut WorkspaceConfig) {
+fn ensure_export_xml(config: &mut ProjectConfig) {
     ensure_export(config);
     if config.export.as_ref().unwrap().xml.is_none() {
         config.export.as_mut().unwrap().xml = Some(XmlExport { empty_as: None, line_ending: None, encoding: None });
     }
 }
 
-fn ensure_export_server(config: &mut WorkspaceConfig) {
+fn ensure_export_server(config: &mut ProjectConfig) {
     ensure_export(config);
     if config.export.as_ref().unwrap().server.is_none() {
         config.export.as_mut().unwrap().server = Some(ServerExport {
@@ -188,7 +188,7 @@ fn ensure_export_server(config: &mut WorkspaceConfig) {
     }
 }
 
-fn ensure_export_server_java(config: &mut WorkspaceConfig) {
+fn ensure_export_server_java(config: &mut ProjectConfig) {
     ensure_export_server(config);
     if config.export.as_ref().unwrap().server.as_ref().unwrap().java.is_none() {
         config.export.as_mut().unwrap().server.as_mut().unwrap().java = Some(JavaExport {
@@ -197,7 +197,7 @@ fn ensure_export_server_java(config: &mut WorkspaceConfig) {
     }
 }
 
-fn ensure_export_server_go(config: &mut WorkspaceConfig) {
+fn ensure_export_server_go(config: &mut ProjectConfig) {
     ensure_export_server(config);
     if config.export.as_ref().unwrap().server.as_ref().unwrap().go.is_none() {
         config.export.as_mut().unwrap().server.as_mut().unwrap().go = Some(GoExport {
@@ -206,7 +206,7 @@ fn ensure_export_server_go(config: &mut WorkspaceConfig) {
     }
 }
 
-fn ensure_export_server_cpp(config: &mut WorkspaceConfig) {
+fn ensure_export_server_cpp(config: &mut ProjectConfig) {
     ensure_export_server(config);
     if config.export.as_ref().unwrap().server.as_ref().unwrap().cpp.is_none() {
         config.export.as_mut().unwrap().server.as_mut().unwrap().cpp = Some(CppExport {
@@ -216,7 +216,7 @@ fn ensure_export_server_cpp(config: &mut WorkspaceConfig) {
     }
 }
 
-fn ensure_export_server_csharp_dotnet(config: &mut WorkspaceConfig) {
+fn ensure_export_server_csharp_dotnet(config: &mut ProjectConfig) {
     ensure_export_server(config);
     if config.export.as_ref().unwrap().server.as_ref().unwrap().csharp_dotnet.is_none() {
         config.export.as_mut().unwrap().server.as_mut().unwrap().csharp_dotnet = Some(CSharpExport {
@@ -225,7 +225,7 @@ fn ensure_export_server_csharp_dotnet(config: &mut WorkspaceConfig) {
     }
 }
 
-fn ensure_export_client(config: &mut WorkspaceConfig) {
+fn ensure_export_client(config: &mut ProjectConfig) {
     ensure_export(config);
     if config.export.as_ref().unwrap().client.is_none() {
         config.export.as_mut().unwrap().client = Some(ClientConfig {
@@ -236,7 +236,7 @@ fn ensure_export_client(config: &mut WorkspaceConfig) {
     }
 }
 
-fn ensure_export_client_csharp_unity(config: &mut WorkspaceConfig) {
+fn ensure_export_client_csharp_unity(config: &mut ProjectConfig) {
     ensure_export_client(config);
     if config.export.as_ref().unwrap().client.as_ref().unwrap().csharp_unity.is_none() {
         config.export.as_mut().unwrap().client.as_mut().unwrap().csharp_unity = Some(CSharpExport {
@@ -245,7 +245,7 @@ fn ensure_export_client_csharp_unity(config: &mut WorkspaceConfig) {
     }
 }
 
-fn ensure_export_client_csharp_godot(config: &mut WorkspaceConfig) {
+fn ensure_export_client_csharp_godot(config: &mut ProjectConfig) {
     ensure_export_client(config);
     if config.export.as_ref().unwrap().client.as_ref().unwrap().csharp_godot.is_none() {
         config.export.as_mut().unwrap().client.as_mut().unwrap().csharp_godot = Some(CSharpExport {
@@ -254,7 +254,7 @@ fn ensure_export_client_csharp_godot(config: &mut WorkspaceConfig) {
     }
 }
 
-fn ensure_export_client_lua(config: &mut WorkspaceConfig) {
+fn ensure_export_client_lua(config: &mut ProjectConfig) {
     ensure_export_client(config);
     if config.export.as_ref().unwrap().client.as_ref().unwrap().lua.is_none() {
         config.export.as_mut().unwrap().client.as_mut().unwrap().lua = Some(LuaExport {
@@ -263,7 +263,7 @@ fn ensure_export_client_lua(config: &mut WorkspaceConfig) {
     }
 }
 
-fn ensure_export_client_typescript(config: &mut WorkspaceConfig) {
+fn ensure_export_client_typescript(config: &mut ProjectConfig) {
     ensure_export_client(config);
     if config.export.as_ref().unwrap().client.as_ref().unwrap().typescript.is_none() {
         config.export.as_mut().unwrap().client.as_mut().unwrap().typescript = Some(TypeScriptExport {
@@ -272,7 +272,7 @@ fn ensure_export_client_typescript(config: &mut WorkspaceConfig) {
     }
 }
 
-fn ensure_export_server_typescript(config: &mut WorkspaceConfig) {
+fn ensure_export_server_typescript(config: &mut ProjectConfig) {
     ensure_export_server(config);
     if config.export.as_ref().unwrap().server.as_ref().unwrap().typescript.is_none() {
         config.export.as_mut().unwrap().server.as_mut().unwrap().typescript = Some(TypeScriptExport {

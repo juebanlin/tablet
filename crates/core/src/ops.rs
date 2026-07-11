@@ -164,6 +164,8 @@ fn save_project_files(project: &mut Project) -> (usize, usize) {
 pub struct ProjectEngine {
     /// 顶层 workdir（@04.2.0 多 Project 同时管理）。所有 project 共用。
     pub workdir: PathBuf,
+    /// 全局配置（来自 tablet.toml），所有 Project 共享。
+    pub global_config: GlobalConfig,
     /// 扫描 `<workdir>/projects/` 得到的全部 project 元数据（包含未打开的）。
     /// 启动 + rename / delete project 时维护；UI 树根据它渲染所有 project。
     pub available_projects: Vec<AvailableProject>,
@@ -303,8 +305,21 @@ impl ProjectEngine {
     pub fn new(project: Project) -> Self {
         let workdir = project.workdir.clone();
         let available = vec![AvailableProject::from_project(&project)];
+        // 构造一个默认的 GlobalConfig
+        let global_config = GlobalConfig {
+            project_management: crate::model::ProjectManagementConfig {
+                last_project: project.schema.meta.id.clone(),
+                opened_projects: vec![project.schema.meta.id.clone()],
+                project_sort: String::new(),
+                project_order: Vec::new(),
+            },
+            export: project.config.export.clone(),
+            ui: project.config.ui.clone(),
+            separators: project.schema.separators.clone(),
+        };
         Self {
             workdir,
+            global_config,
             available_projects: available,
             projects: vec![project],
             active_idx: Some(0),
@@ -324,8 +339,21 @@ impl ProjectEngine {
         let active_idx = last_id
             .and_then(|id| projects.iter().position(|p| p.schema.meta.id == id))
             .or(Some(0));
+        // 构造一个默认的 GlobalConfig
+        let global_config = GlobalConfig {
+            project_management: crate::model::ProjectManagementConfig {
+                last_project: last_id.unwrap_or("").to_string(),
+                opened_projects: projects.iter().map(|p| p.schema.meta.id.clone()).collect(),
+                project_sort: String::new(),
+                project_order: Vec::new(),
+            },
+            export: projects[0].config.export.clone(),
+            ui: projects[0].config.ui.clone(),
+            separators: projects[0].schema.separators.clone(),
+        };
         Self {
             workdir,
+            global_config,
             available_projects: available,
             projects,
             active_idx,
@@ -341,6 +369,7 @@ impl ProjectEngine {
     /// 若 active_id 不在 opened 里，且 opened 非空，则 active = opened[0]；opened 空则 None。
     pub fn new_workspace(
         workdir: PathBuf,
+        global_config: GlobalConfig,
         available: Vec<AvailableProject>,
         opened: Vec<Project>,
         active_id: Option<&str>,
@@ -354,6 +383,7 @@ impl ProjectEngine {
         };
         Self {
             workdir,
+            global_config,
             available_projects: available,
             projects: opened,
             active_idx,
@@ -432,6 +462,15 @@ impl ProjectEngine {
             .into_iter()
             .map(AvailableProject::from_list_entry)
             .collect();
+    }
+
+    /// 重新生成指定项目的合并配置（global + raw + schema → config）。
+    /// 当外部直接修改了 project.schema / project.raw_config 后调用此方法，
+    /// 确保 project.config 反映最新的合并结果（特别是 config.separators 来自 schema）。
+    pub fn remerge_project_config(&mut self, project_id: &str) {
+        if let Some(p) = self.projects.iter_mut().find(|p| p.schema.meta.id == project_id) {
+            p.config = crate::project::merge_config(&self.global_config, &p.raw_config, &p.schema);
+        }
     }
 
     /// 打开一个 available project：从盘加载并 append 到 self.projects；
@@ -519,7 +558,7 @@ impl ProjectEngine {
     /// 内存模式创建新 Project：与 clone_project_in_memory 行为对齐。
     /// - 不立即落盘；root_pending_create=true、schema_dirty=true
     /// - sections 展开为 group.is_new=true、节点 original="" → 树面板 `+` 标记
-    /// - config 借用现有任意 opened project 的 WorkspaceConfig，否则用默认 fallback
+    /// - config 借用现有任意 opened project 的 ProjectConfig，否则用默认 fallback
     /// - 同时加进 available_projects（未保存前目录还不存在，但 UI 树要展示）
     /// 返回 new_id 或错误信息。
     ///
@@ -538,14 +577,18 @@ impl ProjectEngine {
         let project_id = schema.meta.id.clone();
         let project_root = self.workdir.join(crate::project::PROJECTS_DIR).join(&project_id);
 
-        // 借用任一已打开 project 的 config 当默认（与 workspace 共享段对齐）；都没有则走 toml 默认
-        let config = self.projects.first().map(|p| p.config.clone())
-            .or_else(|| toml::from_str::<WorkspaceConfig>("").ok())
-            .ok_or_else(|| "无法构造默认 WorkspaceConfig".to_string())?;
+        // 借用任一已打开 project 的 config 当默认（与 workspace 共享段对齐）；都没有则走默认
+        let raw_config = self.projects.first()
+            .map(|p| p.raw_config.clone())
+            .unwrap_or_default();
+        let config = self.projects.first()
+            .map(|p| p.config.clone())
+            .unwrap_or_default();
 
         let mut new_project = Project {
             workdir: self.workdir.clone(),
             project_root: project_root.clone(),
+            raw_config,
             config,
             schema: schema.clone(),
             groups: Vec::new(),
@@ -1775,6 +1818,8 @@ impl ProjectEngine {
         };
         let project = &mut self.projects[idx];
         let only_name_change = old_id == new_id;
+        // 未保存的内存项目（目录还没落盘）：只改内存，不碰文件系统。
+        let pending = project.root_pending_create;
         if !only_name_change {
             // 检查 new_id 不存在（含 closed 的 available）
             if self.available_projects.iter().any(|a| a.id == new_id) {
@@ -1782,11 +1827,14 @@ impl ProjectEngine {
                 return;
             }
             let project = &mut self.projects[idx];
-            let old_root = project.project_root.clone();
             let new_root = project.workdir.join(crate::project::PROJECTS_DIR).join(new_id);
-            if let Err(e) = std::fs::rename(&old_root, &new_root) {
-                self.log(format!("重命名 project 目录失败: {}", e));
-                return;
+            // 仅当项目已落盘时才 rename 目录；未落盘的直接改内存路径。
+            if !pending {
+                let old_root = project.project_root.clone();
+                if let Err(e) = std::fs::rename(&old_root, &new_root) {
+                    self.log(format!("重命名 project 目录失败: {}", e));
+                    return;
+                }
             }
             project.project_root = new_root.clone();
             project.schema.meta.id = new_id.to_string();
@@ -1803,15 +1851,18 @@ impl ProjectEngine {
         } else {
             project.schema.meta.name = new_name.to_string();
         }
-        // 写 project.tblschema：项目身份归 schema.meta
+        // 写 project.tblschema：项目身份归 schema.meta。
+        // 未落盘的内存项目只标记 dirty，等首次 save 时统一落盘（避免目录不存在报错）。
         let project = &mut self.projects[idx];
         project.schema_dirty = true;
-        let schema_path = project.project_root.join(crate::project::PROJECT_SCHEMA_FILE);
-        let txt = crate::tblschema::serialize_tblschema(&project.schema);
-        if let Err(e) = std::fs::write(&schema_path, txt) {
-            self.log(format!("写 project.tblschema 失败: {}", e));
-        } else {
-            project.schema_dirty = false;
+        if !pending {
+            let schema_path = project.project_root.join(crate::project::PROJECT_SCHEMA_FILE);
+            let txt = crate::tblschema::serialize_tblschema(&project.schema);
+            if let Err(e) = std::fs::write(&schema_path, txt) {
+                self.log(format!("写 project.tblschema 失败: {}", e));
+            } else {
+                project.schema_dirty = false;
+            }
         }
         // 同步 available_projects（id / name / root）
         if let Some(ap) = self.available_projects.iter_mut().find(|a| a.id == old_id) {
@@ -2161,10 +2212,12 @@ mod project_toml_template_tests {
         let mut schema = crate::tblschema::TblSchema::default();
         schema.meta.id = id.to_string();
         schema.meta.name = id.to_string();
-        let config: WorkspaceConfig = toml::from_str("").expect("empty workspace config");
+        let raw_config = ProjectConfig::default();
+        let config = ProjectConfig::default();
         Project {
             workdir,
             project_root,
+            raw_config,
             config,
             schema,
             groups: Vec::new(),
@@ -2192,7 +2245,7 @@ mod project_toml_template_tests {
         assert!(!txt.lines().any(|l| l.trim() == "[ui]"), "项目级 toml 不应有 [ui] 段（工作区级）");
         assert!(!txt.lines().any(|l| l.trim() == "[separators]"), "项目级 toml 不应有 [separators] 段");
         // 模板本身合法 toml
-        let _: WorkspaceConfig = toml::from_str(&txt).expect("生成的模板必须能解析");
+        let _: GlobalConfig = toml::from_str(&txt).expect("生成的模板必须能解析");
 
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -2213,6 +2266,37 @@ mod project_toml_template_tests {
 
         let after = std::fs::read_to_string(&toml_path).unwrap();
         assert_eq!(after, custom, "已有 project.toml 不应被覆盖");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn rename_unsaved_project_only_touches_memory() {
+        // 回归：未保存的内存项目（root_pending_create=true，目录不存在）改身份信息
+        // 不应因目录不存在而报错——只改内存，等 save 时统一落盘。
+        let dir = unique_tmp("rename_unsaved");
+        let project_root = dir.join("projects").join("p1");
+        // 注意：故意不创建 project_root 目录，模拟"新建未保存"场景
+        let project = make_project(dir.clone(), project_root.clone(), "p1");
+        assert!(project.root_pending_create, "make_project 默认 pending");
+        let mut engine = ProjectEngine::new(project);
+
+        // 改 id + name
+        engine.execute_action(&ProjectAction::RenameProject {
+            old_id: "p1".to_string(),
+            new_id: "p2".to_string(),
+            new_name: "新名字".to_string(),
+        });
+
+        // 内存中身份已更新
+        let p = engine.find_project("p2").expect("p2 应存在于内存");
+        assert_eq!(p.schema.meta.id, "p2");
+        assert_eq!(p.schema.meta.name, "新名字");
+        assert!(p.root_pending_create, "仍未落盘");
+        assert!(p.schema_dirty, "schema 标记为 dirty，等 save 落盘");
+        // 磁盘上不应有任何文件（目录都没建）
+        assert!(!project_root.exists(), "旧目录不该被创建");
+        assert!(!dir.join("projects").join("p2").exists(), "新目录不该被创建");
+
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

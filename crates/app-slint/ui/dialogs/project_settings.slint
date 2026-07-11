@@ -108,6 +108,8 @@ export component ProjectSettingsDialog inherits Rectangle {
     in-out property <string> version-buf;
     in property <string> id-error;
     in property <bool> can-confirm: true;
+    // id 是否可编辑：仅未落盘项目（克隆 / 新建）为 true；已存盘项目 id 固定。
+    in property <bool> id-editable: false;
     // 分隔符 buf —— 25 个叶子
     in-out property <string> sep-tuple2;
     in-out property <string> sep-tuple3;
@@ -185,6 +187,7 @@ export component ProjectSettingsDialog inherits Rectangle {
                         Text { text: "项目 ID:"; width: 96px; vertical-alignment: center; color: Theme.text-primary; }
                         LineEdit {
                             text <=> root.id-buf;
+                            enabled: root.id-editable;
                             edited(s) => { root.id-edited(s); }
                         }
                     }
@@ -222,7 +225,9 @@ export component ProjectSettingsDialog inherits Rectangle {
                         wrap: word-wrap;
                     }
                     Text {
-                        text: "提示：改 id 会重命名项目目录；其它字段仅落到 .tblschema 元数据。";
+                        text: root.id-editable
+                            ? "提示：id 可改（项目尚未保存）；保存后 id 将固定，其它字段随项目保存落到 .tblschema。"
+                            : "提示：已保存项目的 id 不可修改；其它字段随项目保存落到 .tblschema 元数据。";
                         color: Theme.text-secondary;
                         font-size: Theme.fs-tiny;
                         wrap: word-wrap;

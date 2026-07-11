@@ -9,7 +9,10 @@ pub struct Project {
     /// 当前 Project 的根目录：`project.tblschema` / `config/` 在它下面。
     /// - 多 Project 模式：`<workdir>/projects/<id>/`
     pub project_root: PathBuf,
-    pub config: WorkspaceConfig,
+    /// 项目级原始配置（来自 project.toml），保存时写回此配置。
+    pub raw_config: ProjectConfig,
+    /// 合并后的最终配置（global + raw + schema），业务逻辑使用。
+    pub config: ProjectConfig,
     /// `project.tblschema` 解析结果，承担"项目身份 + 结构骨架"双职：
     /// - `schema.meta.id / name / created_at / source_template* / category / version` = 项目身份
     /// - `schema.sections` = 结构骨架，由 ops 在 group/node 变动时增量同步
@@ -39,14 +42,14 @@ impl Project {
     }
 }
 
-/// `tablet.toml` 反序列化的顶层结构。
-/// `[project]` 段对应 `ProjectConfig`（仓库展示信息 + Project 列表配置）；
-/// 其它段（export / ui / separators）是 Project 共享的工作空间默认值。
+/// `tablet.toml` 反序列化的顶层结构（全局配置）。
+/// `[project]` 段对应 `ProjectManagementConfig`（项目管理状态）；
+/// 其它段（export / ui / separators）是所有 Project 共享的工作空间默认值。
 #[derive(Debug, Clone, serde::Deserialize)]
-pub struct WorkspaceConfig {
-    /// 仓库级配置段：`[project]`。
-    #[serde(default = "default_project_section", rename = "project")]
-    pub project: ProjectConfig,
+pub struct GlobalConfig {
+    /// 项目管理配置段：`[project]`。
+    #[serde(default = "default_project_management_section", rename = "project")]
+    pub project_management: ProjectManagementConfig,
     #[serde(default)]
     pub export: Option<ExportConfig>,
     #[serde(default)]
@@ -55,8 +58,8 @@ pub struct WorkspaceConfig {
     pub separators: crate::types::SeparatorsSection,
 }
 
-fn default_project_section() -> ProjectConfig {
-    ProjectConfig {
+fn default_project_management_section() -> ProjectManagementConfig {
+    ProjectManagementConfig {
         last_project: String::new(),
         opened_projects: Vec::new(),
         project_sort: String::new(),
@@ -64,7 +67,7 @@ fn default_project_section() -> ProjectConfig {
     }
 }
 
-#[derive(Debug, Clone, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
 pub struct ExportConfig {
     pub json: Option<JsonExport>,
     pub xml: Option<XmlExport>,
@@ -74,21 +77,21 @@ pub struct ExportConfig {
     pub line_ending: Option<String>,
 }
 
-#[derive(Debug, Clone, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
 pub struct JsonExport {
     pub empty_as: Option<String>,
     pub line_ending: Option<String>,
     pub encoding: Option<String>,
 }
 
-#[derive(Debug, Clone, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
 pub struct XmlExport {
     pub empty_as: Option<String>,
     pub line_ending: Option<String>,
     pub encoding: Option<String>,
 }
 
-#[derive(Debug, Clone, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
 pub struct ServerExport {
     pub data_output: Option<String>,
     pub java: Option<JavaExport>,
@@ -100,7 +103,7 @@ pub struct ServerExport {
     pub encoding: Option<String>,
 }
 
-#[derive(Debug, Clone, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
 pub struct JavaExport {
     pub package: Option<String>,
     pub code_output: Option<String>,
@@ -108,7 +111,7 @@ pub struct JavaExport {
     pub encoding: Option<String>,
 }
 
-#[derive(Debug, Clone, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
 pub struct GoExport {
     pub package: Option<String>,
     pub code_output: Option<String>,
@@ -116,7 +119,7 @@ pub struct GoExport {
     pub encoding: Option<String>,
 }
 
-#[derive(Debug, Clone, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
 pub struct CppExport {
     pub namespace: Option<String>,
     pub code_output: Option<String>,
@@ -126,7 +129,7 @@ pub struct CppExport {
 }
 
 /// 三个 runtime（dotnet / unity / godot）共用同一份 schema 定义，仅 Loader 不同。
-#[derive(Debug, Clone, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
 pub struct CSharpExport {
     pub namespace: Option<String>,
     pub code_output: Option<String>,
@@ -134,7 +137,7 @@ pub struct CSharpExport {
     pub encoding: Option<String>,
 }
 
-#[derive(Debug, Clone, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
 pub struct ClientConfig {
     pub lua: Option<LuaExport>,
     pub gdscript: Option<GdScriptExport>,
@@ -145,21 +148,21 @@ pub struct ClientConfig {
     pub encoding: Option<String>,
 }
 
-#[derive(Debug, Clone, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
 pub struct LuaExport {
     pub output: Option<String>,
     pub line_ending: Option<String>,
     pub encoding: Option<String>,
 }
 
-#[derive(Debug, Clone, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
 pub struct GdScriptExport {
     pub output: Option<String>,
     pub line_ending: Option<String>,
     pub encoding: Option<String>,
 }
 
-#[derive(Debug, Clone, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
 pub struct TypeScriptExport {
     pub output: Option<String>,
     pub module_kind: Option<String>,
@@ -211,11 +214,11 @@ fn default_picker_trigger_data() -> String { "double".to_string() }
 
 fn default_true() -> bool { true }
 
-/// `[project]` toml 段：仓库级配置，不随 Project 切换。
+/// `[project]` toml 段：仓库级项目管理配置，不随 Project 切换。
 ///
 /// 持有 Project 列表管理状态（启动 last_project / 已打开列表 / 排序）。
 #[derive(Debug, Clone, serde::Deserialize)]
-pub struct ProjectConfig {
+pub struct ProjectManagementConfig {
     /// 启动时进入的 Project id；为空 = 扫到的第一个。
     #[serde(default)]
     pub last_project: String,
@@ -229,6 +232,21 @@ pub struct ProjectConfig {
     /// project_sort = "manual" 时使用：用户拖拽得到的 id 序列。
     #[serde(default)]
     pub project_order: Vec<String>,
+}
+
+/// 项目级配置（来自 project.toml）。
+///
+/// 用途：
+/// - `raw_config`：原始配置，保存时写回 project.toml
+/// - `config`：合并后配置（global + raw），业务逻辑使用
+#[derive(Debug, Clone, serde::Deserialize, Default)]
+pub struct ProjectConfig {
+    #[serde(default)]
+    pub export: Option<ExportConfig>,
+    #[serde(default)]
+    pub ui: Option<UiConfig>,
+    #[serde(default)]
+    pub separators: crate::types::SeparatorsSection,
 }
 
 #[derive(Debug, Clone)]

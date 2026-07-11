@@ -748,6 +748,9 @@ pub struct ProjectSettingsState {
     pub version_buf: String,
     /// id 实时校验消息（空 = 合法）；不合法时禁用「确定」
     pub id_error: String,
+    /// id 是否可编辑：仅未落盘项目（克隆 / 新建）允许改 id；
+    /// 已存盘项目 id 固定（改 id 需 rename 目录，风险大），UI 禁用输入。
+    pub id_editable: bool,
     /// 分隔符编辑缓冲
     pub sep: tablet_core::types::SeparatorsSection,
 }
@@ -762,6 +765,7 @@ impl ProjectSettingsState {
         self.category_buf.clear();
         self.version_buf.clear();
         self.id_error.clear();
+        self.id_editable = false;
         self.sep = tablet_core::types::SeparatorsSection::default();
     }
 }
@@ -855,13 +859,9 @@ impl AppState {
         let constant_ref_allowed = cfg_src
             .and_then(|p| p.config.ui.as_ref())
             .map_or(true, |u| u.constant_ref_allowed);
-        let project_sort = cfg_src
-            .map(|p| p.config.project.project_sort.clone())
-            .filter(|s| !s.is_empty())
-            .unwrap_or_else(|| "id".to_string());
-        let project_order = cfg_src
-            .map(|p| p.config.project.project_order.clone())
-            .unwrap_or_default();
+        let project_sort = engine.global_config.project_management.project_sort.clone();
+        let project_sort = if project_sort.is_empty() { "id".to_string() } else { project_sort };
+        let project_order = engine.global_config.project_management.project_order.clone();
         let (expanded, project_expanded) = if let Some(active) = engine.active() {
             let aid = active.schema.meta.id.clone();
             let exp: HashSet<(String, String)> = active.groups.iter()
