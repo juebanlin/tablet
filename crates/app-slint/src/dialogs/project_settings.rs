@@ -1,8 +1,6 @@
 // 项目设置对话框：身份（id/name/category/version）+ 分隔符（25 leaves）2 tab。
 //
-// id 改 → 复用 engine ProjectAction::RenameProject（含目录 rename + schema 写盘）；
-// 其它身份字段 + 分隔符 → 直接落 schema.meta + schema.separators，schema_dirty=true，
-// serialize_tblschema 写盘 + revalidate_all。
+// 所有改动只更新内存，标记 schema_dirty=true，等"保存项目"才写盘。
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -116,11 +114,9 @@ fn apply_sep_kv(sep: &mut SeparatorsSection, key: &str, value: &str) {
     }
 }
 
-/// 「确定」逻辑。聚合 id rename + meta + separators，一次写盘。
+/// 「确定」逻辑。更新所有字段到内存，标记 dirty，等"保存项目"才写盘。
 fn run(state: &Rc<RefCell<AppState>>) {
-    use tablet_core::ops::ProjectAction;
-
-    // 取出 buf，先放下 borrow（execute_action 内部要 borrow_mut）
+    // 取出 buf，先放下 borrow
     let (old_id, new_id, name, category, version, sep) = {
         let st = state.borrow();
         let ps = &st.project_settings;
@@ -134,77 +130,55 @@ fn run(state: &Rc<RefCell<AppState>>) {
         )
     };
 
-    // id 或 name 改了 → 走 RenameProject（同时承担目录 rename 与 schema 写盘）
-    let id_changed = old_id != new_id;
-    let name_changed = {
-        let st = state.borrow();
-        st.engine.find_project(&old_id).map(|p| p.schema.meta.name != name).unwrap_or(false)
-    };
-    if id_changed || name_changed {
-        let mut st = state.borrow_mut();
-        st.engine.execute_action(&ProjectAction::RenameProject {
-            old_id: old_id.clone(),
-            new_id: new_id.clone(),
-            new_name: name.clone(),
-        });
-        // RenameProject 失败时（id 重名 / 目录 rename 失败）会保留旧 id；
-        // 后续仍按 new_id 找项目可能拿不到，统一用 find_by_id 兜底。
-    }
-
-    // 此时 project 真正的 id（可能 rename 失败，故重新查一次）
-    let effective_id = {
-        let st = state.borrow();
-        if st.engine.find_project(&new_id).is_some() {
-            new_id.clone()
-        } else {
-            old_id.clone()
-        }
-    };
-
-    // 改 category / version / separators，并写盘
-    let mut wrote = false;
+    // 更新所有字段到内存（id / name / category / version / separators），
+    // 只标记 dirty，等"保存项目"才写盘。
+    let mut has_changes = false;
     {
         let mut st = state.borrow_mut();
-        if let Some(p) = st.engine.find_project_mut(&effective_id) {
-            let mut dirty = false;
+        if let Some(p) = st.engine.find_project_mut(&old_id) {
+            if p.schema.meta.id != new_id {
+                p.schema.meta.id = new_id.clone();
+                has_changes = true;
+            }
+            if p.schema.meta.name != name {
+                p.schema.meta.name = name.clone();
+                has_changes = true;
+            }
             if p.schema.meta.category != category {
                 p.schema.meta.category = category.clone();
-                dirty = true;
+                has_changes = true;
             }
             if p.schema.meta.version != version {
                 p.schema.meta.version = version.clone();
-                dirty = true;
+                has_changes = true;
             }
             if p.schema.separators != sep {
                 p.schema.separators = sep.clone();
                 p.config.separators = sep.clone();
-                dirty = true;
+                has_changes = true;
             }
-            if dirty {
-                // 配置分层原则：项目设置只改内存 + 标记 dirty，
-                // 由项目保存（save_project_files）统一负责写盘。
+            if has_changes {
                 p.schema_dirty = true;
-                wrote = true;
             }
-        }
-        // schema 改了（特别是 separators）→ 重新生成合并后的 ProjectConfig
-        if wrote {
-            st.engine.remerge_project_config(&effective_id);
         }
     }
 
-    if wrote {
+    if has_changes {
         let mut st = state.borrow_mut();
+        // schema 改了（特别是 separators）→ 重新生成合并后的 ProjectConfig
+        st.engine.remerge_project_config(&old_id);
+
         // 分隔符变了要全表重校验（active scope）：临时切到目标 project 跑 revalidate_all 再切回。
         let prev_active = st.engine.active_project_id().map(|s| s.to_string());
-        if st.engine.set_active_by_id(&effective_id) {
+        if st.engine.set_active_by_id(&old_id) {
             st.engine.revalidate_all();
         }
         match prev_active {
             Some(id) => { st.engine.set_active_by_id(&id); }
             None => st.engine.set_active_none(),
         }
-        st.engine.log(format!("[项目设置] 已应用修改: {}（需保存项目才写盘）", effective_id));
+
+        st.engine.log(format!("[项目设置] 已应用修改: {}（需保存项目才写盘）", old_id));
     }
 }
 

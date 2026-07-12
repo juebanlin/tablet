@@ -43,7 +43,7 @@ pub fn encode(value: &str, kind: FieldKind) -> String {
     match kind {
         FieldKind::Str => encode_str(value),
         FieldKind::Atom => {
-            debug_assert!(
+            assert!(
                 !value.contains(|c: char| matches!(c, '\\' | '|' | '\n' | '\r' | '\t')),
                 "Atom field contains special char (business layer bug): {:?}", value
             );
@@ -183,7 +183,6 @@ mod tests {
     #[should_panic(expected = "Atom field contains special char")]
     fn atom_panics_on_pipe() {
         // Atom 字段含 | 是业务层 bug，应 panic 暴露
-        // 注意：release build 下 debug_assert 被跳过，此测试仅在 debug 生效
         encode("1|2", FieldKind::Atom);
     }
 

@@ -292,8 +292,6 @@ pub enum ProjectAction {
     NewEnum     { project_id: String, group: String, name: String },
     RenameGroup { project_id: String, old_name: String, new_name: String },
     RenameNode  { project_id: String, group: String, old_name: String, new_name: String },
-    /// 重命名 project：迁移 `projects/<old_id>/` → `projects/<new_id>/`，写 project.toml 新 name + id。
-    RenameProject { old_id: String, new_id: String, new_name: String },
     /// 删除 project：rm -rf `projects/<id>/`、从内存 `Vec<Project>` 移除。
     /// 至少要保留一个 project；删最后一个会失败（log 报错）。
     DeleteProject { project_id: String },
@@ -1782,9 +1780,6 @@ impl ProjectEngine {
                 }
                 self.log(format!("[{}] 重命名: {}/{} → {}", project_id, group, old_name, new_name));
             }
-            ProjectAction::RenameProject { old_id, new_id, new_name } => {
-                self.execute_rename_project(old_id, new_id, new_name);
-            }
             ProjectAction::DeleteProject { project_id } => {
                 self.execute_delete_project(project_id);
             }
@@ -1805,81 +1800,6 @@ impl ProjectEngine {
             }
             _ => {}
         }
-    }
-
-    /// `RenameProject` 的实际逻辑（拆出便于阅读）。
-    fn execute_rename_project(&mut self, old_id: &str, new_id: &str, new_name: &str) {
-        if old_id == new_id && new_name == self.find_project(old_id).map(|p| p.schema.meta.name.as_str()).unwrap_or("") {
-            return;
-        }
-        let Some(idx) = self.projects.iter().position(|p| p.schema.meta.id == old_id) else {
-            self.log(format!("Project 不存在: {}", old_id));
-            return;
-        };
-        let project = &mut self.projects[idx];
-        let only_name_change = old_id == new_id;
-        // 未保存的内存项目（目录还没落盘）：只改内存，不碰文件系统。
-        let pending = project.state.is_pending();
-        if !only_name_change {
-            // 检查 new_id 不存在（含 closed 的 available）
-            if self.available_projects.iter().any(|a| a.id == new_id) {
-                self.log(format!("Project id 已存在: {}", new_id));
-                return;
-            }
-            let project = &mut self.projects[idx];
-            let new_root = project.workdir.join(crate::project::PROJECTS_DIR).join(new_id);
-            // 仅当项目已落盘时才 rename 目录；未落盘的直接改内存路径。
-            if !pending {
-                let old_root = project.project_root.clone();
-                if let Err(e) = std::fs::rename(&old_root, &new_root) {
-                    self.log(format!("重命名 project 目录失败: {}", e));
-                    return;
-                }
-            }
-            project.project_root = new_root.clone();
-            project.schema.meta.id = new_id.to_string();
-            project.schema.meta.name = new_name.to_string();
-            // 同步所有 group dir + 节点 path
-            let new_data_dir = project.data_dir();
-            for g in &mut project.groups {
-                let group_name = g.name.clone();
-                g.dir = new_data_dir.join(&group_name);
-                for t in &mut g.tables { t.path = g.dir.join(format!("{}.tbl", t.name)); }
-                for c in &mut g.constants { c.path = g.dir.join(format!("{}.tbl", c.name)); }
-                for e in &mut g.enums { e.path = g.dir.join(format!("{}.tbl", e.name)); }
-            }
-        } else {
-            project.schema.meta.name = new_name.to_string();
-        }
-        // 写 project.tblschema：项目身份归 schema.meta。
-        // 未落盘的内存项目只标记 dirty，等首次 save 时统一落盘（避免目录不存在报错）。
-        let project = &mut self.projects[idx];
-        project.schema_dirty = true;
-        if !pending {
-            let schema_path = project.project_root.join(crate::project::PROJECT_SCHEMA_FILE);
-            let txt = crate::tblschema::serialize_tblschema(&project.schema);
-            if let Err(e) = std::fs::write(&schema_path, txt) {
-                self.log(format!("写 project.tblschema 失败: {}", e));
-            } else {
-                project.schema_dirty = false;
-            }
-        }
-        // 同步 available_projects（id / name / root）
-        if let Some(ap) = self.available_projects.iter_mut().find(|a| a.id == old_id) {
-            ap.id = new_id.to_string();
-            ap.name = if new_name.is_empty() { new_id.to_string() } else { new_name.to_string() };
-            ap.root = self.projects[idx].project_root.clone();
-        }
-        // 迁移 validation_errors 索引：(old_id, ...) → (new_id, ...)
-        if !only_name_change {
-            let migrated: Vec<_> = self.validation_errors.iter()
-                .filter(|(p, _, _, _, _)| p == old_id).cloned().collect();
-            for entry in &migrated { self.validation_errors.remove(entry); }
-            for (_, g, n, r, c) in migrated {
-                self.validation_errors.insert((new_id.to_string(), g, n, r, c));
-            }
-        }
-        self.log(format!("重命名 Project: {} → {} (name={})", old_id, new_id, new_name));
     }
 
     /// `DeleteProject` 的实际逻辑（拆出便于阅读）。
@@ -2280,12 +2200,13 @@ mod project_toml_template_tests {
         assert!(project.state.is_pending(), "make_project 默认 pending");
         let mut engine = ProjectEngine::new(project);
 
-        // 改 id + name
-        engine.execute_action(&ProjectAction::RenameProject {
-            old_id: "p1".to_string(),
-            new_id: "p2".to_string(),
-            new_name: "新名字".to_string(),
-        });
+        // 直接修改内存中的 meta 字段（模拟 UI 项目设置的行为）
+        {
+            let p = engine.find_project_mut("p1").unwrap();
+            p.schema.meta.id = "p2".to_string();
+            p.schema.meta.name = "新名字".to_string();
+            p.schema_dirty = true;
+        }
 
         // 内存中身份已更新
         let p = engine.find_project("p2").expect("p2 应存在于内存");
