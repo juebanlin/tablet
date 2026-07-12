@@ -1154,15 +1154,6 @@ tablet-cli -w D:/work/game-config list-templates
 tablet-cli --fmt json list-templates
 ```
 
-#### `migrate-legacy`
-
-把根目录 `config/` + `project.tblschema` 迁移到 `projects/default/`。
-
-```bash
-tablet-cli migrate-legacy
-tablet-cli -w D:/old-project migrate-legacy
-```
-
 ## 9. `-s` 覆盖键
 
 `apply_overrides` 当前认识的键（实现见 `crates/app-cli/src/actions/overrides.rs`）：

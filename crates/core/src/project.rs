@@ -19,7 +19,6 @@
 //! 加载顺序：项目 toml > 全局 toml > 内置默认。
 //!
 //! **历史兼容**：
-//! - 历史文件名 `schema.tblschema` 在 load 时一次性 rename 为 `project.tblschema`
 //! - 配置文件 `tbl-tool.toml` 在 load 时一次性 rename 为 `tablet.toml`
 //! - 不再支持单项目模式（`<workdir>/config/` 直接存放数据），
 //!   旧仓库需要手动迁移到 `projects/default/` 结构
@@ -66,8 +65,6 @@ macro_rules! const_concat {
         unsafe { std::str::from_utf8_unchecked(&BUF) }
     }};
 }
-
-const LEGACY_SCHEMA_FILE: &str = "schema.tblschema";
 
 /// 工作区根 `tablet.toml` banner：说明四类段的作用域差异，避免用户混淆。
 /// `[project]`（仓库级）/ `[export]`（项目默认值，可被项目级覆盖）/
@@ -321,9 +318,8 @@ pub fn default_project_toml_template() -> &'static str {
 /// 流程：
 /// 1. 解析 `<workdir>/tablet.toml`（不存在则写默认）—— 全局配置
 /// 2. 从 `<workdir>/projects/` 扫描，从 `last_project` 或第一个挑选
-/// 3. 加载文件名迁移（schema.tblschema → project.tblschema）
-/// 4. 解析 project.tblschema 和 project.toml，合并配置
-/// 5. 扫 config/ 加载 groups
+/// 3. 解析 project.tblschema 和 project.toml，合并配置
+/// 4. 扫 config/ 加载 groups
 pub fn load_project(workdir: &Path) -> Result<Project> {
     let config_path = workdir.join(crate::CONFIG_FILE);
 
@@ -371,8 +367,6 @@ fn load_specific_project_impl(
     project_root: &Path,
     global_config: &GlobalConfig,
 ) -> Result<Project> {
-    migrate_legacy_files(project_root);
-
     let proj_text = std::fs::read_to_string(project_root.join(PROJECT_TOML_FILE)).ok();
     let schema = read_project_schema_with_fallback(
         project_root,
@@ -645,23 +639,6 @@ pub fn persist_workspace_state(
     let updated = upsert_project_config_section(&original, &project_cfg);
     std::fs::write(&path, updated)?;
     Ok(())
-}
-
-/// 老文件名迁移：rename 一次到位，让后续代码只面对新名。
-/// 仅当老文件存在且新文件不存在时才动；幂等。
-fn migrate_legacy_files(project_root: &Path) {
-    let pairs = [
-        (LEGACY_SCHEMA_FILE, PROJECT_SCHEMA_FILE),
-    ];
-    for (old, new) in pairs {
-        let old_path = project_root.join(old);
-        let new_path = project_root.join(new);
-        if old_path.exists() && !new_path.exists() {
-            if let Err(e) = std::fs::rename(&old_path, &new_path) {
-                eprintln!("warn: 迁移 {} → {} 失败: {}", old_path.display(), new_path.display(), e);
-            }
-        }
-    }
 }
 
 #[derive(Debug, Clone)]

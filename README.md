@@ -74,7 +74,6 @@ Commands:
   sep             分隔符查询
   util            底层工具（无需项目上下文）
   list-templates  列出可用模板
-  migrate-legacy  迁移旧 config/ 到 projects/default/
 
 Options:
   -w, --workdir <WORKDIR>  工作目录 [default: .]
