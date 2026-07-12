@@ -78,6 +78,22 @@ fn save_project_files(project: &mut Project) -> (usize, usize) {
         }
         project.state = crate::model::ProjectState::Loaded;
         project.schema_dirty = true;
+
+        // 未落盘项目首次保存时，根据当前 project_root 重新推演所有路径
+        // （应对"项目设置"修改 id 的场景：id 改了、project_root 更新了，但子节点路径还是旧的）
+        let new_data_dir = project.data_dir();
+        for group in &mut project.groups {
+            group.dir = new_data_dir.join(&group.name);
+            for table in &mut group.tables {
+                table.path = group.dir.join(format!("{}.tbl", table.name));
+            }
+            for constant in &mut group.constants {
+                constant.path = group.dir.join(format!("{}.tbl", constant.name));
+            }
+            for enum_def in &mut group.enums {
+                enum_def.path = group.dir.join(format!("{}.tbl", enum_def.name));
+            }
+        }
     }
     // 项目首次落盘时写一份「全量带注释」的 project.toml 模板，让用户能直接看到
     // 全部可改键。已存在则不覆盖（用户改过 / 手写过都保留）。
@@ -300,21 +316,16 @@ pub enum ProjectAction {
 impl ProjectEngine {
     /// 构造单个 Project 实例（用于测试和简单场景）。
     /// available_projects 仅含该 project；workdir 取自该 project。
-    pub fn new(project: Project) -> Self {
+    ///
+    /// `global_config` 参数：传入真实的全局配置，避免从已 merge 的 project.config 反推。
+    /// 测试场景可传 `GlobalConfig::default()`。
+    pub fn new(project: Project, global_config: GlobalConfig) -> Self {
         let workdir = project.workdir.clone();
         let available = vec![AvailableProject::from_project(&project)];
-        // 构造一个默认的 GlobalConfig
-        let global_config = GlobalConfig {
-            project_management: crate::model::ProjectManagementConfig {
-                last_project: project.schema.meta.id.clone(),
-                opened_projects: vec![project.schema.meta.id.clone()],
-                project_sort: String::new(),
-                project_order: Vec::new(),
-            },
-            export: project.config.export.clone(),
-            ui: project.config.ui.clone(),
-            separators: project.schema.separators.clone(),
-        };
+        let mut global_config = global_config;
+        // 更新 project_management 段以匹配当前 project
+        global_config.project_management.last_project = project.schema.meta.id.clone();
+        global_config.project_management.opened_projects = vec![project.schema.meta.id.clone()];
         Self {
             workdir,
             global_config,
@@ -330,25 +341,19 @@ impl ProjectEngine {
 
     /// 多 Project 构造（兼容 #195 老调用点：把 projects 当作"全部"且全部 opened）。
     /// projects 必须非空；available_projects 由 projects 推导。
-    pub fn new_multi(projects: Vec<Project>, last_id: Option<&str>) -> Self {
+    ///
+    /// `global_config` 参数：传入真实的全局配置，避免从已 merge 的 project.config 反推。
+    pub fn new_multi(projects: Vec<Project>, last_id: Option<&str>, global_config: GlobalConfig) -> Self {
         assert!(!projects.is_empty(), "ProjectEngine::new_multi 至少要有一个 Project");
         let workdir = projects[0].workdir.clone();
         let available = projects.iter().map(AvailableProject::from_project).collect();
         let active_idx = last_id
             .and_then(|id| projects.iter().position(|p| p.schema.meta.id == id))
             .or(Some(0));
-        // 构造一个默认的 GlobalConfig
-        let global_config = GlobalConfig {
-            project_management: crate::model::ProjectManagementConfig {
-                last_project: last_id.unwrap_or("").to_string(),
-                opened_projects: projects.iter().map(|p| p.schema.meta.id.clone()).collect(),
-                project_sort: String::new(),
-                project_order: Vec::new(),
-            },
-            export: projects[0].config.export.clone(),
-            ui: projects[0].config.ui.clone(),
-            separators: projects[0].schema.separators.clone(),
-        };
+        let mut global_config = global_config;
+        // 更新 project_management 段以匹配当前打开的 projects
+        global_config.project_management.last_project = last_id.unwrap_or("").to_string();
+        global_config.project_management.opened_projects = projects.iter().map(|p| p.schema.meta.id.clone()).collect();
         Self {
             workdir,
             global_config,
@@ -1205,7 +1210,7 @@ impl ProjectEngine {
         let mut errors = Vec::new();
         let sep = &self.project().config.separators;
         let refs = RefIndex::build(&self.project().groups);
-        let allow_ref = self.project().config.ui.as_ref()
+        let allow_ref = self.global_config.ui.as_ref()
             .map_or(true, |u| u.constant_ref_allowed);
         for group in &self.project().groups {
             for table in &group.tables {
@@ -1235,7 +1240,7 @@ impl ProjectEngine {
         self.validation_errors.retain(|(p, g, n, _, _)| p != &pid || g != group || n != name);
         let sep = self.project().config.separators.clone();
         let refs = RefIndex::build(&self.project().groups);
-        let allow_ref = self.project().config.ui.as_ref()
+        let allow_ref = self.global_config.ui.as_ref()
             .map_or(true, |u| u.constant_ref_allowed);
         let mut new_errs: Vec<(usize, usize)> = Vec::new();
         {
@@ -1902,7 +1907,7 @@ impl ProjectEngine {
         let mut errors = Vec::new();
         let sep = &project.config.separators;
         let refs = RefIndex::build(&project.groups);
-        let allow_ref = project.config.ui.as_ref()
+        let allow_ref = self.global_config.ui.as_ref()
             .map_or(true, |u| u.constant_ref_allowed);
         for group in &project.groups {
             for table in &group.tables {
@@ -2198,7 +2203,7 @@ mod project_toml_template_tests {
         // 注意：故意不创建 project_root 目录，模拟"新建未保存"场景
         let project = make_project(dir.clone(), project_root.clone(), "p1");
         assert!(project.state.is_pending(), "make_project 默认 pending");
-        let mut engine = ProjectEngine::new(project);
+        let mut engine = ProjectEngine::new(project, GlobalConfig::default());
 
         // 直接修改内存中的 meta 字段（模拟 UI 项目设置的行为）
         {

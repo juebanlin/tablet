@@ -138,6 +138,11 @@ fn run(state: &Rc<RefCell<AppState>>) {
         if let Some(p) = st.engine.find_project_mut(&old_id) {
             if p.schema.meta.id != new_id {
                 p.schema.meta.id = new_id.clone();
+                // 未落盘项目改 id 时需同步更新 project_root 路径
+                // 子节点路径会在首次保存时由 save_project_files 自动推演
+                if p.state.is_pending() {
+                    p.project_root = p.workdir.join("projects").join(&new_id);
+                }
                 has_changes = true;
             }
             if p.schema.meta.name != name {
@@ -165,12 +170,49 @@ fn run(state: &Rc<RefCell<AppState>>) {
 
     if has_changes {
         let mut st = state.borrow_mut();
+
+        // ID 改变时，需要同步更新 engine 内部的所有索引结构
+        let id_changed = old_id != new_id;
+        if id_changed {
+            // 更新 available_projects 列表中的 id
+            if let Some(avail) = st.engine.available_projects.iter_mut().find(|a| a.id == old_id) {
+                avail.id = new_id.clone();
+            }
+            // 更新 opened_projects 列表
+            for opened_id in &mut st.engine.global_config.project_management.opened_projects {
+                if opened_id == &old_id {
+                    *opened_id = new_id.clone();
+                }
+            }
+            // 更新 last_project（如果是当前项目）
+            if st.engine.global_config.project_management.last_project == old_id {
+                st.engine.global_config.project_management.last_project = new_id.clone();
+            }
+            // 更新 project_order 列表
+            for order_id in &mut st.engine.global_config.project_management.project_order {
+                if order_id == &old_id {
+                    *order_id = new_id.clone();
+                }
+            }
+            // 更新 validation_errors 中的 project_id
+            let old_errors: Vec<_> = st.engine.validation_errors.iter()
+                .filter(|(pid, _, _, _, _)| pid == &old_id)
+                .cloned()
+                .collect();
+            for (_, g, n, r, c) in old_errors {
+                st.engine.validation_errors.remove(&(old_id.clone(), g.clone(), n.clone(), r, c));
+                st.engine.validation_errors.insert((new_id.clone(), g, n, r, c));
+            }
+        }
+
         // schema 改了（特别是 separators）→ 重新生成合并后的 ProjectConfig
-        st.engine.remerge_project_config(&old_id);
+        // 注意：ID 改变后要用新 ID 查找
+        let target_id = if id_changed { &new_id } else { &old_id };
+        st.engine.remerge_project_config(target_id);
 
         // 分隔符变了要全表重校验（active scope）：临时切到目标 project 跑 revalidate_all 再切回。
         let prev_active = st.engine.active_project_id().map(|s| s.to_string());
-        if st.engine.set_active_by_id(&old_id) {
+        if st.engine.set_active_by_id(target_id) {
             st.engine.revalidate_all();
         }
         match prev_active {
@@ -178,7 +220,7 @@ fn run(state: &Rc<RefCell<AppState>>) {
             None => st.engine.set_active_none(),
         }
 
-        st.engine.log(format!("[项目设置] 已应用修改: {}（需保存项目才写盘）", old_id));
+        st.engine.log(format!("[项目设置] 已应用修改: {}（需保存项目才写盘）", target_id));
     }
 }
 
