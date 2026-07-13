@@ -97,7 +97,7 @@ fn default_project_management_section() -> ProjectManagementConfig {
     }
 }
 
-#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
+#[derive(Debug, Clone, Default, PartialEq, serde::Deserialize, serde::Serialize)]
 pub struct ExportConfig {
     pub json: Option<JsonExport>,
     pub xml: Option<XmlExport>,
@@ -107,21 +107,21 @@ pub struct ExportConfig {
     pub line_ending: Option<String>,
 }
 
-#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, serde::Deserialize, serde::Serialize)]
 pub struct JsonExport {
     pub empty_as: Option<String>,
     pub line_ending: Option<String>,
     pub encoding: Option<String>,
 }
 
-#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, serde::Deserialize, serde::Serialize)]
 pub struct XmlExport {
     pub empty_as: Option<String>,
     pub line_ending: Option<String>,
     pub encoding: Option<String>,
 }
 
-#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, serde::Deserialize, serde::Serialize)]
 pub struct ServerExport {
     pub data_output: Option<String>,
     pub java: Option<JavaExport>,
@@ -133,7 +133,7 @@ pub struct ServerExport {
     pub encoding: Option<String>,
 }
 
-#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, serde::Deserialize, serde::Serialize)]
 pub struct JavaExport {
     pub package: Option<String>,
     pub code_output: Option<String>,
@@ -141,7 +141,7 @@ pub struct JavaExport {
     pub encoding: Option<String>,
 }
 
-#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, serde::Deserialize, serde::Serialize)]
 pub struct GoExport {
     pub package: Option<String>,
     pub code_output: Option<String>,
@@ -149,7 +149,7 @@ pub struct GoExport {
     pub encoding: Option<String>,
 }
 
-#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, serde::Deserialize, serde::Serialize)]
 pub struct CppExport {
     pub namespace: Option<String>,
     pub code_output: Option<String>,
@@ -159,7 +159,7 @@ pub struct CppExport {
 }
 
 /// 三个 runtime（dotnet / unity / godot）共用同一份 schema 定义，仅 Loader 不同。
-#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, serde::Deserialize, serde::Serialize)]
 pub struct CSharpExport {
     pub namespace: Option<String>,
     pub code_output: Option<String>,
@@ -167,7 +167,7 @@ pub struct CSharpExport {
     pub encoding: Option<String>,
 }
 
-#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, serde::Deserialize, serde::Serialize)]
 pub struct ClientConfig {
     pub lua: Option<LuaExport>,
     pub gdscript: Option<GdScriptExport>,
@@ -178,21 +178,21 @@ pub struct ClientConfig {
     pub encoding: Option<String>,
 }
 
-#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, serde::Deserialize, serde::Serialize)]
 pub struct LuaExport {
     pub output: Option<String>,
     pub line_ending: Option<String>,
     pub encoding: Option<String>,
 }
 
-#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, serde::Deserialize, serde::Serialize)]
 pub struct GdScriptExport {
     pub output: Option<String>,
     pub line_ending: Option<String>,
     pub encoding: Option<String>,
 }
 
-#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, serde::Deserialize, serde::Serialize)]
 pub struct TypeScriptExport {
     pub output: Option<String>,
     pub module_kind: Option<String>,
@@ -200,7 +200,7 @@ pub struct TypeScriptExport {
     pub encoding: Option<String>,
 }
 
-#[derive(Debug, Clone, serde::Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, serde::Deserialize, serde::Serialize)]
 pub struct UiConfig {
     #[serde(default = "default_true")]
     pub auto_commit_on_blur: bool,
@@ -228,7 +228,7 @@ pub struct UiConfig {
     pub constant_ref_allowed: bool,
 }
 
-#[derive(Debug, Clone, Default, serde::Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, serde::Deserialize, serde::Serialize)]
 pub struct RefPickerConfig {
     /// 引用选择弹窗对 Table 的列展示策略：
     /// - "auto"（默认）：id + 最多 2 个 export=cs 且类型为字符串的辅助列

@@ -872,6 +872,116 @@ fn escape_toml_string(s: &str) -> String {
     s.replace('\\', "\\\\").replace('"', "\\\"")
 }
 
+/// 将 GlobalConfig 的 [ui], [export], [separators] 三个段写回 tablet.toml。
+/// 保留 [project] 段和文件中的注释、空行、其它段。
+pub fn persist_global_config_sections(
+    workdir: &Path,
+    global_config: &crate::model::GlobalConfig,
+) -> Result<()> {
+    let path = workdir.join(crate::CONFIG_FILE);
+    let original = std::fs::read_to_string(&path).unwrap_or_default();
+
+    let updated = upsert_global_sections(&original, global_config)?;
+    std::fs::write(&path, updated)?;
+    Ok(())
+}
+
+/// 将 [ui], [export], [separators] 三个段 upsert 到 toml 文本中。
+/// 保留 [project] 段和其它段、注释、空行。
+fn upsert_global_sections(
+    original: &str,
+    global_config: &crate::model::GlobalConfig,
+) -> Result<String> {
+    // 序列化三个段为 TOML 字符串
+    let ui_toml = if let Some(ref ui) = global_config.ui {
+        toml::to_string_pretty(ui)?
+    } else {
+        String::new()
+    };
+    let export_toml = if let Some(ref export) = global_config.export {
+        toml::to_string_pretty(export)?
+    } else {
+        String::new()
+    };
+    let sep_toml = toml::to_string_pretty(&global_config.separators)?;
+
+    // 解析现有内容，按段重建
+    let mut out_lines: Vec<String> = Vec::new();
+    let mut in_target_section = false;
+    let mut found_sections = std::collections::HashSet::new();
+
+    for line in original.lines() {
+        let trimmed = line.trim();
+
+        // 检测段标题
+        if trimmed.starts_with('[') && trimmed.ends_with(']') {
+            // 解析段名
+            let section_name = trimmed.trim_start_matches('[').trim_end_matches(']').trim();
+
+            // 检查是否是目标段
+            if section_name == "ui" {
+                found_sections.insert("ui");
+                if !ui_toml.is_empty() {
+                    out_lines.push("[ui]".to_string());
+                    out_lines.extend(ui_toml.lines().map(|s| s.to_string()));
+                }
+                in_target_section = true;
+                continue;
+            } else if section_name == "export" {
+                found_sections.insert("export");
+                if !export_toml.is_empty() {
+                    out_lines.push("[export]".to_string());
+                    out_lines.extend(export_toml.lines().map(|s| s.to_string()));
+                }
+                in_target_section = true;
+                continue;
+            } else if section_name == "separators" {
+                found_sections.insert("separators");
+                out_lines.push("[separators]".to_string());
+                out_lines.extend(sep_toml.lines().map(|s| s.to_string()));
+                in_target_section = true;
+                continue;
+            } else {
+                // 其它段保留
+                in_target_section = false;
+                out_lines.push(line.to_string());
+                continue;
+            }
+        }
+
+        // 跳过目标段内的旧内容
+        if in_target_section {
+            continue;
+        }
+
+        // 保留非目标段的内容
+        out_lines.push(line.to_string());
+    }
+
+    // 追加未找到的段
+    if !found_sections.contains("ui") && !ui_toml.is_empty() {
+        out_lines.push(String::new());
+        out_lines.push("[ui]".to_string());
+        out_lines.extend(ui_toml.lines().map(|s| s.to_string()));
+    }
+    if !found_sections.contains("export") && !export_toml.is_empty() {
+        out_lines.push(String::new());
+        out_lines.push("[export]".to_string());
+        out_lines.extend(export_toml.lines().map(|s| s.to_string()));
+    }
+    if !found_sections.contains("separators") {
+        out_lines.push(String::new());
+        out_lines.push("[separators]".to_string());
+        out_lines.extend(sep_toml.lines().map(|s| s.to_string()));
+    }
+
+    let mut result = out_lines.join("\n");
+    if !result.ends_with('\n') {
+        result.push('\n');
+    }
+    Ok(result)
+}
+
 fn load_groups_in(data_dir: &Path) -> Result<Vec<Group>> {
     let mut groups = Vec::new();
     let mut entries: Vec<_> = std::fs::read_dir(data_dir)?

@@ -769,6 +769,52 @@ impl ProjectSettingsState {
     }
 }
 
+/// 全局设置对话框（菜单栏「设置」→「全局设置...」入口）。
+///
+/// 与项目设置的区别：点击「确定」后立即写 tablet.toml，而不是标记 dirty 等手动保存。
+/// 修改全局配置后会重新合并所有已打开项目的配置，并在分隔符改变时重新验证数据。
+///
+/// 数据范式：current + apply 模式。
+/// - current_snapshot: 当前已保存的值（打开对话框时从 engine.global_config 深拷贝，等于硬盘值）
+/// - ui/sep/export: 待应用的编辑缓冲（用户正在编辑）
+/// - modified: 后端对比计算得出（apply != current）
+///
+/// 操作语义：
+/// - open(): current = 硬盘值，apply = current，modified = false
+/// - 编辑: 修改 apply，计算 modified = (apply != current)
+/// - 撤销: apply = current，modified = false
+/// - 默认值: apply = 硬编码默认值，计算 modified = (apply != current)
+/// - 确定: current = apply，写盘，modified = false
+/// - 取消: apply = current（丢弃编辑），关闭对话框
+#[derive(Default)]
+pub struct GlobalSettingsDialogState {
+    pub open: bool,
+    /// 0=UI设置  1=分隔符  2=导出设置
+    pub tab: i32,
+    pub ui_tab_modified: bool,
+    pub sep_tab_modified: bool,
+    pub export_tab_modified: bool,
+
+    // —— apply buffer：直接复用核心类型 ——
+    pub ui: tablet_core::model::UiConfig,
+    pub sep: tablet_core::types::SeparatorsSection,
+    pub export: tablet_core::model::ExportConfig,
+
+    /// current：当前已保存的值（打开对话框时的快照，等于硬盘值）
+    pub current_snapshot: Option<tablet_core::model::GlobalConfig>,
+}
+
+impl GlobalSettingsDialogState {
+    pub fn close(&mut self) {
+        self.open = false;
+        self.tab = 0;
+        self.ui_tab_modified = false;
+        self.sep_tab_modified = false;
+        self.export_tab_modified = false;
+        self.current_snapshot = None;
+    }
+}
+
 pub struct AppState {
     pub engine: ProjectEngine,
     pub selected: Option<SelectedNode>,
@@ -832,6 +878,8 @@ pub struct AppState {
     pub clone_project: CloneProjectState,
     /// 「项目设置」对话框（id / name / category / version / 分隔符）
     pub project_settings: ProjectSettingsState,
+    /// 「全局设置」对话框（UI / 分隔符 / 导出设置）
+    pub global_settings: GlobalSettingsDialogState,
     /// "id" / "name" / "open" / "created" / "manual"。从 [project] project_sort 读初值，UI 写时持久化。
     pub project_sort: String,
     /// sort=manual 时使用；UI 拖拽顺序持久化到 [project] project_order。
@@ -906,6 +954,7 @@ impl AppState {
             create_project: CreateProjectState::default(),
             clone_project: CloneProjectState::default(),
             project_settings: ProjectSettingsState::default(),
+            global_settings: GlobalSettingsDialogState::default(),
             project_sort,
             project_order,
             excel_session: None,

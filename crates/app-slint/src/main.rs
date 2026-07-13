@@ -179,6 +179,18 @@ fn run_gui(workdir_arg: Option<PathBuf>) -> anyhow::Result<()> {
         });
     }
 
+    // 「设置」→「全局设置...」：打开全局设置对话框
+    {
+        let s = app_state.clone();
+        let weak = app_window.as_weak();
+        app_window.on_global_settings_clicked(move || {
+            dialogs::global_settings::open(&s);
+            if let Some(ui_h) = weak.upgrade() {
+                dialogs::global_settings::push(&ui_h, &s);
+            }
+        });
+    }
+
     // 初次 push（首屏数据 + 各对话框默认关闭态）
     refresh::initial(&app_window, &app_state);
 
@@ -197,6 +209,7 @@ fn run_gui(workdir_arg: Option<PathBuf>) -> anyhow::Result<()> {
     dialogs::create_project::wire(&app_window, &app_state);
     dialogs::clone_project::wire(&app_window, &app_state);
     dialogs::project_settings::wire(&app_window, &app_state);
+    dialogs::global_settings::wire(&app_window, &app_state);
     excel_bridge::wire(&app_window, &app_state);
 
     // 启动时扫描 Excel 编辑残留（@plans §5.6）：上次崩溃 / kill 留下的 .tbl-cache/*.xlsx

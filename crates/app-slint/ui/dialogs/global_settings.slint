@@ -1,0 +1,445 @@
+// 全局设置对话框：UI设置 / 分隔符 / 导出设置 3 tab。
+
+import { Theme } from "../theme.slint";
+import { DialogChrome } from "dialog_chrome.slint";
+import { Button, LineEdit, ScrollView, CheckBox, ComboBox } from "std-widgets.slint";
+
+// Tab segmented bar：UI设置 / 分隔符 / 导出设置
+component TabBar inherits Rectangle {
+    in property <int> current: 0;
+    callback changed(int);
+
+    height: 32px;
+    background: Theme.bg-toolbar;
+    border-color: Theme.border-light;
+    border-width: 1px;
+
+    HorizontalLayout {
+        spacing: 0;
+        padding-left: Theme.sp-3;
+        padding-top: 4px;
+        alignment: start;
+        Rectangle {
+            width: 96px;
+            background: root.current == 0 ? Theme.bg-row-selected : transparent;
+            Text {
+                text: "UI设置";
+                font-size: Theme.fs-normal;
+                color: Theme.text-primary;
+                vertical-alignment: center;
+                horizontal-alignment: center;
+            }
+            TouchArea { clicked => { root.changed(0); } }
+        }
+        Rectangle {
+            width: 96px;
+            background: root.current == 1 ? Theme.bg-row-selected : transparent;
+            Text {
+                text: "分隔符";
+                font-size: Theme.fs-normal;
+                color: Theme.text-primary;
+                vertical-alignment: center;
+                horizontal-alignment: center;
+            }
+            TouchArea { clicked => { root.changed(1); } }
+        }
+        Rectangle {
+            width: 96px;
+            background: root.current == 2 ? Theme.bg-row-selected : transparent;
+            Text {
+                text: "导出设置";
+                font-size: Theme.fs-normal;
+                color: Theme.text-primary;
+                vertical-alignment: center;
+                horizontal-alignment: center;
+            }
+            TouchArea { clicked => { root.changed(2); } }
+        }
+    }
+}
+
+// 单条紧凑分隔符行：复用项目设置的组件
+component SepRow inherits HorizontalLayout {
+    in property <string> l1;
+    in-out property <string> v1;
+    in property <string> l2;
+    in-out property <string> v2;
+    in property <string> l3;
+    in-out property <string> v3;
+    in property <bool> show2: true;
+    in property <bool> show3: false;
+    callback edited1(string);
+    callback edited2(string);
+    callback edited3(string);
+
+    spacing: Theme.sp-2;
+    alignment: start;
+
+    Text {
+        text: root.l1; width: 96px;
+        color: Theme.text-primary;
+        vertical-alignment: center;
+        horizontal-alignment: end;
+    }
+    LineEdit {
+        text <=> root.v1;
+        width: 56px;
+        edited(s) => { root.edited1(s); }
+    }
+    if root.show2: Text {
+        text: root.l2; width: 96px;
+        color: Theme.text-primary;
+        vertical-alignment: center;
+        horizontal-alignment: end;
+    }
+    if root.show2: LineEdit {
+        text <=> root.v2;
+        width: 56px;
+        edited(s) => { root.edited2(s); }
+    }
+    if root.show3: Text {
+        text: root.l3; width: 96px;
+        color: Theme.text-primary;
+        vertical-alignment: center;
+        horizontal-alignment: end;
+    }
+    if root.show3: LineEdit {
+        text <=> root.v3;
+        width: 56px;
+        edited(s) => { root.edited3(s); }
+    }
+}
+
+export component GlobalSettingsDialog inherits Rectangle {
+    in property <bool> open: false;
+    in property <int> tab: 0;
+    in-out property <bool> ui-tab-modified: false;
+    in-out property <bool> sep-tab-modified: false;
+    in-out property <bool> export-tab-modified: false;
+
+    // UI 设置 buf
+    in-out property <bool> ui-auto-commit-on-blur;
+    in-out property <bool> ui-realtime-validate;
+    in-out property <string> ui-log-level;
+    in-out property <string> ui-picker-trigger-header;
+    in-out property <string> ui-picker-trigger-data;
+    in-out property <bool> ui-show-meta-id;
+    in-out property <bool> ui-constant-ref-allowed;
+    in-out property <string> ui-ref-picker-strategy;
+
+    // 分隔符 buf（25 个）
+    in-out property <string> sep-tuple2;
+    in-out property <string> sep-tuple3;
+    in-out property <string> sep-tuple4;
+    in-out property <string> sep-list;
+    in-out property <string> sep-set;
+    in-out property <string> sep-map-kv;
+    in-out property <string> sep-map-entry;
+    in-out property <string> sep-lt2-tuple;
+    in-out property <string> sep-lt2-list;
+    in-out property <string> sep-lt3-tuple;
+    in-out property <string> sep-lt3-list;
+    in-out property <string> sep-lt4-tuple;
+    in-out property <string> sep-lt4-list;
+    in-out property <string> sep-mt2-kv;
+    in-out property <string> sep-mt2-tuple;
+    in-out property <string> sep-mt2-entry;
+    in-out property <string> sep-mt3-kv;
+    in-out property <string> sep-mt3-tuple;
+    in-out property <string> sep-mt3-entry;
+    in-out property <string> sep-mt4-kv;
+    in-out property <string> sep-mt4-tuple;
+    in-out property <string> sep-mt4-entry;
+    in-out property <string> sep-ml-kv;
+    in-out property <string> sep-ml-item;
+    in-out property <string> sep-ml-entry;
+
+    // 导出设置 buf（简化版：仅通用字段）
+    in-out property <string> export-encoding;
+    in-out property <string> export-line-ending;
+
+    callback tab-changed(int);
+    callback ui-field-edited(string, string);
+    callback sep-edited(string, string);
+    callback export-field-edited(string, string);
+    callback reset-clicked();
+    callback undo-clicked();
+    callback confirm();
+    callback cancel();
+
+    visible: root.open;
+    width: 100%;
+    height: 100%;
+
+    DialogChrome {
+        title: "全局设置";
+        dialog-w: 800px;
+        dialog-h: 600px;
+        primary-text: "确定";
+        primary-enabled: true;
+        primary-clicked => { root.confirm(); }
+        cancel-clicked => { root.cancel(); }
+        scrim-clicked => { root.cancel(); }
+        show-secondary: true;
+        secondary-text: "使用默认值";
+        default-enabled: true;
+        secondary-clicked => { root.reset-clicked(); }
+        show-third: true;
+        third-text: "撤销改动";
+        undo-enabled: root.tab == 0 ? root.ui-tab-modified : (root.tab == 1 ? root.sep-tab-modified : root.export-tab-modified);
+        third-clicked => { root.undo-clicked(); }
+
+        VerticalLayout {
+            spacing: 0;
+            padding: 0;
+
+            TabBar {
+                current: root.tab;
+                changed(i) => { root.tab-changed(i); }
+            }
+
+            // UI设置 tab
+            if root.tab == 0: ScrollView {
+                vertical-stretch: 1;
+                VerticalLayout {
+                    padding: Theme.sp-4;
+                    spacing: Theme.sp-3;
+
+                    Text { text: "编辑行为"; color: Theme.text-secondary; font-size: Theme.fs-small; }
+                    HorizontalLayout {
+                        spacing: Theme.sp-3;
+                        CheckBox {
+                            text: "失焦自动提交";
+                            checked <=> root.ui-auto-commit-on-blur;
+                            toggled => { root.ui-field-edited("auto_commit_on_blur", root.ui-auto-commit-on-blur ? "true" : "false"); }
+                        }
+                    }
+                    HorizontalLayout {
+                        spacing: Theme.sp-3;
+                        CheckBox {
+                            text: "实时验证";
+                            checked <=> root.ui-realtime-validate;
+                            toggled => { root.ui-field-edited("realtime_validate", root.ui-realtime-validate ? "true" : "false"); }
+                        }
+                    }
+
+                    Text { text: "选择器触发"; color: Theme.text-secondary; font-size: Theme.fs-small; }
+                    HorizontalLayout {
+                        spacing: Theme.sp-3;
+                        alignment: start;
+                        Text { text: "表头触发方式:"; width: 120px; vertical-alignment: center; color: Theme.text-primary; }
+                        ComboBox {
+                            model: ["single", "double"];
+                            current-value <=> root.ui-picker-trigger-header;
+                            width: 120px;
+                            selected(s) => { root.ui-field-edited("picker_trigger_header", s); }
+                        }
+                    }
+                    HorizontalLayout {
+                        spacing: Theme.sp-3;
+                        alignment: start;
+                        Text { text: "数据区触发方式:"; width: 120px; vertical-alignment: center; color: Theme.text-primary; }
+                        ComboBox {
+                            model: ["single", "double"];
+                            current-value <=> root.ui-picker-trigger-data;
+                            width: 120px;
+                            selected(s) => { root.ui-field-edited("picker_trigger_data", s); }
+                        }
+                    }
+
+                    Text { text: "显示选项"; color: Theme.text-secondary; font-size: Theme.fs-small; }
+                    HorizontalLayout {
+                        spacing: Theme.sp-3;
+                        CheckBox {
+                            text: "显示元数据 ID";
+                            checked <=> root.ui-show-meta-id;
+                            toggled => { root.ui-field-edited("show_meta_id", root.ui-show-meta-id ? "true" : "false"); }
+                        }
+                    }
+                    HorizontalLayout {
+                        spacing: Theme.sp-3;
+                        CheckBox {
+                            text: "允许常量表引用";
+                            checked <=> root.ui-constant-ref-allowed;
+                            toggled => { root.ui-field-edited("constant_ref_allowed", root.ui-constant-ref-allowed ? "true" : "false"); }
+                        }
+                    }
+
+                    Text { text: "引用选择器"; color: Theme.text-secondary; font-size: Theme.fs-small; }
+                    HorizontalLayout {
+                        spacing: Theme.sp-3;
+                        alignment: start;
+                        Text { text: "默认策略:"; width: 120px; vertical-alignment: center; color: Theme.text-primary; }
+                        ComboBox {
+                            model: ["auto", "full"];
+                            current-value <=> root.ui-ref-picker-strategy;
+                            width: 120px;
+                            selected(s) => { root.ui-field-edited("ref_picker_strategy", s); }
+                        }
+                    }
+
+                    Text { text: "日志"; color: Theme.text-secondary; font-size: Theme.fs-small; }
+                    HorizontalLayout {
+                        spacing: Theme.sp-3;
+                        alignment: start;
+                        Text { text: "日志级别:"; width: 120px; vertical-alignment: center; color: Theme.text-primary; }
+                        ComboBox {
+                            model: ["trace", "debug", "info", "warn", "error"];
+                            current-value <=> root.ui-log-level;
+                            width: 120px;
+                            selected(s) => { root.ui-field-edited("log_level", s); }
+                        }
+                    }
+
+                    Text {
+                        text: "提示：UI 配置修改后立即生效并写入 tablet.toml。";
+                        color: Theme.text-secondary;
+                        font-size: Theme.fs-tiny;
+                        wrap: word-wrap;
+                    }
+                    Rectangle { vertical-stretch: 1; }
+                }
+            }
+
+            // 分隔符 tab（复用项目设置的布局）
+            if root.tab == 1: ScrollView {
+                vertical-stretch: 1;
+                VerticalLayout {
+                    padding: Theme.sp-4;
+                    spacing: Theme.sp-3;
+
+                    Text { text: "基础"; color: Theme.text-secondary; font-size: Theme.fs-small; }
+                    SepRow {
+                        l1: "Tuple2"; v1 <=> root.sep-tuple2;
+                        l2: "Tuple3"; v2 <=> root.sep-tuple3;
+                        l3: "Tuple4"; v3 <=> root.sep-tuple4;
+                        show2: true; show3: true;
+                        edited1(s) => { root.sep-edited("Tuple2", s); }
+                        edited2(s) => { root.sep-edited("Tuple3", s); }
+                        edited3(s) => { root.sep-edited("Tuple4", s); }
+                    }
+                    SepRow {
+                        l1: "List"; v1 <=> root.sep-list;
+                        l2: "Set"; v2 <=> root.sep-set;
+                        show2: true; show3: false;
+                        edited1(s) => { root.sep-edited("List", s); }
+                        edited2(s) => { root.sep-edited("Set", s); }
+                    }
+
+                    Text { text: "Map"; color: Theme.text-secondary; font-size: Theme.fs-small; }
+                    SepRow {
+                        l1: "Map.kv"; v1 <=> root.sep-map-kv;
+                        l2: "Map.entry"; v2 <=> root.sep-map-entry;
+                        show2: true; show3: false;
+                        edited1(s) => { root.sep-edited("Map.kv", s); }
+                        edited2(s) => { root.sep-edited("Map.entry", s); }
+                    }
+
+                    Text { text: "List<TupleN>"; color: Theme.text-secondary; font-size: Theme.fs-small; }
+                    SepRow {
+                        l1: "List_Tuple2.tuple"; v1 <=> root.sep-lt2-tuple;
+                        l2: "List_Tuple2.list"; v2 <=> root.sep-lt2-list;
+                        show2: true; show3: false;
+                        edited1(s) => { root.sep-edited("List_Tuple2.tuple", s); }
+                        edited2(s) => { root.sep-edited("List_Tuple2.list", s); }
+                    }
+                    SepRow {
+                        l1: "List_Tuple3.tuple"; v1 <=> root.sep-lt3-tuple;
+                        l2: "List_Tuple3.list"; v2 <=> root.sep-lt3-list;
+                        show2: true; show3: false;
+                        edited1(s) => { root.sep-edited("List_Tuple3.tuple", s); }
+                        edited2(s) => { root.sep-edited("List_Tuple3.list", s); }
+                    }
+                    SepRow {
+                        l1: "List_Tuple4.tuple"; v1 <=> root.sep-lt4-tuple;
+                        l2: "List_Tuple4.list"; v2 <=> root.sep-lt4-list;
+                        show2: true; show3: false;
+                        edited1(s) => { root.sep-edited("List_Tuple4.tuple", s); }
+                        edited2(s) => { root.sep-edited("List_Tuple4.list", s); }
+                    }
+
+                    Text { text: "Map<*,TupleN>"; color: Theme.text-secondary; font-size: Theme.fs-small; }
+                    SepRow {
+                        l1: "Map_Tuple2.kv"; v1 <=> root.sep-mt2-kv;
+                        l2: "Map_Tuple2.tuple"; v2 <=> root.sep-mt2-tuple;
+                        l3: "Map_Tuple2.entry"; v3 <=> root.sep-mt2-entry;
+                        show2: true; show3: true;
+                        edited1(s) => { root.sep-edited("Map_Tuple2.kv", s); }
+                        edited2(s) => { root.sep-edited("Map_Tuple2.tuple", s); }
+                        edited3(s) => { root.sep-edited("Map_Tuple2.entry", s); }
+                    }
+                    SepRow {
+                        l1: "Map_Tuple3.kv"; v1 <=> root.sep-mt3-kv;
+                        l2: "Map_Tuple3.tuple"; v2 <=> root.sep-mt3-tuple;
+                        l3: "Map_Tuple3.entry"; v3 <=> root.sep-mt3-entry;
+                        show2: true; show3: true;
+                        edited1(s) => { root.sep-edited("Map_Tuple3.kv", s); }
+                        edited2(s) => { root.sep-edited("Map_Tuple3.tuple", s); }
+                        edited3(s) => { root.sep-edited("Map_Tuple3.entry", s); }
+                    }
+                    SepRow {
+                        l1: "Map_Tuple4.kv"; v1 <=> root.sep-mt4-kv;
+                        l2: "Map_Tuple4.tuple"; v2 <=> root.sep-mt4-tuple;
+                        l3: "Map_Tuple4.entry"; v3 <=> root.sep-mt4-entry;
+                        show2: true; show3: true;
+                        edited1(s) => { root.sep-edited("Map_Tuple4.kv", s); }
+                        edited2(s) => { root.sep-edited("Map_Tuple4.tuple", s); }
+                        edited3(s) => { root.sep-edited("Map_Tuple4.entry", s); }
+                    }
+
+                    Text { text: "Map<*,List>"; color: Theme.text-secondary; font-size: Theme.fs-small; }
+                    SepRow {
+                        l1: "Map_List.kv"; v1 <=> root.sep-ml-kv;
+                        l2: "Map_List.item"; v2 <=> root.sep-ml-item;
+                        l3: "Map_List.entry"; v3 <=> root.sep-ml-entry;
+                        show2: true; show3: true;
+                        edited1(s) => { root.sep-edited("Map_List.kv", s); }
+                        edited2(s) => { root.sep-edited("Map_List.item", s); }
+                        edited3(s) => { root.sep-edited("Map_List.entry", s); }
+                    }
+                }
+            }
+
+            // 导出设置 tab（简化版，仅全局字段）
+            if root.tab == 2: ScrollView {
+                vertical-stretch: 1;
+                VerticalLayout {
+                    padding: Theme.sp-4;
+                    spacing: Theme.sp-3;
+
+                    Text { text: "通用导出设置"; color: Theme.text-secondary; font-size: Theme.fs-small; }
+                    HorizontalLayout {
+                        spacing: Theme.sp-3;
+                        alignment: start;
+                        Text { text: "编码:"; width: 120px; vertical-alignment: center; color: Theme.text-primary; }
+                        ComboBox {
+                            model: ["utf-8", "gbk", "utf-16"];
+                            current-value <=> root.export-encoding;
+                            width: 160px;
+                            selected(s) => { root.export-field-edited("encoding", s); }
+                        }
+                    }
+                    HorizontalLayout {
+                        spacing: Theme.sp-3;
+                        alignment: start;
+                        Text { text: "换行符:"; width: 120px; vertical-alignment: center; color: Theme.text-primary; }
+                        ComboBox {
+                            model: ["lf", "crlf"];
+                            current-value <=> root.export-line-ending;
+                            width: 160px;
+                            selected(s) => { root.export-field-edited("line_ending", s); }
+                        }
+                    }
+
+                    Text {
+                        text: "提示：导出配置的子段（JSON/XML/服务端等）暂不支持可视化编辑，请直接修改 tablet.toml。";
+                        color: Theme.text-secondary;
+                        font-size: Theme.fs-tiny;
+                        wrap: word-wrap;
+                    }
+                    Rectangle { vertical-stretch: 1; }
+                }
+            }
+        }
+    }
+}

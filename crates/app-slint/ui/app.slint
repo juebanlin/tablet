@@ -28,6 +28,7 @@ import { NewProjectDialog, TemplateItem } from "dialogs/template_dialog.slint";
 import { CreateProjectDialog } from "dialogs/create_project.slint";
 import { ContextMenu, CtxMenuItem } from "dialogs/context_menu.slint";
 import { ProjectSettingsDialog } from "dialogs/project_settings.slint";
+import { GlobalSettingsDialog } from "dialogs/global_settings.slint";
 import { InputDialog } from "dialogs/input_dialog.slint";
 import { ConfirmDialog } from "dialogs/confirm_dialog.slint";
 
@@ -59,6 +60,13 @@ export component AppWindow inherits Window {
                 activated => { root.check-update-clicked(); }
             }
         }
+        Menu {
+            title: "设置";
+            MenuItem {
+                title: "全局设置...";
+                activated => { root.global-settings-clicked(); }
+            }
+        }
     }
 
     // ── Toolbar ─────────────────────────────────────────────
@@ -67,6 +75,8 @@ export component AppWindow inherits Window {
     // ── MenuBar 回调 ────────────────────────────────────────
     /// 「关于」菜单 → 「检查更新」点击触发；Rust 端用 open::that 跳 GitHub 仓库。
     callback check-update-clicked();
+    /// 「设置」菜单 → 「全局设置...」点击触发；Rust 端打开全局设置对话框。
+    callback global-settings-clicked();
 
     // ── TreeSection ─────────────────────────────────────────
     in property <[TreeNode]> tree-nodes;
@@ -371,6 +381,59 @@ export component AppWindow inherits Window {
     callback ps-reset-sep();
     callback ps-confirm();
     callback ps-cancel();
+
+    // ── Dialog: 全局设置（UI / 分隔符 / 导出设置）─────────────
+    in-out property <bool> dlg-gs-open: false;
+    in-out property <int> gs-tab: 0;
+    in-out property <bool> gs-ui-tab-modified: false;
+    in-out property <bool> gs-sep-tab-modified: false;
+    in-out property <bool> gs-export-tab-modified: false;
+    // UI 设置
+    in-out property <bool> gs-ui-auto-commit-on-blur;
+    in-out property <bool> gs-ui-realtime-validate;
+    in-out property <string> gs-ui-log-level;
+    in-out property <string> gs-ui-picker-trigger-header;
+    in-out property <string> gs-ui-picker-trigger-data;
+    in-out property <bool> gs-ui-show-meta-id;
+    in-out property <bool> gs-ui-constant-ref-allowed;
+    in-out property <string> gs-ui-ref-picker-strategy;
+    // 分隔符（25 个）
+    in-out property <string> gs-sep-tuple2;
+    in-out property <string> gs-sep-tuple3;
+    in-out property <string> gs-sep-tuple4;
+    in-out property <string> gs-sep-list;
+    in-out property <string> gs-sep-set;
+    in-out property <string> gs-sep-map-kv;
+    in-out property <string> gs-sep-map-entry;
+    in-out property <string> gs-sep-lt2-tuple;
+    in-out property <string> gs-sep-lt2-list;
+    in-out property <string> gs-sep-lt3-tuple;
+    in-out property <string> gs-sep-lt3-list;
+    in-out property <string> gs-sep-lt4-tuple;
+    in-out property <string> gs-sep-lt4-list;
+    in-out property <string> gs-sep-mt2-kv;
+    in-out property <string> gs-sep-mt2-tuple;
+    in-out property <string> gs-sep-mt2-entry;
+    in-out property <string> gs-sep-mt3-kv;
+    in-out property <string> gs-sep-mt3-tuple;
+    in-out property <string> gs-sep-mt3-entry;
+    in-out property <string> gs-sep-mt4-kv;
+    in-out property <string> gs-sep-mt4-tuple;
+    in-out property <string> gs-sep-mt4-entry;
+    in-out property <string> gs-sep-ml-kv;
+    in-out property <string> gs-sep-ml-item;
+    in-out property <string> gs-sep-ml-entry;
+    // 导出设置
+    in-out property <string> gs-export-encoding;
+    in-out property <string> gs-export-line-ending;
+    callback gs-tab-changed(int);
+    callback gs-ui-field-edited(string, string);
+    callback gs-sep-edited(string, string);
+    callback gs-export-field-edited(string, string);
+    callback gs-reset-clicked();
+    callback gs-undo-clicked();
+    callback gs-confirm();
+    callback gs-cancel();
 
     // ── ContextMenu / InputDialog / ConfirmDialog ───────────
     in property <bool> ctx-menu-open: false;
@@ -827,6 +890,57 @@ export component AppWindow inherits Window {
         reset-sep => { root.ps-reset-sep(); }
         confirm => { root.ps-confirm(); }
         cancel => { root.ps-cancel(); }
+    }
+
+    GlobalSettingsDialog {
+        open: root.dlg-gs-open;
+        tab: root.gs-tab;
+        ui-tab-modified <=> root.gs-ui-tab-modified;
+        sep-tab-modified <=> root.gs-sep-tab-modified;
+        export-tab-modified <=> root.gs-export-tab-modified;
+        ui-auto-commit-on-blur <=> root.gs-ui-auto-commit-on-blur;
+        ui-realtime-validate <=> root.gs-ui-realtime-validate;
+        ui-log-level <=> root.gs-ui-log-level;
+        ui-picker-trigger-header <=> root.gs-ui-picker-trigger-header;
+        ui-picker-trigger-data <=> root.gs-ui-picker-trigger-data;
+        ui-show-meta-id <=> root.gs-ui-show-meta-id;
+        ui-constant-ref-allowed <=> root.gs-ui-constant-ref-allowed;
+        ui-ref-picker-strategy <=> root.gs-ui-ref-picker-strategy;
+        sep-tuple2 <=> root.gs-sep-tuple2;
+        sep-tuple3 <=> root.gs-sep-tuple3;
+        sep-tuple4 <=> root.gs-sep-tuple4;
+        sep-list <=> root.gs-sep-list;
+        sep-set <=> root.gs-sep-set;
+        sep-map-kv <=> root.gs-sep-map-kv;
+        sep-map-entry <=> root.gs-sep-map-entry;
+        sep-lt2-tuple <=> root.gs-sep-lt2-tuple;
+        sep-lt2-list <=> root.gs-sep-lt2-list;
+        sep-lt3-tuple <=> root.gs-sep-lt3-tuple;
+        sep-lt3-list <=> root.gs-sep-lt3-list;
+        sep-lt4-tuple <=> root.gs-sep-lt4-tuple;
+        sep-lt4-list <=> root.gs-sep-lt4-list;
+        sep-mt2-kv <=> root.gs-sep-mt2-kv;
+        sep-mt2-tuple <=> root.gs-sep-mt2-tuple;
+        sep-mt2-entry <=> root.gs-sep-mt2-entry;
+        sep-mt3-kv <=> root.gs-sep-mt3-kv;
+        sep-mt3-tuple <=> root.gs-sep-mt3-tuple;
+        sep-mt3-entry <=> root.gs-sep-mt3-entry;
+        sep-mt4-kv <=> root.gs-sep-mt4-kv;
+        sep-mt4-tuple <=> root.gs-sep-mt4-tuple;
+        sep-mt4-entry <=> root.gs-sep-mt4-entry;
+        sep-ml-kv <=> root.gs-sep-ml-kv;
+        sep-ml-item <=> root.gs-sep-ml-item;
+        sep-ml-entry <=> root.gs-sep-ml-entry;
+        export-encoding <=> root.gs-export-encoding;
+        export-line-ending <=> root.gs-export-line-ending;
+        tab-changed(i) => { root.gs-tab = i; root.gs-tab-changed(i); }
+        ui-field-edited(k, v) => { root.gs-ui-field-edited(k, v); }
+        sep-edited(k, v) => { root.gs-sep-edited(k, v); }
+        export-field-edited(k, v) => { root.gs-export-field-edited(k, v); }
+        reset-clicked => { root.gs-reset-clicked(); }
+        undo-clicked => { root.gs-undo-clicked(); }
+        confirm => { root.gs-confirm(); }
+        cancel => { root.gs-cancel(); }
     }
 
     InputDialog {

@@ -14,10 +14,15 @@ export component DialogChrome inherits Rectangle {
     in property <string> cancel-text: "取消";
     in property <bool> show-secondary: false;
     in property <string> secondary-text: "";
+    in property <bool> default-enabled: true;
+    in property <bool> show-third: false;
+    in property <string> third-text: "";
+    in property <bool> undo-enabled: true;
 
     callback primary-clicked();
     callback cancel-clicked();
     callback secondary-clicked();
+    callback third-clicked();
     callback scrim-clicked();           // 点击遮罩 = 取消
 
     background: Theme.scrim;
@@ -72,15 +77,21 @@ export component DialogChrome inherits Rectangle {
 
             Rectangle { height: 1px; background: Theme.border-light; }
 
-            // 按钮行：右对齐，[secondary] [primary] [cancel]
+            // 按钮行：右对齐，[third] [secondary] [primary] [cancel]
             Rectangle {
                 height: 44px;
                 HorizontalLayout {
                     padding: Theme.sp-3;
                     spacing: Theme.sp-3;
                     alignment: end;
+                    if root.show-third: Button {
+                        text: root.third-text;
+                        enabled: root.undo-enabled;
+                        clicked => { root.third-clicked(); }
+                    }
                     if root.show-secondary: Button {
                         text: root.secondary-text;
+                        enabled: root.default-enabled;
                         clicked => { root.secondary-clicked(); }
                     }
                     Button {

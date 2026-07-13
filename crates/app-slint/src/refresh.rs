@@ -56,6 +56,14 @@ pub fn after_log(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
     ui::log_panel::push(ui_h, state);
 }
 
+/// 全局设置对话框关闭后。
+pub fn after_global_settings(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
+    dialogs::global_settings::push(ui_h, state);
+    ui::tree::push(ui_h, state);
+    ui::grid::push(ui_h, state);
+    ui::log_panel::push(ui_h, state);
+}
+
 /// 启动时的初次 push（不调用 reset_view_after_reload，避免覆盖 AppState::load 已计算好的展开集）。
 pub fn initial(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
     ui::tree::push(ui_h, state);
