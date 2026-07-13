@@ -8,6 +8,7 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::cell::OnceCell;
+use std::str::FromStr;
 
 use slint::ComponentHandle;
 
@@ -64,14 +65,22 @@ pub(crate) fn sort_to_index(s: &str) -> i32 {
         _ => 0,
     }
 }
-fn index_to_sort(i: i32) -> &'static str {
-    match i { 1 => "name", 2 => "open", 3 => "created", 4 => "manual", _ => "id" }
+fn index_to_sort(i: i32) -> tablet_core::enums::ProjectSort {
+    use tablet_core::enums::ProjectSort;
+    match i {
+        1 => ProjectSort::Name,
+        2 => ProjectSort::Open,
+        3 => ProjectSort::Created,
+        4 => ProjectSort::Manual,
+        _ => ProjectSort::Id
+    }
 }
 
 /// 把当前 workspace 状态落盘到 `<workdir>/tablet.toml`；失败仅 log。
 pub(crate) fn persist_workspace(state: &mut AppState) {
+    let sort_enum = tablet_core::enums::ProjectSort::from_str(&state.project_sort).unwrap_or_default();
     if let Err(e) = tablet_core::project::persist_workspace_state(
-        &state.engine, &state.project_sort, &state.project_order,
+        &state.engine, sort_enum, &state.project_order,
     ) {
         state.engine.log(format!("[workspace] 持久化失败: {}", e));
     }
@@ -303,7 +312,7 @@ pub fn wire(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
         let s = state.clone();
         let weak = ui_h.as_weak();
         ui_h.on_tree_sort_changed(move |i| {
-            let new_sort = index_to_sort(i).to_string();
+            let new_sort = index_to_sort(i).as_str().to_string();
             {
                 let mut st = s.borrow_mut();
                 if st.project_sort != new_sort {

@@ -11,6 +11,7 @@
 
 use std::cell::RefCell;
 use std::rc::Rc;
+use std::str::FromStr;
 
 use slint::ComponentHandle;
 use tablet_core::types::{SepKey, SeparatorsSection};
@@ -54,19 +55,25 @@ pub fn push(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
     // UI 设置
     ui_h.set_gs_ui_auto_commit_on_blur(gs.ui.auto_commit_on_blur);
     ui_h.set_gs_ui_realtime_validate(gs.ui.realtime_validate);
-    ui_h.set_gs_ui_log_level(gs.ui.log_level.as_deref().unwrap_or("info").into());
-    ui_h.set_gs_ui_picker_trigger_header(gs.ui.picker_trigger_header.clone().into());
-    ui_h.set_gs_ui_picker_trigger_data(gs.ui.picker_trigger_data.clone().into());
+    ui_h.set_gs_ui_log_level(
+        gs.ui.log_level.map(|l| l.as_str()).unwrap_or(tablet_core::enums::LogLevel::default().as_str()).into()
+    );
+    ui_h.set_gs_ui_picker_trigger_header(gs.ui.picker_trigger_header.as_str().into());
+    ui_h.set_gs_ui_picker_trigger_data(gs.ui.picker_trigger_data.as_str().into());
     ui_h.set_gs_ui_show_meta_id(gs.ui.show_meta_id);
     ui_h.set_gs_ui_constant_ref_allowed(gs.ui.constant_ref_allowed);
-    ui_h.set_gs_ui_ref_picker_strategy(gs.ui.ref_picker.default_strategy.clone().into());
+    ui_h.set_gs_ui_ref_picker_strategy(gs.ui.ref_picker.default_strategy.as_str().into());
 
     // 分隔符（25 个）
     push_separators(ui_h, &gs.sep);
 
     // 导出设置
-    ui_h.set_gs_export_encoding(gs.export.encoding.as_deref().unwrap_or("utf-8").into());
-    ui_h.set_gs_export_line_ending(gs.export.line_ending.as_deref().unwrap_or("lf").into());
+    ui_h.set_gs_export_encoding(
+        gs.export.encoding.map(|e| e.as_str()).unwrap_or(tablet_core::enums::Encoding::default().as_str()).into()
+    );
+    ui_h.set_gs_export_line_ending(
+        gs.export.line_ending.map(|l| l.as_str()).unwrap_or(tablet_core::enums::LineEnding::default().as_str()).into()
+    );
 }
 
 fn push_separators(ui_h: &AppWindow, sep: &SeparatorsSection) {
@@ -147,8 +154,8 @@ fn run(state: &Rc<RefCell<AppState>>) {
 
         // 更新 AppState 中的 UI 配置缓存
         st.realtime_validate = ui.realtime_validate;
-        st.picker_trigger_header_single = ui.picker_trigger_header == "single";
-        st.picker_trigger_data_single = ui.picker_trigger_data == "single";
+        st.picker_trigger_header_single = ui.picker_trigger_header == tablet_core::enums::PickerTrigger::Single;
+        st.picker_trigger_data_single = ui.picker_trigger_data == tablet_core::enums::PickerTrigger::Single;
         st.constant_ref_allowed = ui.constant_ref_allowed;
     }
 
@@ -204,16 +211,20 @@ pub fn wire(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
                     gs.ui.constant_ref_allowed = value == "true";
                 }
                 "log_level" => {
-                    gs.ui.log_level = if value.is_empty() { None } else { Some(value.to_string()) };
+                    gs.ui.log_level = if value.is_empty() {
+                        None
+                    } else {
+                        tablet_core::enums::LogLevel::from_str(&value).ok()
+                    };
                 }
                 "picker_trigger_header" => {
-                    gs.ui.picker_trigger_header = value.to_string();
+                    gs.ui.picker_trigger_header = tablet_core::enums::PickerTrigger::from_str(&value).unwrap_or_default();
                 }
                 "picker_trigger_data" => {
-                    gs.ui.picker_trigger_data = value.to_string();
+                    gs.ui.picker_trigger_data = tablet_core::enums::PickerTrigger::from_str(&value).unwrap_or_default();
                 }
                 "ref_picker_strategy" => {
-                    gs.ui.ref_picker.default_strategy = value.to_string();
+                    gs.ui.ref_picker.default_strategy = tablet_core::enums::RefPickerStrategy::from_str(&value).unwrap_or_default();
                 }
                 _ => {}
             }
@@ -235,10 +246,18 @@ pub fn wire(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
             let gs = &mut st.global_settings;
             match key.as_str() {
                 "encoding" => {
-                    gs.export.encoding = if value.is_empty() { None } else { Some(value.to_string()) };
+                    gs.export.encoding = if value.is_empty() {
+                        None
+                    } else {
+                        tablet_core::enums::Encoding::from_str(&value).ok()
+                    };
                 }
                 "line_ending" => {
-                    gs.export.line_ending = if value.is_empty() { None } else { Some(value.to_string()) };
+                    gs.export.line_ending = if value.is_empty() {
+                        None
+                    } else {
+                        tablet_core::enums::LineEnding::from_str(&value).ok()
+                    };
                 }
                 _ => {}
             }

@@ -417,23 +417,23 @@ pub fn export_all_csharp(project: &Project, runtime: CSharpRuntime) -> Result<su
         .unwrap_or(runtime.default_namespace());
 
     let parent_ending = match runtime {
-        CSharpRuntime::Dotnet => export_cfg.and_then(|e| e.server.as_ref()).and_then(|s| s.line_ending.as_deref()),
-        _ => export_cfg.and_then(|e| e.client.as_ref()).and_then(|c| c.line_ending.as_deref()),
+        CSharpRuntime::Dotnet => export_cfg.and_then(|e| e.server.as_ref()).and_then(|s| s.line_ending.map(|l| l.as_str())),
+        _ => export_cfg.and_then(|e| e.client.as_ref()).and_then(|c| c.line_ending.map(|l| l.as_str())),
     };
     let parent_encoding = match runtime {
-        CSharpRuntime::Dotnet => export_cfg.and_then(|e| e.server.as_ref()).and_then(|s| s.encoding.as_deref()),
-        _ => export_cfg.and_then(|e| e.client.as_ref()).and_then(|c| c.encoding.as_deref()),
+        CSharpRuntime::Dotnet => export_cfg.and_then(|e| e.server.as_ref()).and_then(|s| s.encoding.map(|e| e.as_str())),
+        _ => export_cfg.and_then(|e| e.client.as_ref()).and_then(|c| c.encoding.map(|e| e.as_str())),
     };
 
     let line_ending = LineEnding::from_config(
-        cs_cfg.and_then(|c| c.line_ending.as_deref())
+        cs_cfg.and_then(|c| c.line_ending.map(|l| l.as_str()))
             .or(parent_ending)
-            .or_else(|| export_cfg.and_then(|e| e.line_ending.as_deref()))
+            .or_else(|| export_cfg.and_then(|e| e.line_ending.map(|l| l.as_str())))
             .unwrap_or("lf")
     );
-    let encoding = cs_cfg.and_then(|c| c.encoding.as_deref())
+    let encoding = cs_cfg.and_then(|c| c.encoding.map(|e| e.as_str()))
         .or(parent_encoding)
-        .or_else(|| export_cfg.and_then(|e| e.encoding.as_deref()))
+        .or_else(|| export_cfg.and_then(|e| e.encoding.map(|e| e.as_str())))
         .unwrap_or("utf-8").to_string();
     let opts = super::ExportOptions { line_ending, encoding };
 

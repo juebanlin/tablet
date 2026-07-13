@@ -623,7 +623,7 @@ pub fn load_workspace(workdir: &Path) -> Result<crate::ops::ProjectEngine> {
 /// UI 在 open/close/sort 改变时调一次；失败由调用方决定如何处理（best-effort）。
 pub fn persist_workspace_state(
     engine: &crate::ops::ProjectEngine,
-    project_sort: &str,
+    project_sort: crate::enums::ProjectSort,
     project_order: &[String],
 ) -> Result<()> {
     let path = engine.workdir.join(crate::CONFIG_FILE);
@@ -632,7 +632,7 @@ pub fn persist_workspace_state(
     let project_cfg = crate::model::ProjectManagementConfig {
         last_project: engine.active_project_id().unwrap_or("").to_string(),
         opened_projects: engine.opened_ids(),
-        project_sort: project_sort.to_string(),
+        project_sort,
         project_order: project_order.to_vec(),
     };
     let updated = upsert_project_config_section(&original, &project_cfg);
@@ -860,7 +860,7 @@ fn build_project_field_lines(project: &crate::model::ProjectManagementConfig) ->
         .map(|s| format!("\"{}\"", escape_toml_string(s)))
         .collect::<Vec<_>>().join(", ");
     m.insert("opened_projects", format!("opened_projects = [{}]", opened));
-    m.insert("project_sort", format!("project_sort = \"{}\"", escape_toml_string(&project.project_sort)));
+    m.insert("project_sort", format!("project_sort = \"{}\"", escape_toml_string(project.project_sort.as_str())));
     let order = project.project_order.iter()
         .map(|s| format!("\"{}\"", escape_toml_string(s)))
         .collect::<Vec<_>>().join(", ");
@@ -1134,7 +1134,7 @@ mod tests {
         let project = ProjectManagementConfig {
             last_project: "p1".to_string(),
             opened_projects: vec!["p1".to_string(), "p2".to_string()],
-            project_sort: "manual".to_string(),
+            project_sort: crate::enums::ProjectSort::Manual,
             project_order: vec!["p2".to_string(), "p1".to_string()],
         };
         let result = upsert_project_config_section(original, &project);
@@ -1222,7 +1222,7 @@ mod tests {
         let ui = engine.global_config.ui.as_ref().expect("[ui] present");
         // 项目 toml 的 [ui] 该被 strip → 全局值留下来
         assert!(ui.realtime_validate, "项目级 [ui] 应被 strip，全局 realtime_validate=true 留下");
-        assert_eq!(ui.picker_trigger_data, "double", "项目级 picker_trigger_data 应被 strip");
+        assert_eq!(ui.picker_trigger_data, crate::enums::PickerTrigger::Double, "项目级 picker_trigger_data 应被 strip");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -1362,7 +1362,7 @@ mod tests {
         let mut engine = load_workspace(&dir).expect("load");
         engine.open_project("p2").unwrap();
         engine.set_active_by_id("p2");
-        persist_workspace_state(&engine, "name", &["p2".to_string(), "p1".to_string()])
+        persist_workspace_state(&engine, crate::enums::ProjectSort::Name, &["p2".to_string(), "p1".to_string()])
             .expect("persist");
 
         // re-load

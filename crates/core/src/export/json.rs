@@ -98,17 +98,17 @@ pub fn export_all_json(project: &Project) -> Result<super::ExportResult> {
 
     let strategy_str = export_cfg
         .and_then(|e| e.json.as_ref())
-        .and_then(|j| j.empty_as.as_deref())
+        .and_then(|j| j.empty_as.map(|e| e.as_str()))
         .unwrap_or("null");
     let strategy = EmptyStrategy::from_json_config(strategy_str);
 
     let line_ending = LineEnding::from_config(
-        export_cfg.and_then(|e| e.json.as_ref()).and_then(|j| j.line_ending.as_deref())
-            .or_else(|| export_cfg.and_then(|e| e.line_ending.as_deref()))
+        export_cfg.and_then(|e| e.json.as_ref()).and_then(|j| j.line_ending.map(|l| l.as_str()))
+            .or_else(|| export_cfg.and_then(|e| e.line_ending.map(|l| l.as_str())))
             .unwrap_or("lf")
     );
-    let encoding = export_cfg.and_then(|e| e.json.as_ref()).and_then(|j| j.encoding.as_deref())
-        .or_else(|| export_cfg.and_then(|e| e.encoding.as_deref()))
+    let encoding = export_cfg.and_then(|e| e.json.as_ref()).and_then(|j| j.encoding.map(|e| e.as_str()))
+        .or_else(|| export_cfg.and_then(|e| e.encoding.map(|e| e.as_str())))
         .unwrap_or("utf-8").to_string();
     let opts = super::ExportOptions { line_ending, encoding };
 
@@ -159,17 +159,17 @@ pub fn export_json_filtered(project: &Project, filter: &super::DataFilter) -> Re
 
     let strategy_str = export_cfg
         .and_then(|e| e.json.as_ref())
-        .and_then(|j| j.empty_as.as_deref())
+        .and_then(|j| j.empty_as.map(|e| e.as_str()))
         .unwrap_or("null");
     let strategy = EmptyStrategy::from_json_config(strategy_str);
 
     let line_ending = LineEnding::from_config(
-        export_cfg.and_then(|e| e.json.as_ref()).and_then(|j| j.line_ending.as_deref())
-            .or_else(|| export_cfg.and_then(|e| e.line_ending.as_deref()))
+        export_cfg.and_then(|e| e.json.as_ref()).and_then(|j| j.line_ending.map(|l| l.as_str()))
+            .or_else(|| export_cfg.and_then(|e| e.line_ending.map(|l| l.as_str())))
             .unwrap_or("lf")
     );
-    let encoding = export_cfg.and_then(|e| e.json.as_ref()).and_then(|j| j.encoding.as_deref())
-        .or_else(|| export_cfg.and_then(|e| e.encoding.as_deref()))
+    let encoding = export_cfg.and_then(|e| e.json.as_ref()).and_then(|j| j.encoding.map(|e| e.as_str()))
+        .or_else(|| export_cfg.and_then(|e| e.encoding.map(|e| e.as_str())))
         .unwrap_or("utf-8").to_string();
     let opts = super::ExportOptions { line_ending, encoding };
 

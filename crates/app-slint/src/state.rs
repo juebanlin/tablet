@@ -896,13 +896,12 @@ impl AppState {
         let rt_validate = engine.global_config.ui.as_ref()
             .map_or(false, |u| u.realtime_validate);
         let header_single = engine.global_config.ui.as_ref()
-            .map_or(true, |u| u.picker_trigger_header == "single");
+            .map_or(true, |u| u.picker_trigger_header == tablet_core::enums::PickerTrigger::Single);
         let data_single = engine.global_config.ui.as_ref()
-            .map_or(false, |u| u.picker_trigger_data == "single");
+            .map_or(false, |u| u.picker_trigger_data == tablet_core::enums::PickerTrigger::Single);
         let constant_ref_allowed = engine.global_config.ui.as_ref()
             .map_or(true, |u| u.constant_ref_allowed);
-        let project_sort = engine.global_config.project_management.project_sort.clone();
-        let project_sort = if project_sort.is_empty() { "id".to_string() } else { project_sort };
+        let project_sort = engine.global_config.project_management.project_sort.as_str().to_string();
         let project_order = engine.global_config.project_management.project_order.clone();
         let (expanded, project_expanded) = if let Some(active) = engine.active() {
             let aid = active.schema.meta.id.clone();

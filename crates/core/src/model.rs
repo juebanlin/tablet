@@ -1,5 +1,9 @@
 use std::path::PathBuf;
 
+use crate::enums::{
+    Encoding, LineEnding, JsonEmptyAs, XmlEmptyAs, LogLevel,
+    PickerTrigger, RefPickerStrategy, ProjectSort,
+};
 use crate::tblschema::TblSchema;
 
 /// 项目状态：区分已落盘 vs 未落盘
@@ -92,7 +96,7 @@ fn default_project_management_section() -> ProjectManagementConfig {
     ProjectManagementConfig {
         last_project: String::new(),
         opened_projects: Vec::new(),
-        project_sort: String::new(),
+        project_sort: crate::enums::ProjectSort::default(),
         project_order: Vec::new(),
     }
 }
@@ -103,22 +107,30 @@ pub struct ExportConfig {
     pub xml: Option<XmlExport>,
     pub server: Option<ServerExport>,
     pub client: Option<ClientConfig>,
-    pub encoding: Option<String>,
-    pub line_ending: Option<String>,
+    #[serde(default)]
+    pub encoding: Option<Encoding>,
+    #[serde(default)]
+    pub line_ending: Option<LineEnding>,
 }
 
 #[derive(Debug, Clone, PartialEq, serde::Deserialize, serde::Serialize)]
 pub struct JsonExport {
-    pub empty_as: Option<String>,
-    pub line_ending: Option<String>,
-    pub encoding: Option<String>,
+    #[serde(default)]
+    pub empty_as: Option<JsonEmptyAs>,
+    #[serde(default)]
+    pub line_ending: Option<LineEnding>,
+    #[serde(default)]
+    pub encoding: Option<Encoding>,
 }
 
 #[derive(Debug, Clone, PartialEq, serde::Deserialize, serde::Serialize)]
 pub struct XmlExport {
-    pub empty_as: Option<String>,
-    pub line_ending: Option<String>,
-    pub encoding: Option<String>,
+    #[serde(default)]
+    pub empty_as: Option<XmlEmptyAs>,
+    #[serde(default)]
+    pub line_ending: Option<LineEnding>,
+    #[serde(default)]
+    pub encoding: Option<Encoding>,
 }
 
 #[derive(Debug, Clone, PartialEq, serde::Deserialize, serde::Serialize)]
@@ -129,24 +141,30 @@ pub struct ServerExport {
     pub cpp: Option<CppExport>,
     pub csharp_dotnet: Option<CSharpExport>,
     pub typescript: Option<TypeScriptExport>,
-    pub line_ending: Option<String>,
-    pub encoding: Option<String>,
+    #[serde(default)]
+    pub line_ending: Option<LineEnding>,
+    #[serde(default)]
+    pub encoding: Option<Encoding>,
 }
 
 #[derive(Debug, Clone, PartialEq, serde::Deserialize, serde::Serialize)]
 pub struct JavaExport {
     pub package: Option<String>,
     pub code_output: Option<String>,
-    pub line_ending: Option<String>,
-    pub encoding: Option<String>,
+    #[serde(default)]
+    pub line_ending: Option<LineEnding>,
+    #[serde(default)]
+    pub encoding: Option<Encoding>,
 }
 
 #[derive(Debug, Clone, PartialEq, serde::Deserialize, serde::Serialize)]
 pub struct GoExport {
     pub package: Option<String>,
     pub code_output: Option<String>,
-    pub line_ending: Option<String>,
-    pub encoding: Option<String>,
+    #[serde(default)]
+    pub line_ending: Option<LineEnding>,
+    #[serde(default)]
+    pub encoding: Option<Encoding>,
 }
 
 #[derive(Debug, Clone, PartialEq, serde::Deserialize, serde::Serialize)]
@@ -154,8 +172,10 @@ pub struct CppExport {
     pub namespace: Option<String>,
     pub code_output: Option<String>,
     pub json_lib: Option<String>,
-    pub line_ending: Option<String>,
-    pub encoding: Option<String>,
+    #[serde(default)]
+    pub line_ending: Option<LineEnding>,
+    #[serde(default)]
+    pub encoding: Option<Encoding>,
 }
 
 /// 三个 runtime（dotnet / unity / godot）共用同一份 schema 定义，仅 Loader 不同。
@@ -163,8 +183,10 @@ pub struct CppExport {
 pub struct CSharpExport {
     pub namespace: Option<String>,
     pub code_output: Option<String>,
-    pub line_ending: Option<String>,
-    pub encoding: Option<String>,
+    #[serde(default)]
+    pub line_ending: Option<LineEnding>,
+    #[serde(default)]
+    pub encoding: Option<Encoding>,
 }
 
 #[derive(Debug, Clone, PartialEq, serde::Deserialize, serde::Serialize)]
@@ -174,30 +196,38 @@ pub struct ClientConfig {
     pub typescript: Option<TypeScriptExport>,
     pub csharp_unity: Option<CSharpExport>,
     pub csharp_godot: Option<CSharpExport>,
-    pub line_ending: Option<String>,
-    pub encoding: Option<String>,
+    #[serde(default)]
+    pub line_ending: Option<LineEnding>,
+    #[serde(default)]
+    pub encoding: Option<Encoding>,
 }
 
 #[derive(Debug, Clone, PartialEq, serde::Deserialize, serde::Serialize)]
 pub struct LuaExport {
     pub output: Option<String>,
-    pub line_ending: Option<String>,
-    pub encoding: Option<String>,
+    #[serde(default)]
+    pub line_ending: Option<LineEnding>,
+    #[serde(default)]
+    pub encoding: Option<Encoding>,
 }
 
 #[derive(Debug, Clone, PartialEq, serde::Deserialize, serde::Serialize)]
 pub struct GdScriptExport {
     pub output: Option<String>,
-    pub line_ending: Option<String>,
-    pub encoding: Option<String>,
+    #[serde(default)]
+    pub line_ending: Option<LineEnding>,
+    #[serde(default)]
+    pub encoding: Option<Encoding>,
 }
 
 #[derive(Debug, Clone, PartialEq, serde::Deserialize, serde::Serialize)]
 pub struct TypeScriptExport {
     pub output: Option<String>,
     pub module_kind: Option<String>,
-    pub line_ending: Option<String>,
-    pub encoding: Option<String>,
+    #[serde(default)]
+    pub line_ending: Option<LineEnding>,
+    #[serde(default)]
+    pub encoding: Option<Encoding>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, serde::Deserialize, serde::Serialize)]
@@ -206,17 +236,18 @@ pub struct UiConfig {
     pub auto_commit_on_blur: bool,
     #[serde(default)]
     pub realtime_validate: bool,
-    pub log_level: Option<String>,
+    #[serde(default)]
+    pub log_level: Option<LogLevel>,
     #[serde(default)]
     pub ref_picker: RefPickerConfig,
-    /// 表头 picker 单元格（Table type/export 行）的呼出方式："single" | "double"
-    /// 默认 single：表头每列一格、几乎不批量改，单击直出选择器更顺手。
+    /// 表头 picker 单元格（Table type/export 行）的呼出方式：Single | Double
+    /// 默认 Single：表头每列一格、几乎不批量改，单击直出选择器更顺手。
     #[serde(default = "default_picker_trigger_header")]
-    pub picker_trigger_header: String,
-    /// 数据区 picker 单元格（Ref / Constant type / export 列）的呼出方式："single" | "double"
-    /// 默认 double：让单击保留为"瞄准选中"，是 Ctrl+C/V 批量复制 ref id / enum 值的前提。
+    pub picker_trigger_header: PickerTrigger,
+    /// 数据区 picker 单元格（Ref / Constant type / export 列）的呼出方式：Single | Double
+    /// 默认 Double：让单击保留为"瞄准选中"，是 Ctrl+C/V 批量复制 ref id / enum 值的前提。
     #[serde(default = "default_picker_trigger_data")]
-    pub picker_trigger_data: String,
+    pub picker_trigger_data: PickerTrigger,
     /// 模板/Project 列表里展示 id 还是 name；默认 false → 显示 name。
     /// 切换效果类似枚举显示 id/name。Project 实际目录始终用 id；此开关只决定**显示文本**。
     #[serde(default)]
@@ -231,16 +262,14 @@ pub struct UiConfig {
 #[derive(Debug, Clone, Default, PartialEq, serde::Deserialize, serde::Serialize)]
 pub struct RefPickerConfig {
     /// 引用选择弹窗对 Table 的列展示策略：
-    /// - "auto"（默认）：id + 最多 2 个 export=cs 且类型为字符串的辅助列
-    /// - "full"：schema 全部字段（除了 export=- 不导出列）
-    #[serde(default = "default_ref_strategy")]
-    pub default_strategy: String,
+    /// - Auto（默认）：id + 最多 2 个 export=cs 且类型为字符串的辅助列
+    /// - Full：schema 全部字段（除了 export=- 不导出列）
+    #[serde(default)]
+    pub default_strategy: RefPickerStrategy,
 }
 
-fn default_ref_strategy() -> String { "auto".to_string() }
-
-fn default_picker_trigger_header() -> String { "single".to_string() }
-fn default_picker_trigger_data() -> String { "double".to_string() }
+fn default_picker_trigger_header() -> PickerTrigger { PickerTrigger::Single }
+fn default_picker_trigger_data() -> PickerTrigger { PickerTrigger::Double }
 
 fn default_true() -> bool { true }
 
@@ -256,10 +285,10 @@ pub struct ProjectManagementConfig {
     /// 为空时仅打开 `last_project`。
     #[serde(default)]
     pub opened_projects: Vec<String>,
-    /// 项目排序方式：id / name / open / created / manual。空字符串=id。
+    /// 项目排序方式：Id / Name / Open / Created / Manual
     #[serde(default)]
-    pub project_sort: String,
-    /// project_sort = "manual" 时使用：用户拖拽得到的 id 序列。
+    pub project_sort: ProjectSort,
+    /// project_sort = Manual 时使用：用户拖拽得到的 id 序列。
     #[serde(default)]
     pub project_order: Vec<String>,
 }

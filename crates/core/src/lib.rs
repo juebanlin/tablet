@@ -3,6 +3,7 @@
 
 pub mod model;
 pub mod types;
+pub mod enums;
 pub mod tbl;
 pub mod tbl_str;
 pub mod tblschema;

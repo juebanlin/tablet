@@ -129,7 +129,7 @@ fn run_gui(workdir_arg: Option<PathBuf>) -> anyhow::Result<()> {
     let log_level = {
         let st = app_state.borrow();
         st.engine.global_config.ui.as_ref()
-            .and_then(|u| u.log_level.as_deref())
+            .and_then(|u| u.log_level.map(|l| l.as_str()))
             .unwrap_or("debug")
             .to_string()
     };

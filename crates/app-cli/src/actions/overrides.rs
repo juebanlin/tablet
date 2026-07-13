@@ -53,19 +53,19 @@ pub fn apply_overrides(engine: &mut ProjectEngine, overrides: &[String]) -> Over
             }
             "export.encoding" => {
                 ensure_export(&mut project.config);
-                project.config.export.as_mut().unwrap().encoding = Some(value.to_string());
+                project.config.export.as_mut().unwrap().encoding = Some(value.parse().unwrap_or_default());
             }
             "export.line_ending" => {
                 ensure_export(&mut project.config);
-                project.config.export.as_mut().unwrap().line_ending = Some(value.to_string());
+                project.config.export.as_mut().unwrap().line_ending = Some(value.parse().unwrap_or_default());
             }
             "export.json.empty_as" => {
                 ensure_export_json(&mut project.config);
-                project.config.export.as_mut().unwrap().json.as_mut().unwrap().empty_as = Some(value.to_string());
+                project.config.export.as_mut().unwrap().json.as_mut().unwrap().empty_as = Some(value.parse().unwrap_or_default());
             }
             "export.xml.empty_as" => {
                 ensure_export_xml(&mut project.config);
-                project.config.export.as_mut().unwrap().xml.as_mut().unwrap().empty_as = Some(value.to_string());
+                project.config.export.as_mut().unwrap().xml.as_mut().unwrap().empty_as = Some(value.parse().unwrap_or_default());
             }
             "export.server.lang" => {
                 out.warnings.push(OverrideWarning::Deprecated {

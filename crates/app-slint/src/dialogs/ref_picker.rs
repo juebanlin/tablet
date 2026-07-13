@@ -110,7 +110,7 @@ pub(crate) fn open_for_cell(state: &Rc<RefCell<AppState>>, r: usize, c: usize, r
     let default_strategy = RefDisplayStrategy::from_config(
         st.engine.global_config.ui.as_ref()
             .map(|u| u.ref_picker.default_strategy.as_str())
-            .unwrap_or("auto"));
+            .unwrap_or(tablet_core::enums::RefPickerStrategy::default().as_str()));
     let (group, name, is_table, current) = match &st.selected {
         Some(SelectedNode::Table { group, name, .. }) => {
             let cur = st.engine.find_table(group, name)

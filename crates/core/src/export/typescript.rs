@@ -380,16 +380,16 @@ pub fn export_all_typescript(project: &Project, side: TypeScriptSide) -> Result<
             let parent = export_cfg.and_then(|e| e.client.as_ref());
             (
                 parent.and_then(|c| c.typescript.as_ref()),
-                parent.and_then(|c| c.line_ending.as_deref()),
-                parent.and_then(|c| c.encoding.as_deref()),
+                parent.and_then(|c| c.line_ending.map(|l| l.as_str())),
+                parent.and_then(|c| c.encoding.map(|e| e.as_str())),
             )
         }
         TypeScriptSide::Server => {
             let parent = export_cfg.and_then(|e| e.server.as_ref());
             (
                 parent.and_then(|s| s.typescript.as_ref()),
-                parent.and_then(|s| s.line_ending.as_deref()),
-                parent.and_then(|s| s.encoding.as_deref()),
+                parent.and_then(|s| s.line_ending.map(|l| l.as_str())),
+                parent.and_then(|s| s.encoding.map(|e| e.as_str())),
             )
         }
     };
@@ -399,14 +399,14 @@ pub fn export_all_typescript(project: &Project, side: TypeScriptSide) -> Result<
         .unwrap_or(side.default_output());
 
     let line_ending = LineEnding::from_config(
-        ts.and_then(|t| t.line_ending.as_deref())
+        ts.and_then(|t| t.line_ending.map(|l| l.as_str()))
             .or(parent_line_ending)
-            .or_else(|| export_cfg.and_then(|e| e.line_ending.as_deref()))
+            .or_else(|| export_cfg.and_then(|e| e.line_ending.map(|l| l.as_str())))
             .unwrap_or("lf")
     );
-    let encoding = ts.and_then(|t| t.encoding.as_deref())
+    let encoding = ts.and_then(|t| t.encoding.map(|e| e.as_str()))
         .or(parent_encoding)
-        .or_else(|| export_cfg.and_then(|e| e.encoding.as_deref()))
+        .or_else(|| export_cfg.and_then(|e| e.encoding.map(|e| e.as_str())))
         .unwrap_or("utf-8").to_string();
     let opts = super::ExportOptions { line_ending, encoding };
 

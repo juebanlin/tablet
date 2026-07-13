@@ -308,14 +308,14 @@ pub fn export_all_gdscript(project: &Project) -> Result<super::ExportResult> {
         .unwrap_or("gen/client/gdscript");
 
     let line_ending = LineEnding::from_config(
-        gd.and_then(|g| g.line_ending.as_deref())
-            .or_else(|| client.and_then(|c| c.line_ending.as_deref()))
-            .or_else(|| export_cfg.and_then(|e| e.line_ending.as_deref()))
+        gd.and_then(|g| g.line_ending.map(|l| l.as_str()))
+            .or_else(|| client.and_then(|c| c.line_ending.map(|l| l.as_str())))
+            .or_else(|| export_cfg.and_then(|e| e.line_ending.map(|l| l.as_str())))
             .unwrap_or("lf")
     );
-    let encoding = gd.and_then(|g| g.encoding.as_deref())
-        .or_else(|| client.and_then(|c| c.encoding.as_deref()))
-        .or_else(|| export_cfg.and_then(|e| e.encoding.as_deref()))
+    let encoding = gd.and_then(|g| g.encoding.map(|e| e.as_str()))
+        .or_else(|| client.and_then(|c| c.encoding.map(|e| e.as_str())))
+        .or_else(|| export_cfg.and_then(|e| e.encoding.map(|e| e.as_str())))
         .unwrap_or("utf-8").to_string();
     let opts = super::ExportOptions { line_ending, encoding };
 

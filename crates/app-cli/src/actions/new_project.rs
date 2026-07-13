@@ -58,7 +58,7 @@ pub fn run_new_project(
         let project_cfg = tablet_core::model::ProjectManagementConfig {
             last_project: project_id.to_string(),
             opened_projects: Vec::new(),
-            project_sort: String::new(),
+            project_sort: tablet_core::enums::ProjectSort::default(),
             project_order: Vec::new(),
         };
         let updated = tablet_core::project::upsert_project_config_section(&original, &project_cfg);
