@@ -404,6 +404,52 @@ impl RefPickerStrategy {
     }
 }
 
+/// C++ JSON 库选择
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum CppJsonLib {
+    /// nlohmann/json（默认）
+    Nlohmann,
+    /// RapidJSON
+    RapidJson,
+}
+
+impl Default for CppJsonLib {
+    fn default() -> Self {
+        Self::Nlohmann
+    }
+}
+
+impl fmt::Display for CppJsonLib {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Nlohmann => write!(f, "nlohmann"),
+            Self::RapidJson => write!(f, "rapidjson"),
+        }
+    }
+}
+
+impl FromStr for CppJsonLib {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.trim().to_lowercase().as_str() {
+            "nlohmann" => Ok(Self::Nlohmann),
+            "rapidjson" | "rapid" => Ok(Self::RapidJson),
+            _ => Err(format!("Unknown C++ JSON library: {}", s)),
+        }
+    }
+}
+
+impl CppJsonLib {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Nlohmann => "nlohmann",
+            Self::RapidJson => "rapidjson",
+        }
+    }
+}
+
 /// 项目排序方式
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]

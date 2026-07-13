@@ -171,7 +171,8 @@ pub struct GoExport {
 pub struct CppExport {
     pub namespace: Option<String>,
     pub code_output: Option<String>,
-    pub json_lib: Option<String>,
+    #[serde(default)]
+    pub json_lib: Option<crate::enums::CppJsonLib>,
     #[serde(default)]
     pub line_ending: Option<LineEnding>,
     #[serde(default)]

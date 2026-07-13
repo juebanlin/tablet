@@ -171,6 +171,8 @@ code_output = "gen/server/go"
 namespace = "game::config"
 # C++ 头文件输出目录（每张表 / 常量 / 枚举一个 .h）
 code_output = "gen/server/cpp"
+# JSON 库选择: "nlohmann"（默认）| "rapidjson"
+json_lib = "nlohmann"
 
 [export.server.csharp_dotnet]
 # .NET 服务端命名空间

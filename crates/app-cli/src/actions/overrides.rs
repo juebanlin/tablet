@@ -103,7 +103,7 @@ pub fn apply_overrides(engine: &mut ProjectEngine, overrides: &[String]) -> Over
             }
             "export.server.cpp.json_lib" => {
                 ensure_export_server_cpp(&mut project.config);
-                project.config.export.as_mut().unwrap().server.as_mut().unwrap().cpp.as_mut().unwrap().json_lib = Some(value.to_string());
+                project.config.export.as_mut().unwrap().server.as_mut().unwrap().cpp.as_mut().unwrap().json_lib = Some(value.parse().unwrap_or_default());
             }
             "export.server.csharp_dotnet.namespace" => {
                 ensure_export_server_csharp_dotnet(&mut project.config);
