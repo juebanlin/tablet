@@ -117,6 +117,13 @@ export component GlobalSettingsDialog inherits Rectangle {
     in-out property <bool> sep-tab-modified: false;
     in-out property <bool> export-tab-modified: false;
 
+    // 枚举选项列表（由后端推送）
+    in property <[string]> gs-log-level-options;
+    in property <[string]> gs-picker-trigger-options;
+    in property <[string]> gs-ref-picker-strategy-options;
+    in property <[string]> gs-encoding-options;
+    in property <[string]> gs-line-ending-options;
+
     // UI 设置 buf
     in-out property <bool> ui-auto-commit-on-blur;
     in-out property <bool> ui-realtime-validate;
@@ -229,7 +236,7 @@ export component GlobalSettingsDialog inherits Rectangle {
                         alignment: start;
                         Text { text: "表头触发方式:"; width: 120px; vertical-alignment: center; color: Theme.text-primary; }
                         ComboBox {
-                            model: ["single", "double"];
+                            model: root.gs-picker-trigger-options;
                             current-value <=> root.ui-picker-trigger-header;
                             width: 120px;
                             selected(s) => { root.ui-field-edited("picker_trigger_header", s); }
@@ -240,7 +247,7 @@ export component GlobalSettingsDialog inherits Rectangle {
                         alignment: start;
                         Text { text: "数据区触发方式:"; width: 120px; vertical-alignment: center; color: Theme.text-primary; }
                         ComboBox {
-                            model: ["single", "double"];
+                            model: root.gs-picker-trigger-options;
                             current-value <=> root.ui-picker-trigger-data;
                             width: 120px;
                             selected(s) => { root.ui-field-edited("picker_trigger_data", s); }
@@ -271,7 +278,7 @@ export component GlobalSettingsDialog inherits Rectangle {
                         alignment: start;
                         Text { text: "默认策略:"; width: 120px; vertical-alignment: center; color: Theme.text-primary; }
                         ComboBox {
-                            model: ["auto", "full"];
+                            model: root.gs-ref-picker-strategy-options;
                             current-value <=> root.ui-ref-picker-strategy;
                             width: 120px;
                             selected(s) => { root.ui-field-edited("ref_picker_strategy", s); }
@@ -284,7 +291,7 @@ export component GlobalSettingsDialog inherits Rectangle {
                         alignment: start;
                         Text { text: "日志级别:"; width: 120px; vertical-alignment: center; color: Theme.text-primary; }
                         ComboBox {
-                            model: ["trace", "debug", "info", "warn", "error"];
+                            model: root.gs-log-level-options;
                             current-value <=> root.ui-log-level;
                             width: 120px;
                             selected(s) => { root.ui-field-edited("log_level", s); }
@@ -413,7 +420,7 @@ export component GlobalSettingsDialog inherits Rectangle {
                         alignment: start;
                         Text { text: "编码:"; width: 120px; vertical-alignment: center; color: Theme.text-primary; }
                         ComboBox {
-                            model: ["utf-8", "gbk", "utf-16"];
+                            model: root.gs-encoding-options;
                             current-value <=> root.export-encoding;
                             width: 160px;
                             selected(s) => { root.export-field-edited("encoding", s); }
@@ -424,7 +431,7 @@ export component GlobalSettingsDialog inherits Rectangle {
                         alignment: start;
                         Text { text: "换行符:"; width: 120px; vertical-alignment: center; color: Theme.text-primary; }
                         ComboBox {
-                            model: ["lf", "crlf"];
+                            model: root.gs-line-ending-options;
                             current-value <=> root.export-line-ending;
                             width: 160px;
                             selected(s) => { root.export-field-edited("line_ending", s); }

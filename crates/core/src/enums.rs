@@ -86,6 +86,24 @@ impl Encoding {
             Self::Big5 => "big5",
         }
     }
+
+    /// 返回所有编码选项
+    pub fn all() -> &'static [Self] {
+        &[
+            Self::Utf8,
+            Self::Utf8Bom,
+            Self::Utf16Le,
+            Self::Utf16Be,
+            Self::Gb2312,
+            Self::Gbk,
+            Self::Big5,
+        ]
+    }
+
+    /// 返回所有编码选项的字符串表示
+    pub fn all_str() -> Vec<&'static str> {
+        Self::all().iter().map(|e| e.as_str()).collect()
+    }
 }
 
 /// 行尾符
@@ -148,6 +166,16 @@ impl LineEnding {
             Self::CrLf => b"\r\n",
             Self::Cr => b"\r",
         }
+    }
+
+    /// 返回所有行尾符选项
+    pub fn all() -> &'static [Self] {
+        &[Self::Lf, Self::CrLf, Self::Cr]
+    }
+
+    /// 返回所有行尾符选项的字符串表示
+    pub fn all_str() -> Vec<&'static str> {
+        Self::all().iter().map(|e| e.as_str()).collect()
     }
 }
 
@@ -306,6 +334,16 @@ impl LogLevel {
             Self::Error => "error",
         }
     }
+
+    /// 返回所有日志级别选项
+    pub fn all() -> &'static [Self] {
+        &[Self::Trace, Self::Debug, Self::Info, Self::Warn, Self::Error]
+    }
+
+    /// 返回所有日志级别选项的字符串表示
+    pub fn all_str() -> Vec<&'static str> {
+        Self::all().iter().map(|e| e.as_str()).collect()
+    }
 }
 
 /// Picker 触发方式
@@ -353,6 +391,16 @@ impl PickerTrigger {
             Self::Single => "single",
             Self::Double => "double",
         }
+    }
+
+    /// 返回所有触发方式选项
+    pub fn all() -> &'static [Self] {
+        &[Self::Single, Self::Double]
+    }
+
+    /// 返回所有触发方式选项的字符串表示
+    pub fn all_str() -> Vec<&'static str> {
+        Self::all().iter().map(|e| e.as_str()).collect()
     }
 }
 
@@ -402,6 +450,16 @@ impl RefPickerStrategy {
             Self::Full => "full",
         }
     }
+
+    /// 返回所有策略选项
+    pub fn all() -> &'static [Self] {
+        &[Self::Auto, Self::Full]
+    }
+
+    /// 返回所有策略选项的字符串表示
+    pub fn all_str() -> Vec<&'static str> {
+        Self::all().iter().map(|e| e.as_str()).collect()
+    }
 }
 
 /// C++ JSON 库选择
@@ -447,6 +505,16 @@ impl CppJsonLib {
             Self::Nlohmann => "nlohmann",
             Self::RapidJson => "rapidjson",
         }
+    }
+
+    /// 返回所有 C++ JSON 库选项
+    pub fn all() -> &'static [Self] {
+        &[Self::Nlohmann, Self::RapidJson]
+    }
+
+    /// 返回所有 C++ JSON 库选项的字符串表示
+    pub fn all_str() -> Vec<&'static str> {
+        Self::all().iter().map(|e| e.as_str()).collect()
     }
 }
 

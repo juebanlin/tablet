@@ -52,6 +52,23 @@ pub fn push(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
     ui_h.set_gs_sep_tab_modified(gs.sep_tab_modified);
     ui_h.set_gs_export_tab_modified(gs.export_tab_modified);
 
+    // 推送枚举选项列表（从枚举定义生成）
+    use tablet_core::enums::*;
+    let log_level_opts: Vec<slint::SharedString> = LogLevel::all_str().iter().map(|s| (*s).into()).collect();
+    ui_h.set_gs_log_level_options(slint::ModelRc::new(slint::VecModel::from(log_level_opts)));
+
+    let picker_trigger_opts: Vec<slint::SharedString> = PickerTrigger::all_str().iter().map(|s| (*s).into()).collect();
+    ui_h.set_gs_picker_trigger_options(slint::ModelRc::new(slint::VecModel::from(picker_trigger_opts)));
+
+    let ref_picker_strategy_opts: Vec<slint::SharedString> = RefPickerStrategy::all_str().iter().map(|s| (*s).into()).collect();
+    ui_h.set_gs_ref_picker_strategy_options(slint::ModelRc::new(slint::VecModel::from(ref_picker_strategy_opts)));
+
+    let encoding_opts: Vec<slint::SharedString> = Encoding::all_str().iter().map(|s| (*s).into()).collect();
+    ui_h.set_gs_encoding_options(slint::ModelRc::new(slint::VecModel::from(encoding_opts)));
+
+    let line_ending_opts: Vec<slint::SharedString> = LineEnding::all_str().iter().map(|s| (*s).into()).collect();
+    ui_h.set_gs_line_ending_options(slint::ModelRc::new(slint::VecModel::from(line_ending_opts)));
+
     // UI 设置
     ui_h.set_gs_ui_auto_commit_on_blur(gs.ui.auto_commit_on_blur);
     ui_h.set_gs_ui_realtime_validate(gs.ui.realtime_validate);

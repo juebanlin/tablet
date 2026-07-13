@@ -388,6 +388,12 @@ export component AppWindow inherits Window {
     in-out property <bool> gs-ui-tab-modified: false;
     in-out property <bool> gs-sep-tab-modified: false;
     in-out property <bool> gs-export-tab-modified: false;
+    // 枚举选项列表
+    in property <[string]> gs-log-level-options;
+    in property <[string]> gs-picker-trigger-options;
+    in property <[string]> gs-ref-picker-strategy-options;
+    in property <[string]> gs-encoding-options;
+    in property <[string]> gs-line-ending-options;
     // UI 设置
     in-out property <bool> gs-ui-auto-commit-on-blur;
     in-out property <bool> gs-ui-realtime-validate;
@@ -898,6 +904,11 @@ export component AppWindow inherits Window {
         ui-tab-modified <=> root.gs-ui-tab-modified;
         sep-tab-modified <=> root.gs-sep-tab-modified;
         export-tab-modified <=> root.gs-export-tab-modified;
+        gs-log-level-options: root.gs-log-level-options;
+        gs-picker-trigger-options: root.gs-picker-trigger-options;
+        gs-ref-picker-strategy-options: root.gs-ref-picker-strategy-options;
+        gs-encoding-options: root.gs-encoding-options;
+        gs-line-ending-options: root.gs-line-ending-options;
         ui-auto-commit-on-blur <=> root.gs-ui-auto-commit-on-blur;
         ui-realtime-validate <=> root.gs-ui-realtime-validate;
         ui-log-level <=> root.gs-ui-log-level;
