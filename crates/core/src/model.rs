@@ -77,6 +77,17 @@ pub struct GlobalConfig {
     pub separators: crate::types::SeparatorsSection,
 }
 
+impl Default for GlobalConfig {
+    fn default() -> Self {
+        Self {
+            project_management: default_project_management_section(),
+            export: None,
+            ui: None,
+            separators: crate::types::SeparatorsSection::default(),
+        }
+    }
+}
+
 fn default_project_management_section() -> ProjectManagementConfig {
     ProjectManagementConfig {
         last_project: String::new(),
@@ -258,12 +269,12 @@ pub struct ProjectManagementConfig {
 /// 用途：
 /// - `raw_config`：原始配置，保存时写回 project.toml
 /// - `config`：合并后配置（global + raw），业务逻辑使用
+///
+/// 注意：UI 配置仅在全局级别（GlobalConfig），项目级不支持覆盖。
 #[derive(Debug, Clone, serde::Deserialize, Default)]
 pub struct ProjectConfig {
     #[serde(default)]
     pub export: Option<ExportConfig>,
-    #[serde(default)]
-    pub ui: Option<UiConfig>,
     #[serde(default)]
     pub separators: crate::types::SeparatorsSection,
 }

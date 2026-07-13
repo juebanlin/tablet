@@ -12,6 +12,7 @@
 use anyhow::Result;
 use clap::Parser;
 use tablet_core::ops::ProjectEngine;
+use tablet_core::model::GlobalConfig;
 use tablet_core::project::{load_project, load_specific_project, load_workspace};
 
 use super::args::*;
@@ -138,11 +139,23 @@ fn run(cli: Cli) -> Result<i32> {
     }
 
     // 以下命令需要先加载 Project
-    let project = match cli.project.as_deref() {
-        Some(pid) => load_specific_project(&cli.workdir, pid)?,
-        None => load_project(&cli.workdir)?,
+    let (project, global_config) = match cli.project.as_deref() {
+        Some(pid) => {
+            let config_path = cli.workdir.join("tablet.toml");
+            let global_text = std::fs::read_to_string(&config_path)?;
+            let global_config: GlobalConfig = toml::from_str(&global_text)?;
+            let project = load_specific_project(&cli.workdir, pid)?;
+            (project, global_config)
+        }
+        None => {
+            let config_path = cli.workdir.join("tablet.toml");
+            let global_text = std::fs::read_to_string(&config_path)?;
+            let global_config: GlobalConfig = toml::from_str(&global_text)?;
+            let project = load_project(&cli.workdir)?;
+            (project, global_config)
+        }
     };
-    let mut engine = ProjectEngine::new(project);
+    let mut engine = ProjectEngine::new(project, global_config);
 
     let warns = apply_overrides(&mut engine, &cli.overrides);
     output::print_override_warnings_cli(&warns);

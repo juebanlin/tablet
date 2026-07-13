@@ -128,9 +128,7 @@ fn run_gui(workdir_arg: Option<PathBuf>) -> anyhow::Result<()> {
 
     let log_level = {
         let st = app_state.borrow();
-        st.engine.active()
-            .or_else(|| st.engine.projects.first())
-            .and_then(|p| p.config.ui.as_ref())
+        st.engine.global_config.ui.as_ref()
             .and_then(|u| u.log_level.as_deref())
             .unwrap_or("debug")
             .to_string()

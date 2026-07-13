@@ -844,19 +844,14 @@ pub struct AppState {
 impl AppState {
     pub fn load(workdir: &Path) -> anyhow::Result<Self> {
         let mut engine = load_workspace(workdir)?;
-        // active 缺失时回落到首个 opened；都没有则取 default 配置。
-        let cfg_src = engine.active().or_else(|| engine.projects.first());
-        let rt_validate = cfg_src
-            .and_then(|p| p.config.ui.as_ref())
+        // UI 配置从全局配置读取（不随项目切换）
+        let rt_validate = engine.global_config.ui.as_ref()
             .map_or(false, |u| u.realtime_validate);
-        let header_single = cfg_src
-            .and_then(|p| p.config.ui.as_ref())
+        let header_single = engine.global_config.ui.as_ref()
             .map_or(true, |u| u.picker_trigger_header == "single");
-        let data_single = cfg_src
-            .and_then(|p| p.config.ui.as_ref())
+        let data_single = engine.global_config.ui.as_ref()
             .map_or(false, |u| u.picker_trigger_data == "single");
-        let constant_ref_allowed = cfg_src
-            .and_then(|p| p.config.ui.as_ref())
+        let constant_ref_allowed = engine.global_config.ui.as_ref()
             .map_or(true, |u| u.constant_ref_allowed);
         let project_sort = engine.global_config.project_management.project_sort.clone();
         let project_sort = if project_sort.is_empty() { "id".to_string() } else { project_sort };

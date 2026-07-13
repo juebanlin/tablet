@@ -423,15 +423,15 @@ fn parse_raw_project_config(project_text: Option<&str>) -> ProjectConfig {
         .and_then(|e| e.clone().try_into::<crate::model::ExportConfig>().ok());
     ProjectConfig {
         export,
-        ui: None,          // 项目级 [ui] 被 strip
         separators: crate::types::SeparatorsSection::default(),  // 以 schema 为准
     }
 }
 
 /// 合并配置：GlobalConfig + ProjectConfig(raw) + TblSchema → ProjectConfig(merged)
 /// - export：字段级 deep merge（项目优先，缺失字段回退全局）
-/// - ui：直接用全局（项目级不允许覆盖）
 /// - separators：用 schema（优先级最高）
+///
+/// 注意：UI 配置不在此合并，始终从 GlobalConfig 读取。
 pub fn merge_config(
     global: &GlobalConfig,
     raw: &ProjectConfig,
@@ -439,7 +439,6 @@ pub fn merge_config(
 ) -> ProjectConfig {
     ProjectConfig {
         export: merge_export(global.export.as_ref(), raw.export.as_ref()),
-        ui: global.ui.clone(),
         separators: schema.separators.clone(),
     }
 }
@@ -1109,8 +1108,8 @@ mod tests {
             dir.join("tablet.toml"),
             "[project]\nlast_project = \"p\"\n\n[ui]\nrealtime_validate = true\npicker_trigger_data = \"double\"\n",
         ).unwrap();
-        let proj = load_project(&dir).expect("load");
-        let ui = proj.config.ui.as_ref().expect("[ui] present");
+        let engine = load_workspace(&dir).expect("load");
+        let ui = engine.global_config.ui.as_ref().expect("[ui] present");
         // 项目 toml 的 [ui] 该被 strip → 全局值留下来
         assert!(ui.realtime_validate, "项目级 [ui] 应被 strip，全局 realtime_validate=true 留下");
         assert_eq!(ui.picker_trigger_data, "double", "项目级 picker_trigger_data 应被 strip");
