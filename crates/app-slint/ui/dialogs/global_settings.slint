@@ -127,12 +127,12 @@ export component GlobalSettingsDialog inherits Rectangle {
     // UI 设置 buf
     in-out property <bool> ui-auto-commit-on-blur;
     in-out property <bool> ui-realtime-validate;
-    in-out property <string> ui-log-level;
-    in-out property <string> ui-picker-trigger-header;
-    in-out property <string> ui-picker-trigger-data;
+    in-out property <int> ui-log-level-index;
+    in-out property <int> ui-picker-trigger-header-index;
+    in-out property <int> ui-picker-trigger-data-index;
     in-out property <bool> ui-show-meta-id;
     in-out property <bool> ui-constant-ref-allowed;
-    in-out property <string> ui-ref-picker-strategy;
+    in-out property <int> ui-ref-picker-strategy-index;
 
     // 分隔符 buf（25 个）
     in-out property <string> sep-tuple2;
@@ -162,8 +162,8 @@ export component GlobalSettingsDialog inherits Rectangle {
     in-out property <string> sep-ml-entry;
 
     // 导出设置 buf（简化版：仅通用字段）
-    in-out property <string> export-encoding;
-    in-out property <string> export-line-ending;
+    in-out property <int> export-encoding-index;
+    in-out property <int> export-line-ending-index;
 
     callback tab-changed(int);
     callback ui-field-edited(string, string);
@@ -237,7 +237,7 @@ export component GlobalSettingsDialog inherits Rectangle {
                         Text { text: "表头触发方式:"; width: 120px; vertical-alignment: center; color: Theme.text-primary; }
                         ComboBox {
                             model: root.gs-picker-trigger-options;
-                            current-value <=> root.ui-picker-trigger-header;
+                            current-index <=> root.ui-picker-trigger-header-index;
                             width: 120px;
                             selected(s) => { root.ui-field-edited("picker_trigger_header", s); }
                         }
@@ -248,7 +248,7 @@ export component GlobalSettingsDialog inherits Rectangle {
                         Text { text: "数据区触发方式:"; width: 120px; vertical-alignment: center; color: Theme.text-primary; }
                         ComboBox {
                             model: root.gs-picker-trigger-options;
-                            current-value <=> root.ui-picker-trigger-data;
+                            current-index <=> root.ui-picker-trigger-data-index;
                             width: 120px;
                             selected(s) => { root.ui-field-edited("picker_trigger_data", s); }
                         }
@@ -279,7 +279,7 @@ export component GlobalSettingsDialog inherits Rectangle {
                         Text { text: "默认策略:"; width: 120px; vertical-alignment: center; color: Theme.text-primary; }
                         ComboBox {
                             model: root.gs-ref-picker-strategy-options;
-                            current-value <=> root.ui-ref-picker-strategy;
+                            current-index <=> root.ui-ref-picker-strategy-index;
                             width: 120px;
                             selected(s) => { root.ui-field-edited("ref_picker_strategy", s); }
                         }
@@ -292,7 +292,7 @@ export component GlobalSettingsDialog inherits Rectangle {
                         Text { text: "日志级别:"; width: 120px; vertical-alignment: center; color: Theme.text-primary; }
                         ComboBox {
                             model: root.gs-log-level-options;
-                            current-value <=> root.ui-log-level;
+                            current-index <=> root.ui-log-level-index;
                             width: 120px;
                             selected(s) => { root.ui-field-edited("log_level", s); }
                         }
@@ -421,7 +421,7 @@ export component GlobalSettingsDialog inherits Rectangle {
                         Text { text: "编码:"; width: 120px; vertical-alignment: center; color: Theme.text-primary; }
                         ComboBox {
                             model: root.gs-encoding-options;
-                            current-value <=> root.export-encoding;
+                            current-index <=> root.export-encoding-index;
                             width: 160px;
                             selected(s) => { root.export-field-edited("encoding", s); }
                         }
@@ -432,7 +432,7 @@ export component GlobalSettingsDialog inherits Rectangle {
                         Text { text: "换行符:"; width: 120px; vertical-alignment: center; color: Theme.text-primary; }
                         ComboBox {
                             model: root.gs-line-ending-options;
-                            current-value <=> root.export-line-ending;
+                            current-index <=> root.export-line-ending-index;
                             width: 160px;
                             selected(s) => { root.export-field-edited("line_ending", s); }
                         }

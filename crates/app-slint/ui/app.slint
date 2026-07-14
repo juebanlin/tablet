@@ -397,12 +397,12 @@ export component AppWindow inherits Window {
     // UI 设置
     in-out property <bool> gs-ui-auto-commit-on-blur;
     in-out property <bool> gs-ui-realtime-validate;
-    in-out property <string> gs-ui-log-level;
-    in-out property <string> gs-ui-picker-trigger-header;
-    in-out property <string> gs-ui-picker-trigger-data;
+    in-out property <int> gs-ui-log-level-index;
+    in-out property <int> gs-ui-picker-trigger-header-index;
+    in-out property <int> gs-ui-picker-trigger-data-index;
     in-out property <bool> gs-ui-show-meta-id;
     in-out property <bool> gs-ui-constant-ref-allowed;
-    in-out property <string> gs-ui-ref-picker-strategy;
+    in-out property <int> gs-ui-ref-picker-strategy-index;
     // 分隔符（25 个）
     in-out property <string> gs-sep-tuple2;
     in-out property <string> gs-sep-tuple3;
@@ -430,8 +430,8 @@ export component AppWindow inherits Window {
     in-out property <string> gs-sep-ml-item;
     in-out property <string> gs-sep-ml-entry;
     // 导出设置
-    in-out property <string> gs-export-encoding;
-    in-out property <string> gs-export-line-ending;
+    in-out property <int> gs-export-encoding-index;
+    in-out property <int> gs-export-line-ending-index;
     callback gs-tab-changed(int);
     callback gs-ui-field-edited(string, string);
     callback gs-sep-edited(string, string);
@@ -911,12 +911,12 @@ export component AppWindow inherits Window {
         gs-line-ending-options: root.gs-line-ending-options;
         ui-auto-commit-on-blur <=> root.gs-ui-auto-commit-on-blur;
         ui-realtime-validate <=> root.gs-ui-realtime-validate;
-        ui-log-level <=> root.gs-ui-log-level;
-        ui-picker-trigger-header <=> root.gs-ui-picker-trigger-header;
-        ui-picker-trigger-data <=> root.gs-ui-picker-trigger-data;
+        ui-log-level-index <=> root.gs-ui-log-level-index;
+        ui-picker-trigger-header-index <=> root.gs-ui-picker-trigger-header-index;
+        ui-picker-trigger-data-index <=> root.gs-ui-picker-trigger-data-index;
         ui-show-meta-id <=> root.gs-ui-show-meta-id;
         ui-constant-ref-allowed <=> root.gs-ui-constant-ref-allowed;
-        ui-ref-picker-strategy <=> root.gs-ui-ref-picker-strategy;
+        ui-ref-picker-strategy-index <=> root.gs-ui-ref-picker-strategy-index;
         sep-tuple2 <=> root.gs-sep-tuple2;
         sep-tuple3 <=> root.gs-sep-tuple3;
         sep-tuple4 <=> root.gs-sep-tuple4;
@@ -942,8 +942,8 @@ export component AppWindow inherits Window {
         sep-ml-kv <=> root.gs-sep-ml-kv;
         sep-ml-item <=> root.gs-sep-ml-item;
         sep-ml-entry <=> root.gs-sep-ml-entry;
-        export-encoding <=> root.gs-export-encoding;
-        export-line-ending <=> root.gs-export-line-ending;
+        export-encoding-index <=> root.gs-export-encoding-index;
+        export-line-ending-index <=> root.gs-export-line-ending-index;
         tab-changed(i) => { root.gs-tab = i; root.gs-tab-changed(i); }
         ui-field-edited(k, v) => { root.gs-ui-field-edited(k, v); }
         sep-edited(k, v) => { root.gs-sep-edited(k, v); }
