@@ -1091,7 +1091,7 @@ mod tests {
         let project = ProjectManagementConfig {
             last_project: "p1".to_string(),
             opened_projects: Vec::new(),
-            project_sort: String::new(),
+            project_sort: crate::enums::ProjectSort::default(),
             project_order: Vec::new(),
         };
         let result = upsert_project_config_section(original, &project);
@@ -1107,7 +1107,7 @@ mod tests {
         let project = ProjectManagementConfig {
             last_project: "new".to_string(),
             opened_projects: Vec::new(),
-            project_sort: String::new(),
+            project_sort: crate::enums::ProjectSort::default(),
             project_order: Vec::new(),
         };
         let result = upsert_project_config_section(original, &project);
@@ -1121,7 +1121,7 @@ mod tests {
         let project = ProjectManagementConfig {
             last_project: "p1".to_string(),
             opened_projects: Vec::new(),
-            project_sort: String::new(),
+            project_sort: crate::enums::ProjectSort::default(),
             project_order: Vec::new(),
         };
         let result = upsert_project_config_section(original, &project);
