@@ -20,7 +20,7 @@ use crate::state::AppState;
 use crate::{refresh, AppWindow};
 
 /// 打开全局设置对话框：从 engine.global_config 拷贝数据到 apply buffer，并保存 current 快照
-pub fn open(state: &Rc<RefCell<AppState>>) {
+pub fn open(state: &Rc<RefCell<AppState>>, ui_h: &AppWindow) {
     let mut st = state.borrow_mut();
 
     // current: 当前已保存的值（等于硬盘值）
@@ -37,22 +37,8 @@ pub fn open(state: &Rc<RefCell<AppState>>) {
     gs.sep = current.separators.clone();
     gs.export = current.export.clone().unwrap_or_default();
     gs.current_snapshot = Some(current);
-}
 
-pub fn push(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
-    let st = state.borrow();
-    let gs = &st.global_settings;
-
-    ui_h.set_dlg_gs_open(gs.open);
-    if !gs.open {
-        return;
-    }
-    ui_h.set_gs_tab(gs.tab);
-    ui_h.set_gs_ui_tab_modified(gs.ui_tab_modified);
-    ui_h.set_gs_sep_tab_modified(gs.sep_tab_modified);
-    ui_h.set_gs_export_tab_modified(gs.export_tab_modified);
-
-    // 推送枚举选项列表（从枚举定义生成）
+    // 初始化枚举选项列表（只设置一次）
     use tablet_core::enums::*;
     let log_level_opts: Vec<slint::SharedString> = LogLevel::all_str().iter().map(|s| (*s).into()).collect();
     ui_h.set_gs_log_level_options(slint::ModelRc::new(slint::VecModel::from(log_level_opts)));
@@ -68,6 +54,20 @@ pub fn push(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
 
     let line_ending_opts: Vec<slint::SharedString> = LineEnding::all_str().iter().map(|s| (*s).into()).collect();
     ui_h.set_gs_line_ending_options(slint::ModelRc::new(slint::VecModel::from(line_ending_opts)));
+}
+
+pub fn push(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
+    let st = state.borrow();
+    let gs = &st.global_settings;
+
+    ui_h.set_dlg_gs_open(gs.open);
+    if !gs.open {
+        return;
+    }
+    ui_h.set_gs_tab(gs.tab);
+    ui_h.set_gs_ui_tab_modified(gs.ui_tab_modified);
+    ui_h.set_gs_sep_tab_modified(gs.sep_tab_modified);
+    ui_h.set_gs_export_tab_modified(gs.export_tab_modified);
 
     // UI 设置
     ui_h.set_gs_ui_auto_commit_on_blur(gs.ui.auto_commit_on_blur);

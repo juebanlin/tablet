@@ -184,8 +184,8 @@ fn run_gui(workdir_arg: Option<PathBuf>) -> anyhow::Result<()> {
         let s = app_state.clone();
         let weak = app_window.as_weak();
         app_window.on_global_settings_clicked(move || {
-            dialogs::global_settings::open(&s);
             if let Some(ui_h) = weak.upgrade() {
+                dialogs::global_settings::open(&s, &ui_h);
                 dialogs::global_settings::push(&ui_h, &s);
             }
         });
