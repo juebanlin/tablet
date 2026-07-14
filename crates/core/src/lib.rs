@@ -15,6 +15,7 @@ pub mod export;
 pub mod excel;
 pub mod search;
 pub mod test_util;
+pub mod config_fix;
 
 pub use search::name_matches;
 

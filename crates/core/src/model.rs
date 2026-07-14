@@ -68,7 +68,7 @@ impl Project {
 /// `tablet.toml` 反序列化的顶层结构（全局配置）。
 /// `[project]` 段对应 `ProjectManagementConfig`（项目管理状态）；
 /// 其它段（export / ui / separators）是所有 Project 共享的工作空间默认值。
-#[derive(Debug, Clone, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
 pub struct GlobalConfig {
     /// 项目管理配置段：`[project]`。
     #[serde(default = "default_project_management_section", rename = "project")]
@@ -411,7 +411,7 @@ fn default_true() -> bool { true }
 /// `[project]` toml 段：仓库级项目管理配置，不随 Project 切换。
 ///
 /// 持有 Project 列表管理状态（启动 last_project / 已打开列表 / 排序）。
-#[derive(Debug, Clone, PartialEq, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, serde::Deserialize, serde::Serialize)]
 pub struct ProjectManagementConfig {
     /// 启动时进入的 Project id；为空 = 扫到的第一个。
     #[serde(default)]

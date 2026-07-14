@@ -528,7 +528,7 @@ pub fn load_all_projects(workdir: &Path) -> Result<Vec<Project>> {
 ///    - 否则若 `last_project` 非空且存在：仅打开它
 ///    - 否则打开 available 第一个（保持兼容，确保启动有内容）
 /// 3. active = `last_project`（不在 opened 里则 fallback opened[0]）
-pub fn load_workspace(workdir: &Path) -> Result<crate::ops::ProjectEngine> {
+pub fn load_workspace(workdir: &Path) -> Result<(crate::ops::ProjectEngine, bool)> {
     use crate::ops::{AvailableProject, ProjectEngine};
 
     let projects_dir = workdir.join(PROJECTS_DIR);
@@ -545,18 +545,17 @@ pub fn load_workspace(workdir: &Path) -> Result<crate::ops::ProjectEngine> {
             println!("已生成默认配置文件: {}", config_path.display());
         }
     }
-    let global_text = std::fs::read_to_string(&config_path)?;
-    let global_config: GlobalConfig = toml::from_str(&global_text)?;
+    let (global_config, config_fixed) = crate::config_fix::load_and_fix_global_config(&config_path)?;
 
     if !projects_dir.is_dir() {
         // projects/ 不存在 = 空仓库
-        return Ok(ProjectEngine::new_workspace(
+        return Ok((ProjectEngine::new_workspace(
             workdir.to_path_buf(),
             global_config,
             Vec::new(),
             Vec::new(),
             None,
-        ));
+        ), config_fixed));
     }
 
     let entries = scan_projects_dir(&projects_dir);
@@ -576,13 +575,13 @@ pub fn load_workspace(workdir: &Path) -> Result<crate::ops::ProjectEngine> {
     if available.is_empty() {
         // projects/ 存在但为空（用户删光了所有 project）：保留空 workspace，
         // 不再隐式创建 default。否则启动时会冒出一个磁盘上不存在的"幽灵项目"。
-        return Ok(ProjectEngine::new_workspace(
+        return Ok((ProjectEngine::new_workspace(
             workdir.to_path_buf(),
             global_config,
             Vec::new(),
             Vec::new(),
             None,
-        ));
+        ), config_fixed));
     }
 
     // 计算 to_open
@@ -622,7 +621,7 @@ pub fn load_workspace(workdir: &Path) -> Result<crate::ops::ProjectEngine> {
     // workspace tablet.toml [separators] 作为「新建空项目」时 schema.separators 的初值；
     // toml 里没写的字段走 SeparatorsSection 自身 default。
     engine.set_default_separators(global_config.separators.clone());
-    Ok(engine)
+    Ok((engine, config_fixed))
 }
 
 /// 把当前 engine 的 opened/active/sort/order 落盘到 `<workdir>/tablet.toml`。
@@ -894,7 +893,7 @@ pub fn persist_global_config_sections(
 
 /// 将 [ui], [export], [separators] 三个段 upsert 到 toml 文本中。
 /// 保留 [project] 段和其它段、注释、空行。
-fn upsert_global_sections(
+pub fn upsert_global_sections(
     original: &str,
     global_config: &crate::model::GlobalConfig,
 ) -> Result<String> {

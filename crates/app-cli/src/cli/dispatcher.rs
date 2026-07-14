@@ -362,6 +362,11 @@ fn run(cli: Cli) -> Result<i32> {
 fn dispatch_project(cli: &Cli, pa: &ProjectArgs) -> Result<i32> {
     match &pa.action {
         ProjectAction::List => {
+            // 先触发配置加载（含自动修复），即使 list 命令不需要用到 engine
+            let (_engine, config_fixed) = load_workspace(&cli.workdir)?;
+            if config_fixed {
+                eprintln!("已自动修复 tablet.toml 中的无效配置值");
+            }
             let projects = list_projects(&cli.workdir);
             if cli.is_json() {
                 let val: Vec<serde_json::Value> = projects.iter().map(|p| {
@@ -381,7 +386,7 @@ fn dispatch_project(cli: &Cli, pa: &ProjectArgs) -> Result<i32> {
             Ok(0)
         }
         ProjectAction::Info { id } => {
-            let mut engine = load_workspace(&cli.workdir)?;
+            let (mut engine, _config_fixed) = load_workspace(&cli.workdir)?;
             if let Some(pid) = cli.project.as_deref().or(id.as_deref()) {
                 engine.set_active_by_id(pid);
             }
@@ -394,7 +399,7 @@ fn dispatch_project(cli: &Cli, pa: &ProjectArgs) -> Result<i32> {
             Ok(0)
         }
         ProjectAction::Rename { id, new_id, new_name } => {
-            let mut engine = load_workspace(&cli.workdir)?;
+            let (mut engine, _config_fixed) = load_workspace(&cli.workdir)?;
             run_project_rename(&mut engine, id, new_id.as_deref(), new_name.as_deref())?;
             println!("已重命名 Project: {}", new_id.as_deref().unwrap_or(id));
             Ok(0)
@@ -404,13 +409,13 @@ fn dispatch_project(cli: &Cli, pa: &ProjectArgs) -> Result<i32> {
                 eprintln!("错误: 删除操作不可逆，请添加 --confirm 确认");
                 return Ok(1);
             }
-            let mut engine = load_workspace(&cli.workdir)?;
+            let (mut engine, _config_fixed) = load_workspace(&cli.workdir)?;
             run_project_delete(&mut engine, id)?;
             println!("已删除 Project: {}", id);
             Ok(0)
         }
         ProjectAction::Clone { source, id, name } => {
-            let mut engine = load_workspace(&cli.workdir)?;
+            let (mut engine, _config_fixed) = load_workspace(&cli.workdir)?;
             run_project_clone(&mut engine, source, id, name.as_deref())?;
             println!("已克隆 Project: {} → {}", source, id);
             Ok(0)
