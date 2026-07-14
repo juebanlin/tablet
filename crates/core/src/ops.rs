@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+﻿use std::collections::HashSet;
 use std::path::PathBuf;
 use crate::model::*;
 use crate::validate::*;
@@ -499,7 +499,7 @@ impl ProjectEngine {
     /// 不动 available_projects（关闭 ≠ 删除）。同时清掉该 pid 的 validation_errors。
     pub fn close_project(&mut self, project_id: &str) -> bool {
         let Some(idx) = self.projects.iter().position(|p| p.schema.meta.id == project_id) else {
-            self.log(format!("Project 未打开: {}", project_id));
+            self.error_log(format!("Project 未打开: {}", project_id));
             return false;
         };
         self.projects.remove(idx);
@@ -639,11 +639,11 @@ impl ProjectEngine {
         new_name: &str,
     ) -> Option<String> {
         if !crate::tblschema::is_valid_metadata_id(new_id) {
-            self.log(format!("project id 不合法: {}", new_id));
+            self.error_log(format!("project id 不合法: {}", new_id));
             return None;
         }
         if self.available_projects.iter().any(|a| a.id == new_id) {
-            self.log(format!("project id 已存在: {}", new_id));
+            self.error_log(format!("project id 已存在: {}", new_id));
             return None;
         }
         let source = self.find_project(source_project_id)?.clone();
@@ -684,7 +684,7 @@ impl ProjectEngine {
         self.available_projects.push(avail);
         self.available_projects.sort_by(|a, b| a.id.cmp(&b.id));
         self.projects.push(new_project);
-        self.log(format!(
+        self.ui_log(format!(
             "已克隆 {} → {}（内存中，需保存才落地）",
             source_project_id, new_id
         ));
@@ -741,9 +741,36 @@ impl ProjectEngine {
         self.validation_errors.iter().any(|(p, _, _, _, _)| p == project_id)
     }
 
-    pub fn log(&mut self, msg: String) {
+    /// 操作日志：显示在 UI 面板 + 写文件（info 级别）
+    pub fn ui_log(&mut self, msg: String) {
         let now = chrono::Local::now().format("%H:%M:%S").to_string();
         self.logs.push(format!("{} {}", now, msg));
+        log::info!("{}", msg);
+    }
+
+    /// 调试日志：只写文件（debug 级别），不显示 UI
+    pub fn debug_log(&mut self, msg: String) {
+        log::debug!("{}", msg);
+    }
+
+    /// 警告日志：显示在 UI 面板（带 ⚠️）+ 写文件（warn 级别）
+    pub fn warn_log(&mut self, msg: String) {
+        let now = chrono::Local::now().format("%H:%M:%S").to_string();
+        self.logs.push(format!("{} ⚠️ {}", now, msg));
+        log::warn!("{}", msg);
+    }
+
+    /// 错误日志：显示在 UI 面板（带 ❌）+ 写文件（error 级别）
+    pub fn error_log(&mut self, msg: String) {
+        let now = chrono::Local::now().format("%H:%M:%S").to_string();
+        self.logs.push(format!("{} ❌ {}", now, msg));
+        log::error!("{}", msg);
+    }
+
+    /// 旧接口兼容：默认为 ui_log
+    #[deprecated(note = "使用 ui_log/debug_log/warn_log/error_log 替代")]
+    pub fn log(&mut self, msg: String) {
+        self.ui_log(msg);
     }
 
     pub fn logs(&self) -> &[String] {
@@ -883,7 +910,7 @@ impl ProjectEngine {
                 en.update_dirty();
             }
         }
-        self.log(format!("粘贴 {}行 数据", lines.len()));
+        self.ui_log(format!("粘贴 {}行 数据", lines.len()));
     }
 
     pub fn insert_enum_row(&mut self, group: &str, name: &str, at: usize) {
@@ -914,7 +941,7 @@ impl ProjectEngine {
                 if start < end {
                     en.entries.drain(start..end);
                     en.update_dirty();
-                    self.log(format!("已删除 {} 行", end - start));
+                    self.ui_log(format!("已删除 {} 行", end - start));
                 }
             }
         }
@@ -1041,7 +1068,7 @@ impl ProjectEngine {
             }
         }
         if let Some(kw) = keyword_err {
-            self.log(format!("字段名 '{}' 是保留关键字，不允许使用", kw));
+            self.ui_log(format!("字段名 '{}' 是保留关键字，不允许使用", kw));
         }
     }
 
@@ -1075,7 +1102,7 @@ impl ProjectEngine {
                 if start < end {
                     t.records.drain(start..end);
                     t.update_dirty();
-                    self.log(format!("已删除 {} 行", end - start));
+                    self.ui_log(format!("已删除 {} 行", end - start));
                 }
             }
         }
@@ -1135,7 +1162,7 @@ impl ProjectEngine {
                 t.update_dirty();
             }
         }
-        self.log(format!("粘贴 {}行 数据", lines.len()));
+        self.ui_log(format!("粘贴 {}行 数据", lines.len()));
     }
 
     pub fn paste_constant_data(&mut self, group: &str, name: &str, start_row: usize, start_col: usize, text: &str) {
@@ -1168,7 +1195,7 @@ impl ProjectEngine {
                 c.update_dirty();
             }
         }
-        self.log(format!("粘贴 {}行 数据", lines.len()));
+        self.ui_log(format!("粘贴 {}行 数据", lines.len()));
     }
 
     pub fn clear_table_cells(&mut self, group: &str, name: &str, cells: &[(usize, usize)]) {
@@ -1307,7 +1334,7 @@ impl ProjectEngine {
     /// 全部关闭时（无 active）直接 no-op。
     pub fn save_all(&mut self) {
         if self.active_idx.is_none() {
-            self.log("没有打开的 Project，无需保存".to_string());
+            self.ui_log("没有打开的 Project，无需保存".to_string());
             return;
         }
         self.revalidate_all();
@@ -1323,9 +1350,9 @@ impl ProjectEngine {
         }
         let (count, deleted) = save_project_files(self.project_mut());
         if count > 0 || deleted > 0 {
-            self.log(format!("已保存 {} 个文件, 删除 {} 个", count, deleted));
+            self.ui_log(format!("已保存 {} 个文件, 删除 {} 个", count, deleted));
         } else {
-            self.log("无修改需要保存".to_string());
+            self.ui_log("无修改需要保存".to_string());
         }
     }
 
@@ -1347,10 +1374,10 @@ impl ProjectEngine {
             total_deleted += d;
         }
         if total_count > 0 || total_deleted > 0 {
-            self.log(format!("已保存 {} 个文件, 删除 {} 个（{} 个 Project）",
+            self.ui_log(format!("已保存 {} 个文件, 删除 {} 个（{} 个 Project）",
                 total_count, total_deleted, self.projects.len()));
         } else {
-            self.log("无修改需要保存".to_string());
+            self.ui_log("无修改需要保存".to_string());
         }
     }
 
@@ -1370,9 +1397,9 @@ impl ProjectEngine {
                 self.projects = new_engine.projects;
                 self.active_idx = new_engine.active_idx;
                 self.validation_errors.clear();
-                self.log(format!("重新加载完成，共 {} 个 Project / {} 个 Group", pcount, group_total));
+                self.ui_log(format!("重新加载完成，共 {} 个 Project / {} 个 Group", pcount, group_total));
             }
-            Err(e) => self.log(format!("加载失败: {}", e)),
+            Err(e) => self.ui_log(format!("加载失败: {}", e)),
         }
     }
 
@@ -1408,14 +1435,14 @@ impl ProjectEngine {
         if let Some(g) = self.project().groups.iter().find(|g| g.name == group_name) {
             if g.is_new {
                 self.project_mut().groups.retain(|g| g.name != group_name);
-                self.log(format!("已移除新建 Group: {}", group_name));
+                self.ui_log(format!("已移除新建 Group: {}", group_name));
             } else {
                 if let Some(g) = self.project_mut().groups.iter_mut().find(|g| g.name == group_name) {
                     for t in &mut g.tables { t.deleted = true; }
                     for c in &mut g.constants { c.deleted = true; }
                     for e in &mut g.enums { e.deleted = true; }
                 }
-                self.log(format!("已标记删除 Group: {}", group_name));
+                self.ui_log(format!("已标记删除 Group: {}", group_name));
             }
         }
         sync_schema_from_groups(self.project_mut());
@@ -1439,7 +1466,7 @@ impl ProjectEngine {
         sync_schema_from_groups(self.project_mut());
         let Some(pid) = self.active_project_id().map(str::to_string) else { return; };
         self.validation_errors.retain(|(p, g, n, _, _)| !(p == &pid && g == group_name && n == node_name));
-        self.log(format!("已标记删除: {}/{}", group_name, node_name));
+        self.ui_log(format!("已标记删除: {}/{}", group_name, node_name));
     }
 
     /// 把指定节点深拷贝到剪贴板（不改源数据，不动 dirty 标）。
@@ -1452,11 +1479,11 @@ impl ProjectEngine {
         kind: NodeKind,
     ) {
         let Some(p) = self.find_project(project_id) else {
-            self.log(format!("Project 不存在: {}", project_id));
+            self.ui_log(format!("Project 不存在: {}", project_id));
             return;
         };
         let Some(g) = p.groups.iter().find(|g| g.name == group) else {
-            self.log(format!("Group 不存在: {}/{}", project_id, group));
+            self.ui_log(format!("Group 不存在: {}/{}", project_id, group));
             return;
         };
         let body = match kind {
@@ -1465,7 +1492,7 @@ impl ProjectEngine {
             NodeKind::Enum => g.enums.iter().find(|e| e.name == node_name).cloned().map(NodeBody::Enum),
         };
         let Some(body) = body else {
-            self.log(format!("节点不存在: {}/{}/{}", project_id, group, node_name));
+            self.ui_log(format!("节点不存在: {}/{}/{}", project_id, group, node_name));
             return;
         };
         let kind_label = match &body {
@@ -1478,17 +1505,17 @@ impl ProjectEngine {
             source_group: group.to_string(),
             body,
         });
-        self.log(format!("已复制 {} 到剪贴板: {}/{}/{}", kind_label, project_id, group, node_name));
+        self.ui_log(format!("已复制 {} 到剪贴板: {}/{}/{}", kind_label, project_id, group, node_name));
     }
 
     /// 整组深拷贝到剪贴板（含组内全部 table/constant/enum）。
     pub fn clipboard_copy_group(&mut self, project_id: &str, group: &str) {
         let Some(p) = self.find_project(project_id) else {
-            self.log(format!("Project 不存在: {}", project_id));
+            self.ui_log(format!("Project 不存在: {}", project_id));
             return;
         };
         let Some(g) = p.groups.iter().find(|g| g.name == group) else {
-            self.log(format!("Group 不存在: {}/{}", project_id, group));
+            self.ui_log(format!("Group 不存在: {}/{}", project_id, group));
             return;
         };
         let snapshot = g.clone();
@@ -1502,7 +1529,7 @@ impl ProjectEngine {
             source_project: project_id.to_string(),
             snapshot,
         });
-        self.log(format!("已复制 Group 到剪贴板: {}/{}（{}）", project_id, group, summary));
+        self.ui_log(format!("已复制 Group 到剪贴板: {}/{}（{}）", project_id, group, summary));
     }
 
     /// 粘贴单节点到目标 (project, group)。
@@ -1513,7 +1540,7 @@ impl ProjectEngine {
     /// 返回新节点名（成功时）。
     pub fn paste_node_to(&mut self, target_project: &str, target_group: &str) -> Option<String> {
         let Some(NodeClipboard::Node { body, .. }) = self.node_clipboard.clone() else {
-            self.log("剪贴板为空或类型不匹配（需要节点剪贴板）".to_string());
+            self.warn_log("剪贴板为空或类型不匹配（需要节点剪贴板）".to_string());
             return None;
         };
         let project = self.find_project_mut(target_project)?;
@@ -1559,7 +1586,7 @@ impl ProjectEngine {
                 "Enum"
             }
         };
-        self.log(format!(
+        self.ui_log(format!(
             "已粘贴 {} 到 {}/{}/{}",
             kind_label, target_project, target_group, final_name
         ));
@@ -1583,7 +1610,7 @@ impl ProjectEngine {
     /// 返回新 group 名。
     pub fn paste_group_to(&mut self, target_project: &str) -> Option<String> {
         let Some(NodeClipboard::Group { snapshot, .. }) = self.node_clipboard.clone() else {
-            self.log("剪贴板为空或类型不匹配（需要 Group 剪贴板）".to_string());
+            self.warn_log("剪贴板为空或类型不匹配（需要 Group 剪贴板）".to_string());
             return None;
         };
         let project = self.find_project_mut(target_project)?;
@@ -1621,7 +1648,7 @@ impl ProjectEngine {
         );
         project.groups.push(new_group);
         sync_schema_from_groups(project);
-        self.log(format!("已粘贴 Group 到 {}/{}（{}）", target_project, final_name, summary));
+        self.ui_log(format!("已粘贴 Group 到 {}/{}（{}）", target_project, final_name, summary));
         let prev = self.active_idx;
         if let Some(idx) = self.projects.iter().position(|p| p.schema.meta.id == target_project) {
             self.active_idx = Some(idx);
@@ -1642,7 +1669,7 @@ impl ProjectEngine {
         match action {
             ProjectAction::NewGroup { project_id, name } => {
                 let Some(project) = self.find_project_mut(project_id) else {
-                    self.log(format!("Project 不存在: {}", project_id));
+                    self.ui_log(format!("Project 不存在: {}", project_id));
                     return;
                 };
                 let dir = project.data_dir().join(name);
@@ -1655,7 +1682,7 @@ impl ProjectEngine {
                     is_new: true,
                 });
                 sync_schema_from_groups(project);
-                self.log(format!("[{}] 新建 Group: {}", project_id, name));
+                self.ui_log(format!("[{}] 新建 Group: {}", project_id, name));
             }
             ProjectAction::NewTable { project_id, group, name } => {
                 let mut ok = false;
@@ -1683,7 +1710,7 @@ impl ProjectEngine {
                     sync_schema_from_groups(project);
                 }
                 if ok {
-                    self.log(format!("[{}] 新建 Table: {}/{}", project_id, group, name));
+                    self.ui_log(format!("[{}] 新建 Table: {}/{}", project_id, group, name));
                 }
             }
             ProjectAction::NewConstant { project_id, group, name } => {
@@ -1704,7 +1731,7 @@ impl ProjectEngine {
                     sync_schema_from_groups(project);
                 }
                 if ok {
-                    self.log(format!("[{}] 新建 Constant: {}/{}", project_id, group, name));
+                    self.ui_log(format!("[{}] 新建 Constant: {}/{}", project_id, group, name));
                 }
             }
             ProjectAction::NewEnum { project_id, group, name } => {
@@ -1725,7 +1752,7 @@ impl ProjectEngine {
                     sync_schema_from_groups(project);
                 }
                 if ok {
-                    self.log(format!("[{}] 新建 Enum: {}/{}", project_id, group, name));
+                    self.ui_log(format!("[{}] 新建 Enum: {}/{}", project_id, group, name));
                 }
             }
             ProjectAction::RenameGroup { project_id, old_name, new_name } => {
@@ -1753,7 +1780,7 @@ impl ProjectEngine {
                 for (_, _, n, r, c) in migrated {
                     self.validation_errors.insert((project_id.clone(), new_name.clone(), n, r, c));
                 }
-                self.log(format!("[{}] 重命名 Group: {} → {}", project_id, old_name, new_name));
+                self.ui_log(format!("[{}] 重命名 Group: {} → {}", project_id, old_name, new_name));
             }
             ProjectAction::RenameNode { project_id, group, old_name, new_name } => {
                 if let Some(project) = self.find_project_mut(project_id) {
@@ -1783,7 +1810,7 @@ impl ProjectEngine {
                 for (_, g, _, r, c) in migrated {
                     self.validation_errors.insert((project_id.clone(), g, new_name.clone(), r, c));
                 }
-                self.log(format!("[{}] 重命名: {}/{} → {}", project_id, group, old_name, new_name));
+                self.ui_log(format!("[{}] 重命名: {}/{} → {}", project_id, group, old_name, new_name));
             }
             ProjectAction::DeleteProject { project_id } => {
                 self.execute_delete_project(project_id);
@@ -1816,14 +1843,14 @@ impl ProjectEngine {
         } else if let Some(ap) = self.available_projects.iter().find(|a| a.id == project_id) {
             (ap.root.clone(), false)
         } else {
-            self.log(format!("Project 不存在: {}", project_id));
+            self.ui_log(format!("Project 不存在: {}", project_id));
             return;
         };
 
         // 内存项目（还没落盘）：跳过文件系统删除；NotFound 也忽略，按"目标已不在"处理。
         if !in_memory_only && project_root.exists() {
             if let Err(e) = std::fs::remove_dir_all(&project_root) {
-                self.log(format!("删除 project 目录失败: {}", e));
+                self.ui_log(format!("删除 project 目录失败: {}", e));
                 return;
             }
         }
@@ -1845,7 +1872,7 @@ impl ProjectEngine {
         self.available_projects.retain(|a| a.id != project_id);
         // 清掉 validation_errors
         self.validation_errors.retain(|(p, _, _, _, _)| p != project_id);
-        self.log(format!("已删除 Project: {}", project_id));
+        self.ui_log(format!("已删除 Project: {}", project_id));
     }
 
     /// 该 Project 是否有未保存改动。
@@ -1890,14 +1917,14 @@ impl ProjectEngine {
             return;
         }
         let Some(project) = self.find_project_mut(project_id) else {
-            self.log(format!("Project 不存在: {}", project_id));
+            self.ui_log(format!("Project 不存在: {}", project_id));
             return;
         };
         let (count, deleted) = save_project_files(project);
         if count > 0 || deleted > 0 {
-            self.log(format!("[{}] 已保存 {} 个文件, 删除 {} 个", project_id, count, deleted));
+            self.ui_log(format!("[{}] 已保存 {} 个文件, 删除 {} 个", project_id, count, deleted));
         } else {
-            self.log(format!("[{}] 无修改需要保存", project_id));
+            self.ui_log(format!("[{}] 无修改需要保存", project_id));
         }
     }
 
@@ -1938,7 +1965,7 @@ impl ProjectEngine {
             let _ = std::fs::remove_dir_all(&config_dir);
             let _ = std::fs::create_dir_all(&config_dir);
         }
-        self.log("已清空所有配置文件".to_string());
+        self.ui_log("已清空所有配置文件".to_string());
         self.reload();
     }
 
@@ -2109,13 +2136,13 @@ impl ProjectEngine {
 
     fn log_export(&mut self, label: &str, result: &crate::export::ExportResult) {
         use crate::export::FileStatus;
-        self.log(format!("[{}] {} 新增, {} 修改, {} 删除, {} 不变",
+        self.ui_log(format!("[{}] {} 新增, {} 修改, {} 删除, {} 不变",
             label, result.added(), result.modified(), result.deleted(), result.unchanged()));
         for f in &result.files {
             match f.status {
-                FileStatus::Added => self.log(format!("  [新增] {}", f.path)),
-                FileStatus::Modified => self.log(format!("  [修改] {}", f.path)),
-                FileStatus::Deleted => self.log(format!("  [删除] {}", f.path)),
+                FileStatus::Added => self.ui_log(format!("  [新增] {}", f.path)),
+                FileStatus::Modified => self.ui_log(format!("  [修改] {}", f.path)),
+                FileStatus::Deleted => self.ui_log(format!("  [删除] {}", f.path)),
                 FileStatus::Unchanged => {}
             }
         }

@@ -1,4 +1,4 @@
-// 数据导出对话框：12 个格式勾选框 + 确认。
+﻿// 数据导出对话框：12 个格式勾选框 + 确认。
 //
 // TypeScript 拆双 side：
 // - 客户端 → `[export.client.typescript]`，对应勾选「TypeScript (前端)」
@@ -76,86 +76,86 @@ fn run(state: &Rc<RefCell<AppState>>) {
     if opts.json {
         match st.engine.export_json() {
             Ok(r) => log_result(&mut st, "JSON", &r),
-            Err(e) => st.engine.log(format!("[JSON] 错误: {}", e)),
+            Err(e) => st.engine.error_log(format!("[JSON] 错误: {}", e)),
         }
     }
     if opts.xml {
         match st.engine.export_xml() {
             Ok(r) => log_result(&mut st, "XML", &r),
-            Err(e) => st.engine.log(format!("[XML] 错误: {}", e)),
+            Err(e) => st.engine.error_log(format!("[XML] 错误: {}", e)),
         }
     }
     if opts.java {
         match st.engine.export_java() {
             Ok(r) => log_result(&mut st, "Java", &r),
-            Err(e) => st.engine.log(format!("[Java] 错误: {}", e)),
+            Err(e) => st.engine.error_log(format!("[Java] 错误: {}", e)),
         }
     }
     if opts.go {
         match st.engine.export_go() {
             Ok(r) => log_result(&mut st, "Go", &r),
-            Err(e) => st.engine.log(format!("[Go] 错误: {}", e)),
+            Err(e) => st.engine.error_log(format!("[Go] 错误: {}", e)),
         }
     }
     if opts.cpp {
         match st.engine.export_cpp() {
             Ok(r) => log_result(&mut st, "C++", &r),
-            Err(e) => st.engine.log(format!("[C++] 错误: {}", e)),
+            Err(e) => st.engine.error_log(format!("[C++] 错误: {}", e)),
         }
     }
     if opts.csharp_dotnet {
         match st.engine.export_csharp_dotnet() {
             Ok(r) => log_result(&mut st, "C# (.NET)", &r),
-            Err(e) => st.engine.log(format!("[C# (.NET)] 错误: {}", e)),
+            Err(e) => st.engine.error_log(format!("[C# (.NET)] 错误: {}", e)),
         }
     }
     if opts.typescript_server {
         match st.engine.export_typescript_server() {
             Ok(r) => log_result(&mut st, "TypeScript (Node.js)", &r),
-            Err(e) => st.engine.log(format!("[TypeScript (Node.js)] 错误: {}", e)),
+            Err(e) => st.engine.error_log(format!("[TypeScript (Node.js)] 错误: {}", e)),
         }
     }
     if opts.lua {
         match st.engine.export_lua() {
             Ok(r) => log_result(&mut st, "Lua", &r),
-            Err(e) => st.engine.log(format!("[Lua] 错误: {}", e)),
+            Err(e) => st.engine.error_log(format!("[Lua] 错误: {}", e)),
         }
     }
     if opts.gdscript {
         match st.engine.export_gdscript() {
             Ok(r) => log_result(&mut st, "GDScript", &r),
-            Err(e) => st.engine.log(format!("[GDScript] 错误: {}", e)),
+            Err(e) => st.engine.error_log(format!("[GDScript] 错误: {}", e)),
         }
     }
     if opts.typescript {
         match st.engine.export_typescript_client() {
             Ok(r) => log_result(&mut st, "TypeScript (前端)", &r),
-            Err(e) => st.engine.log(format!("[TypeScript (前端)] 错误: {}", e)),
+            Err(e) => st.engine.error_log(format!("[TypeScript (前端)] 错误: {}", e)),
         }
     }
     if opts.csharp_unity {
         match st.engine.export_csharp_unity() {
             Ok(r) => log_result(&mut st, "C# (Unity)", &r),
-            Err(e) => st.engine.log(format!("[C# (Unity)] 错误: {}", e)),
+            Err(e) => st.engine.error_log(format!("[C# (Unity)] 错误: {}", e)),
         }
     }
     if opts.csharp_godot {
         match st.engine.export_csharp_godot() {
             Ok(r) => log_result(&mut st, "C# (Godot)", &r),
-            Err(e) => st.engine.log(format!("[C# (Godot)] 错误: {}", e)),
+            Err(e) => st.engine.error_log(format!("[C# (Godot)] 错误: {}", e)),
         }
     }
 }
 
 fn log_result(st: &mut AppState, label: &str, result: &tablet_core::export::ExportResult) {
     use tablet_core::export::FileStatus;
-    st.engine.log(format!("[{}] {} 新增, {} 修改, {} 删除, {} 不变",
+    st.engine.ui_log(format!("[{}] {} 新增, {} 修改, {} 删除, {} 不变",
         label, result.added(), result.modified(), result.deleted(), result.unchanged()));
     for f in &result.files {
         match f.status {
-            FileStatus::Added => st.engine.log(format!("  [新增] {}", f.path)),
-            FileStatus::Modified => st.engine.log(format!("  [修改] {}", f.path)),
-            FileStatus::Deleted => st.engine.log(format!("  [删除] {}", f.path)),
+            FileStatus::Added => st.engine.ui_log(format!("  [新增] {}", f.path)),
+            FileStatus::Modified => st.engine.ui_log(format!("  [修改] {}", f.path)),
+            FileStatus::Deleted => st.engine.ui_log(format!("  [删除] {}", f.path)),
             FileStatus::Unchanged => {}
         }
     }

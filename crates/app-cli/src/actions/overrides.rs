@@ -6,8 +6,8 @@
 use std::str::FromStr;
 
 use tablet_core::model::{
-    ClientConfig, CppExport, CSharpExport, ExportConfig, GoExport, JavaExport, JsonExport,
-    LuaExport, ProjectConfig, ServerExport, TypeScriptExport, XmlExport,
+    ClientConfig, CppExport, DotNetExport, ExportConfig, GodotCSharpExport, GoExport, JavaExport,
+    JsonExport, LuaExport, ProjectConfig, ServerExport, UnityCSharpExport, XmlExport,
 };
 use tablet_core::ops::ProjectEngine;
 
@@ -241,7 +241,7 @@ fn ensure_export_server_cpp(config: &mut ProjectConfig) {
 fn ensure_export_server_csharp_dotnet(config: &mut ProjectConfig) {
     ensure_export_server(config);
     if config.export.as_ref().unwrap().server.as_ref().unwrap().csharp_dotnet.is_none() {
-        config.export.as_mut().unwrap().server.as_mut().unwrap().csharp_dotnet = Some(CSharpExport {
+        config.export.as_mut().unwrap().server.as_mut().unwrap().csharp_dotnet = Some(DotNetExport {
             namespace: None, code_output: None,
         });
     }
@@ -260,7 +260,7 @@ fn ensure_export_client(config: &mut ProjectConfig) {
 fn ensure_export_client_csharp_unity(config: &mut ProjectConfig) {
     ensure_export_client(config);
     if config.export.as_ref().unwrap().client.as_ref().unwrap().csharp_unity.is_none() {
-        config.export.as_mut().unwrap().client.as_mut().unwrap().csharp_unity = Some(CSharpExport {
+        config.export.as_mut().unwrap().client.as_mut().unwrap().csharp_unity = Some(UnityCSharpExport {
             namespace: None, code_output: None,
         });
     }
@@ -269,7 +269,7 @@ fn ensure_export_client_csharp_unity(config: &mut ProjectConfig) {
 fn ensure_export_client_csharp_godot(config: &mut ProjectConfig) {
     ensure_export_client(config);
     if config.export.as_ref().unwrap().client.as_ref().unwrap().csharp_godot.is_none() {
-        config.export.as_mut().unwrap().client.as_mut().unwrap().csharp_godot = Some(CSharpExport {
+        config.export.as_mut().unwrap().client.as_mut().unwrap().csharp_godot = Some(GodotCSharpExport {
             namespace: None, code_output: None,
         });
     }

@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+﻿// SPDX-License-Identifier: GPL-3.0-only
 // Copyright 2026 juebanlin <juebanlin@gmail.com>
 
 // 启动壳子（@05.12 跨平台启动约定）
@@ -170,8 +170,8 @@ fn run_gui(workdir_arg: Option<PathBuf>) -> anyhow::Result<()> {
         app_window.on_check_update_clicked(move || {
             const REPO_URL: &str = "https://github.com/juebanlin/tablet";
             match open::that(REPO_URL) {
-                Ok(_) => s.borrow_mut().engine.log(format!("[关于] 已打开 {}", REPO_URL)),
-                Err(e) => s.borrow_mut().engine.log(format!("[关于] 打开 GitHub 失败: {}", e)),
+                Ok(_) => s.borrow_mut().engine.ui_log(format!("[关于] 已打开 {}", REPO_URL)),
+                Err(e) => s.borrow_mut().engine.error_log(format!("[关于] 打开 GitHub 失败: {}", e)),
             }
             if let Some(ui_h) = weak.upgrade() {
                 refresh::after_log(&ui_h, &s);

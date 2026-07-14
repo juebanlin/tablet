@@ -1,4 +1,4 @@
-// 项目设置对话框：身份（id/name/category/version）+ 分隔符（25 leaves）2 tab。
+﻿// 项目设置对话框：身份（id/name/category/version）+ 分隔符（25 leaves）2 tab。
 //
 // 所有改动只更新内存，标记 schema_dirty=true，等"保存项目"才写盘。
 
@@ -16,7 +16,7 @@ use crate::{refresh, AppWindow};
 pub fn open_for(state: &Rc<RefCell<AppState>>, project_id: &str) {
     let mut st = state.borrow_mut();
     let Some(p) = st.engine.find_project(project_id) else {
-        st.engine.log(format!("[项目设置] 项目不存在: {}", project_id));
+        st.engine.ui_log(format!("[项目设置] 项目不存在: {}", project_id));
         return;
     };
     let id = p.schema.meta.id.clone();
@@ -220,7 +220,7 @@ fn run(state: &Rc<RefCell<AppState>>) {
             None => st.engine.set_active_none(),
         }
 
-        st.engine.log(format!("[项目设置] 已应用修改: {}（需保存项目才写盘）", target_id));
+        st.engine.ui_log(format!("[项目设置] 已应用修改: {}（需保存项目才写盘）", target_id));
     }
 }
 

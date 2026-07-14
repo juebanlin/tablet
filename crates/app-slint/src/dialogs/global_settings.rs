@@ -1,4 +1,4 @@
-// 全局设置对话框：UI设置 / 分隔符 / 导出设置 3 tab。
+﻿// 全局设置对话框：UI设置 / 分隔符 / 导出设置 3 tab。
 //
 // 数据范式：current + apply 模式
 // - current: engine.global_config（当前已保存的内存值，等于硬盘值）
@@ -149,10 +149,10 @@ fn run(state: &Rc<RefCell<AppState>>) {
 
         // 立即写盘
         if let Err(e) = tablet_core::project::persist_global_config_sections(&st.engine.workdir, &st.engine.global_config) {
-            st.engine.log(format!("[全局设置] 写入失败: {}", e));
+            st.engine.error_log(format!("[全局设置] 写入失败: {}", e));
             return;
         }
-        st.engine.log("[全局设置] 已保存到 tablet.toml".to_string());
+        st.engine.ui_log("[全局设置] 已保存到 tablet.toml".to_string());
     }
 
     // 重新合并所有项目的配置
@@ -181,7 +181,7 @@ fn run(state: &Rc<RefCell<AppState>>) {
         let mut st = state.borrow_mut();
         st.engine.revalidate_all_projects();
         let err_count = st.engine.validation_errors.len();
-        st.engine.log(format!("[全局设置] 分隔符已更新，重新验证了 {} 个错误", err_count));
+        st.engine.error_log(format!("[全局设置] 分隔符已更新，重新验证了 {} 个错误", err_count));
     }
 
     // 确定成功：更新 current_snapshot 为当前配置，并重置改动标记
@@ -195,7 +195,7 @@ fn run(state: &Rc<RefCell<AppState>>) {
 }
 
 pub fn wire(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
-    state.borrow_mut().engine.log("[全局设置] wire 函数已调用，注册回调".to_string());
+    state.borrow_mut().engine.ui_log("[全局设置] wire 函数已调用，注册回调".to_string());
 
     // tab 切换
     {
@@ -297,7 +297,7 @@ pub fn wire(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
             st.global_settings.sep_tab_modified = check_sep_modified(&st.global_settings);
             let modified = st.global_settings.sep_tab_modified;
             drop(st);
-            s.borrow_mut().engine.log(format!("[全局设置] 分隔符 {} 编辑，modified={}", key, modified));
+            s.borrow_mut().engine.ui_log(format!("[全局设置] 分隔符 {} 编辑，modified={}", key, modified));
             if let Some(ui_h) = weak.upgrade() { push(&ui_h, &s); }
         });
     }

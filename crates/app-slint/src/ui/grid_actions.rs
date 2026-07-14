@@ -1,4 +1,4 @@
-// grid 操作 helpers：被 grid.rs / context_menu.rs / focus.rs 共用的 perform_* 系列
+﻿// grid 操作 helpers：被 grid.rs / context_menu.rs / focus.rs 共用的 perform_* 系列
 // + commit_editing + selection 计算 + popup export 写回。
 //
 // 本模块没有自己的 UI，全部 `pub(crate) fn`。
@@ -300,16 +300,16 @@ pub(crate) fn perform_action(state: &Rc<RefCell<AppState>>, action: &str, tag: &
                     } else {
                         format!("[{}] {}", tag, coord_label)
                     };
-                    state.borrow_mut().engine.log(msg);
+                    state.borrow_mut().engine.ui_log(msg);
                 }
-                Err(e) => state.borrow_mut().engine.log(format!("[{}] {} 失败: {}", tag, coord_label, e)),
+                Err(e) => state.borrow_mut().engine.error_log(format!("[{}] {} 失败: {}", tag, coord_label, e)),
             }
         }
         "grid.cell-paste" => {
             let text = match Clipboard::new().and_then(|mut cb| cb.get_text()) {
                 Ok(t) => t,
                 Err(e) => {
-                    state.borrow_mut().engine.log(format!("[{}] {} 读剪贴板失败: {}", tag, coord_label, e));
+                    state.borrow_mut().engine.error_log(format!("[{}] {} 读剪贴板失败: {}", tag, coord_label, e));
                     return;
                 }
             };
@@ -327,7 +327,7 @@ pub(crate) fn perform_action(state: &Rc<RefCell<AppState>>, action: &str, tag: &
                 };
                 let mut st = state.borrow_mut();
                 st.set_cell(r1, c1, &single);
-                st.engine.log(format!("[{}] {} \"{}\" → \"{}\"", tag, coord_label, before, single));
+                st.engine.ui_log(format!("[{}] {} \"{}\" → \"{}\"", tag, coord_label, before, single));
             } else {
                 paste_region(state, r1, c1, &text);
                 let dst = format!(
@@ -335,7 +335,7 @@ pub(crate) fn perform_action(state: &Rc<RefCell<AppState>>, action: &str, tag: &
                     convert::col_letter(c1), r1 + 1,
                     convert::col_letter(c1 + col_n - 1), r1 + row_n,
                 );
-                state.borrow_mut().engine.log(format!("[{}] {} → {} ({}行×{}列)", tag, coord_label, dst, row_n, col_n));
+                state.borrow_mut().engine.ui_log(format!("[{}] {} → {} ({}行×{}列)", tag, coord_label, dst, row_n, col_n));
             }
         }
         "grid.cell-clear" => {
@@ -346,10 +346,10 @@ pub(crate) fn perform_action(state: &Rc<RefCell<AppState>>, action: &str, tag: &
                 };
                 let mut st = state.borrow_mut();
                 st.set_cell(r1, c1, "");
-                st.engine.log(format!("[{}] {} \"{}\" → \"\"", tag, coord_label, before));
+                st.engine.ui_log(format!("[{}] {} \"{}\" → \"\"", tag, coord_label, before));
             } else {
                 clear_region(state, r1, c1, r2, c2);
-                state.borrow_mut().engine.log(format!("[{}] {}", tag, coord_label));
+                state.borrow_mut().engine.ui_log(format!("[{}] {}", tag, coord_label));
             }
         }
         "grid.cell-cut" => {
@@ -365,13 +365,13 @@ pub(crate) fn perform_action(state: &Rc<RefCell<AppState>>, action: &str, tag: &
                     if is_single {
                         let mut st = state.borrow_mut();
                         st.set_cell(r1, c1, "");
-                        st.engine.log(format!("[{}] {} \"{}\" → \"\"", tag, coord_label, tsv));
+                        st.engine.ui_log(format!("[{}] {} \"{}\" → \"\"", tag, coord_label, tsv));
                     } else {
                         clear_region(state, r1, c1, r2, c2);
-                        state.borrow_mut().engine.log(format!("[{}] {}", tag, coord_label));
+                        state.borrow_mut().engine.ui_log(format!("[{}] {}", tag, coord_label));
                     }
                 }
-                Err(e) => state.borrow_mut().engine.log(format!("[{}] {} 失败: {}", tag, coord_label, e)),
+                Err(e) => state.borrow_mut().engine.error_log(format!("[{}] {} 失败: {}", tag, coord_label, e)),
             }
         }
         _ => {}

@@ -1,4 +1,4 @@
-// 表格区：push grid 快照 + 接通各类 cell/header/row/col 的事件回调。
+﻿// 表格区：push grid 快照 + 接通各类 cell/header/row/col 的事件回调。
 //
 // 关键约束：单击千万不能对 picker cell 做 push（model 重建会销毁 TouchArea 实例，
 // slint 双击事件需要同一 TouchArea 接连两次 clicked）。所以单击场景用
@@ -139,7 +139,7 @@ pub fn wire(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
             let (pid, group, name) = match target {
                 Some(t) => t,
                 None => {
-                    s.borrow_mut().engine.log("[Excel] 未选中可编辑节点".to_string());
+                    s.borrow_mut().engine.ui_log("[Excel] 未选中可编辑节点".to_string());
                     if let Some(ui_h) = weak.upgrade() { crate::refresh::after_log(&ui_h, &s); }
                     return;
                 }
@@ -148,7 +148,7 @@ pub fn wire(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
                 &s, weak.clone(), &pid, &group, vec![name],
             );
             if let Err(e) = result {
-                s.borrow_mut().engine.log(format!("[Excel] 调起失败: {}", e));
+                s.borrow_mut().engine.ui_log(format!("[Excel] 调起失败: {}", e));
             }
             if let Some(ui_h) = weak.upgrade() {
                 crate::excel_bridge::push(&ui_h, &s);

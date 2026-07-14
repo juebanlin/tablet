@@ -1,4 +1,4 @@
-// 「新建项目」统一对话框：3 tab + 单页左右分栏。
+﻿// 「新建项目」统一对话框：3 tab + 单页左右分栏。
 //
 // tab 0 = 空项目：右半填身份 → 创建一个空 project
 // tab 1 = 从文件：浏览 .tblschema → sections-picker → 创建 + 可选灌入预设
@@ -332,7 +332,7 @@ fn run(state: &Rc<RefCell<AppState>>) {
             let source = match source {
                 Some(s) => s,
                 None => {
-                    st.engine.log("[新建项目] 内部错误：source 为空".to_string());
+                    st.engine.ui_log("[新建项目] 内部错误：source 为空".to_string());
                     return;
                 }
             };
@@ -358,7 +358,7 @@ fn run(state: &Rc<RefCell<AppState>>) {
             st.engine.create_project_in_memory_with(schema, with_preset)
         }
         _ => {
-            st.engine.log(format!("[新建项目] 未知 tab: {}", tab));
+            st.engine.ui_log(format!("[新建项目] 未知 tab: {}", tab));
             return;
         }
     };
@@ -366,7 +366,7 @@ fn run(state: &Rc<RefCell<AppState>>) {
     let new_id = match result {
         Ok(id) => id,
         Err(e) => {
-            st.engine.log(format!("[新建项目] 失败: {}", e));
+            st.engine.error_log(format!("[新建项目] 失败: {}", e));
             return;
         }
     };
@@ -374,7 +374,7 @@ fn run(state: &Rc<RefCell<AppState>>) {
     if open_after {
         st.engine.set_active_by_id(&new_id);
     }
-    st.engine.log(format!(
+    st.engine.ui_log(format!(
         "[新建项目] 已创建 {}（内存中，需保存才落地）",
         new_id
     ));
@@ -468,7 +468,7 @@ pub fn wire(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
                         st.create_project.file_schema = None;
                         st.create_project.picker_items.clear();
                         st.create_project.picker_checked.clear();
-                        st.engine.log(format!("[新建项目] 读取失败: {}", e));
+                        st.engine.error_log(format!("[新建项目] 读取失败: {}", e));
                         if let Some(ui_h) = weak.upgrade() { push(&ui_h, &s); }
                         return;
                     }
@@ -482,7 +482,7 @@ pub fn wire(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
                         st.create_project.file_schema = None;
                         st.create_project.picker_items.clear();
                         st.create_project.picker_checked.clear();
-                        st.engine.log(format!("[新建项目] 解析失败: {}", e));
+                        st.engine.error_log(format!("[新建项目] 解析失败: {}", e));
                         if let Some(ui_h) = weak.upgrade() { push(&ui_h, &s); }
                         return;
                     }

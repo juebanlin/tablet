@@ -1,4 +1,4 @@
-// 树面板：构建 TreeNode 列表 + 接通 9 个 callback（filter / search / 排序 /
+﻿// 树面板：构建 TreeNode 列表 + 接通 9 个 callback（filter / search / 排序 /
 // 单击 / 双击 / 右键 / 完整组勾选 / toggle expand / 空白右键）。
 //
 // `push_tree` 复用同一个 VecModel：直接替换 items 而非整张 ModelRc。
@@ -82,7 +82,7 @@ pub(crate) fn persist_workspace(state: &mut AppState) {
     if let Err(e) = tablet_core::project::persist_workspace_state(
         &state.engine, sort_enum, &state.project_order,
     ) {
-        state.engine.log(format!("[workspace] 持久化失败: {}", e));
+        state.engine.error_log(format!("[workspace] 持久化失败: {}", e));
     }
 }
 
@@ -96,7 +96,7 @@ pub(crate) fn open_project_with_persist(state: &Rc<RefCell<AppState>>, pid: &str
         }
         Ok(false) => false,
         Err(e) => {
-            state.borrow_mut().engine.log(format!("[workspace] 打开 {} 失败: {}", pid, e));
+            state.borrow_mut().engine.error_log(format!("[workspace] 打开 {} 失败: {}", pid, e));
             false
         }
     }

@@ -1,4 +1,4 @@
-// Schema 导出 / 导入对话框：列出 group + 子节点的 tristate 复选树。
+﻿// Schema 导出 / 导入对话框：列出 group + 子节点的 tristate 复选树。
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -430,19 +430,19 @@ fn run_export(state: &Rc<RefCell<AppState>>) {
                 .save_file();
             if let Some(path) = file {
                 match std::fs::write(&path, &content) {
-                    Ok(_) => state.borrow_mut().engine.log(format!("[导出Schema] 已保存到 {}", path.display())),
-                    Err(e) => state.borrow_mut().engine.log(format!("[导出Schema] 写入失败: {}", e)),
+                    Ok(_) => state.borrow_mut().engine.ui_log(format!("[导出Schema] 已保存到 {}", path.display())),
+                    Err(e) => state.borrow_mut().engine.error_log(format!("[导出Schema] 写入失败: {}", e)),
                 }
             }
         }
         state::SchemaExportMode::Template => {
             // id 必填且需合法（UI 层只校验非空，这里再把字符集卡一次）
             if meta.id.is_empty() {
-                state.borrow_mut().engine.log("[导出为本地模板] 失败：模板 ID 为空".to_string());
+                state.borrow_mut().engine.ui_log("[导出为本地模板] 失败：模板 ID 为空".to_string());
                 return;
             }
             if !is_valid_metadata_id(&meta.id) {
-                state.borrow_mut().engine.log(format!(
+                state.borrow_mut().engine.ui_log(format!(
                     "[导出为本地模板] 失败：模板 ID '{}' 非法（仅小写字母/数字/下划线/连字符，长度 1-32）",
                     meta.id
                 ));
@@ -450,7 +450,7 @@ fn run_export(state: &Rc<RefCell<AppState>>) {
             }
             let dir = default_local_dir();
             if let Err(e) = std::fs::create_dir_all(&dir) {
-                state.borrow_mut().engine.log(format!(
+                state.borrow_mut().engine.ui_log(format!(
                     "[导出为本地模板] 创建目录失败 {}: {}", dir.display(), e
                 ));
                 return;
@@ -458,12 +458,12 @@ fn run_export(state: &Rc<RefCell<AppState>>) {
             let path = dir.join(format!("{}.tblschema", meta.id));
             let existed = path.exists();
             match std::fs::write(&path, &content) {
-                Ok(_) => state.borrow_mut().engine.log(format!(
+                Ok(_) => state.borrow_mut().engine.ui_log(format!(
                     "[导出为本地模板] 已{}保存到 {}",
                     if existed { "覆盖" } else { "" },
                     path.display()
                 )),
-                Err(e) => state.borrow_mut().engine.log(format!(
+                Err(e) => state.borrow_mut().engine.ui_log(format!(
                     "[导出为本地模板] 写入失败 {}: {}", path.display(), e
                 )),
             }
@@ -479,7 +479,7 @@ fn load_import(state: &Rc<RefCell<AppState>>, file_path: &str) {
     let content = match std::fs::read_to_string(file_path) {
         Ok(c) => c,
         Err(e) => {
-            st.engine.log(format!("[导入Schema] 读取失败: {}", e));
+            st.engine.error_log(format!("[导入Schema] 读取失败: {}", e));
             st.schema_import.schema = None;
             st.schema_import.items.clear();
             st.schema_import.checked.clear();
@@ -490,7 +490,7 @@ fn load_import(state: &Rc<RefCell<AppState>>, file_path: &str) {
     let schema = match parse_tblschema(&content) {
         Ok(s) => s,
         Err(e) => {
-            st.engine.log(format!("[导入Schema] 解析失败: {}", e));
+            st.engine.error_log(format!("[导入Schema] 解析失败: {}", e));
             st.schema_import.schema = None;
             st.schema_import.items.clear();
             st.schema_import.checked.clear();
@@ -558,5 +558,5 @@ fn run_import(state: &Rc<RefCell<AppState>>) {
         &config_dir,
         with_preset,
     );
-    st.engine.log(format!("[导入Schema] 完成: {} 新增, {} 覆盖", added, overwritten));
+    st.engine.ui_log(format!("[导入Schema] 完成: {} 新增, {} 覆盖", added, overwritten));
 }

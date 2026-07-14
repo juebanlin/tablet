@@ -1,4 +1,4 @@
-// 右键菜单：列出菜单项 + 处理 dispatch（按 kind+action_id 分发）。
+﻿// 右键菜单：列出菜单项 + 处理 dispatch（按 kind+action_id 分发）。
 //
 // kind 来源：tree 节点 / tree 空白 / grid 列字母 / grid 行号 / grid 数据格。
 // action_id 形如 "tree.new-group" / "grid.col-insert-left"。
@@ -212,7 +212,7 @@ pub fn wire(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
                         &s, weak_ui, &project_id, &name, vec![],
                     );
                     if let Err(e) = result {
-                        s.borrow_mut().engine.log(format!("[Excel] 调起失败: {}", e));
+                        s.borrow_mut().engine.ui_log(format!("[Excel] 调起失败: {}", e));
                     }
                     if let Some(ui_h) = weak.upgrade() {
                         crate::excel_bridge::push(&ui_h, &s);

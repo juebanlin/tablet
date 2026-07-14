@@ -1,4 +1,4 @@
-// AppState：Rust 侧的真值，所有 UI 数据从这里派生。
+﻿// AppState：Rust 侧的真值，所有 UI 数据从这里派生。
 // slint 是 retained UI，需要 Rust 显式 push 数据；AppState 持有 engine + UI 临时态。
 
 use std::collections::HashSet;
@@ -914,11 +914,11 @@ impl AppState {
             (HashSet::new(), HashSet::new())
         };
         let group_count = engine.active().map(|p| p.groups.len()).unwrap_or(0);
-        engine.log(format!("已加载 {} 个 Group", group_count));
+        engine.ui_log(format!("已加载 {} 个 Group", group_count));
         // 加载即跑一遍全 Project 验证：让所有 project 的红框/`!` 标记打开就可见。
         engine.revalidate_all_projects();
         if !engine.validation_errors.is_empty() {
-            engine.log(format!("[验证] 加载后发现 {} 个错误", engine.validation_errors.len()));
+            engine.error_log(format!("[验证] 加载后发现 {} 个错误", engine.validation_errors.len()));
         }
         Ok(Self {
             engine,
