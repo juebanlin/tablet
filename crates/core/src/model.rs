@@ -303,7 +303,7 @@ impl Default for GdScriptExport {
 #[derive(Debug, Clone, PartialEq, serde::Deserialize, serde::Serialize)]
 pub struct TypeScriptExport {
     pub output: Option<String>,
-    pub module_kind: Option<String>,
+    pub module_kind: Option<crate::enums::ModuleKind>,
 }
 
 impl Default for TypeScriptExport {

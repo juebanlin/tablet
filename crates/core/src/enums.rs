@@ -583,3 +583,61 @@ impl ProjectSort {
         }
     }
 }
+
+/// TypeScript 模块类型
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ModuleKind {
+    /// ES Module (export/import) - 现代标准（默认）
+    #[serde(rename = "esm")]
+    Esm,
+    /// CommonJS (module.exports/require) - Node.js 传统格式
+    #[serde(rename = "commonjs")]
+    CommonJs,
+}
+
+impl Default for ModuleKind {
+    fn default() -> Self {
+        Self::Esm
+    }
+}
+
+impl fmt::Display for ModuleKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Esm => write!(f, "esm"),
+            Self::CommonJs => write!(f, "commonjs"),
+        }
+    }
+}
+
+impl FromStr for ModuleKind {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.trim().to_lowercase().as_str() {
+            "esm" | "es" | "module" => Ok(Self::Esm),
+            "commonjs" | "cjs" | "common" => Ok(Self::CommonJs),
+            _ => Err(format!("Unknown module kind: {}", s)),
+        }
+    }
+}
+
+impl ModuleKind {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Esm => "esm",
+            Self::CommonJs => "commonjs",
+        }
+    }
+
+    /// 返回所有模块类型选项
+    pub fn all() -> &'static [Self] {
+        &[Self::Esm, Self::CommonJs]
+    }
+
+    /// 返回所有模块类型选项的字符串表示
+    pub fn all_str() -> Vec<&'static str> {
+        Self::all().iter().map(|e| e.as_str()).collect()
+    }
+}

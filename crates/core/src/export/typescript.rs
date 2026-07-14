@@ -264,7 +264,7 @@ fn value_to_ts(raw: &str, tbl_type_str: &str, sep: &SeparatorsSection) -> String
     }
 }
 
-pub fn export_table_ts(table: &Table, side: TypeScriptSide) -> String {
+pub fn export_table_ts(table: &Table, side: TypeScriptSide, module_kind: crate::enums::ModuleKind) -> String {
     let fields = &table.schema.fields;
     let export_cols: Vec<(usize, &FieldDef)> = fields.iter().enumerate()
         .filter(|(_, f)| export_visible(&f.export, side))
@@ -275,14 +275,30 @@ pub fn export_table_ts(table: &Table, side: TypeScriptSide) -> String {
     let mut s = String::new();
 
     let iface_name = format!("{}Tpl", table.name);
-    writeln!(s, "export interface {} {{", iface_name).unwrap();
+
+    match module_kind {
+        crate::enums::ModuleKind::Esm => {
+            writeln!(s, "export interface {} {{", iface_name).unwrap();
+        }
+        crate::enums::ModuleKind::CommonJs => {
+            writeln!(s, "interface {} {{", iface_name).unwrap();
+        }
+    }
+
     for &(_, field) in &export_cols {
         writeln!(s, "    {}: {};", field.name, ts_field_type(&field.tbl_type)).unwrap();
     }
     writeln!(s, "}}").unwrap();
     writeln!(s).unwrap();
 
-    writeln!(s, "export const {}: Record<number, {}> = {{", table.name, iface_name).unwrap();
+    match module_kind {
+        crate::enums::ModuleKind::Esm => {
+            writeln!(s, "export const {}: Record<number, {}> = {{", table.name, iface_name).unwrap();
+        }
+        crate::enums::ModuleKind::CommonJs => {
+            writeln!(s, "const {}: Record<number, {}> = {{", table.name, iface_name).unwrap();
+        }
+    }
 
     let sep = &SeparatorsSection::default();
     for record in &table.records {
@@ -306,6 +322,11 @@ pub fn export_table_ts(table: &Table, side: TypeScriptSide) -> String {
     }
 
     writeln!(s, "}};").unwrap();
+
+    if module_kind == crate::enums::ModuleKind::CommonJs {
+        writeln!(s, "module.exports.{} = {};", table.name, table.name).unwrap();
+    }
+
     s
 }
 
@@ -329,9 +350,17 @@ fn default_for_field(tbl_type_str: &str) -> String {
     }
 }
 
-pub fn export_constant_ts(constant: &Constant, sep: &SeparatorsSection, side: TypeScriptSide) -> String {
+pub fn export_constant_ts(constant: &Constant, sep: &SeparatorsSection, side: TypeScriptSide, module_kind: crate::enums::ModuleKind) -> String {
     let mut s = String::new();
-    writeln!(s, "export const {} = {{", constant.name).unwrap();
+
+    match module_kind {
+        crate::enums::ModuleKind::Esm => {
+            writeln!(s, "export const {} = {{", constant.name).unwrap();
+        }
+        crate::enums::ModuleKind::CommonJs => {
+            writeln!(s, "const {} = {{", constant.name).unwrap();
+        }
+    }
 
     for entry in &constant.entries {
         if !export_visible(&entry.export, side) { continue; }
@@ -342,11 +371,20 @@ pub fn export_constant_ts(constant: &Constant, sep: &SeparatorsSection, side: Ty
         writeln!(s, "    {}: {},", entry.name, val).unwrap();
     }
 
-    writeln!(s, "}} as const;").unwrap();
+    match module_kind {
+        crate::enums::ModuleKind::Esm => {
+            writeln!(s, "}} as const;").unwrap();
+        }
+        crate::enums::ModuleKind::CommonJs => {
+            writeln!(s, "}};").unwrap();
+            writeln!(s, "module.exports.{} = {};", constant.name, constant.name).unwrap();
+        }
+    }
+
     s
 }
 
-pub fn export_enum_ts(enum_def: &EnumDef) -> String {
+pub fn export_enum_ts(enum_def: &EnumDef, module_kind: crate::enums::ModuleKind) -> String {
     let mut s = String::new();
     let valid: Vec<&EnumEntry> = enum_def.entries.iter()
         .filter(|e| !e.id.is_empty() && !e.name.is_empty())
@@ -354,20 +392,52 @@ pub fn export_enum_ts(enum_def: &EnumDef) -> String {
 
     let enum_name = format!("{}Enum", enum_def.name);
 
-    writeln!(s, "export enum {} {{", enum_name).unwrap();
+    match module_kind {
+        crate::enums::ModuleKind::Esm => {
+            writeln!(s, "export enum {} {{", enum_name).unwrap();
+        }
+        crate::enums::ModuleKind::CommonJs => {
+            writeln!(s, "const {} = {{", enum_name).unwrap();
+        }
+    }
+
     for e in &valid {
         let id = e.id.parse::<i64>().unwrap_or(0);
-        writeln!(s, "    /** {} */", e.desc).unwrap();
-        writeln!(s, "    {} = {},", e.name, id).unwrap();
+        match module_kind {
+            crate::enums::ModuleKind::Esm => {
+                writeln!(s, "    /** {} */", e.desc).unwrap();
+                writeln!(s, "    {} = {},", e.name, id).unwrap();
+            }
+            crate::enums::ModuleKind::CommonJs => {
+                writeln!(s, "    {}: {}, // {}", e.name, id, e.desc).unwrap();
+            }
+        }
     }
     writeln!(s, "}}").unwrap();
+
+    if module_kind == crate::enums::ModuleKind::CommonJs {
+        writeln!(s, "module.exports.{} = {};", enum_name, enum_name).unwrap();
+    }
+
     writeln!(s).unwrap();
 
-    writeln!(s, "export const {}Desc: Record<{}, string> = {{", enum_name, enum_name).unwrap();
-    for e in &valid {
-        writeln!(s, "    [{}.{}]: \"{}\",", enum_name, e.name, ts_escape(&e.desc)).unwrap();
+    match module_kind {
+        crate::enums::ModuleKind::Esm => {
+            writeln!(s, "export const {}Desc: Record<{}, string> = {{", enum_name, enum_name).unwrap();
+            for e in &valid {
+                writeln!(s, "    [{}.{}]: \"{}\",", enum_name, e.name, ts_escape(&e.desc)).unwrap();
+            }
+            writeln!(s, "}};").unwrap();
+        }
+        crate::enums::ModuleKind::CommonJs => {
+            writeln!(s, "const {}Desc = {{", enum_name).unwrap();
+            for e in &valid {
+                writeln!(s, "    [{}[\"{}\"]]: \"{}\",", enum_name, e.name, ts_escape(&e.desc)).unwrap();
+            }
+            writeln!(s, "}};").unwrap();
+            writeln!(s, "module.exports.{}Desc = {}Desc;", enum_name, enum_name).unwrap();
+        }
     }
-    writeln!(s, "}};").unwrap();
     s
 }
 
@@ -388,6 +458,10 @@ pub fn export_all_typescript(project: &Project, side: TypeScriptSide) -> Result<
         .and_then(|t| t.output.as_deref())
         .unwrap_or(side.default_output());
 
+    let module_kind = ts
+        .and_then(|t| t.module_kind)
+        .unwrap_or(crate::enums::ModuleKind::default());
+
     let line_ending = LineEnding::from_config(
         export_cfg.and_then(|e| e.line_ending.map(|l| l.as_str()))
             .unwrap_or("lf")
@@ -403,21 +477,21 @@ pub fn export_all_typescript(project: &Project, side: TypeScriptSide) -> Result<
     for group in &project.groups {
         for table in &group.tables {
             if table.deleted { continue; }
-            let src = export_table_ts(table, side);
+            let src = export_table_ts(table, side, module_kind);
             let file_path = output_dir.join(format!("{}.ts", &table.name));
             collected.push((file_path, opts.encode(&src)));
         }
 
         for constant in &group.constants {
             if constant.deleted { continue; }
-            let src = export_constant_ts(constant, sep, side);
+            let src = export_constant_ts(constant, sep, side, module_kind);
             let file_path = output_dir.join(format!("{}.ts", &constant.name));
             collected.push((file_path, opts.encode(&src)));
         }
 
         for enum_def in &group.enums {
             if enum_def.deleted { continue; }
-            let src = export_enum_ts(enum_def);
+            let src = export_enum_ts(enum_def, module_kind);
             let file_path = output_dir.join(format!("{}.ts", &enum_def.name));
             collected.push((file_path, opts.encode(&src)));
         }
@@ -511,7 +585,7 @@ mod tests {
             deleted: false,
             original: String::new(),
         };
-        let out = export_enum_ts(&e);
+        let out = export_enum_ts(&e, crate::enums::ModuleKind::Esm);
         assert!(out.contains("export enum HeroTypeEnum {"));
         assert!(out.contains("Warrior = 1,"));
         assert!(out.contains("Mage = 2,"));

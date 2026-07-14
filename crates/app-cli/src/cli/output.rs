@@ -101,6 +101,9 @@ pub fn print_override_warnings_cli(out: &OverrideOutcome) {
             OverrideWarning::Unknown(key) => {
                 eprintln!("警告: 未知配置项 '{}'", key);
             }
+            OverrideWarning::Invalid(msg) => {
+                eprintln!("警告: {}", msg);
+            }
         }
     }
 }
