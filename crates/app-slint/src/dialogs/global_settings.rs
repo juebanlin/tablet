@@ -149,11 +149,6 @@ pub fn push(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
         let line_ending_idx = tablet_core::enums::LineEnding::all().iter().position(|&l| l == line_ending).unwrap_or(0) as i32;
         ui_h.set_gs_export_line_ending_index(line_ending_idx);
     }
-
-    state.borrow_mut().engine.ui_log(format!(
-        "[全局设置] push 设置 UI 值: picker_trigger_header={}, picker_trigger_data={}",
-        header_val, data_val
-    ));
 }
 
 fn push_separators(ui_h: &AppWindow, sep: &SeparatorsSection) {
