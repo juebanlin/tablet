@@ -172,10 +172,7 @@ impl Default for ServerExport {
             go: Some(GoExport::default()),
             cpp: Some(CppExport::default()),
             csharp_dotnet: Some(CSharpExport::default()),
-            typescript: Some(TypeScriptExport {
-                output: Some("gen/server/typescript".to_string()),
-                module_kind: Some(crate::enums::ModuleKind::default()),
-            }),
+            typescript: Some(TypeScriptExport::default_server()),
         }
     }
 }
@@ -258,10 +255,7 @@ impl Default for ClientConfig {
         Self {
             lua: Some(LuaExport::default()),
             gdscript: Some(GdScriptExport::default()),
-            typescript: Some(TypeScriptExport {
-                output: Some("gen/client/typescript".to_string()),
-                module_kind: Some(crate::enums::ModuleKind::default()),
-            }),
+            typescript: Some(TypeScriptExport::default_client()),
             csharp_unity: Some(CSharpExport {
                 namespace: Some("Game.Config.Client".to_string()),
                 code_output: Some("gen/client/csharp_unity".to_string()),
@@ -304,6 +298,22 @@ impl Default for GdScriptExport {
 pub struct TypeScriptExport {
     pub output: Option<String>,
     pub module_kind: Option<crate::enums::ModuleKind>,
+}
+
+impl TypeScriptExport {
+    pub fn default_server() -> Self {
+        Self {
+            output: Some("gen/server/typescript".to_string()),
+            module_kind: Some(crate::enums::ModuleKind::default()),
+        }
+    }
+
+    pub fn default_client() -> Self {
+        Self {
+            output: Some("gen/client/typescript".to_string()),
+            module_kind: Some(crate::enums::ModuleKind::default()),
+        }
+    }
 }
 
 impl Default for TypeScriptExport {

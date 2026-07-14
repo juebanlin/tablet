@@ -287,18 +287,15 @@ fn ensure_export_client_lua(config: &mut ProjectConfig) {
 fn ensure_export_client_typescript(config: &mut ProjectConfig) {
     ensure_export_client(config);
     if config.export.as_ref().unwrap().client.as_ref().unwrap().typescript.is_none() {
-        config.export.as_mut().unwrap().client.as_mut().unwrap().typescript = Some(TypeScriptExport {
-            output: None,
-            module_kind: Some(tablet_core::enums::ModuleKind::default()),
-        });
+        config.export.as_mut().unwrap().client.as_mut().unwrap().typescript =
+            Some(tablet_core::model::TypeScriptExport::default_client());
     }
 }
 
 fn ensure_export_server_typescript(config: &mut ProjectConfig) {
     ensure_export_server(config);
     if config.export.as_ref().unwrap().server.as_ref().unwrap().typescript.is_none() {
-        config.export.as_mut().unwrap().server.as_mut().unwrap().typescript = Some(TypeScriptExport {
-            output: None, module_kind: None,
-        });
+        config.export.as_mut().unwrap().server.as_mut().unwrap().typescript =
+            Some(tablet_core::model::TypeScriptExport::default_server());
     }
 }
