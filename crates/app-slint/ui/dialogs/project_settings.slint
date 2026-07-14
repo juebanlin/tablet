@@ -2,9 +2,9 @@
 
 import { Theme } from "../theme.slint";
 import { DialogChrome } from "dialog_chrome.slint";
-import { Button, LineEdit, ScrollView } from "std-widgets.slint";
+import { Button, LineEdit, ScrollView, ComboBox } from "std-widgets.slint";
 
-// Tab segmented bar：身份 / 分隔符
+// Tab segmented bar：身份 / 分隔符 / 导出设置
 component TabBar inherits Rectangle {
     in property <int> current: 0;
     callback changed(int);
@@ -42,6 +42,18 @@ component TabBar inherits Rectangle {
                 horizontal-alignment: center;
             }
             TouchArea { clicked => { root.changed(1); } }
+        }
+        Rectangle {
+            width: 96px;
+            background: root.current == 2 ? Theme.bg-row-selected : transparent;
+            Text {
+                text: "导出设置";
+                font-size: Theme.fs-normal;
+                color: Theme.text-primary;
+                vertical-alignment: center;
+                horizontal-alignment: center;
+            }
+            TouchArea { clicked => { root.changed(2); } }
         }
     }
 }
@@ -101,6 +113,10 @@ component SepRow inherits HorizontalLayout {
 export component ProjectSettingsDialog inherits Rectangle {
     in property <bool> open: false;
     in property <int> tab: 0;
+    in-out property <bool> identity-tab-modified: false;
+    in-out property <bool> sep-tab-modified: false;
+    in-out property <bool> export-tab-modified: false;
+
     // 身份 buf
     in-out property <string> id-buf;
     in-out property <string> name-buf;
@@ -137,6 +153,37 @@ export component ProjectSettingsDialog inherits Rectangle {
     in-out property <string> sep-ml-item;
     in-out property <string> sep-ml-entry;
 
+    // 枚举选项列表（由后端推送）
+    in property <[string]> ps-encoding-options;
+    in property <[string]> ps-line-ending-options;
+    in property <[string]> ps-json-empty-as-options;
+    in property <[string]> ps-xml-empty-as-options;
+    in property <[string]> ps-cpp-json-lib-options;
+
+    // 导出设置 buf
+    in-out property <int> ps-export-encoding-index;
+    in-out property <int> ps-export-line-ending-index;
+    in-out property <int> ps-export-json-empty-as-index;
+    in-out property <int> ps-export-xml-empty-as-index;
+    in-out property <string> ps-export-server-data-output;
+    in-out property <string> ps-export-java-package;
+    in-out property <string> ps-export-java-code-output;
+    in-out property <string> ps-export-go-package;
+    in-out property <string> ps-export-go-code-output;
+    in-out property <string> ps-export-cpp-namespace;
+    in-out property <string> ps-export-cpp-code-output;
+    in-out property <int> ps-export-cpp-json-lib-index;
+    in-out property <string> ps-export-csharp-dotnet-namespace;
+    in-out property <string> ps-export-csharp-dotnet-code-output;
+    in-out property <string> ps-export-typescript-server-code-output;
+    in-out property <string> ps-export-lua-output;
+    in-out property <string> ps-export-gdscript-output;
+    in-out property <string> ps-export-typescript-client-output;
+    in-out property <string> ps-export-csharp-unity-namespace;
+    in-out property <string> ps-export-csharp-unity-code-output;
+    in-out property <string> ps-export-csharp-godot-namespace;
+    in-out property <string> ps-export-csharp-godot-code-output;
+
     callback tab-changed(int);
     callback id-edited(string);
     callback name-edited(string);
@@ -144,7 +191,10 @@ export component ProjectSettingsDialog inherits Rectangle {
     callback version-edited(string);
     /// (key, value) — key 与 # @sep 行 key 一致
     callback sep-edited(string, string);
+    callback export-field-edited(string, string);
     callback reset-sep();
+    callback reset-export();
+    callback undo-clicked();
     callback confirm();
     callback cancel();
 
@@ -161,9 +211,19 @@ export component ProjectSettingsDialog inherits Rectangle {
         primary-clicked => { root.confirm(); }
         cancel-clicked => { root.cancel(); }
         scrim-clicked => { root.cancel(); }
-        show-secondary: root.tab == 1;
+        show-secondary: root.tab == 1 || root.tab == 2;
         secondary-text: "恢复默认";
-        secondary-clicked => { root.reset-sep(); }
+        secondary-clicked => {
+            if root.tab == 1 {
+                root.reset-sep();
+            } else if root.tab == 2 {
+                root.reset-export();
+            }
+        }
+        show-third: true;
+        third-text: "撤销改动";
+        undo-enabled: root.tab == 0 ? root.identity-tab-modified : (root.tab == 1 ? root.sep-tab-modified : root.export-tab-modified);
+        third-clicked => { root.undo-clicked(); }
 
         VerticalLayout {
             spacing: 0;
@@ -337,6 +397,286 @@ export component ProjectSettingsDialog inherits Rectangle {
                         edited2(s) => { root.sep-edited("Map_List.item", s); }
                         edited3(s) => { root.sep-edited("Map_List.entry", s); }
                     }
+                }
+            }
+
+            // 导出设置 tab
+            if root.tab == 2: ScrollView {
+                vertical-stretch: 1;
+                VerticalLayout {
+                    padding: Theme.sp-4;
+                    spacing: Theme.sp-4;
+
+                    // 通用设置
+                    Text { text: "通用设置"; color: Theme.text-secondary; font-size: Theme.fs-small; font-weight: 600; }
+                    HorizontalLayout {
+                        spacing: Theme.sp-3;
+                        alignment: start;
+                        Text { text: "编码:"; width: 140px; vertical-alignment: center; color: Theme.text-primary; }
+                        ComboBox {
+                            model: root.ps-encoding-options;
+                            current-index <=> root.ps-export-encoding-index;
+                            width: 180px;
+                            selected(s) => { root.export-field-edited("encoding", s); }
+                        }
+                    }
+                    HorizontalLayout {
+                        spacing: Theme.sp-3;
+                        alignment: start;
+                        Text { text: "换行符:"; width: 140px; vertical-alignment: center; color: Theme.text-primary; }
+                        ComboBox {
+                            model: root.ps-line-ending-options;
+                            current-index <=> root.ps-export-line-ending-index;
+                            width: 180px;
+                            selected(s) => { root.export-field-edited("line_ending", s); }
+                        }
+                    }
+
+                    Rectangle { height: 1px; background: Theme.border; }
+
+                    // JSON/XML 配置
+                    Text { text: "数据格式"; color: Theme.text-secondary; font-size: Theme.fs-small; font-weight: 600; }
+                    HorizontalLayout {
+                        spacing: Theme.sp-3;
+                        alignment: start;
+                        Text { text: "JSON 空值处理:"; width: 140px; vertical-alignment: center; color: Theme.text-primary; }
+                        ComboBox {
+                            model: root.ps-json-empty-as-options;
+                            current-index <=> root.ps-export-json-empty-as-index;
+                            width: 180px;
+                            selected(s) => { root.export-field-edited("json_empty_as", s); }
+                        }
+                    }
+                    HorizontalLayout {
+                        spacing: Theme.sp-3;
+                        alignment: start;
+                        Text { text: "XML 空值处理:"; width: 140px; vertical-alignment: center; color: Theme.text-primary; }
+                        ComboBox {
+                            model: root.ps-xml-empty-as-options;
+                            current-index <=> root.ps-export-xml-empty-as-index;
+                            width: 180px;
+                            selected(s) => { root.export-field-edited("xml_empty_as", s); }
+                        }
+                    }
+
+                    Rectangle { height: 1px; background: Theme.border; }
+
+                    // 服务端配置
+                    Text { text: "服务端"; color: Theme.text-secondary; font-size: Theme.fs-small; font-weight: 600; }
+                    HorizontalLayout {
+                        spacing: Theme.sp-3;
+                        alignment: start;
+                        Text { text: "数据输出目录:"; width: 140px; vertical-alignment: center; color: Theme.text-primary; }
+                        LineEdit {
+                            text <=> root.ps-export-server-data-output;
+                            width: 300px;
+                            edited(s) => { root.export-field-edited("server_data_output", s); }
+                        }
+                    }
+
+                    Text { text: "Java"; color: Theme.text-secondary; font-size: Theme.fs-tiny; }
+                    HorizontalLayout {
+                        spacing: Theme.sp-3;
+                        alignment: start;
+                        Text { text: "  package:"; width: 140px; vertical-alignment: center; color: Theme.text-primary; }
+                        LineEdit {
+                            text <=> root.ps-export-java-package;
+                            width: 300px;
+                            edited(s) => { root.export-field-edited("java_package", s); }
+                        }
+                    }
+                    HorizontalLayout {
+                        spacing: Theme.sp-3;
+                        alignment: start;
+                        Text { text: "  code_output:"; width: 140px; vertical-alignment: center; color: Theme.text-primary; }
+                        LineEdit {
+                            text <=> root.ps-export-java-code-output;
+                            width: 300px;
+                            edited(s) => { root.export-field-edited("java_code_output", s); }
+                        }
+                    }
+
+                    Text { text: "Go"; color: Theme.text-secondary; font-size: Theme.fs-tiny; }
+                    HorizontalLayout {
+                        spacing: Theme.sp-3;
+                        alignment: start;
+                        Text { text: "  package:"; width: 140px; vertical-alignment: center; color: Theme.text-primary; }
+                        LineEdit {
+                            text <=> root.ps-export-go-package;
+                            width: 300px;
+                            edited(s) => { root.export-field-edited("go_package", s); }
+                        }
+                    }
+                    HorizontalLayout {
+                        spacing: Theme.sp-3;
+                        alignment: start;
+                        Text { text: "  code_output:"; width: 140px; vertical-alignment: center; color: Theme.text-primary; }
+                        LineEdit {
+                            text <=> root.ps-export-go-code-output;
+                            width: 300px;
+                            edited(s) => { root.export-field-edited("go_code_output", s); }
+                        }
+                    }
+
+                    Text { text: "C++"; color: Theme.text-secondary; font-size: Theme.fs-tiny; }
+                    HorizontalLayout {
+                        spacing: Theme.sp-3;
+                        alignment: start;
+                        Text { text: "  namespace:"; width: 140px; vertical-alignment: center; color: Theme.text-primary; }
+                        LineEdit {
+                            text <=> root.ps-export-cpp-namespace;
+                            width: 300px;
+                            edited(s) => { root.export-field-edited("cpp_namespace", s); }
+                        }
+                    }
+                    HorizontalLayout {
+                        spacing: Theme.sp-3;
+                        alignment: start;
+                        Text { text: "  code_output:"; width: 140px; vertical-alignment: center; color: Theme.text-primary; }
+                        LineEdit {
+                            text <=> root.ps-export-cpp-code-output;
+                            width: 300px;
+                            edited(s) => { root.export-field-edited("cpp_code_output", s); }
+                        }
+                    }
+                    HorizontalLayout {
+                        spacing: Theme.sp-3;
+                        alignment: start;
+                        Text { text: "  json_lib:"; width: 140px; vertical-alignment: center; color: Theme.text-primary; }
+                        ComboBox {
+                            model: root.ps-cpp-json-lib-options;
+                            current-index <=> root.ps-export-cpp-json-lib-index;
+                            width: 180px;
+                            selected(s) => { root.export-field-edited("cpp_json_lib", s); }
+                        }
+                    }
+
+                    Text { text: "C# (.NET)"; color: Theme.text-secondary; font-size: Theme.fs-tiny; }
+                    HorizontalLayout {
+                        spacing: Theme.sp-3;
+                        alignment: start;
+                        Text { text: "  namespace:"; width: 140px; vertical-alignment: center; color: Theme.text-primary; }
+                        LineEdit {
+                            text <=> root.ps-export-csharp-dotnet-namespace;
+                            width: 300px;
+                            edited(s) => { root.export-field-edited("csharp_dotnet_namespace", s); }
+                        }
+                    }
+                    HorizontalLayout {
+                        spacing: Theme.sp-3;
+                        alignment: start;
+                        Text { text: "  code_output:"; width: 140px; vertical-alignment: center; color: Theme.text-primary; }
+                        LineEdit {
+                            text <=> root.ps-export-csharp-dotnet-code-output;
+                            width: 300px;
+                            edited(s) => { root.export-field-edited("csharp_dotnet_code_output", s); }
+                        }
+                    }
+
+                    Text { text: "TypeScript"; color: Theme.text-secondary; font-size: Theme.fs-tiny; }
+                    HorizontalLayout {
+                        spacing: Theme.sp-3;
+                        alignment: start;
+                        Text { text: "  code_output:"; width: 140px; vertical-alignment: center; color: Theme.text-primary; }
+                        LineEdit {
+                            text <=> root.ps-export-typescript-server-code-output;
+                            width: 300px;
+                            edited(s) => { root.export-field-edited("typescript_server_code_output", s); }
+                        }
+                    }
+
+                    Rectangle { height: 1px; background: Theme.border; }
+
+                    // 客户端配置
+                    Text { text: "客户端"; color: Theme.text-secondary; font-size: Theme.fs-small; font-weight: 600; }
+
+                    Text { text: "Lua"; color: Theme.text-secondary; font-size: Theme.fs-tiny; }
+                    HorizontalLayout {
+                        spacing: Theme.sp-3;
+                        alignment: start;
+                        Text { text: "  output:"; width: 140px; vertical-alignment: center; color: Theme.text-primary; }
+                        LineEdit {
+                            text <=> root.ps-export-lua-output;
+                            width: 300px;
+                            edited(s) => { root.export-field-edited("lua_output", s); }
+                        }
+                    }
+
+                    Text { text: "GDScript"; color: Theme.text-secondary; font-size: Theme.fs-tiny; }
+                    HorizontalLayout {
+                        spacing: Theme.sp-3;
+                        alignment: start;
+                        Text { text: "  output:"; width: 140px; vertical-alignment: center; color: Theme.text-primary; }
+                        LineEdit {
+                            text <=> root.ps-export-gdscript-output;
+                            width: 300px;
+                            edited(s) => { root.export-field-edited("gdscript_output", s); }
+                        }
+                    }
+
+                    Text { text: "TypeScript"; color: Theme.text-secondary; font-size: Theme.fs-tiny; }
+                    HorizontalLayout {
+                        spacing: Theme.sp-3;
+                        alignment: start;
+                        Text { text: "  output:"; width: 140px; vertical-alignment: center; color: Theme.text-primary; }
+                        LineEdit {
+                            text <=> root.ps-export-typescript-client-output;
+                            width: 300px;
+                            edited(s) => { root.export-field-edited("typescript_client_output", s); }
+                        }
+                    }
+
+                    Text { text: "C# (Unity)"; color: Theme.text-secondary; font-size: Theme.fs-tiny; }
+                    HorizontalLayout {
+                        spacing: Theme.sp-3;
+                        alignment: start;
+                        Text { text: "  namespace:"; width: 140px; vertical-alignment: center; color: Theme.text-primary; }
+                        LineEdit {
+                            text <=> root.ps-export-csharp-unity-namespace;
+                            width: 300px;
+                            edited(s) => { root.export-field-edited("csharp_unity_namespace", s); }
+                        }
+                    }
+                    HorizontalLayout {
+                        spacing: Theme.sp-3;
+                        alignment: start;
+                        Text { text: "  code_output:"; width: 140px; vertical-alignment: center; color: Theme.text-primary; }
+                        LineEdit {
+                            text <=> root.ps-export-csharp-unity-code-output;
+                            width: 300px;
+                            edited(s) => { root.export-field-edited("csharp_unity_code_output", s); }
+                        }
+                    }
+
+                    Text { text: "C# (Godot)"; color: Theme.text-secondary; font-size: Theme.fs-tiny; }
+                    HorizontalLayout {
+                        spacing: Theme.sp-3;
+                        alignment: start;
+                        Text { text: "  namespace:"; width: 140px; vertical-alignment: center; color: Theme.text-primary; }
+                        LineEdit {
+                            text <=> root.ps-export-csharp-godot-namespace;
+                            width: 300px;
+                            edited(s) => { root.export-field-edited("csharp_godot_namespace", s); }
+                        }
+                    }
+                    HorizontalLayout {
+                        spacing: Theme.sp-3;
+                        alignment: start;
+                        Text { text: "  code_output:"; width: 140px; vertical-alignment: center; color: Theme.text-primary; }
+                        LineEdit {
+                            text <=> root.ps-export-csharp-godot-code-output;
+                            width: 300px;
+                            edited(s) => { root.export-field-edited("csharp_godot_code_output", s); }
+                        }
+                    }
+
+                    Text {
+                        text: "提示：导出配置点确定后更新内存，需保存项目才写盘。";
+                        color: Theme.text-secondary;
+                        font-size: Theme.fs-tiny;
+                        wrap: word-wrap;
+                    }
+                    Rectangle { vertical-stretch: 1; }
                 }
             }
         }

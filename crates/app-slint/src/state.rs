@@ -739,8 +739,16 @@ pub struct ProjectSettingsState {
     pub open: bool,
     /// 当前编辑的 project id（也是 dialog 打开时的 old_id）
     pub project_id: String,
-    /// 0=身份  1=分隔符
+    /// 0=身份  1=分隔符  2=导出设置
     pub tab: i32,
+
+    // 修改标记（对比 current 快照计算得出）
+    pub identity_tab_modified: bool,
+    pub sep_tab_modified: bool,
+    pub export_tab_modified: bool,
+
+    // —— apply buffer：待应用的编辑缓冲 ——
+    // 身份字段（来自 schema.meta）
     pub id_buf: String,
     pub name_buf: String,
     pub category_buf: String,
@@ -750,8 +758,17 @@ pub struct ProjectSettingsState {
     /// id 是否可编辑：仅未落盘项目（克隆 / 新建）允许改 id；
     /// 已存盘项目 id 固定（改 id 需 rename 目录，风险大），UI 禁用输入。
     pub id_editable: bool,
-    /// 分隔符编辑缓冲
+
+    // 分隔符缓冲（来自 schema.separators）
     pub sep: tablet_core::types::SeparatorsSection,
+
+    // 导出配置缓冲（来自 config.export）
+    pub export: tablet_core::model::ExportConfig,
+
+    // —— current：当前已保存的值快照 ——
+    pub current_meta: Option<tablet_core::tblschema::SchemaMetadata>,
+    pub current_sep: Option<tablet_core::types::SeparatorsSection>,
+    pub current_export: Option<tablet_core::model::ExportConfig>,
 }
 
 impl ProjectSettingsState {
@@ -759,6 +776,9 @@ impl ProjectSettingsState {
         self.open = false;
         self.project_id.clear();
         self.tab = 0;
+        self.identity_tab_modified = false;
+        self.sep_tab_modified = false;
+        self.export_tab_modified = false;
         self.id_buf.clear();
         self.name_buf.clear();
         self.category_buf.clear();
@@ -766,6 +786,37 @@ impl ProjectSettingsState {
         self.id_error.clear();
         self.id_editable = false;
         self.sep = tablet_core::types::SeparatorsSection::default();
+        self.export = tablet_core::model::ExportConfig::default();
+        self.current_meta = None;
+        self.current_sep = None;
+        self.current_export = None;
+    }
+
+    pub fn undo(&mut self) {
+        match self.tab {
+            0 => {
+                if let Some(ref meta) = self.current_meta {
+                    self.id_buf = meta.id.clone();
+                    self.name_buf = meta.name.clone();
+                    self.category_buf = meta.category.clone();
+                    self.version_buf = meta.version.clone();
+                    self.identity_tab_modified = false;
+                }
+            }
+            1 => {
+                if let Some(ref sep) = self.current_sep {
+                    self.sep = sep.clone();
+                    self.sep_tab_modified = false;
+                }
+            }
+            2 => {
+                if let Some(ref export) = self.current_export {
+                    self.export = export.clone();
+                    self.export_tab_modified = false;
+                }
+            }
+            _ => {}
+        }
     }
 }
 

@@ -372,13 +372,46 @@ export component AppWindow inherits Window {
     in-out property <string> ps-sep-ml-kv;
     in-out property <string> ps-sep-ml-item;
     in-out property <string> ps-sep-ml-entry;
+    in-out property <bool> ps-identity-tab-modified: false;
+    in-out property <bool> ps-sep-tab-modified: false;
+    in-out property <bool> ps-export-tab-modified: false;
+    in-out property <[string]> ps-encoding-options;
+    in-out property <[string]> ps-line-ending-options;
+    in-out property <[string]> ps-json-empty-as-options;
+    in-out property <[string]> ps-xml-empty-as-options;
+    in-out property <[string]> ps-cpp-json-lib-options;
+    in-out property <int> ps-export-encoding-index;
+    in-out property <int> ps-export-line-ending-index;
+    in-out property <int> ps-export-json-empty-as-index;
+    in-out property <int> ps-export-xml-empty-as-index;
+    in-out property <int> ps-export-cpp-json-lib-index;
+    in-out property <string> ps-export-server-data-output;
+    in-out property <string> ps-export-java-package;
+    in-out property <string> ps-export-java-code-output;
+    in-out property <string> ps-export-go-package;
+    in-out property <string> ps-export-go-code-output;
+    in-out property <string> ps-export-cpp-namespace;
+    in-out property <string> ps-export-cpp-code-output;
+    in-out property <string> ps-export-csharp-dotnet-namespace;
+    in-out property <string> ps-export-csharp-dotnet-code-output;
+    in-out property <string> ps-export-typescript-server-code-output;
+    in-out property <string> ps-export-lua-output;
+    in-out property <string> ps-export-gdscript-output;
+    in-out property <string> ps-export-typescript-client-output;
+    in-out property <string> ps-export-csharp-unity-namespace;
+    in-out property <string> ps-export-csharp-unity-code-output;
+    in-out property <string> ps-export-csharp-godot-namespace;
+    in-out property <string> ps-export-csharp-godot-code-output;
     callback ps-tab-changed(int);
     callback ps-id-edited(string);
     callback ps-name-edited(string);
     callback ps-category-edited(string);
     callback ps-version-edited(string);
     callback ps-sep-edited(string, string);
+    callback ps-export-field-edited(string, string);
     callback ps-reset-sep();
+    callback ps-reset-export();
+    callback ps-undo-clicked();
     callback ps-confirm();
     callback ps-cancel();
 
@@ -878,6 +911,18 @@ export component AppWindow inherits Window {
     ProjectSettingsDialog {
         open: root.dlg-ps-open;
         tab: root.ps-tab;
+        identity-tab-modified <=> root.ps-identity-tab-modified;
+        sep-tab-modified <=> root.ps-sep-tab-modified;
+        export-tab-modified <=> root.ps-export-tab-modified;
+        // ⚠️ 枚举下拉框选项列表传递（新增枚举时必须在此添加 xxx-options 绑定）
+        // 每个枚举 ComboBox 需要传递对应的 options，否则下拉框显示空值
+        // 后端：project_settings.rs:open_for() 调用 ui_h.set_xxx_options()
+        // 前端：此处必须传递 xxx-options: root.xxx-options
+        ps-encoding-options: root.ps-encoding-options;
+        ps-line-ending-options: root.ps-line-ending-options;
+        ps-json-empty-as-options: root.ps-json-empty-as-options;
+        ps-xml-empty-as-options: root.ps-xml-empty-as-options;
+        ps-cpp-json-lib-options: root.ps-cpp-json-lib-options;
         id-buf <=> root.ps-id-buf;
         name-buf <=> root.ps-name-buf;
         category-buf <=> root.ps-category-buf;
@@ -910,13 +955,38 @@ export component AppWindow inherits Window {
         sep-ml-kv <=> root.ps-sep-ml-kv;
         sep-ml-item <=> root.ps-sep-ml-item;
         sep-ml-entry <=> root.ps-sep-ml-entry;
+        ps-export-encoding-index <=> root.ps-export-encoding-index;
+        ps-export-line-ending-index <=> root.ps-export-line-ending-index;
+        ps-export-json-empty-as-index <=> root.ps-export-json-empty-as-index;
+        ps-export-xml-empty-as-index <=> root.ps-export-xml-empty-as-index;
+        ps-export-cpp-json-lib-index <=> root.ps-export-cpp-json-lib-index;
+        ps-export-server-data-output <=> root.ps-export-server-data-output;
+        ps-export-java-package <=> root.ps-export-java-package;
+        ps-export-java-code-output <=> root.ps-export-java-code-output;
+        ps-export-go-package <=> root.ps-export-go-package;
+        ps-export-go-code-output <=> root.ps-export-go-code-output;
+        ps-export-cpp-namespace <=> root.ps-export-cpp-namespace;
+        ps-export-cpp-code-output <=> root.ps-export-cpp-code-output;
+        ps-export-csharp-dotnet-namespace <=> root.ps-export-csharp-dotnet-namespace;
+        ps-export-csharp-dotnet-code-output <=> root.ps-export-csharp-dotnet-code-output;
+        ps-export-typescript-server-code-output <=> root.ps-export-typescript-server-code-output;
+        ps-export-lua-output <=> root.ps-export-lua-output;
+        ps-export-gdscript-output <=> root.ps-export-gdscript-output;
+        ps-export-typescript-client-output <=> root.ps-export-typescript-client-output;
+        ps-export-csharp-unity-namespace <=> root.ps-export-csharp-unity-namespace;
+        ps-export-csharp-unity-code-output <=> root.ps-export-csharp-unity-code-output;
+        ps-export-csharp-godot-namespace <=> root.ps-export-csharp-godot-namespace;
+        ps-export-csharp-godot-code-output <=> root.ps-export-csharp-godot-code-output;
         tab-changed(i) => { root.ps-tab = i; root.ps-tab-changed(i); }
         id-edited(s) => { root.ps-id-edited(s); }
         name-edited(s) => { root.ps-name-edited(s); }
         category-edited(s) => { root.ps-category-edited(s); }
         version-edited(s) => { root.ps-version-edited(s); }
         sep-edited(k, v) => { root.ps-sep-edited(k, v); }
+        export-field-edited(k, v) => { root.ps-export-field-edited(k, v); }
         reset-sep => { root.ps-reset-sep(); }
+        reset-export => { root.ps-reset-export(); }
+        undo-clicked => { root.ps-undo-clicked(); }
         confirm => { root.ps-confirm(); }
         cancel => { root.ps-cancel(); }
     }
