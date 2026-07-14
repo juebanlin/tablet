@@ -292,14 +292,10 @@ pub fn export_all_lua(project: &Project) -> Result<super::ExportResult> {
         .unwrap_or("gen/client");
 
     let line_ending = LineEnding::from_config(
-        lua.and_then(|l| l.line_ending.map(|l| l.as_str()))
-            .or_else(|| client.and_then(|c| c.line_ending.map(|l| l.as_str())))
-            .or_else(|| export_cfg.and_then(|e| e.line_ending.map(|l| l.as_str())))
+        export_cfg.and_then(|e| e.line_ending.map(|l| l.as_str()))
             .unwrap_or("lf")
     );
-    let encoding = lua.and_then(|l| l.encoding.map(|e| e.as_str()))
-        .or_else(|| client.and_then(|c| c.encoding.map(|e| e.as_str())))
-        .or_else(|| export_cfg.and_then(|e| e.encoding.map(|e| e.as_str())))
+    let encoding = export_cfg.and_then(|e| e.encoding.map(|e| e.as_str()))
         .unwrap_or("utf-8").to_string();
     let opts = super::ExportOptions { line_ending, encoding };
 

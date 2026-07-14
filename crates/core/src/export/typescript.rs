@@ -375,22 +375,12 @@ pub fn export_all_typescript(project: &Project, side: TypeScriptSide) -> Result<
     let export_cfg = project.config.export.as_ref();
 
     // 按 side 取对应段；fall-back 串：side 段 → 父段（client/server）→ 顶层 export → 默认
-    let (ts, parent_line_ending, parent_encoding) = match side {
+    let ts = match side {
         TypeScriptSide::Client => {
-            let parent = export_cfg.and_then(|e| e.client.as_ref());
-            (
-                parent.and_then(|c| c.typescript.as_ref()),
-                parent.and_then(|c| c.line_ending.map(|l| l.as_str())),
-                parent.and_then(|c| c.encoding.map(|e| e.as_str())),
-            )
+            export_cfg.and_then(|e| e.client.as_ref()).and_then(|c| c.typescript.as_ref())
         }
         TypeScriptSide::Server => {
-            let parent = export_cfg.and_then(|e| e.server.as_ref());
-            (
-                parent.and_then(|s| s.typescript.as_ref()),
-                parent.and_then(|s| s.line_ending.map(|l| l.as_str())),
-                parent.and_then(|s| s.encoding.map(|e| e.as_str())),
-            )
+            export_cfg.and_then(|e| e.server.as_ref()).and_then(|s| s.typescript.as_ref())
         }
     };
 
@@ -399,14 +389,10 @@ pub fn export_all_typescript(project: &Project, side: TypeScriptSide) -> Result<
         .unwrap_or(side.default_output());
 
     let line_ending = LineEnding::from_config(
-        ts.and_then(|t| t.line_ending.map(|l| l.as_str()))
-            .or(parent_line_ending)
-            .or_else(|| export_cfg.and_then(|e| e.line_ending.map(|l| l.as_str())))
+        export_cfg.and_then(|e| e.line_ending.map(|l| l.as_str()))
             .unwrap_or("lf")
     );
-    let encoding = ts.and_then(|t| t.encoding.map(|e| e.as_str()))
-        .or(parent_encoding)
-        .or_else(|| export_cfg.and_then(|e| e.encoding.map(|e| e.as_str())))
+    let encoding = export_cfg.and_then(|e| e.encoding.map(|e| e.as_str()))
         .unwrap_or("utf-8").to_string();
     let opts = super::ExportOptions { line_ending, encoding };
 

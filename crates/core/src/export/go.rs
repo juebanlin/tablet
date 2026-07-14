@@ -230,14 +230,10 @@ pub fn export_all_go(project: &Project) -> Result<super::ExportResult> {
         .unwrap_or("config");
 
     let line_ending = LineEnding::from_config(
-        go.and_then(|g| g.line_ending.map(|l| l.as_str()))
-            .or_else(|| server.and_then(|s| s.line_ending.map(|l| l.as_str())))
-            .or_else(|| export_cfg.and_then(|e| e.line_ending.map(|l| l.as_str())))
+        export_cfg.and_then(|e| e.line_ending.map(|l| l.as_str()))
             .unwrap_or("lf")
     );
-    let encoding = go.and_then(|g| g.encoding.map(|e| e.as_str()))
-        .or_else(|| server.and_then(|s| s.encoding.map(|e| e.as_str())))
-        .or_else(|| export_cfg.and_then(|e| e.encoding.map(|e| e.as_str())))
+    let encoding = export_cfg.and_then(|e| e.encoding.map(|e| e.as_str()))
         .unwrap_or("utf-8").to_string();
     let opts = super::ExportOptions { line_ending, encoding };
 

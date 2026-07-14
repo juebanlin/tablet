@@ -166,14 +166,14 @@ fn ensure_export(config: &mut ProjectConfig) {
 fn ensure_export_json(config: &mut ProjectConfig) {
     ensure_export(config);
     if config.export.as_ref().unwrap().json.is_none() {
-        config.export.as_mut().unwrap().json = Some(JsonExport { empty_as: None, line_ending: None, encoding: None });
+        config.export.as_mut().unwrap().json = Some(JsonExport { empty_as: None });
     }
 }
 
 fn ensure_export_xml(config: &mut ProjectConfig) {
     ensure_export(config);
     if config.export.as_ref().unwrap().xml.is_none() {
-        config.export.as_mut().unwrap().xml = Some(XmlExport { empty_as: None, line_ending: None, encoding: None });
+        config.export.as_mut().unwrap().xml = Some(XmlExport { empty_as: None });
     }
 }
 
@@ -183,7 +183,6 @@ fn ensure_export_server(config: &mut ProjectConfig) {
         config.export.as_mut().unwrap().server = Some(ServerExport {
             data_output: None, java: None, go: None, cpp: None, csharp_dotnet: None,
             typescript: None,
-            line_ending: None, encoding: None,
         });
     }
 }
@@ -192,7 +191,7 @@ fn ensure_export_server_java(config: &mut ProjectConfig) {
     ensure_export_server(config);
     if config.export.as_ref().unwrap().server.as_ref().unwrap().java.is_none() {
         config.export.as_mut().unwrap().server.as_mut().unwrap().java = Some(JavaExport {
-            package: None, code_output: None, line_ending: None, encoding: None,
+            package: None, code_output: None,
         });
     }
 }
@@ -201,7 +200,7 @@ fn ensure_export_server_go(config: &mut ProjectConfig) {
     ensure_export_server(config);
     if config.export.as_ref().unwrap().server.as_ref().unwrap().go.is_none() {
         config.export.as_mut().unwrap().server.as_mut().unwrap().go = Some(GoExport {
-            package: None, code_output: None, line_ending: None, encoding: None,
+            package: None, code_output: None,
         });
     }
 }
@@ -211,7 +210,6 @@ fn ensure_export_server_cpp(config: &mut ProjectConfig) {
     if config.export.as_ref().unwrap().server.as_ref().unwrap().cpp.is_none() {
         config.export.as_mut().unwrap().server.as_mut().unwrap().cpp = Some(CppExport {
             namespace: None, code_output: None, json_lib: None,
-            line_ending: None, encoding: None,
         });
     }
 }
@@ -220,7 +218,7 @@ fn ensure_export_server_csharp_dotnet(config: &mut ProjectConfig) {
     ensure_export_server(config);
     if config.export.as_ref().unwrap().server.as_ref().unwrap().csharp_dotnet.is_none() {
         config.export.as_mut().unwrap().server.as_mut().unwrap().csharp_dotnet = Some(CSharpExport {
-            namespace: None, code_output: None, line_ending: None, encoding: None,
+            namespace: None, code_output: None,
         });
     }
 }
@@ -231,7 +229,6 @@ fn ensure_export_client(config: &mut ProjectConfig) {
         config.export.as_mut().unwrap().client = Some(ClientConfig {
             lua: None, gdscript: None, typescript: None,
             csharp_unity: None, csharp_godot: None,
-            line_ending: None, encoding: None,
         });
     }
 }
@@ -240,7 +237,7 @@ fn ensure_export_client_csharp_unity(config: &mut ProjectConfig) {
     ensure_export_client(config);
     if config.export.as_ref().unwrap().client.as_ref().unwrap().csharp_unity.is_none() {
         config.export.as_mut().unwrap().client.as_mut().unwrap().csharp_unity = Some(CSharpExport {
-            namespace: None, code_output: None, line_ending: None, encoding: None,
+            namespace: None, code_output: None,
         });
     }
 }
@@ -249,7 +246,7 @@ fn ensure_export_client_csharp_godot(config: &mut ProjectConfig) {
     ensure_export_client(config);
     if config.export.as_ref().unwrap().client.as_ref().unwrap().csharp_godot.is_none() {
         config.export.as_mut().unwrap().client.as_mut().unwrap().csharp_godot = Some(CSharpExport {
-            namespace: None, code_output: None, line_ending: None, encoding: None,
+            namespace: None, code_output: None,
         });
     }
 }
@@ -258,7 +255,7 @@ fn ensure_export_client_lua(config: &mut ProjectConfig) {
     ensure_export_client(config);
     if config.export.as_ref().unwrap().client.as_ref().unwrap().lua.is_none() {
         config.export.as_mut().unwrap().client.as_mut().unwrap().lua = Some(LuaExport {
-            output: None, line_ending: None, encoding: None,
+            output: None,
         });
     }
 }
@@ -267,7 +264,7 @@ fn ensure_export_client_typescript(config: &mut ProjectConfig) {
     ensure_export_client(config);
     if config.export.as_ref().unwrap().client.as_ref().unwrap().typescript.is_none() {
         config.export.as_mut().unwrap().client.as_mut().unwrap().typescript = Some(TypeScriptExport {
-            output: None, module_kind: None, line_ending: None, encoding: None,
+            output: None, module_kind: None,
         });
     }
 }
@@ -276,7 +273,7 @@ fn ensure_export_server_typescript(config: &mut ProjectConfig) {
     ensure_export_server(config);
     if config.export.as_ref().unwrap().server.as_ref().unwrap().typescript.is_none() {
         config.export.as_mut().unwrap().server.as_mut().unwrap().typescript = Some(TypeScriptExport {
-            output: None, module_kind: None, line_ending: None, encoding: None,
+            output: None, module_kind: None,
         });
     }
 }

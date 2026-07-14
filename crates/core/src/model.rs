@@ -85,8 +85,8 @@ impl Default for GlobalConfig {
     fn default() -> Self {
         Self {
             project_management: default_project_management_section(),
-            export: None,
-            ui: None,
+            export: Some(ExportConfig::default()),
+            ui: Some(UiConfig::default()),
             separators: crate::types::SeparatorsSection::default(),
         }
     }
@@ -101,7 +101,7 @@ fn default_project_management_section() -> ProjectManagementConfig {
     }
 }
 
-#[derive(Debug, Clone, Default, PartialEq, serde::Deserialize, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, serde::Deserialize, serde::Serialize)]
 pub struct ExportConfig {
     pub json: Option<JsonExport>,
     pub xml: Option<XmlExport>,
@@ -113,24 +113,45 @@ pub struct ExportConfig {
     pub line_ending: Option<LineEnding>,
 }
 
+impl Default for ExportConfig {
+    fn default() -> Self {
+        Self {
+            json: Some(JsonExport::default()),
+            xml: Some(XmlExport::default()),
+            server: Some(ServerExport::default()),
+            client: Some(ClientConfig::default()),
+            encoding: Some(Encoding::Utf8),
+            line_ending: Some(LineEnding::Lf),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, serde::Deserialize, serde::Serialize)]
 pub struct JsonExport {
     #[serde(default)]
     pub empty_as: Option<JsonEmptyAs>,
-    #[serde(default)]
-    pub line_ending: Option<LineEnding>,
-    #[serde(default)]
-    pub encoding: Option<Encoding>,
+}
+
+impl Default for JsonExport {
+    fn default() -> Self {
+        Self {
+            empty_as: Some(JsonEmptyAs::Null),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, serde::Deserialize, serde::Serialize)]
 pub struct XmlExport {
     #[serde(default)]
     pub empty_as: Option<XmlEmptyAs>,
-    #[serde(default)]
-    pub line_ending: Option<LineEnding>,
-    #[serde(default)]
-    pub encoding: Option<Encoding>,
+}
+
+impl Default for XmlExport {
+    fn default() -> Self {
+        Self {
+            empty_as: Some(XmlEmptyAs::Empty),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, serde::Deserialize, serde::Serialize)]
@@ -141,30 +162,52 @@ pub struct ServerExport {
     pub cpp: Option<CppExport>,
     pub csharp_dotnet: Option<CSharpExport>,
     pub typescript: Option<TypeScriptExport>,
-    #[serde(default)]
-    pub line_ending: Option<LineEnding>,
-    #[serde(default)]
-    pub encoding: Option<Encoding>,
+}
+
+impl Default for ServerExport {
+    fn default() -> Self {
+        Self {
+            data_output: Some("gen/server/data".to_string()),
+            java: Some(JavaExport::default()),
+            go: Some(GoExport::default()),
+            cpp: Some(CppExport::default()),
+            csharp_dotnet: Some(CSharpExport::default()),
+            typescript: Some(TypeScriptExport {
+                output: Some("gen/server/typescript".to_string()),
+                module_kind: None,
+            }),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, serde::Deserialize, serde::Serialize)]
 pub struct JavaExport {
     pub package: Option<String>,
     pub code_output: Option<String>,
-    #[serde(default)]
-    pub line_ending: Option<LineEnding>,
-    #[serde(default)]
-    pub encoding: Option<Encoding>,
+}
+
+impl Default for JavaExport {
+    fn default() -> Self {
+        Self {
+            package: Some("com.game.config".to_string()),
+            code_output: Some("gen/server/java".to_string()),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, serde::Deserialize, serde::Serialize)]
 pub struct GoExport {
     pub package: Option<String>,
     pub code_output: Option<String>,
-    #[serde(default)]
-    pub line_ending: Option<LineEnding>,
-    #[serde(default)]
-    pub encoding: Option<Encoding>,
+}
+
+impl Default for GoExport {
+    fn default() -> Self {
+        Self {
+            package: Some("config".to_string()),
+            code_output: Some("gen/server/go".to_string()),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, serde::Deserialize, serde::Serialize)]
@@ -173,10 +216,16 @@ pub struct CppExport {
     pub code_output: Option<String>,
     #[serde(default)]
     pub json_lib: Option<crate::enums::CppJsonLib>,
-    #[serde(default)]
-    pub line_ending: Option<LineEnding>,
-    #[serde(default)]
-    pub encoding: Option<Encoding>,
+}
+
+impl Default for CppExport {
+    fn default() -> Self {
+        Self {
+            namespace: Some("game::config".to_string()),
+            code_output: Some("gen/server/cpp".to_string()),
+            json_lib: Some(crate::enums::CppJsonLib::Nlohmann),
+        }
+    }
 }
 
 /// 三个 runtime（dotnet / unity / godot）共用同一份 schema 定义，仅 Loader 不同。
@@ -184,10 +233,15 @@ pub struct CppExport {
 pub struct CSharpExport {
     pub namespace: Option<String>,
     pub code_output: Option<String>,
-    #[serde(default)]
-    pub line_ending: Option<LineEnding>,
-    #[serde(default)]
-    pub encoding: Option<Encoding>,
+}
+
+impl Default for CSharpExport {
+    fn default() -> Self {
+        Self {
+            namespace: Some("Game.Config.Server".to_string()),
+            code_output: Some("gen/server/csharp".to_string()),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, serde::Deserialize, serde::Serialize)]
@@ -197,41 +251,71 @@ pub struct ClientConfig {
     pub typescript: Option<TypeScriptExport>,
     pub csharp_unity: Option<CSharpExport>,
     pub csharp_godot: Option<CSharpExport>,
-    #[serde(default)]
-    pub line_ending: Option<LineEnding>,
-    #[serde(default)]
-    pub encoding: Option<Encoding>,
+}
+
+impl Default for ClientConfig {
+    fn default() -> Self {
+        Self {
+            lua: Some(LuaExport::default()),
+            gdscript: Some(GdScriptExport::default()),
+            typescript: Some(TypeScriptExport {
+                output: Some("gen/client/typescript".to_string()),
+                module_kind: None,
+            }),
+            csharp_unity: Some(CSharpExport {
+                namespace: Some("Game.Config.Client".to_string()),
+                code_output: Some("gen/client/csharp_unity".to_string()),
+            }),
+            csharp_godot: Some(CSharpExport {
+                namespace: Some("Game.Config.Client".to_string()),
+                code_output: Some("gen/client/csharp_godot".to_string()),
+            }),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, serde::Deserialize, serde::Serialize)]
 pub struct LuaExport {
     pub output: Option<String>,
-    #[serde(default)]
-    pub line_ending: Option<LineEnding>,
-    #[serde(default)]
-    pub encoding: Option<Encoding>,
+}
+
+impl Default for LuaExport {
+    fn default() -> Self {
+        Self {
+            output: Some("gen/client".to_string()),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, serde::Deserialize, serde::Serialize)]
 pub struct GdScriptExport {
     pub output: Option<String>,
-    #[serde(default)]
-    pub line_ending: Option<LineEnding>,
-    #[serde(default)]
-    pub encoding: Option<Encoding>,
+}
+
+impl Default for GdScriptExport {
+    fn default() -> Self {
+        Self {
+            output: Some("gen/client/gdscript".to_string()),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, serde::Deserialize, serde::Serialize)]
 pub struct TypeScriptExport {
     pub output: Option<String>,
     pub module_kind: Option<String>,
-    #[serde(default)]
-    pub line_ending: Option<LineEnding>,
-    #[serde(default)]
-    pub encoding: Option<Encoding>,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, serde::Deserialize, serde::Serialize)]
+impl Default for TypeScriptExport {
+    fn default() -> Self {
+        Self {
+            output: Some("gen/client/typescript".to_string()),
+            module_kind: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, serde::Deserialize, serde::Serialize)]
 pub struct UiConfig {
     #[serde(default = "default_true")]
     pub auto_commit_on_blur: bool,
@@ -258,6 +342,21 @@ pub struct UiConfig {
     /// 设 false 则恢复早期行为，schema 校验会把 constant 段里的 @Xxx 报为 ConstantRefForbidden。
     #[serde(default = "default_true")]
     pub constant_ref_allowed: bool,
+}
+
+impl Default for UiConfig {
+    fn default() -> Self {
+        Self {
+            auto_commit_on_blur: true,
+            realtime_validate: false,
+            log_level: Some(LogLevel::Debug),
+            ref_picker: RefPickerConfig::default(),
+            picker_trigger_header: PickerTrigger::Single,
+            picker_trigger_data: PickerTrigger::Double,
+            show_meta_id: false,
+            constant_ref_allowed: true,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq, serde::Deserialize, serde::Serialize)]

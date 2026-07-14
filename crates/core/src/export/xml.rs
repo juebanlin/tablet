@@ -109,12 +109,10 @@ pub fn export_all_xml(project: &Project) -> Result<super::ExportResult> {
     let strategy = EmptyStrategy::from_xml_config(strategy_str);
 
     let line_ending = LineEnding::from_config(
-        export_cfg.and_then(|e| e.xml.as_ref()).and_then(|x| x.line_ending.map(|l| l.as_str()))
-            .or_else(|| export_cfg.and_then(|e| e.line_ending.map(|l| l.as_str())))
+        export_cfg.and_then(|e| e.line_ending.map(|l| l.as_str()))
             .unwrap_or("lf")
     );
-    let encoding = export_cfg.and_then(|e| e.xml.as_ref()).and_then(|x| x.encoding.map(|e| e.as_str()))
-        .or_else(|| export_cfg.and_then(|e| e.encoding.map(|e| e.as_str())))
+    let encoding = export_cfg.and_then(|e| e.encoding.map(|e| e.as_str()))
         .unwrap_or("utf-8").to_string();
     let opts = super::ExportOptions { line_ending, encoding };
 
@@ -156,12 +154,10 @@ pub fn export_xml_filtered(project: &Project, filter: &super::DataFilter) -> Res
     let strategy = EmptyStrategy::from_xml_config(strategy_str);
 
     let line_ending = LineEnding::from_config(
-        export_cfg.and_then(|e| e.xml.as_ref()).and_then(|x| x.line_ending.map(|l| l.as_str()))
-            .or_else(|| export_cfg.and_then(|e| e.line_ending.map(|l| l.as_str())))
+        export_cfg.and_then(|e| e.line_ending.map(|l| l.as_str()))
             .unwrap_or("lf")
     );
-    let encoding = export_cfg.and_then(|e| e.xml.as_ref()).and_then(|x| x.encoding.map(|e| e.as_str()))
-        .or_else(|| export_cfg.and_then(|e| e.encoding.map(|e| e.as_str())))
+    let encoding = export_cfg.and_then(|e| e.encoding.map(|e| e.as_str()))
         .unwrap_or("utf-8").to_string();
     let opts = super::ExportOptions { line_ending, encoding };
 
