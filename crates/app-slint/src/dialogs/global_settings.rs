@@ -92,6 +92,30 @@ pub fn open(state: &Rc<RefCell<AppState>>, ui_h: &AppWindow) {
     let line_ending_opts: Vec<slint::SharedString> = LineEnding::all_str().iter().map(|s| (*s).into()).collect();
     ui_h.set_gs_line_ending_options(slint::ModelRc::new(slint::VecModel::from(line_ending_opts)));
 
+    // JsonEmptyAs：先设置 index，再设置 model（与 Encoding/LineEnding 保持一致）
+    let json_empty_as = gs.export.json.as_ref().and_then(|j| j.empty_as).unwrap_or(JsonEmptyAs::default());
+    let json_empty_as_idx = JsonEmptyAs::all().iter().position(|&e| e == json_empty_as).unwrap_or(0) as i32;
+    ui_h.set_gs_export_json_empty_as_index(json_empty_as_idx);
+    let json_empty_as_opts: Vec<slint::SharedString> = JsonEmptyAs::all_str().iter().map(|s| (*s).into()).collect();
+    ui_h.set_gs_json_empty_as_options(slint::ModelRc::new(slint::VecModel::from(json_empty_as_opts)));
+
+    // XmlEmptyAs：先设置 index，再设置 model（与 Encoding/LineEnding 保持一致）
+    let xml_empty_as = gs.export.xml.as_ref().and_then(|x| x.empty_as).unwrap_or(XmlEmptyAs::default());
+    let xml_empty_as_idx = XmlEmptyAs::all().iter().position(|&e| e == xml_empty_as).unwrap_or(0) as i32;
+    ui_h.set_gs_export_xml_empty_as_index(xml_empty_as_idx);
+    let xml_empty_as_opts: Vec<slint::SharedString> = XmlEmptyAs::all_str().iter().map(|s| (*s).into()).collect();
+    ui_h.set_gs_xml_empty_as_options(slint::ModelRc::new(slint::VecModel::from(xml_empty_as_opts)));
+
+    // CppJsonLib：先设置 index，再设置 model（与 Encoding/LineEnding 保持一致）
+    let cpp_json_lib = gs.export.server.as_ref()
+        .and_then(|s| s.cpp.as_ref())
+        .and_then(|c| c.json_lib)
+        .unwrap_or(CppJsonLib::default());
+    let cpp_json_lib_idx = CppJsonLib::all().iter().position(|&l| l == cpp_json_lib).unwrap_or(0) as i32;
+    ui_h.set_gs_export_cpp_json_lib_index(cpp_json_lib_idx);
+    let cpp_json_lib_opts: Vec<slint::SharedString> = CppJsonLib::all_str().iter().map(|s| (*s).into()).collect();
+    ui_h.set_gs_cpp_json_lib_options(slint::ModelRc::new(slint::VecModel::from(cpp_json_lib_opts)));
+
     // 调试日志：打印 apply buffer 的值
     st.engine.ui_log(format!(
         "[全局设置] open 设置初始值: picker_trigger_header={}, picker_trigger_data={}",
@@ -142,6 +166,74 @@ pub fn push(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
     let line_ending = gs.export.line_ending.unwrap_or(tablet_core::enums::LineEnding::default());
     let line_ending_idx = tablet_core::enums::LineEnding::all().iter().position(|&l| l == line_ending).unwrap_or(0) as i32;
     ui_h.set_gs_export_line_ending_index(line_ending_idx);
+
+    // JSON/XML 空值处理
+    let json_empty_as = gs.export.json.as_ref().and_then(|j| j.empty_as).unwrap_or(tablet_core::enums::JsonEmptyAs::default());
+    let json_empty_as_idx = tablet_core::enums::JsonEmptyAs::all().iter().position(|&e| e == json_empty_as).unwrap_or(0) as i32;
+    ui_h.set_gs_export_json_empty_as_index(json_empty_as_idx);
+
+    let xml_empty_as = gs.export.xml.as_ref().and_then(|x| x.empty_as).unwrap_or(tablet_core::enums::XmlEmptyAs::default());
+    let xml_empty_as_idx = tablet_core::enums::XmlEmptyAs::all().iter().position(|&e| e == xml_empty_as).unwrap_or(0) as i32;
+    ui_h.set_gs_export_xml_empty_as_index(xml_empty_as_idx);
+
+    // Server
+    ui_h.set_gs_export_server_data_output(
+        gs.export.server.as_ref().and_then(|s| s.data_output.as_ref()).cloned().unwrap_or_default().into()
+    );
+    ui_h.set_gs_export_java_package(
+        gs.export.server.as_ref().and_then(|s| s.java.as_ref()).and_then(|j| j.package.as_ref()).cloned().unwrap_or_default().into()
+    );
+    ui_h.set_gs_export_java_code_output(
+        gs.export.server.as_ref().and_then(|s| s.java.as_ref()).and_then(|j| j.code_output.as_ref()).cloned().unwrap_or_default().into()
+    );
+    ui_h.set_gs_export_go_package(
+        gs.export.server.as_ref().and_then(|s| s.go.as_ref()).and_then(|g| g.package.as_ref()).cloned().unwrap_or_default().into()
+    );
+    ui_h.set_gs_export_go_code_output(
+        gs.export.server.as_ref().and_then(|s| s.go.as_ref()).and_then(|g| g.code_output.as_ref()).cloned().unwrap_or_default().into()
+    );
+    ui_h.set_gs_export_cpp_namespace(
+        gs.export.server.as_ref().and_then(|s| s.cpp.as_ref()).and_then(|c| c.namespace.as_ref()).cloned().unwrap_or_default().into()
+    );
+    ui_h.set_gs_export_cpp_code_output(
+        gs.export.server.as_ref().and_then(|s| s.cpp.as_ref()).and_then(|c| c.code_output.as_ref()).cloned().unwrap_or_default().into()
+    );
+    let cpp_json_lib = gs.export.server.as_ref().and_then(|s| s.cpp.as_ref()).and_then(|c| c.json_lib).unwrap_or(tablet_core::enums::CppJsonLib::default());
+    let cpp_json_lib_idx = tablet_core::enums::CppJsonLib::all().iter().position(|&l| l == cpp_json_lib).unwrap_or(0) as i32;
+    ui_h.set_gs_export_cpp_json_lib_index(cpp_json_lib_idx);
+
+    ui_h.set_gs_export_csharp_dotnet_namespace(
+        gs.export.server.as_ref().and_then(|s| s.csharp_dotnet.as_ref()).and_then(|c| c.namespace.as_ref()).cloned().unwrap_or_default().into()
+    );
+    ui_h.set_gs_export_csharp_dotnet_code_output(
+        gs.export.server.as_ref().and_then(|s| s.csharp_dotnet.as_ref()).and_then(|c| c.code_output.as_ref()).cloned().unwrap_or_default().into()
+    );
+    ui_h.set_gs_export_typescript_server_code_output(
+        gs.export.server.as_ref().and_then(|s| s.typescript.as_ref()).and_then(|t| t.output.as_ref()).cloned().unwrap_or_default().into()
+    );
+
+    // Client
+    ui_h.set_gs_export_lua_output(
+        gs.export.client.as_ref().and_then(|c| c.lua.as_ref()).and_then(|l| l.output.as_ref()).cloned().unwrap_or_default().into()
+    );
+    ui_h.set_gs_export_gdscript_output(
+        gs.export.client.as_ref().and_then(|c| c.gdscript.as_ref()).and_then(|g| g.output.as_ref()).cloned().unwrap_or_default().into()
+    );
+    ui_h.set_gs_export_typescript_client_output(
+        gs.export.client.as_ref().and_then(|c| c.typescript.as_ref()).and_then(|t| t.output.as_ref()).cloned().unwrap_or_default().into()
+    );
+    ui_h.set_gs_export_csharp_unity_namespace(
+        gs.export.client.as_ref().and_then(|c| c.csharp_unity.as_ref()).and_then(|u| u.namespace.as_ref()).cloned().unwrap_or_default().into()
+    );
+    ui_h.set_gs_export_csharp_unity_code_output(
+        gs.export.client.as_ref().and_then(|c| c.csharp_unity.as_ref()).and_then(|u| u.code_output.as_ref()).cloned().unwrap_or_default().into()
+    );
+    ui_h.set_gs_export_csharp_godot_namespace(
+        gs.export.client.as_ref().and_then(|c| c.csharp_godot.as_ref()).and_then(|g| g.namespace.as_ref()).cloned().unwrap_or_default().into()
+    );
+    ui_h.set_gs_export_csharp_godot_code_output(
+        gs.export.client.as_ref().and_then(|c| c.csharp_godot.as_ref()).and_then(|g| g.code_output.as_ref()).cloned().unwrap_or_default().into()
+    );
 }
 
 fn push_separators(ui_h: &AppWindow, sep: &SeparatorsSection) {
@@ -315,6 +407,180 @@ pub fn wire(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
                     } else {
                         tablet_core::enums::LineEnding::from_str(&value).ok()
                     };
+                }
+                "json_empty_as" => {
+                    if gs.export.json.is_none() {
+                        gs.export.json = Some(tablet_core::model::JsonExport::default());
+                    }
+                    gs.export.json.as_mut().unwrap().empty_as =
+                        tablet_core::enums::JsonEmptyAs::from_str(&value).ok();
+                }
+                "xml_empty_as" => {
+                    if gs.export.xml.is_none() {
+                        gs.export.xml = Some(tablet_core::model::XmlExport::default());
+                    }
+                    gs.export.xml.as_mut().unwrap().empty_as =
+                        tablet_core::enums::XmlEmptyAs::from_str(&value).ok();
+                }
+                "server_data_output" => {
+                    if gs.export.server.is_none() {
+                        gs.export.server = Some(tablet_core::model::ServerExport::default());
+                    }
+                    gs.export.server.as_mut().unwrap().data_output = Some(value.to_string());
+                }
+                "java_package" => {
+                    if gs.export.server.is_none() {
+                        gs.export.server = Some(tablet_core::model::ServerExport::default());
+                    }
+                    if gs.export.server.as_mut().unwrap().java.is_none() {
+                        gs.export.server.as_mut().unwrap().java = Some(tablet_core::model::JavaExport::default());
+                    }
+                    gs.export.server.as_mut().unwrap().java.as_mut().unwrap().package = Some(value.to_string());
+                }
+                "java_code_output" => {
+                    if gs.export.server.is_none() {
+                        gs.export.server = Some(tablet_core::model::ServerExport::default());
+                    }
+                    if gs.export.server.as_mut().unwrap().java.is_none() {
+                        gs.export.server.as_mut().unwrap().java = Some(tablet_core::model::JavaExport::default());
+                    }
+                    gs.export.server.as_mut().unwrap().java.as_mut().unwrap().code_output = Some(value.to_string());
+                }
+                "go_package" => {
+                    if gs.export.server.is_none() {
+                        gs.export.server = Some(tablet_core::model::ServerExport::default());
+                    }
+                    if gs.export.server.as_mut().unwrap().go.is_none() {
+                        gs.export.server.as_mut().unwrap().go = Some(tablet_core::model::GoExport::default());
+                    }
+                    gs.export.server.as_mut().unwrap().go.as_mut().unwrap().package = Some(value.to_string());
+                }
+                "go_code_output" => {
+                    if gs.export.server.is_none() {
+                        gs.export.server = Some(tablet_core::model::ServerExport::default());
+                    }
+                    if gs.export.server.as_mut().unwrap().go.is_none() {
+                        gs.export.server.as_mut().unwrap().go = Some(tablet_core::model::GoExport::default());
+                    }
+                    gs.export.server.as_mut().unwrap().go.as_mut().unwrap().code_output = Some(value.to_string());
+                }
+                "cpp_namespace" => {
+                    if gs.export.server.is_none() {
+                        gs.export.server = Some(tablet_core::model::ServerExport::default());
+                    }
+                    if gs.export.server.as_mut().unwrap().cpp.is_none() {
+                        gs.export.server.as_mut().unwrap().cpp = Some(tablet_core::model::CppExport::default());
+                    }
+                    gs.export.server.as_mut().unwrap().cpp.as_mut().unwrap().namespace = Some(value.to_string());
+                }
+                "cpp_code_output" => {
+                    if gs.export.server.is_none() {
+                        gs.export.server = Some(tablet_core::model::ServerExport::default());
+                    }
+                    if gs.export.server.as_mut().unwrap().cpp.is_none() {
+                        gs.export.server.as_mut().unwrap().cpp = Some(tablet_core::model::CppExport::default());
+                    }
+                    gs.export.server.as_mut().unwrap().cpp.as_mut().unwrap().code_output = Some(value.to_string());
+                }
+                "cpp_json_lib" => {
+                    if gs.export.server.is_none() {
+                        gs.export.server = Some(tablet_core::model::ServerExport::default());
+                    }
+                    if gs.export.server.as_mut().unwrap().cpp.is_none() {
+                        gs.export.server.as_mut().unwrap().cpp = Some(tablet_core::model::CppExport::default());
+                    }
+                    gs.export.server.as_mut().unwrap().cpp.as_mut().unwrap().json_lib =
+                        tablet_core::enums::CppJsonLib::from_str(&value).ok();
+                }
+                "csharp_dotnet_namespace" => {
+                    if gs.export.server.is_none() {
+                        gs.export.server = Some(tablet_core::model::ServerExport::default());
+                    }
+                    if gs.export.server.as_mut().unwrap().csharp_dotnet.is_none() {
+                        gs.export.server.as_mut().unwrap().csharp_dotnet = Some(tablet_core::model::DotNetExport::default());
+                    }
+                    gs.export.server.as_mut().unwrap().csharp_dotnet.as_mut().unwrap().namespace = Some(value.to_string());
+                }
+                "csharp_dotnet_code_output" => {
+                    if gs.export.server.is_none() {
+                        gs.export.server = Some(tablet_core::model::ServerExport::default());
+                    }
+                    if gs.export.server.as_mut().unwrap().csharp_dotnet.is_none() {
+                        gs.export.server.as_mut().unwrap().csharp_dotnet = Some(tablet_core::model::DotNetExport::default());
+                    }
+                    gs.export.server.as_mut().unwrap().csharp_dotnet.as_mut().unwrap().code_output = Some(value.to_string());
+                }
+                "typescript_server_code_output" => {
+                    if gs.export.server.is_none() {
+                        gs.export.server = Some(tablet_core::model::ServerExport::default());
+                    }
+                    if gs.export.server.as_mut().unwrap().typescript.is_none() {
+                        gs.export.server.as_mut().unwrap().typescript = Some(tablet_core::model::ServerTypeScriptExport::default());
+                    }
+                    gs.export.server.as_mut().unwrap().typescript.as_mut().unwrap().output = Some(value.to_string());
+                }
+                "lua_output" => {
+                    if gs.export.client.is_none() {
+                        gs.export.client = Some(tablet_core::model::ClientConfig::default());
+                    }
+                    if gs.export.client.as_mut().unwrap().lua.is_none() {
+                        gs.export.client.as_mut().unwrap().lua = Some(tablet_core::model::LuaExport::default());
+                    }
+                    gs.export.client.as_mut().unwrap().lua.as_mut().unwrap().output = Some(value.to_string());
+                }
+                "gdscript_output" => {
+                    if gs.export.client.is_none() {
+                        gs.export.client = Some(tablet_core::model::ClientConfig::default());
+                    }
+                    if gs.export.client.as_mut().unwrap().gdscript.is_none() {
+                        gs.export.client.as_mut().unwrap().gdscript = Some(tablet_core::model::GdScriptExport::default());
+                    }
+                    gs.export.client.as_mut().unwrap().gdscript.as_mut().unwrap().output = Some(value.to_string());
+                }
+                "typescript_client_output" => {
+                    if gs.export.client.is_none() {
+                        gs.export.client = Some(tablet_core::model::ClientConfig::default());
+                    }
+                    if gs.export.client.as_mut().unwrap().typescript.is_none() {
+                        gs.export.client.as_mut().unwrap().typescript = Some(tablet_core::model::ClientTypeScriptExport::default());
+                    }
+                    gs.export.client.as_mut().unwrap().typescript.as_mut().unwrap().output = Some(value.to_string());
+                }
+                "csharp_unity_namespace" => {
+                    if gs.export.client.is_none() {
+                        gs.export.client = Some(tablet_core::model::ClientConfig::default());
+                    }
+                    if gs.export.client.as_mut().unwrap().csharp_unity.is_none() {
+                        gs.export.client.as_mut().unwrap().csharp_unity = Some(tablet_core::model::UnityCSharpExport::default());
+                    }
+                    gs.export.client.as_mut().unwrap().csharp_unity.as_mut().unwrap().namespace = Some(value.to_string());
+                }
+                "csharp_unity_code_output" => {
+                    if gs.export.client.is_none() {
+                        gs.export.client = Some(tablet_core::model::ClientConfig::default());
+                    }
+                    if gs.export.client.as_mut().unwrap().csharp_unity.is_none() {
+                        gs.export.client.as_mut().unwrap().csharp_unity = Some(tablet_core::model::UnityCSharpExport::default());
+                    }
+                    gs.export.client.as_mut().unwrap().csharp_unity.as_mut().unwrap().code_output = Some(value.to_string());
+                }
+                "csharp_godot_namespace" => {
+                    if gs.export.client.is_none() {
+                        gs.export.client = Some(tablet_core::model::ClientConfig::default());
+                    }
+                    if gs.export.client.as_mut().unwrap().csharp_godot.is_none() {
+                        gs.export.client.as_mut().unwrap().csharp_godot = Some(tablet_core::model::GodotCSharpExport::default());
+                    }
+                    gs.export.client.as_mut().unwrap().csharp_godot.as_mut().unwrap().namespace = Some(value.to_string());
+                }
+                "csharp_godot_code_output" => {
+                    if gs.export.client.is_none() {
+                        gs.export.client = Some(tablet_core::model::ClientConfig::default());
+                    }
+                    if gs.export.client.as_mut().unwrap().csharp_godot.is_none() {
+                        gs.export.client.as_mut().unwrap().csharp_godot = Some(tablet_core::model::GodotCSharpExport::default());
+                    }
+                    gs.export.client.as_mut().unwrap().csharp_godot.as_mut().unwrap().code_output = Some(value.to_string());
                 }
                 _ => {}
             }

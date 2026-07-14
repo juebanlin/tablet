@@ -432,6 +432,29 @@ export component AppWindow inherits Window {
     // 导出设置
     in-out property <int> gs-export-encoding-index;
     in-out property <int> gs-export-line-ending-index;
+    in property <[string]> gs-json-empty-as-options;
+    in property <[string]> gs-xml-empty-as-options;
+    in property <[string]> gs-cpp-json-lib-options;
+    in-out property <int> gs-export-json-empty-as-index;
+    in-out property <int> gs-export-xml-empty-as-index;
+    in-out property <string> gs-export-server-data-output;
+    in-out property <string> gs-export-java-package;
+    in-out property <string> gs-export-java-code-output;
+    in-out property <string> gs-export-go-package;
+    in-out property <string> gs-export-go-code-output;
+    in-out property <string> gs-export-cpp-namespace;
+    in-out property <string> gs-export-cpp-code-output;
+    in-out property <int> gs-export-cpp-json-lib-index;
+    in-out property <string> gs-export-csharp-dotnet-namespace;
+    in-out property <string> gs-export-csharp-dotnet-code-output;
+    in-out property <string> gs-export-typescript-server-code-output;
+    in-out property <string> gs-export-lua-output;
+    in-out property <string> gs-export-gdscript-output;
+    in-out property <string> gs-export-typescript-client-output;
+    in-out property <string> gs-export-csharp-unity-namespace;
+    in-out property <string> gs-export-csharp-unity-code-output;
+    in-out property <string> gs-export-csharp-godot-namespace;
+    in-out property <string> gs-export-csharp-godot-code-output;
     callback gs-tab-changed(int);
     callback gs-ui-field-edited(string, string);
     callback gs-sep-edited(string, string);
@@ -904,11 +927,18 @@ export component AppWindow inherits Window {
         ui-tab-modified <=> root.gs-ui-tab-modified;
         sep-tab-modified <=> root.gs-sep-tab-modified;
         export-tab-modified <=> root.gs-export-tab-modified;
+        // ⚠️ 枚举下拉框选项列表传递（新增枚举时必须在此添加 xxx-options 绑定）
+        // 每个枚举 ComboBox 需要传递对应的 options，否则下拉框显示空值
+        // 后端：global_settings.rs:open() 调用 ui_h.set_xxx_options()
+        // 前端：此处必须传递 xxx-options: root.xxx-options
         gs-log-level-options: root.gs-log-level-options;
         gs-picker-trigger-options: root.gs-picker-trigger-options;
         gs-ref-picker-strategy-options: root.gs-ref-picker-strategy-options;
         gs-encoding-options: root.gs-encoding-options;
         gs-line-ending-options: root.gs-line-ending-options;
+        gs-json-empty-as-options: root.gs-json-empty-as-options;
+        gs-xml-empty-as-options: root.gs-xml-empty-as-options;
+        gs-cpp-json-lib-options: root.gs-cpp-json-lib-options;
         ui-auto-commit-on-blur <=> root.gs-ui-auto-commit-on-blur;
         ui-realtime-validate <=> root.gs-ui-realtime-validate;
         ui-log-level-index <=> root.gs-ui-log-level-index;
@@ -942,8 +972,28 @@ export component AppWindow inherits Window {
         sep-ml-kv <=> root.gs-sep-ml-kv;
         sep-ml-item <=> root.gs-sep-ml-item;
         sep-ml-entry <=> root.gs-sep-ml-entry;
-        export-encoding-index <=> root.gs-export-encoding-index;
-        export-line-ending-index <=> root.gs-export-line-ending-index;
+        gs-export-encoding-index <=> root.gs-export-encoding-index;
+        gs-export-line-ending-index <=> root.gs-export-line-ending-index;
+        gs-export-json-empty-as-index <=> root.gs-export-json-empty-as-index;
+        gs-export-xml-empty-as-index <=> root.gs-export-xml-empty-as-index;
+        gs-export-server-data-output <=> root.gs-export-server-data-output;
+        gs-export-java-package <=> root.gs-export-java-package;
+        gs-export-java-code-output <=> root.gs-export-java-code-output;
+        gs-export-go-package <=> root.gs-export-go-package;
+        gs-export-go-code-output <=> root.gs-export-go-code-output;
+        gs-export-cpp-namespace <=> root.gs-export-cpp-namespace;
+        gs-export-cpp-code-output <=> root.gs-export-cpp-code-output;
+        gs-export-cpp-json-lib-index <=> root.gs-export-cpp-json-lib-index;
+        gs-export-csharp-dotnet-namespace <=> root.gs-export-csharp-dotnet-namespace;
+        gs-export-csharp-dotnet-code-output <=> root.gs-export-csharp-dotnet-code-output;
+        gs-export-typescript-server-code-output <=> root.gs-export-typescript-server-code-output;
+        gs-export-lua-output <=> root.gs-export-lua-output;
+        gs-export-gdscript-output <=> root.gs-export-gdscript-output;
+        gs-export-typescript-client-output <=> root.gs-export-typescript-client-output;
+        gs-export-csharp-unity-namespace <=> root.gs-export-csharp-unity-namespace;
+        gs-export-csharp-unity-code-output <=> root.gs-export-csharp-unity-code-output;
+        gs-export-csharp-godot-namespace <=> root.gs-export-csharp-godot-namespace;
+        gs-export-csharp-godot-code-output <=> root.gs-export-csharp-godot-code-output;
         tab-changed(i) => { root.gs-tab = i; root.gs-tab-changed(i); }
         ui-field-edited(k, v) => { root.gs-ui-field-edited(k, v); }
         sep-edited(k, v) => { root.gs-sep-edited(k, v); }

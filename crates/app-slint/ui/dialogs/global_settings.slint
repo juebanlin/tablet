@@ -123,6 +123,9 @@ export component GlobalSettingsDialog inherits Rectangle {
     in property <[string]> gs-ref-picker-strategy-options;
     in property <[string]> gs-encoding-options;
     in property <[string]> gs-line-ending-options;
+    in property <[string]> gs-json-empty-as-options;
+    in property <[string]> gs-xml-empty-as-options;
+    in property <[string]> gs-cpp-json-lib-options;
 
     // UI 设置 buf
     in-out property <bool> ui-auto-commit-on-blur;
@@ -161,9 +164,29 @@ export component GlobalSettingsDialog inherits Rectangle {
     in-out property <string> sep-ml-item;
     in-out property <string> sep-ml-entry;
 
-    // 导出设置 buf（简化版：仅通用字段）
-    in-out property <int> export-encoding-index;
-    in-out property <int> export-line-ending-index;
+    // 导出设置 buf
+    in-out property <int> gs-export-encoding-index;
+    in-out property <int> gs-export-line-ending-index;
+    in-out property <int> gs-export-json-empty-as-index;
+    in-out property <int> gs-export-xml-empty-as-index;
+    in-out property <string> gs-export-server-data-output;
+    in-out property <string> gs-export-java-package;
+    in-out property <string> gs-export-java-code-output;
+    in-out property <string> gs-export-go-package;
+    in-out property <string> gs-export-go-code-output;
+    in-out property <string> gs-export-cpp-namespace;
+    in-out property <string> gs-export-cpp-code-output;
+    in-out property <int> gs-export-cpp-json-lib-index;
+    in-out property <string> gs-export-csharp-dotnet-namespace;
+    in-out property <string> gs-export-csharp-dotnet-code-output;
+    in-out property <string> gs-export-typescript-server-code-output;
+    in-out property <string> gs-export-lua-output;
+    in-out property <string> gs-export-gdscript-output;
+    in-out property <string> gs-export-typescript-client-output;
+    in-out property <string> gs-export-csharp-unity-namespace;
+    in-out property <string> gs-export-csharp-unity-code-output;
+    in-out property <string> gs-export-csharp-godot-namespace;
+    in-out property <string> gs-export-csharp-godot-code-output;
 
     callback tab-changed(int);
     callback ui-field-edited(string, string);
@@ -407,43 +430,276 @@ export component GlobalSettingsDialog inherits Rectangle {
                 }
             }
 
-            // 导出设置 tab（简化版，仅全局字段）
+            // 导出设置 tab
             if root.tab == 2: ScrollView {
                 vertical-stretch: 1;
                 VerticalLayout {
                     padding: Theme.sp-4;
-                    spacing: Theme.sp-3;
+                    spacing: Theme.sp-4;
 
-                    Text { text: "通用导出设置"; color: Theme.text-secondary; font-size: Theme.fs-small; }
+                    // 通用设置
+                    Text { text: "通用设置"; color: Theme.text-secondary; font-size: Theme.fs-small; font-weight: 600; }
                     HorizontalLayout {
                         spacing: Theme.sp-3;
                         alignment: start;
-                        Text { text: "编码:"; width: 120px; vertical-alignment: center; color: Theme.text-primary; }
+                        Text { text: "编码:"; width: 140px; vertical-alignment: center; color: Theme.text-primary; }
                         ComboBox {
                             model: root.gs-encoding-options;
-                            current-index <=> root.export-encoding-index;
-                            width: 160px;
+                            current-index <=> root.gs-export-encoding-index;
+                            width: 180px;
                             selected(s) => { root.export-field-edited("encoding", s); }
                         }
                     }
                     HorizontalLayout {
                         spacing: Theme.sp-3;
                         alignment: start;
-                        Text { text: "换行符:"; width: 120px; vertical-alignment: center; color: Theme.text-primary; }
+                        Text { text: "换行符:"; width: 140px; vertical-alignment: center; color: Theme.text-primary; }
                         ComboBox {
                             model: root.gs-line-ending-options;
-                            current-index <=> root.export-line-ending-index;
-                            width: 160px;
+                            current-index <=> root.gs-export-line-ending-index;
+                            width: 180px;
                             selected(s) => { root.export-field-edited("line_ending", s); }
                         }
                     }
 
-                    Text {
-                        text: "提示：导出配置的子段（JSON/XML/服务端等）暂不支持可视化编辑，请直接修改 tablet.toml。";
-                        color: Theme.text-secondary;
-                        font-size: Theme.fs-tiny;
-                        wrap: word-wrap;
+                    Rectangle { height: 1px; background: Theme.border; }
+
+                    // JSON/XML 配置
+                    Text { text: "数据格式"; color: Theme.text-secondary; font-size: Theme.fs-small; font-weight: 600; }
+                    HorizontalLayout {
+                        spacing: Theme.sp-3;
+                        alignment: start;
+                        Text { text: "JSON 空值处理:"; width: 140px; vertical-alignment: center; color: Theme.text-primary; }
+                        ComboBox {
+                            model: root.gs-json-empty-as-options;
+                            current-index <=> root.gs-export-json-empty-as-index;
+                            width: 180px;
+                            selected(s) => { root.export-field-edited("json_empty_as", s); }
+                        }
                     }
+                    HorizontalLayout {
+                        spacing: Theme.sp-3;
+                        alignment: start;
+                        Text { text: "XML 空值处理:"; width: 140px; vertical-alignment: center; color: Theme.text-primary; }
+                        ComboBox {
+                            model: root.gs-xml-empty-as-options;
+                            current-index <=> root.gs-export-xml-empty-as-index;
+                            width: 180px;
+                            selected(s) => { root.export-field-edited("xml_empty_as", s); }
+                        }
+                    }
+
+                    Rectangle { height: 1px; background: Theme.border; }
+
+                    // 服务端配置
+                    Text { text: "服务端"; color: Theme.text-secondary; font-size: Theme.fs-small; font-weight: 600; }
+                    HorizontalLayout {
+                        spacing: Theme.sp-3;
+                        alignment: start;
+                        Text { text: "数据输出目录:"; width: 140px; vertical-alignment: center; color: Theme.text-primary; }
+                        LineEdit {
+                            text <=> root.gs-export-server-data-output;
+                            width: 300px;
+                            edited(s) => { root.export-field-edited("server_data_output", s); }
+                        }
+                    }
+
+                    Text { text: "Java"; color: Theme.text-secondary; font-size: Theme.fs-tiny; }
+                    HorizontalLayout {
+                        spacing: Theme.sp-3;
+                        alignment: start;
+                        Text { text: "  package:"; width: 140px; vertical-alignment: center; color: Theme.text-primary; }
+                        LineEdit {
+                            text <=> root.gs-export-java-package;
+                            width: 300px;
+                            edited(s) => { root.export-field-edited("java_package", s); }
+                        }
+                    }
+                    HorizontalLayout {
+                        spacing: Theme.sp-3;
+                        alignment: start;
+                        Text { text: "  code_output:"; width: 140px; vertical-alignment: center; color: Theme.text-primary; }
+                        LineEdit {
+                            text <=> root.gs-export-java-code-output;
+                            width: 300px;
+                            edited(s) => { root.export-field-edited("java_code_output", s); }
+                        }
+                    }
+
+                    Text { text: "Go"; color: Theme.text-secondary; font-size: Theme.fs-tiny; }
+                    HorizontalLayout {
+                        spacing: Theme.sp-3;
+                        alignment: start;
+                        Text { text: "  package:"; width: 140px; vertical-alignment: center; color: Theme.text-primary; }
+                        LineEdit {
+                            text <=> root.gs-export-go-package;
+                            width: 300px;
+                            edited(s) => { root.export-field-edited("go_package", s); }
+                        }
+                    }
+                    HorizontalLayout {
+                        spacing: Theme.sp-3;
+                        alignment: start;
+                        Text { text: "  code_output:"; width: 140px; vertical-alignment: center; color: Theme.text-primary; }
+                        LineEdit {
+                            text <=> root.gs-export-go-code-output;
+                            width: 300px;
+                            edited(s) => { root.export-field-edited("go_code_output", s); }
+                        }
+                    }
+
+                    Text { text: "C++"; color: Theme.text-secondary; font-size: Theme.fs-tiny; }
+                    HorizontalLayout {
+                        spacing: Theme.sp-3;
+                        alignment: start;
+                        Text { text: "  namespace:"; width: 140px; vertical-alignment: center; color: Theme.text-primary; }
+                        LineEdit {
+                            text <=> root.gs-export-cpp-namespace;
+                            width: 300px;
+                            edited(s) => { root.export-field-edited("cpp_namespace", s); }
+                        }
+                    }
+                    HorizontalLayout {
+                        spacing: Theme.sp-3;
+                        alignment: start;
+                        Text { text: "  code_output:"; width: 140px; vertical-alignment: center; color: Theme.text-primary; }
+                        LineEdit {
+                            text <=> root.gs-export-cpp-code-output;
+                            width: 300px;
+                            edited(s) => { root.export-field-edited("cpp_code_output", s); }
+                        }
+                    }
+                    HorizontalLayout {
+                        spacing: Theme.sp-3;
+                        alignment: start;
+                        Text { text: "  json_lib:"; width: 140px; vertical-alignment: center; color: Theme.text-primary; }
+                        ComboBox {
+                            model: root.gs-cpp-json-lib-options;
+                            current-index <=> root.gs-export-cpp-json-lib-index;
+                            width: 180px;
+                            selected(s) => { root.export-field-edited("cpp_json_lib", s); }
+                        }
+                    }
+
+                    Text { text: "C# (.NET)"; color: Theme.text-secondary; font-size: Theme.fs-tiny; }
+                    HorizontalLayout {
+                        spacing: Theme.sp-3;
+                        alignment: start;
+                        Text { text: "  namespace:"; width: 140px; vertical-alignment: center; color: Theme.text-primary; }
+                        LineEdit {
+                            text <=> root.gs-export-csharp-dotnet-namespace;
+                            width: 300px;
+                            edited(s) => { root.export-field-edited("csharp_dotnet_namespace", s); }
+                        }
+                    }
+                    HorizontalLayout {
+                        spacing: Theme.sp-3;
+                        alignment: start;
+                        Text { text: "  code_output:"; width: 140px; vertical-alignment: center; color: Theme.text-primary; }
+                        LineEdit {
+                            text <=> root.gs-export-csharp-dotnet-code-output;
+                            width: 300px;
+                            edited(s) => { root.export-field-edited("csharp_dotnet_code_output", s); }
+                        }
+                    }
+
+                    Text { text: "TypeScript"; color: Theme.text-secondary; font-size: Theme.fs-tiny; }
+                    HorizontalLayout {
+                        spacing: Theme.sp-3;
+                        alignment: start;
+                        Text { text: "  code_output:"; width: 140px; vertical-alignment: center; color: Theme.text-primary; }
+                        LineEdit {
+                            text <=> root.gs-export-typescript-server-code-output;
+                            width: 300px;
+                            edited(s) => { root.export-field-edited("typescript_server_code_output", s); }
+                        }
+                    }
+
+                    Rectangle { height: 1px; background: Theme.border; }
+
+                    // 客户端配置
+                    Text { text: "客户端"; color: Theme.text-secondary; font-size: Theme.fs-small; font-weight: 600; }
+
+                    Text { text: "Lua"; color: Theme.text-secondary; font-size: Theme.fs-tiny; }
+                    HorizontalLayout {
+                        spacing: Theme.sp-3;
+                        alignment: start;
+                        Text { text: "  output:"; width: 140px; vertical-alignment: center; color: Theme.text-primary; }
+                        LineEdit {
+                            text <=> root.gs-export-lua-output;
+                            width: 300px;
+                            edited(s) => { root.export-field-edited("lua_output", s); }
+                        }
+                    }
+
+                    Text { text: "GDScript"; color: Theme.text-secondary; font-size: Theme.fs-tiny; }
+                    HorizontalLayout {
+                        spacing: Theme.sp-3;
+                        alignment: start;
+                        Text { text: "  output:"; width: 140px; vertical-alignment: center; color: Theme.text-primary; }
+                        LineEdit {
+                            text <=> root.gs-export-gdscript-output;
+                            width: 300px;
+                            edited(s) => { root.export-field-edited("gdscript_output", s); }
+                        }
+                    }
+
+                    Text { text: "TypeScript"; color: Theme.text-secondary; font-size: Theme.fs-tiny; }
+                    HorizontalLayout {
+                        spacing: Theme.sp-3;
+                        alignment: start;
+                        Text { text: "  output:"; width: 140px; vertical-alignment: center; color: Theme.text-primary; }
+                        LineEdit {
+                            text <=> root.gs-export-typescript-client-output;
+                            width: 300px;
+                            edited(s) => { root.export-field-edited("typescript_client_output", s); }
+                        }
+                    }
+
+                    Text { text: "C# (Unity)"; color: Theme.text-secondary; font-size: Theme.fs-tiny; }
+                    HorizontalLayout {
+                        spacing: Theme.sp-3;
+                        alignment: start;
+                        Text { text: "  namespace:"; width: 140px; vertical-alignment: center; color: Theme.text-primary; }
+                        LineEdit {
+                            text <=> root.gs-export-csharp-unity-namespace;
+                            width: 300px;
+                            edited(s) => { root.export-field-edited("csharp_unity_namespace", s); }
+                        }
+                    }
+                    HorizontalLayout {
+                        spacing: Theme.sp-3;
+                        alignment: start;
+                        Text { text: "  code_output:"; width: 140px; vertical-alignment: center; color: Theme.text-primary; }
+                        LineEdit {
+                            text <=> root.gs-export-csharp-unity-code-output;
+                            width: 300px;
+                            edited(s) => { root.export-field-edited("csharp_unity_code_output", s); }
+                        }
+                    }
+
+                    Text { text: "C# (Godot)"; color: Theme.text-secondary; font-size: Theme.fs-tiny; }
+                    HorizontalLayout {
+                        spacing: Theme.sp-3;
+                        alignment: start;
+                        Text { text: "  namespace:"; width: 140px; vertical-alignment: center; color: Theme.text-primary; }
+                        LineEdit {
+                            text <=> root.gs-export-csharp-godot-namespace;
+                            width: 300px;
+                            edited(s) => { root.export-field-edited("csharp_godot_namespace", s); }
+                        }
+                    }
+                    HorizontalLayout {
+                        spacing: Theme.sp-3;
+                        alignment: start;
+                        Text { text: "  code_output:"; width: 140px; vertical-alignment: center; color: Theme.text-primary; }
+                        LineEdit {
+                            text <=> root.gs-export-csharp-godot-code-output;
+                            width: 300px;
+                            edited(s) => { root.export-field-edited("csharp_godot_code_output", s); }
+                        }
+                    }
+
                     Rectangle { vertical-stretch: 1; }
                 }
             }

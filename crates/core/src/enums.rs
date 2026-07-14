@@ -102,7 +102,7 @@ impl Encoding {
 
     /// 返回所有编码选项的字符串表示
     pub fn all_str() -> Vec<&'static str> {
-        vec!["utf-8", "utf-8-bom", "utf-16le", "utf-16be", "gb2312", "gbk", "big5"]
+        Self::all().iter().map(|e| e.as_str()).collect()
     }
 }
 
@@ -225,6 +225,14 @@ impl JsonEmptyAs {
             Self::Omit => "omit",
         }
     }
+
+    pub fn all() -> &'static [Self] {
+        &[Self::Null, Self::Omit]
+    }
+
+    pub fn all_str() -> Vec<&'static str> {
+        Self::all().iter().map(|e| e.as_str()).collect()
+    }
 }
 
 /// XML 空值表达方式
@@ -272,6 +280,14 @@ impl XmlEmptyAs {
             Self::Empty => "empty",
             Self::Omit => "omit",
         }
+    }
+
+    pub fn all() -> &'static [Self] {
+        &[Self::Empty, Self::Omit]
+    }
+
+    pub fn all_str() -> Vec<&'static str> {
+        Self::all().iter().map(|e| e.as_str()).collect()
     }
 }
 
