@@ -100,55 +100,48 @@ pub fn open(state: &Rc<RefCell<AppState>>, ui_h: &AppWindow) {
 }
 
 pub fn push(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
-    let header_val;
-    let data_val;
-    {
-        let st = state.borrow();
-        let gs = &st.global_settings;
+    let st = state.borrow();
+    let gs = &st.global_settings;
 
-        ui_h.set_dlg_gs_open(gs.open);
-        if !gs.open {
-            return;
-        }
-        ui_h.set_gs_tab(gs.tab);
-        ui_h.set_gs_ui_tab_modified(gs.ui_tab_modified);
-        ui_h.set_gs_sep_tab_modified(gs.sep_tab_modified);
-        ui_h.set_gs_export_tab_modified(gs.export_tab_modified);
-
-        // UI 设置
-        ui_h.set_gs_ui_auto_commit_on_blur(gs.ui.auto_commit_on_blur);
-        ui_h.set_gs_ui_realtime_validate(gs.ui.realtime_validate);
-
-        let log_level = gs.ui.log_level.unwrap_or(tablet_core::enums::LogLevel::default());
-        let log_level_idx = tablet_core::enums::LogLevel::all().iter().position(|&l| l == log_level).unwrap_or(0) as i32;
-        ui_h.set_gs_ui_log_level_index(log_level_idx);
-
-        header_val = gs.ui.picker_trigger_header.as_str().to_string();
-        data_val = gs.ui.picker_trigger_data.as_str().to_string();
-
-        // 使用 current-index 而不是 current-value
-        let header_idx = tablet_core::enums::PickerTrigger::all().iter().position(|&t| t == gs.ui.picker_trigger_header).unwrap_or(0) as i32;
-        let data_idx = tablet_core::enums::PickerTrigger::all().iter().position(|&t| t == gs.ui.picker_trigger_data).unwrap_or(0) as i32;
-        ui_h.set_gs_ui_picker_trigger_header_index(header_idx);
-        ui_h.set_gs_ui_picker_trigger_data_index(data_idx);
-        ui_h.set_gs_ui_show_meta_id(gs.ui.show_meta_id);
-        ui_h.set_gs_ui_constant_ref_allowed(gs.ui.constant_ref_allowed);
-
-        let ref_picker_strategy_idx = tablet_core::enums::RefPickerStrategy::all().iter().position(|&s| s == gs.ui.ref_picker.default_strategy).unwrap_or(0) as i32;
-        ui_h.set_gs_ui_ref_picker_strategy_index(ref_picker_strategy_idx);
-
-        // 分隔符（25 个）
-        push_separators(ui_h, &gs.sep);
-
-        // 导出设置
-        let encoding = gs.export.encoding.unwrap_or(tablet_core::enums::Encoding::default());
-        let encoding_idx = tablet_core::enums::Encoding::all().iter().position(|&e| e == encoding).unwrap_or(0) as i32;
-        ui_h.set_gs_export_encoding_index(encoding_idx);
-
-        let line_ending = gs.export.line_ending.unwrap_or(tablet_core::enums::LineEnding::default());
-        let line_ending_idx = tablet_core::enums::LineEnding::all().iter().position(|&l| l == line_ending).unwrap_or(0) as i32;
-        ui_h.set_gs_export_line_ending_index(line_ending_idx);
+    ui_h.set_dlg_gs_open(gs.open);
+    if !gs.open {
+        return;
     }
+    ui_h.set_gs_tab(gs.tab);
+    ui_h.set_gs_ui_tab_modified(gs.ui_tab_modified);
+    ui_h.set_gs_sep_tab_modified(gs.sep_tab_modified);
+    ui_h.set_gs_export_tab_modified(gs.export_tab_modified);
+
+    // UI 设置
+    ui_h.set_gs_ui_auto_commit_on_blur(gs.ui.auto_commit_on_blur);
+    ui_h.set_gs_ui_realtime_validate(gs.ui.realtime_validate);
+
+    let log_level = gs.ui.log_level.unwrap_or(tablet_core::enums::LogLevel::default());
+    let log_level_idx = tablet_core::enums::LogLevel::all().iter().position(|&l| l == log_level).unwrap_or(0) as i32;
+    ui_h.set_gs_ui_log_level_index(log_level_idx);
+
+    // 使用 current-index 而不是 current-value
+    let header_idx = tablet_core::enums::PickerTrigger::all().iter().position(|&t| t == gs.ui.picker_trigger_header).unwrap_or(0) as i32;
+    let data_idx = tablet_core::enums::PickerTrigger::all().iter().position(|&t| t == gs.ui.picker_trigger_data).unwrap_or(0) as i32;
+    ui_h.set_gs_ui_picker_trigger_header_index(header_idx);
+    ui_h.set_gs_ui_picker_trigger_data_index(data_idx);
+    ui_h.set_gs_ui_show_meta_id(gs.ui.show_meta_id);
+    ui_h.set_gs_ui_constant_ref_allowed(gs.ui.constant_ref_allowed);
+
+    let ref_picker_strategy_idx = tablet_core::enums::RefPickerStrategy::all().iter().position(|&s| s == gs.ui.ref_picker.default_strategy).unwrap_or(0) as i32;
+    ui_h.set_gs_ui_ref_picker_strategy_index(ref_picker_strategy_idx);
+
+    // 分隔符（25 个）
+    push_separators(ui_h, &gs.sep);
+
+    // 导出设置
+    let encoding = gs.export.encoding.unwrap_or(tablet_core::enums::Encoding::default());
+    let encoding_idx = tablet_core::enums::Encoding::all().iter().position(|&e| e == encoding).unwrap_or(0) as i32;
+    ui_h.set_gs_export_encoding_index(encoding_idx);
+
+    let line_ending = gs.export.line_ending.unwrap_or(tablet_core::enums::LineEnding::default());
+    let line_ending_idx = tablet_core::enums::LineEnding::all().iter().position(|&l| l == line_ending).unwrap_or(0) as i32;
+    ui_h.set_gs_export_line_ending_index(line_ending_idx);
 }
 
 fn push_separators(ui_h: &AppWindow, sep: &SeparatorsSection) {
