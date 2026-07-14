@@ -183,6 +183,8 @@ code_output = "gen/server/csharp"
 [export.server.typescript]
 # TypeScript Node.js 服务端代码输出目录
 output = "gen/server/typescript"
+# 模块类型: "esm" (默认) | "cjs"
+module_kind = "esm"
 
 [export.client.lua]
 # Lua 文件输出目录（每张表 / 常量 / 枚举一个 .lua）
@@ -195,6 +197,8 @@ output = "gen/client/gdscript"
 [export.client.typescript]
 # TypeScript 前端代码输出目录
 output = "gen/client/typescript"
+# 模块类型: "esm" (默认) | "cjs"
+module_kind = "esm"
 
 [export.client.csharp_unity]
 # Unity 客户端命名空间
@@ -1143,6 +1147,23 @@ mod tests {
         assert!(result.contains("opened_projects = [\"p1\", \"p2\"]"));
         assert!(result.contains("project_sort = \"manual\""));
         assert!(result.contains("project_order = [\"p2\", \"p1\"]"));
+    }
+
+    #[test]
+    fn default_config_template_matches_default_struct() {
+        // GlobalConfig::default() 应与 DEFAULT_CONFIG 反序列化结果一致
+        let from_struct = GlobalConfig::default();
+        let from_toml: GlobalConfig = toml::from_str(DEFAULT_CONFIG)
+            .expect("DEFAULT_CONFIG 应该能成功反序列化为 GlobalConfig");
+
+        assert_eq!(from_struct.project_management, from_toml.project_management,
+            "[project] 段默认值不匹配");
+        assert_eq!(from_struct.export, from_toml.export,
+            "[export] 段默认值不匹配");
+        assert_eq!(from_struct.ui, from_toml.ui,
+            "[ui] 段默认值不匹配");
+        assert_eq!(from_struct.separators, from_toml.separators,
+            "[separators] 段默认值不匹配");
     }
 
     #[test]

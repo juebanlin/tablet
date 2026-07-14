@@ -411,7 +411,7 @@ fn default_true() -> bool { true }
 /// `[project]` toml 段：仓库级项目管理配置，不随 Project 切换。
 ///
 /// 持有 Project 列表管理状态（启动 last_project / 已打开列表 / 排序）。
-#[derive(Debug, Clone, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, serde::Deserialize)]
 pub struct ProjectManagementConfig {
     /// 启动时进入的 Project id；为空 = 扫到的第一个。
     #[serde(default)]
