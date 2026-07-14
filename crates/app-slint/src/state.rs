@@ -890,8 +890,8 @@ pub struct AppState {
 }
 
 impl AppState {
-    pub fn load(workdir: &Path) -> anyhow::Result<Self> {
-        let mut engine = load_workspace(workdir)?;
+    pub fn load(workdir: &Path) -> anyhow::Result<(Self, bool)> {
+        let (mut engine, config_fixed) = load_workspace(workdir)?;
         // UI 配置从全局配置读取（不随项目切换）
         let rt_validate = engine.global_config.ui.as_ref()
             .map_or(false, |u| u.realtime_validate);
@@ -920,7 +920,7 @@ impl AppState {
         if !engine.validation_errors.is_empty() {
             engine.error_log(format!("[验证] 加载后发现 {} 个错误", engine.validation_errors.len()));
         }
-        Ok(Self {
+        Ok((Self {
             engine,
             selected: None,
             tree_filter: TreeFilter::All,
@@ -957,7 +957,7 @@ impl AppState {
             project_sort,
             project_order,
             excel_session: None,
-        })
+        }, config_fixed))
     }
 
     /// 写一个单元格的真实存储值；按当前 selected 节点类型分发到 engine。

@@ -1240,7 +1240,7 @@ mod tests {
             dir.join("tablet.toml"),
             "[project]\nlast_project = \"p\"\n\n[ui]\nrealtime_validate = true\npicker_trigger_data = \"double\"\n",
         ).unwrap();
-        let engine = load_workspace(&dir).expect("load");
+        let (engine, _) = load_workspace(&dir).expect("load");
         let ui = engine.global_config.ui.as_ref().expect("[ui] present");
         // 项目 toml 的 [ui] 该被 strip → 全局值留下来
         assert!(ui.realtime_validate, "项目级 [ui] 应被 strip，全局 realtime_validate=true 留下");
@@ -1264,7 +1264,7 @@ mod tests {
             "[project]\nname = \"x\"\nlast_project = \"p2\"\n",
         ).unwrap();
 
-        let engine = load_workspace(&dir).expect("load_workspace");
+        let (engine, _) = load_workspace(&dir).expect("load_workspace");
         assert_eq!(engine.available().len(), 2);
         assert_eq!(engine.projects.len(), 1, "只打开 last_project");
         assert_eq!(engine.projects[0].schema.meta.id, "p2");
@@ -1283,7 +1283,7 @@ mod tests {
             "[project]\nname = \"x\"\nlast_project = \"p2\"\nopened_projects = [\"p2\", \"p1\"]\n",
         ).unwrap();
 
-        let engine = load_workspace(&dir).expect("load_workspace");
+        let (engine, _) = load_workspace(&dir).expect("load_workspace");
         let ids = engine.opened_ids();
         assert_eq!(ids, vec!["p2".to_string(), "p1".to_string()]);
         assert_eq!(engine.active_project_id(), Some("p2"));
@@ -1302,7 +1302,7 @@ mod tests {
             "[project]\nname = \"x\"\nlast_project = \"alpha\"\n",
         ).unwrap();
 
-        let engine = load_workspace(&dir).expect("load_workspace");
+        let (engine, _) = load_workspace(&dir).expect("load_workspace");
         assert_eq!(engine.available().len(), 2);
         assert_eq!(engine.projects.len(), 1);
         assert!(!engine.is_opened("beta"));
@@ -1320,7 +1320,7 @@ mod tests {
             "[project]\nname = \"x\"\nlast_project = \"a\"\n",
         ).unwrap();
 
-        let mut engine = load_workspace(&dir).expect("load_workspace");
+        let (mut engine, _) = load_workspace(&dir).expect("load_workspace");
         assert_eq!(engine.active_project_id(), Some("a"));
         let opened = engine.open_project("b").expect("open b");
         assert!(opened);
@@ -1342,7 +1342,7 @@ mod tests {
             "[project]\nname = \"x\"\nlast_project = \"a\"\nopened_projects = [\"a\", \"b\"]\n",
         ).unwrap();
 
-        let mut engine = load_workspace(&dir).expect("load_workspace");
+        let (mut engine, _) = load_workspace(&dir).expect("load_workspace");
         assert_eq!(engine.active_project_id(), Some("a"));
         let closed = engine.close_project("a");
         assert!(closed);
@@ -1363,7 +1363,7 @@ mod tests {
             dir.join("tablet.toml"),
             "[project]\nname = \"x\"\nlast_project = \"only\"\n",
         ).unwrap();
-        let mut engine = load_workspace(&dir).expect("load_workspace");
+        let (mut engine, _) = load_workspace(&dir).expect("load_workspace");
         engine.close_project("only");
         assert!(engine.projects.is_empty());
         assert_eq!(engine.active_project_id(), None);
@@ -1381,14 +1381,14 @@ mod tests {
             "[project]\nname = \"my-game\"\nlast_project = \"p1\"\n",
         ).unwrap();
 
-        let mut engine = load_workspace(&dir).expect("load");
+        let (mut engine, _) = load_workspace(&dir).expect("load");
         engine.open_project("p2").unwrap();
         engine.set_active_by_id("p2");
         persist_workspace_state(&engine, crate::enums::ProjectSort::Name, &["p2".to_string(), "p1".to_string()])
             .expect("persist");
 
         // re-load
-        let engine2 = load_workspace(&dir).expect("reload");
+        let (engine2, _) = load_workspace(&dir).expect("reload");
         let opened = engine2.opened_ids();
         assert!(opened.contains(&"p1".to_string()));
         assert!(opened.contains(&"p2".to_string()));

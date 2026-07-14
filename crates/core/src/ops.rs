@@ -1385,7 +1385,7 @@ impl ProjectEngine {
         let workdir = self.workdir.clone();
         let last_id = self.active_project_id().map(str::to_string);
         match crate::project::load_workspace(&workdir) {
-            Ok(mut new_engine) => {
+            Ok((mut new_engine, _config_fixed)) => {
                 // 维持原 active：若原 active 在新 opened 列表里则保留，否则用新 active
                 if let Some(pid) = last_id.as_deref() {
                     new_engine.set_active_by_id(pid);

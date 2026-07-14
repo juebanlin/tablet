@@ -124,7 +124,8 @@ fn run_gui(workdir_arg: Option<PathBuf>) -> anyhow::Result<()> {
     }
     std::fs::write(&lock_path, std::process::id().to_string())?;
 
-    let app_state = Rc::new(RefCell::new(AppState::load(&workdir)?));
+    let (app_state_inner, config_fixed) = AppState::load(&workdir)?;
+    let app_state = Rc::new(RefCell::new(app_state_inner));
 
     let log_level = {
         let st = app_state.borrow();
@@ -156,6 +157,12 @@ fn run_gui(workdir_arg: Option<PathBuf>) -> anyhow::Result<()> {
         log_config,
         log_file,
     )])?;
+
+    // 延迟记录配置修复日志（在日志系统初始化后）
+    if config_fixed {
+        log::warn!("启动时检测到配置文件无效值，已自动修复并保存");
+    }
+
     info!(
         "loaded {} opened / {} available, {} groups in active",
         app_state.borrow().engine.projects.len(),
