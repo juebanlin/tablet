@@ -4719,6 +4719,7 @@ dependencies = [
  "slint-build",
  "tablet-cli",
  "tablet-core",
+ "time",
  "windows-sys 0.59.0",
  "winresource",
 ]

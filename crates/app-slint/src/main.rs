@@ -142,9 +142,18 @@ fn run_gui(workdir_arg: Option<PathBuf>) -> anyhow::Result<()> {
 
     let log_path = workdir.join(tablet_core::LOG_FILE);
     let log_file = std::fs::File::create(&log_path)?;
+
+    // 自定义 Config：Java 风格日志格式 + 过滤 ICU4X 日语分词警告
+    let log_config = simplelog::ConfigBuilder::new()
+        .set_time_format_custom(time::macros::format_description!("[year]-[month]-[day] [hour]:[minute]:[second].[subsecond digits:3]"))
+        .set_thread_level(LevelFilter::Off)
+        .set_target_level(LevelFilter::Off)
+        .add_filter_ignore_str("ICU4X data error")
+        .build();
+
     CombinedLogger::init(vec![WriteLogger::new(
         file_level,
-        Config::default(),
+        log_config,
         log_file,
     )])?;
     info!(
