@@ -396,25 +396,33 @@ fn escape_xml(s: &str) -> String {
 pub fn export_all_csharp(project: &Project, runtime: CSharpRuntime) -> Result<super::ExportResult> {
     let export_cfg = project.config.export.as_ref();
 
-    // 配置定位：按 runtime 取对应 section
-    let cs_cfg: Option<&CSharpExport> = match runtime {
-        CSharpRuntime::Dotnet => export_cfg
-            .and_then(|e| e.server.as_ref())
-            .and_then(|s| s.csharp_dotnet.as_ref()),
-        CSharpRuntime::Unity => export_cfg
-            .and_then(|e| e.client.as_ref())
-            .and_then(|c| c.csharp_unity.as_ref()),
-        CSharpRuntime::Godot => export_cfg
-            .and_then(|e| e.client.as_ref())
-            .and_then(|c| c.csharp_godot.as_ref()),
+    // 配置定位：按 runtime 取对应 section，提取 namespace 和 code_output
+    let (code_output, ns) = match runtime {
+        CSharpRuntime::Dotnet => {
+            let cfg = export_cfg
+                .and_then(|e| e.server.as_ref())
+                .and_then(|s| s.csharp_dotnet.as_ref());
+            let output = cfg.and_then(|c| c.code_output.as_deref()).unwrap_or(runtime.default_code_output());
+            let namespace = cfg.and_then(|c| c.namespace.as_deref()).unwrap_or(runtime.default_namespace());
+            (output, namespace)
+        }
+        CSharpRuntime::Unity => {
+            let cfg = export_cfg
+                .and_then(|e| e.client.as_ref())
+                .and_then(|c| c.csharp_unity.as_ref());
+            let output = cfg.and_then(|c| c.code_output.as_deref()).unwrap_or(runtime.default_code_output());
+            let namespace = cfg.and_then(|c| c.namespace.as_deref()).unwrap_or(runtime.default_namespace());
+            (output, namespace)
+        }
+        CSharpRuntime::Godot => {
+            let cfg = export_cfg
+                .and_then(|e| e.client.as_ref())
+                .and_then(|c| c.csharp_godot.as_ref());
+            let output = cfg.and_then(|c| c.code_output.as_deref()).unwrap_or(runtime.default_code_output());
+            let namespace = cfg.and_then(|c| c.namespace.as_deref()).unwrap_or(runtime.default_namespace());
+            (output, namespace)
+        }
     };
-
-    let code_output = cs_cfg
-        .and_then(|c| c.code_output.as_deref())
-        .unwrap_or(runtime.default_code_output());
-    let ns = cs_cfg
-        .and_then(|c| c.namespace.as_deref())
-        .unwrap_or(runtime.default_namespace());
 
     let line_ending = LineEnding::from_config(
         export_cfg.and_then(|e| e.line_ending.map(|l| l.as_str()))

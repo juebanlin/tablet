@@ -160,7 +160,7 @@ pub struct ServerExport {
     pub java: Option<JavaExport>,
     pub go: Option<GoExport>,
     pub cpp: Option<CppExport>,
-    pub csharp_dotnet: Option<CSharpExport>,
+    pub csharp_dotnet: Option<DotNetExport>,
     pub typescript: Option<ServerTypeScriptExport>,
 }
 
@@ -171,7 +171,7 @@ impl Default for ServerExport {
             java: Some(JavaExport::default()),
             go: Some(GoExport::default()),
             cpp: Some(CppExport::default()),
-            csharp_dotnet: Some(CSharpExport::default()),
+            csharp_dotnet: Some(DotNetExport::default()),
             typescript: Some(ServerTypeScriptExport::default()),
         }
     }
@@ -225,18 +225,50 @@ impl Default for CppExport {
     }
 }
 
-/// 三个 runtime（dotnet / unity / godot）共用同一份 schema 定义，仅 Loader 不同。
+/// .NET 服务端导出
 #[derive(Debug, Clone, PartialEq, serde::Deserialize, serde::Serialize)]
-pub struct CSharpExport {
+pub struct DotNetExport {
     pub namespace: Option<String>,
     pub code_output: Option<String>,
 }
 
-impl Default for CSharpExport {
+impl Default for DotNetExport {
     fn default() -> Self {
         Self {
             namespace: Some("Game.Config.Server".to_string()),
             code_output: Some("gen/server/csharp".to_string()),
+        }
+    }
+}
+
+/// Unity 客户端 C# 导出
+#[derive(Debug, Clone, PartialEq, serde::Deserialize, serde::Serialize)]
+pub struct UnityCSharpExport {
+    pub namespace: Option<String>,
+    pub code_output: Option<String>,
+}
+
+impl Default for UnityCSharpExport {
+    fn default() -> Self {
+        Self {
+            namespace: Some("Game.Config.Client".to_string()),
+            code_output: Some("gen/client/csharp_unity".to_string()),
+        }
+    }
+}
+
+/// Godot 客户端 C# 导出
+#[derive(Debug, Clone, PartialEq, serde::Deserialize, serde::Serialize)]
+pub struct GodotCSharpExport {
+    pub namespace: Option<String>,
+    pub code_output: Option<String>,
+}
+
+impl Default for GodotCSharpExport {
+    fn default() -> Self {
+        Self {
+            namespace: Some("Game.Config.Client".to_string()),
+            code_output: Some("gen/client/csharp_godot".to_string()),
         }
     }
 }
@@ -246,8 +278,8 @@ pub struct ClientConfig {
     pub lua: Option<LuaExport>,
     pub gdscript: Option<GdScriptExport>,
     pub typescript: Option<ClientTypeScriptExport>,
-    pub csharp_unity: Option<CSharpExport>,
-    pub csharp_godot: Option<CSharpExport>,
+    pub csharp_unity: Option<UnityCSharpExport>,
+    pub csharp_godot: Option<GodotCSharpExport>,
 }
 
 impl Default for ClientConfig {
@@ -256,14 +288,8 @@ impl Default for ClientConfig {
             lua: Some(LuaExport::default()),
             gdscript: Some(GdScriptExport::default()),
             typescript: Some(ClientTypeScriptExport::default()),
-            csharp_unity: Some(CSharpExport {
-                namespace: Some("Game.Config.Client".to_string()),
-                code_output: Some("gen/client/csharp_unity".to_string()),
-            }),
-            csharp_godot: Some(CSharpExport {
-                namespace: Some("Game.Config.Client".to_string()),
-                code_output: Some("gen/client/csharp_godot".to_string()),
-            }),
+            csharp_unity: Some(UnityCSharpExport::default()),
+            csharp_godot: Some(GodotCSharpExport::default()),
         }
     }
 }
