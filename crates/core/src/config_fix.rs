@@ -12,6 +12,7 @@ use std::path::Path;
 /// 加载并修复全局配置。返回 (config, fixed)，fixed=true 表示发现并修复了无效值。
 pub fn load_and_fix_global_config(config_path: &Path) -> Result<(GlobalConfig, bool)> {
     let text = std::fs::read_to_string(config_path)?;
+    log::debug!("[config_fix] 开始加载配置文件: {}", config_path.display());
 
     // 先检查文本中是否有无效值（即使 serde 能用 default 绕过）
     let mut fixed_text = text.clone();
@@ -36,7 +37,7 @@ pub fn load_and_fix_global_config(config_path: &Path) -> Result<(GlobalConfig, b
     }
 
     // 修复 picker_trigger_data = "" -> "double"
-    if let Some(new_text) = fix_enum_field(&fixed_text, "picker_trigger_data", &["single", "double"], "double") {
+    if let Some(new_text) = fix_empty_or_invalid_field(&fixed_text, "picker_trigger_data", &["single", "double"], "double") {
         fixed_text = new_text;
         fixed = true;
     }
@@ -73,28 +74,32 @@ fn fix_empty_or_invalid_field(text: &str, field_name: &str, valid_values: &[&str
         let trimmed = line.trim();
 
         // 查找字段行：field_name = "value" 或 field_name = ""
-        if trimmed.starts_with(field_name) {
-            let after = trimmed[field_name.len()..].trim_start();
-            if after.starts_with('=') {
-                let value_part = after[1..].trim();
+        // 精确匹配字段名：后面必须紧跟空白或 =，不能是字母/数字/下划线（避免匹配到 picker_trigger_header 时误中 picker_trigger_data）
+        if let Some(after_field) = trimmed.strip_prefix(field_name) {
+            // 检查字段名后的第一个字符：必须是空白或 =
+            if after_field.is_empty() || after_field.starts_with(|c: char| c.is_whitespace() || c == '=') {
+                let after = after_field.trim_start();
+                if after.starts_with('=') {
+                    let value_part = after[1..].trim();
 
-                // 检查是否是空字符串 ""
-                if value_part == "\"\"" {
-                    let indent = line.len() - line.trim_start().len();
-                    let new_line = format!("{}{} = \"{}\"", " ".repeat(indent), field_name, default_value);
-                    lines.push(new_line);
-                    fixed = true;
-                    continue;
-                }
-
-                // 否则检查是否是无效值
-                if let Some(quoted_value) = extract_quoted_value(value_part) {
-                    if !valid_values.contains(&quoted_value.as_str()) {
+                    // 检查是否是空字符串 ""
+                    if value_part == "\"\"" {
                         let indent = line.len() - line.trim_start().len();
                         let new_line = format!("{}{} = \"{}\"", " ".repeat(indent), field_name, default_value);
                         lines.push(new_line);
                         fixed = true;
                         continue;
+                    }
+
+                    // 否则检查是否是无效值
+                    if let Some(quoted_value) = extract_quoted_value(value_part) {
+                        if !valid_values.contains(&quoted_value.as_str()) {
+                            let indent = line.len() - line.trim_start().len();
+                            let new_line = format!("{}{} = \"{}\"", " ".repeat(indent), field_name, default_value);
+                            lines.push(new_line);
+                            fixed = true;
+                            continue;
+                        }
                     }
                 }
             }
@@ -120,20 +125,24 @@ fn fix_enum_field(text: &str, field_name: &str, valid_values: &[&str], default_v
         let trimmed = line.trim();
 
         // 查找字段行：field_name = "value"
-        if trimmed.starts_with(field_name) {
-            let after = trimmed[field_name.len()..].trim_start();
-            if after.starts_with('=') {
-                // 提取引号内的值
-                let value_part = after[1..].trim();
-                if let Some(quoted_value) = extract_quoted_value(value_part) {
-                    // 检查是否是有效值
-                    if !valid_values.contains(&quoted_value.as_str()) {
-                        // 无效值，替换为默认值
-                        let indent = line.len() - line.trim_start().len();
-                        let new_line = format!("{}{} = \"{}\"", " ".repeat(indent), field_name, default_value);
-                        lines.push(new_line);
-                        fixed = true;
-                        continue;
+        // 精确匹配字段名：后面必须紧跟空白或 =，不能是字母/数字/下划线（避免匹配到 picker_trigger_header 时误中 picker_trigger_data）
+        if let Some(after_field) = trimmed.strip_prefix(field_name) {
+            // 检查字段名后的第一个字符：必须是空白或 =
+            if after_field.is_empty() || after_field.starts_with(|c: char| c.is_whitespace() || c == '=') {
+                let after = after_field.trim_start();
+                if after.starts_with('=') {
+                    // 提取引号内的值
+                    let value_part = after[1..].trim();
+                    if let Some(quoted_value) = extract_quoted_value(value_part) {
+                        // 检查是否是有效值
+                        if !valid_values.contains(&quoted_value.as_str()) {
+                            // 无效值，替换为默认值
+                            let indent = line.len() - line.trim_start().len();
+                            let new_line = format!("{}{} = \"{}\"", " ".repeat(indent), field_name, default_value);
+                            lines.push(new_line);
+                            fixed = true;
+                            continue;
+                        }
                     }
                 }
             }
@@ -158,4 +167,35 @@ fn extract_quoted_value(value_part: &str) -> Option<String> {
         }
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_field_name_matching_precision() {
+        let text = r#"
+[ui]
+picker_trigger_header = "single"
+picker_trigger_data = "double"
+"#;
+
+        // 测试 fix_empty_or_invalid_field 对 picker_trigger_data 的匹配
+        let result = fix_empty_or_invalid_field(text, "picker_trigger_data", &["single", "double"], "double");
+        // 不应修复（值已经是有效的 "double"）
+        assert!(result.is_none(), "picker_trigger_data 应该不被修复");
+
+        // 测试 fix_empty_or_invalid_field 对 picker_trigger_header 的匹配
+        let result = fix_empty_or_invalid_field(text, "picker_trigger_header", &["single", "double"], "single");
+        // 不应修复（值已经是有效的 "single"）
+        assert!(result.is_none(), "picker_trigger_header 应该不被修复");
+
+        // 测试误匹配问题：确保 picker_trigger_data 不会匹配到 picker_trigger_header 行
+        let text_with_header_only = r#"
+picker_trigger_header = "single"
+"#;
+        let result = fix_empty_or_invalid_field(text_with_header_only, "picker_trigger_data", &["single", "double"], "double");
+        assert!(result.is_none(), "picker_trigger_data 不应该匹配到 picker_trigger_header");
+    }
 }

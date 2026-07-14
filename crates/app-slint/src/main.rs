@@ -124,15 +124,30 @@ fn run_gui(workdir_arg: Option<PathBuf>) -> anyhow::Result<()> {
     }
     std::fs::write(&lock_path, std::process::id().to_string())?;
 
-    let (app_state_inner, config_fixed) = AppState::load(&workdir)?;
-    let app_state = Rc::new(RefCell::new(app_state_inner));
+    // 提前初始化日志系统（在 load 之前），避免配置加载时的 ICU4X 警告无法被过滤
+    let log_path = workdir.join(tablet_core::LOG_FILE);
+    let log_file = std::fs::File::create(&log_path)?;
 
+    // 先快速读取 log_level 配置（避免完整加载）
     let log_level = {
-        let st = app_state.borrow();
-        st.engine.global_config.ui.as_ref()
-            .and_then(|u| u.log_level.map(|l| l.as_str()))
-            .unwrap_or("debug")
-            .to_string()
+        let config_path = workdir.join(tablet_core::CONFIG_FILE);
+        if config_path.exists() {
+            std::fs::read_to_string(&config_path)
+                .ok()
+                .and_then(|text| {
+                    // 简单正则匹配 log_level = "xxx"
+                    text.lines()
+                        .find(|line| line.trim().starts_with("log_level"))
+                        .and_then(|line| {
+                            line.split('=')
+                                .nth(1)
+                                .map(|s| s.trim().trim_matches('"').to_string())
+                        })
+                })
+                .unwrap_or_else(|| "debug".to_string())
+        } else {
+            "debug".to_string()
+        }
     };
     let file_level = match log_level.as_str() {
         "info" => LevelFilter::Info,
@@ -141,15 +156,12 @@ fn run_gui(workdir_arg: Option<PathBuf>) -> anyhow::Result<()> {
         _ => LevelFilter::Debug,
     };
 
-    let log_path = workdir.join(tablet_core::LOG_FILE);
-    let log_file = std::fs::File::create(&log_path)?;
-
     // 自定义 Config：Java 风格日志格式 + 过滤 ICU4X 日语分词警告
     let log_config = simplelog::ConfigBuilder::new()
         .set_time_format_custom(time::macros::format_description!("[year]-[month]-[day] [hour]:[minute]:[second].[subsecond digits:3]"))
         .set_thread_level(LevelFilter::Off)
         .set_target_level(LevelFilter::Off)
-        .add_filter_ignore_str("ICU4X data error")
+        .add_filter_ignore_str("ICU4X")
         .build();
 
     CombinedLogger::init(vec![WriteLogger::new(
@@ -157,6 +169,9 @@ fn run_gui(workdir_arg: Option<PathBuf>) -> anyhow::Result<()> {
         log_config,
         log_file,
     )])?;
+
+    let (app_state_inner, config_fixed) = AppState::load(&workdir)?;
+    let app_state = Rc::new(RefCell::new(app_state_inner));
 
     // 延迟记录配置修复日志（在日志系统初始化后）
     if config_fixed {

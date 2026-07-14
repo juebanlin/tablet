@@ -26,6 +26,17 @@ pub fn open(state: &Rc<RefCell<AppState>>, ui_h: &AppWindow) {
     // current: 当前已保存的值（等于硬盘值）
     let current = st.engine.global_config.clone();
 
+    // 调试日志：打印加载的 UI 配置
+    if let Some(ref ui) = current.ui {
+        st.engine.ui_log(format!(
+            "[全局设置] 加载的 UI 配置: picker_trigger_header={:?}, picker_trigger_data={:?}",
+            ui.picker_trigger_header,
+            ui.picker_trigger_data
+        ));
+    } else {
+        st.engine.ui_log("[全局设置] UI 配置为 None，使用默认值".to_string());
+    }
+
     // 初始化 apply buffer：直接克隆结构体
     let gs = &mut st.global_settings;
     gs.open = true;
