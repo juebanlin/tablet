@@ -288,7 +288,8 @@ fn ensure_export_client_typescript(config: &mut ProjectConfig) {
     ensure_export_client(config);
     if config.export.as_ref().unwrap().client.as_ref().unwrap().typescript.is_none() {
         config.export.as_mut().unwrap().client.as_mut().unwrap().typescript = Some(TypeScriptExport {
-            output: None, module_kind: None,
+            output: None,
+            module_kind: Some(tablet_core::enums::ModuleKind::default()),
         });
     }
 }
