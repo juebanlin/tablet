@@ -445,22 +445,20 @@ pub fn export_all_typescript(project: &Project, side: TypeScriptSide) -> Result<
     let export_cfg = project.config.export.as_ref();
 
     // 按 side 取对应段；fall-back 串：side 段 → 父段（client/server）→ 顶层 export → 默认
-    let ts = match side {
+    let (output, module_kind) = match side {
         TypeScriptSide::Client => {
-            export_cfg.and_then(|e| e.client.as_ref()).and_then(|c| c.typescript.as_ref())
+            let ts = export_cfg.and_then(|e| e.client.as_ref()).and_then(|c| c.typescript.as_ref());
+            let output = ts.and_then(|t| t.output.as_deref()).unwrap_or(side.default_output());
+            let module_kind = ts.and_then(|t| t.module_kind).unwrap_or(crate::enums::ModuleKind::default());
+            (output, module_kind)
         }
         TypeScriptSide::Server => {
-            export_cfg.and_then(|e| e.server.as_ref()).and_then(|s| s.typescript.as_ref())
+            let ts = export_cfg.and_then(|e| e.server.as_ref()).and_then(|s| s.typescript.as_ref());
+            let output = ts.and_then(|t| t.output.as_deref()).unwrap_or(side.default_output());
+            let module_kind = ts.and_then(|t| t.module_kind).unwrap_or(crate::enums::ModuleKind::default());
+            (output, module_kind)
         }
     };
-
-    let output = ts
-        .and_then(|t| t.output.as_deref())
-        .unwrap_or(side.default_output());
-
-    let module_kind = ts
-        .and_then(|t| t.module_kind)
-        .unwrap_or(crate::enums::ModuleKind::default());
 
     let line_ending = LineEnding::from_config(
         export_cfg.and_then(|e| e.line_ending.map(|l| l.as_str()))

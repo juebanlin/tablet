@@ -288,7 +288,7 @@ fn ensure_export_client_typescript(config: &mut ProjectConfig) {
     ensure_export_client(config);
     if config.export.as_ref().unwrap().client.as_ref().unwrap().typescript.is_none() {
         config.export.as_mut().unwrap().client.as_mut().unwrap().typescript =
-            Some(tablet_core::model::TypeScriptExport::default_client());
+            Some(tablet_core::model::ClientTypeScriptExport::default());
     }
 }
 
@@ -296,6 +296,6 @@ fn ensure_export_server_typescript(config: &mut ProjectConfig) {
     ensure_export_server(config);
     if config.export.as_ref().unwrap().server.as_ref().unwrap().typescript.is_none() {
         config.export.as_mut().unwrap().server.as_mut().unwrap().typescript =
-            Some(tablet_core::model::TypeScriptExport::default_server());
+            Some(tablet_core::model::ServerTypeScriptExport::default());
     }
 }

@@ -161,7 +161,7 @@ pub struct ServerExport {
     pub go: Option<GoExport>,
     pub cpp: Option<CppExport>,
     pub csharp_dotnet: Option<CSharpExport>,
-    pub typescript: Option<TypeScriptExport>,
+    pub typescript: Option<ServerTypeScriptExport>,
 }
 
 impl Default for ServerExport {
@@ -172,7 +172,7 @@ impl Default for ServerExport {
             go: Some(GoExport::default()),
             cpp: Some(CppExport::default()),
             csharp_dotnet: Some(CSharpExport::default()),
-            typescript: Some(TypeScriptExport::default_server()),
+            typescript: Some(ServerTypeScriptExport::default()),
         }
     }
 }
@@ -245,7 +245,7 @@ impl Default for CSharpExport {
 pub struct ClientConfig {
     pub lua: Option<LuaExport>,
     pub gdscript: Option<GdScriptExport>,
-    pub typescript: Option<TypeScriptExport>,
+    pub typescript: Option<ClientTypeScriptExport>,
     pub csharp_unity: Option<CSharpExport>,
     pub csharp_godot: Option<CSharpExport>,
 }
@@ -255,7 +255,7 @@ impl Default for ClientConfig {
         Self {
             lua: Some(LuaExport::default()),
             gdscript: Some(GdScriptExport::default()),
-            typescript: Some(TypeScriptExport::default_client()),
+            typescript: Some(ClientTypeScriptExport::default()),
             csharp_unity: Some(CSharpExport {
                 namespace: Some("Game.Config.Client".to_string()),
                 code_output: Some("gen/client/csharp_unity".to_string()),
@@ -295,31 +295,30 @@ impl Default for GdScriptExport {
 }
 
 #[derive(Debug, Clone, PartialEq, serde::Deserialize, serde::Serialize)]
-pub struct TypeScriptExport {
+pub struct ServerTypeScriptExport {
     pub output: Option<String>,
     pub module_kind: Option<crate::enums::ModuleKind>,
 }
 
-impl TypeScriptExport {
-    pub fn default_server() -> Self {
+impl Default for ServerTypeScriptExport {
+    fn default() -> Self {
         Self {
             output: Some("gen/server/typescript".to_string()),
             module_kind: Some(crate::enums::ModuleKind::default()),
         }
     }
-
-    pub fn default_client() -> Self {
-        Self {
-            output: Some("gen/client/typescript".to_string()),
-            module_kind: Some(crate::enums::ModuleKind::default()),
-        }
-    }
 }
 
-impl Default for TypeScriptExport {
+#[derive(Debug, Clone, PartialEq, serde::Deserialize, serde::Serialize)]
+pub struct ClientTypeScriptExport {
+    pub output: Option<String>,
+    pub module_kind: Option<crate::enums::ModuleKind>,
+}
+
+impl Default for ClientTypeScriptExport {
     fn default() -> Self {
         Self {
-            output: None,
+            output: Some("gen/client/typescript".to_string()),
             module_kind: Some(crate::enums::ModuleKind::default()),
         }
     }
