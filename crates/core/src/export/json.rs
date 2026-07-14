@@ -89,28 +89,26 @@ pub fn export_constant(constant: &Constant, strategy: &EmptyStrategy) -> Value {
 
 
 pub fn export_all_json(project: &Project) -> Result<super::ExportResult> {
-    let export_cfg = project.config.export.as_ref();
+    let export_cfg = &project.config.export;
 
-    let data_output = export_cfg
-        .and_then(|e| e.server.as_ref())
+    let data_output = export_cfg.server.as_ref()
         .and_then(|s| s.data_output.as_deref())
         .unwrap_or("gen/server/data");
 
-    let strategy_str = export_cfg
-        .and_then(|e| e.json.as_ref())
+    let strategy_str = export_cfg.json.as_ref()
         .and_then(|j| j.empty_as.map(|e| e.as_str()))
         .unwrap_or("null");
     let strategy = EmptyStrategy::from_json_config(strategy_str);
 
     let line_ending = LineEnding::from_config(
-        export_cfg.and_then(|e| e.line_ending.map(|l| l.as_str()))
+        export_cfg.line_ending.map(|l| l.as_str())
             .unwrap_or("lf")
     );
-    let encoding = export_cfg.and_then(|e| e.encoding.map(|e| e.as_str()))
+    let encoding = export_cfg.encoding.map(|e| e.as_str())
         .unwrap_or("utf-8").to_string();
     let opts = super::ExportOptions { line_ending, encoding };
 
-    let sep = &project.config.separators;
+    let sep = &project.schema.separators;
     let output_dir = project.export_root().join(data_output).join("json");
     let mut collected = Vec::new();
 
@@ -148,28 +146,26 @@ pub fn export_all_json(project: &Project) -> Result<super::ExportResult> {
 }
 
 pub fn export_json_filtered(project: &Project, filter: &super::DataFilter) -> Result<super::ExportResult> {
-    let export_cfg = project.config.export.as_ref();
+    let export_cfg = &project.config.export;
 
-    let data_output = export_cfg
-        .and_then(|e| e.server.as_ref())
+    let data_output = export_cfg.server.as_ref()
         .and_then(|s| s.data_output.as_deref())
         .unwrap_or("gen/server/data");
 
-    let strategy_str = export_cfg
-        .and_then(|e| e.json.as_ref())
+    let strategy_str = export_cfg.json.as_ref()
         .and_then(|j| j.empty_as.map(|e| e.as_str()))
         .unwrap_or("null");
     let strategy = EmptyStrategy::from_json_config(strategy_str);
 
     let line_ending = LineEnding::from_config(
-        export_cfg.and_then(|e| e.line_ending.map(|l| l.as_str()))
+        export_cfg.line_ending.map(|l| l.as_str())
             .unwrap_or("lf")
     );
-    let encoding = export_cfg.and_then(|e| e.encoding.map(|e| e.as_str()))
+    let encoding = export_cfg.encoding.map(|e| e.as_str())
         .unwrap_or("utf-8").to_string();
     let opts = super::ExportOptions { line_ending, encoding };
 
-    let sep = &project.config.separators;
+    let sep = &project.schema.separators;
     let output_dir = project.export_root().join(data_output).join("json");
     let mut collected = Vec::new();
 

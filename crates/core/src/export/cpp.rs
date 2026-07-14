@@ -413,8 +413,8 @@ fn gen_all_header(ns: &str, table_names: &[String], constant_names: &[String], e
 }
 
 pub fn export_all_cpp(project: &Project) -> Result<super::ExportResult> {
-    let export_cfg = project.config.export.as_ref();
-    let server = export_cfg.and_then(|e| e.server.as_ref());
+    let export_cfg = &project.config.export;
+    let server = export_cfg.server.as_ref();
     let cpp = server.and_then(|s| s.cpp.as_ref());
 
     let code_output = cpp
@@ -425,10 +425,10 @@ pub fn export_all_cpp(project: &Project) -> Result<super::ExportResult> {
         .unwrap_or("game::config");
 
     let line_ending = LineEnding::from_config(
-        export_cfg.and_then(|e| e.line_ending.map(|l| l.as_str()))
+        export_cfg.line_ending.map(|l| l.as_str())
             .unwrap_or("lf")
     );
-    let encoding = export_cfg.and_then(|e| e.encoding.map(|e| e.as_str()))
+    let encoding = export_cfg.encoding.map(|e| e.as_str())
         .unwrap_or("utf-8").to_string();
     let opts = super::ExportOptions { line_ending, encoding };
 

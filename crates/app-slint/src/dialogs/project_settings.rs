@@ -159,7 +159,6 @@ fn run(state: &Rc<RefCell<AppState>>) {
             }
             if p.schema.separators != sep {
                 p.schema.separators = sep.clone();
-                p.config.separators = sep.clone();
                 has_changes = true;
             }
             if has_changes {

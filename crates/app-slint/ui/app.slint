@@ -54,17 +54,17 @@ export component AppWindow inherits Window {
     // macOS：渲染到顶部全局菜单栏；Windows / Linux：渲染在窗口顶部。
     MenuBar {
         Menu {
-            title: "关于";
-            MenuItem {
-                title: "检查更新";
-                activated => { root.check-update-clicked(); }
-            }
-        }
-        Menu {
             title: "设置";
             MenuItem {
                 title: "全局设置...";
                 activated => { root.global-settings-clicked(); }
+            }
+        }
+        Menu {
+            title: "关于";
+            MenuItem {
+                title: "检查更新";
+                activated => { root.check-update-clicked(); }
             }
         }
     }

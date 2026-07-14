@@ -218,8 +218,8 @@ fn parse_expr_for(raw_var: &str, t: &TblType, sep_var: &str, enum_names: &HashSe
 // PLACEHOLDER_GO_GEN_TPL
 
 pub fn export_all_go(project: &Project) -> Result<super::ExportResult> {
-    let export_cfg = project.config.export.as_ref();
-    let server = export_cfg.and_then(|e| e.server.as_ref());
+    let export_cfg = &project.config.export;
+    let server = export_cfg.server.as_ref();
     let go = server.and_then(|s| s.go.as_ref());
 
     let code_output = go
@@ -230,10 +230,10 @@ pub fn export_all_go(project: &Project) -> Result<super::ExportResult> {
         .unwrap_or("config");
 
     let line_ending = LineEnding::from_config(
-        export_cfg.and_then(|e| e.line_ending.map(|l| l.as_str()))
+        export_cfg.line_ending.map(|l| l.as_str())
             .unwrap_or("lf")
     );
-    let encoding = export_cfg.and_then(|e| e.encoding.map(|e| e.as_str()))
+    let encoding = export_cfg.encoding.map(|e| e.as_str())
         .unwrap_or("utf-8").to_string();
     let opts = super::ExportOptions { line_ending, encoding };
 

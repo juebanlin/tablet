@@ -467,13 +467,10 @@ impl ProjectEngine {
             .collect();
     }
 
-    /// 重新生成指定项目的合并配置（global + raw + schema → config）。
-    /// 当外部直接修改了 project.schema / project.raw_config 后调用此方法，
-    /// 确保 project.config 反映最新的合并结果（特别是 config.separators 来自 schema）。
-    pub fn remerge_project_config(&mut self, project_id: &str) {
-        if let Some(p) = self.projects.iter_mut().find(|p| p.schema.meta.id == project_id) {
-            p.config = crate::project::merge_config(&self.global_config, &p.raw_config, &p.schema);
-        }
+    /// （已废弃）原用于重新合并配置，现在项目配置独立维护，不再需要合并。
+    /// 保留空实现以兼容旧调用点，未来可删除。
+    pub fn remerge_project_config(&mut self, _project_id: &str) {
+        // 不再需要合并：项目配置独立维护
     }
 
     /// 打开一个 available project：从盘加载并 append 到 self.projects；
@@ -580,18 +577,14 @@ impl ProjectEngine {
         let project_id = schema.meta.id.clone();
         let project_root = self.workdir.join(crate::project::PROJECTS_DIR).join(&project_id);
 
-        // 借用任一已打开 project 的 config 当默认（与 workspace 共享段对齐）；都没有则走默认
-        let raw_config = self.projects.first()
-            .map(|p| p.raw_config.clone())
-            .unwrap_or_default();
-        let config = self.projects.first()
-            .map(|p| p.config.clone())
-            .unwrap_or_default();
+        // 从全局配置拷贝初始配置（新项目时的种子）
+        let config = ProjectConfig {
+            export: self.global_config.export.clone().unwrap_or_default(),
+        };
 
         let mut new_project = Project {
             workdir: self.workdir.clone(),
             project_root: project_root.clone(),
-            raw_config,
             config,
             schema: schema.clone(),
             groups: Vec::new(),
@@ -1235,7 +1228,7 @@ impl ProjectEngine {
 
     pub fn validate(&self) -> Vec<String> {
         let mut errors = Vec::new();
-        let sep = &self.project().config.separators;
+        let sep = &self.project().schema.separators;
         let refs = RefIndex::build(&self.project().groups);
         let allow_ref = self.global_config.ui.as_ref()
             .map_or(true, |u| u.constant_ref_allowed);
@@ -1265,7 +1258,7 @@ impl ProjectEngine {
     pub fn revalidate(&mut self, group: &str, name: &str) {
         let Some(pid) = self.active_project_id().map(str::to_string) else { return; };
         self.validation_errors.retain(|(p, g, n, _, _)| p != &pid || g != group || n != name);
-        let sep = self.project().config.separators.clone();
+        let sep = self.project().schema.separators.clone();
         let refs = RefIndex::build(&self.project().groups);
         let allow_ref = self.global_config.ui.as_ref()
             .map_or(true, |u| u.constant_ref_allowed);
@@ -1932,7 +1925,7 @@ impl ProjectEngine {
     pub fn validate_project(&self, project_id: &str) -> Vec<String> {
         let Some(project) = self.find_project(project_id) else { return Vec::new(); };
         let mut errors = Vec::new();
-        let sep = &project.config.separators;
+        let sep = &project.schema.separators;
         let refs = RefIndex::build(&project.groups);
         let allow_ref = self.global_config.ui.as_ref()
             .map_or(true, |u| u.constant_ref_allowed);
@@ -2164,12 +2157,10 @@ mod project_toml_template_tests {
         let mut schema = crate::tblschema::TblSchema::default();
         schema.meta.id = id.to_string();
         schema.meta.name = id.to_string();
-        let raw_config = ProjectConfig::default();
         let config = ProjectConfig::default();
         Project {
             workdir,
             project_root,
-            raw_config,
             config,
             schema,
             groups: Vec::new(),

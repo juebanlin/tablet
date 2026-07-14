@@ -53,7 +53,7 @@ pub fn raw_cell_for(state: &AppState, r: usize, c: usize) -> String {
 /// 用于 StatusBar 在选中单格时把"红框是因为什么"展示给用户，对齐文档 §5.4 实时验证 UX。
 pub(super) fn cell_validation_message(state: &AppState, r: usize, c: usize) -> Option<String> {
     use tablet_core::validate::{validate_table, validate_constant, validate_enum, RefIndex};
-    let sep = &state.engine.project().config.separators;
+    let sep = &state.engine.project().schema.separators;
     let errors = match &state.selected {
         Some(SelectedNode::Table { group, name, .. }) => {
             let table = state.engine.find_table(group, name)?;

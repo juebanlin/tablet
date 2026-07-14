@@ -283,8 +283,8 @@ pub fn export_enum_lua(enum_def: &EnumDef) -> String {
 }
 
 pub fn export_all_lua(project: &Project) -> Result<super::ExportResult> {
-    let export_cfg = project.config.export.as_ref();
-    let client = export_cfg.and_then(|e| e.client.as_ref());
+    let export_cfg = &project.config.export;
+    let client = export_cfg.client.as_ref();
     let lua = client.and_then(|c| c.lua.as_ref());
 
     let output = lua
@@ -292,14 +292,14 @@ pub fn export_all_lua(project: &Project) -> Result<super::ExportResult> {
         .unwrap_or("gen/client");
 
     let line_ending = LineEnding::from_config(
-        export_cfg.and_then(|e| e.line_ending.map(|l| l.as_str()))
+        export_cfg.line_ending.map(|l| l.as_str())
             .unwrap_or("lf")
     );
-    let encoding = export_cfg.and_then(|e| e.encoding.map(|e| e.as_str()))
+    let encoding = export_cfg.encoding.map(|e| e.as_str())
         .unwrap_or("utf-8").to_string();
     let opts = super::ExportOptions { line_ending, encoding };
 
-    let sep = &project.config.separators;
+    let sep = &project.schema.separators;
     let output_dir = project.export_root().join(output);
     let mut collected = Vec::new();
 

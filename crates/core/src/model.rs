@@ -32,9 +32,7 @@ pub struct Project {
     /// 当前 Project 的根目录：`project.tblschema` / `config/` 在它下面。
     /// - 多 Project 模式：`<workdir>/projects/<id>/`
     pub project_root: PathBuf,
-    /// 项目级原始配置（来自 project.toml），保存时写回此配置。
-    pub raw_config: ProjectConfig,
-    /// 合并后的最终配置（global + raw + schema），业务逻辑使用。
+    /// 项目配置（来自 project.toml），业务逻辑使用。
     pub config: ProjectConfig,
     /// `project.tblschema` 解析结果，承担"项目身份 + 结构骨架"双职：
     /// - `schema.meta.id / name / created_at / source_template* / category / version` = 项目身份
@@ -429,18 +427,15 @@ pub struct ProjectManagementConfig {
 }
 
 /// 项目级配置（来自 project.toml）。
+/// 包含项目的导出配置，新建项目时从全局配置拷贝初始值，之后独立维护。
 ///
-/// 用途：
-/// - `raw_config`：原始配置，保存时写回 project.toml
-/// - `config`：合并后配置（global + raw），业务逻辑使用
-///
-/// 注意：UI 配置仅在全局级别（GlobalConfig），项目级不支持覆盖。
-#[derive(Debug, Clone, serde::Deserialize, Default)]
+/// 注意：
+/// - UI 配置仅在全局级别（GlobalConfig），项目级不支持覆盖。
+/// - 分隔符配置存储在 TblSchema 中，不在此处。
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize, Default)]
 pub struct ProjectConfig {
     #[serde(default)]
-    pub export: Option<ExportConfig>,
-    #[serde(default)]
-    pub separators: crate::types::SeparatorsSection,
+    pub export: ExportConfig,
 }
 
 #[derive(Debug, Clone)]

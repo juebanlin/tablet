@@ -73,35 +73,35 @@ const BANNER_GLOBAL: &str = r#"# ===============================================
 # tablet 工作区配置（仓库共享）
 # ============================================================
 #
-# 本文件分四类段，作用域和覆盖关系不同：
+# 本文件分四类段，作用域不同：
 #
 #   [project]      ← 工作区状态（last_project / opened_projects 等）
-#                     仓库级；不属于任何具体 Project，不会被 Project 覆盖
+#                     仓库级；不属于任何具体 Project
 #
-#   [export]       ← Project 默认值
-#                     新建 Project 继承本段；Project 用自己的
-#                     projects/<id>/project.toml 按字段 deep-merge 覆盖
-#                     （在这里改 = 影响所有未显式覆盖的 Project）
+#   [export]       ← 新建 Project 时的导出配置初始模板
+#                     新建 Project 时拷贝一次到 projects/<id>/project.toml
+#                     之后各 Project 独立维护，互不影响
+#                     已有 Project 导出设置走 GUI「项目右键 → 项目设置 → 导出」
 #
 #   [ui]           ← 工作区级 UI 偏好（仅本文件生效）
 #                     不支持项目级覆盖：多 Project 同时打开时若按项目切换
 #                     UI 策略，"全局保存 / 实时校验"等行为会反复变动，
 #                     反而像 bug。项目级 project.toml 写 [ui] 会被忽略。
 #
-#   [separators]   ← 新建空 Project 时的分隔符初值
-#                     拷一次到 project.tblschema 后即与本段无关；
+#   [separators]   ← 新建空 Project 时的分隔符初始模板
+#                     新建时拷贝一次到 project.tblschema 后即与本段无关；
 #                     已有 Project 改分隔符走 GUI「项目右键 → 项目设置 → 分隔符」
 # ============================================================
 
 "#;
 
-/// 项目级 `project.toml` banner：说明覆盖语义、并明确禁止的三段（[project]/[ui]/[separators]）。
+/// 项目级 `project.toml` banner：说明独立配置语义、并明确禁止的三段（[project]/[ui]/[separators]）。
 const BANNER_PROJECT: &str = r#"# ============================================================
-# 项目级配置覆盖（projects/<id>/project.toml）
+# 项目级配置（projects/<id>/project.toml）
 # ============================================================
 #
-# 与 <workdir>/tablet.toml 按字段 deep-merge，项目优先；
-# 缺失字段自动回退到全局值。所有键均已声明，照需修改即可。
+# 本文件包含此项目的独立配置，与全局 tablet.toml 无运行时继承关系。
+# 新建项目时从全局配置拷贝初始值，之后各项目独立维护。
 #
 # 注意：以下三段写在这里会被加载流程剥掉，不会生效——
 #   - [project]    工作区状态（last_project / opened_projects 等），不属于单项目
@@ -379,15 +379,11 @@ fn load_specific_project_impl(
         project_root.file_name().unwrap().to_str().unwrap(),
     );
 
-    // 解析项目级原始配置。
-    // 项目级只允许覆盖 [export]：
-    // - [ui] 是工作区级，多 Project 共享，项目级写了也 strip
-    // - [separators] 以 schema 的 # @sep 为准
-    // - [project] 是仓库状态，不属于单项目
-    let raw_config = parse_raw_project_config(proj_text.as_deref());
+    // 解析项目级配置（仅 [export] 段）
+    let config = parse_project_config(proj_text.as_deref(), global_config);
 
-    // 合并配置
-    let config = merge_config(global_config, &raw_config, &schema);
+    // 分隔符始终来自 schema，不从 toml 读取
+    // （project.toml 中的 [separators] 段会被忽略）
 
     let data_dir = project_root.join("config");
     let groups = if data_dir.is_dir() {
@@ -401,7 +397,6 @@ fn load_specific_project_impl(
     Ok(Project {
         workdir: workdir.to_path_buf(),
         project_root: project_root.to_path_buf(),
-        raw_config,
         config,
         schema,
         groups,
@@ -410,76 +405,76 @@ fn load_specific_project_impl(
     })
 }
 
-/// 解析项目级原始配置（仅 [export]，其它段一律 strip）。
+/// 解析项目级配置（仅 [export] 段）。
 ///
 /// 项目级 project.toml 不允许覆盖工作区级段：
 /// - [project]    仓库状态（last_project / opened_projects），不属于单项目
 /// - [ui]         UI 偏好仅工作区级；多 Project 同时打开时按项目切 UI 策略会反复变
 /// - [separators] 分隔符以 project.tblschema 的 # @sep 为准
-fn parse_raw_project_config(project_text: Option<&str>) -> ProjectConfig {
-    let Some(text) = project_text else {
-        return ProjectConfig::default();
-    };
-    // 只取 [export] 段，其它段忽略
-    let val: toml::Value = match toml::from_str(text) {
-        Ok(v) => v,
-        Err(_) => return ProjectConfig::default(),
-    };
-    let export = val.get("export")
-        .and_then(|e| e.clone().try_into::<crate::model::ExportConfig>().ok());
-    ProjectConfig {
-        export,
-        separators: crate::types::SeparatorsSection::default(),  // 以 schema 为准
-    }
-}
-
-/// 合并配置：GlobalConfig + ProjectConfig(raw) + TblSchema → ProjectConfig(merged)
-/// - export：字段级 deep merge（项目优先，缺失字段回退全局）
-/// - separators：用 schema（优先级最高）
 ///
-/// 注意：UI 配置不在此合并，始终从 GlobalConfig 读取。
-pub fn merge_config(
-    global: &GlobalConfig,
-    raw: &ProjectConfig,
-    schema: &crate::tblschema::TblSchema,
-) -> ProjectConfig {
-    ProjectConfig {
-        export: merge_export(global.export.as_ref(), raw.export.as_ref()),
-        separators: schema.separators.clone(),
-    }
+/// 项目级配置加载策略：
+/// - 如果 project.toml 缺失或解析失败，从全局配置拷贝完整初始值
+/// - 如果 project.toml 存在但某些字段缺失/无效，用全局配置对应字段修复
+/// - 这是加载时的一次性修复，后续内存中配置保持独立，不再继承
+fn parse_project_config(project_text: Option<&str>, global: &GlobalConfig) -> ProjectConfig {
+    let global_export = global.export.clone().unwrap_or_default();
+
+    let Some(text) = project_text else {
+        // 无 project.toml，从全局拷贝
+        return ProjectConfig {
+            export: global_export,
+        };
+    };
+
+    // 只取 [export] 段，其它段忽略
+    let proj_val: toml::Value = match toml::from_str(text) {
+        Ok(v) => v,
+        Err(_) => return ProjectConfig {
+            export: global_export,
+        },
+    };
+
+    let proj_export_val = match proj_val.get("export") {
+        Some(v) => v.clone(),
+        None => return ProjectConfig {
+            export: global_export,
+        },
+    };
+
+    // 将全局 export 序列化为 toml::Value，作为修复基准
+    let global_export_val = toml::Value::try_from(&global_export)
+        .unwrap_or(toml::Value::Table(toml::map::Map::new()));
+
+    // 深度合并：用全局配置补充项目配置中缺失的字段
+    let mut merged = global_export_val;
+    deep_merge_toml(&mut merged, proj_export_val);
+
+    // 反序列化为 ExportConfig，如果失败则回退到全局配置
+    let export = merged.try_into::<crate::model::ExportConfig>()
+        .unwrap_or(global_export);
+
+    ProjectConfig { export }
 }
 
-/// export 字段级 deep merge：走 toml::Value 递归合并（项目字段覆盖全局，缺失回退）。
-fn merge_export(
-    global: Option<&crate::model::ExportConfig>,
-    project: Option<&crate::model::ExportConfig>,
-) -> Option<crate::model::ExportConfig> {
-    match (global, project) {
-        (None, None) => None,
-        (Some(g), None) => Some(g.clone()),
-        (None, Some(p)) => Some(p.clone()),
-        (Some(g), Some(p)) => {
-            // 转成 toml::Value 做递归 deep merge，再转回
-            let mut base = toml::Value::try_from(g).ok()?;
-            let over = toml::Value::try_from(p).ok()?;
-            deep_merge_toml(&mut base, over);
-            base.try_into().ok()
-        }
-    }
-}
+/// 深度合并 toml::Value（overlay 覆盖 base）。
+/// 用于配置修复：base 是完整的全局配置，overlay 是可能不完整的项目配置。
+/// 对于 Table：递归合并字段；对于非 Table：overlay 直接覆盖 base。
+fn deep_merge_toml(base: &mut toml::Value, overlay: toml::Value) {
+    use toml::Value;
 
-/// 深度合并：override 的 table 字段递归合 base；非 table 值直接覆盖；override 缺失字段保留 base。
-fn deep_merge_toml(base: &mut toml::Value, over: toml::Value) {
-    match (base, over) {
-        (toml::Value::Table(b), toml::Value::Table(o)) => {
-            for (k, v) in o {
-                match b.get_mut(&k) {
-                    Some(existing) => deep_merge_toml(existing, v),
-                    None => { b.insert(k, v); }
+    match (base, overlay) {
+        (Value::Table(base_table), Value::Table(overlay_table)) => {
+            for (key, val) in overlay_table {
+                if let Some(base_val) = base_table.get_mut(&key) {
+                    deep_merge_toml(base_val, val);
+                } else {
+                    base_table.insert(key, val);
                 }
             }
         }
-        (slot, v) => { *slot = v; }
+        (base_val, overlay_val) => {
+            *base_val = overlay_val;
+        }
     }
 }
 
@@ -1217,7 +1212,7 @@ mod tests {
             "[project]\nname = \"x\"\nlast_project = \"p\"\n\n[export.server]\ndata_output = \"gen/server/data\"\n[export.server.java]\npackage = \"com.global\"\ncode_output = \"gen/server/java\"\n",
         ).unwrap();
         let proj = load_project(&dir).expect("load");
-        let java = proj.config.export.as_ref().unwrap().server.as_ref().unwrap().java.as_ref().unwrap();
+        let java = proj.config.export.server.as_ref().unwrap().java.as_ref().unwrap();
         // overlay 覆盖
         assert_eq!(java.package.as_deref(), Some("com.over.ride"));
         // 全局保留（overlay 没动 code_output）

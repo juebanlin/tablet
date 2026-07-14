@@ -218,21 +218,10 @@ fn run(state: &Rc<RefCell<AppState>>) {
         st.engine.ui_log("[全局设置] 已保存到 tablet.toml".to_string());
     }
 
-    // 重新合并所有项目的配置
+    // 配置变更后不再需要重新合并：项目配置独立维护
+    // 仅更新 AppState 中的 UI 配置缓存
     {
         let mut st = state.borrow_mut();
-        let global_config = st.engine.global_config.clone();
-
-        for p in &mut st.engine.projects {
-            let merged = tablet_core::project::merge_config(
-                &global_config,
-                &p.raw_config,
-                &p.schema,
-            );
-            p.config = merged;
-        }
-
-        // 更新 AppState 中的 UI 配置缓存
         st.realtime_validate = ui.realtime_validate;
         st.picker_trigger_header_single = ui.picker_trigger_header == tablet_core::enums::PickerTrigger::Single;
         st.picker_trigger_data_single = ui.picker_trigger_data == tablet_core::enums::PickerTrigger::Single;

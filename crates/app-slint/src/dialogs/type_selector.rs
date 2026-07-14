@@ -95,7 +95,7 @@ pub fn push(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
     }
     ui_h.set_ts_param_slots(slint::ModelRc::new(slint::VecModel::from(ts_slots)));
 
-    let sep = st.engine.project().config.separators.clone();
+    let sep = st.engine.project().schema.separators.clone();
     let (preview, example, java, go, lua) = match ts.tab {
         TsTab::Data => {
             let t = ts.data_type();
