@@ -106,6 +106,10 @@ fn main() -> anyhow::Result<()> {
 }
 
 fn run_gui(workdir_arg: Option<PathBuf>) -> anyhow::Result<()> {
+    // 获取本地时区偏移（必须在早期单线程时获取，之后多线程环境下不安全）
+    let time_offset = time::UtcOffset::current_local_offset()
+        .unwrap_or(time::UtcOffset::UTC);
+
     // 默认 = 当前工作目录（cmd cwd / 双击启动时即 exe 所在目录）。
     // `--workdir` 仅作开发期便利覆盖（cargo run -p tablet-slint -- --gui --workdir=...）。
     let workdir = match workdir_arg {
@@ -159,9 +163,12 @@ fn run_gui(workdir_arg: Option<PathBuf>) -> anyhow::Result<()> {
     // 自定义 Config：Java 风格日志格式 + 过滤 ICU4X 日语分词警告
     let log_config = simplelog::ConfigBuilder::new()
         .set_time_format_custom(time::macros::format_description!("[year]-[month]-[day] [hour]:[minute]:[second].[subsecond digits:3]"))
+        .set_time_offset(time_offset)
         .set_thread_level(LevelFilter::Off)
         .set_target_level(LevelFilter::Off)
-        .add_filter_ignore_str("ICU4X")
+        .add_filter_ignore_str("icu")
+        .add_filter_ignore_str("icu4x")
+        .add_filter_ignore_str("icu_segmenter")
         .build();
 
     CombinedLogger::init(vec![WriteLogger::new(

@@ -12,7 +12,7 @@ path = "src/main.rs"
 [dependencies]
 tablet-core = { path = "../core" }
 tablet-cli = { path = "../app-cli" }
-slint = { version = "1.16.1", default-features = false, features = [
+slint = { version = "1.17", default-features = false, features = [
     "std",                  # 桌面环境必需
     "compat-1-2",           # 1.x API 兼容
     "backend-winit",        # winit 窗口/事件后端（跨 Win/macOS/Linux）
@@ -26,12 +26,12 @@ time = { version = "0.3", features = ["macros"] }
 chrono = "0.4"
 anyhow = "1"
 arboard = "3"
-rfd = "0.15"
+rfd = "0.17"
 open = "5"
 
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.59", features = ["Win32_System_Console"] }
+windows-sys = { version = "0.61", features = ["Win32_System_Console"] }
 
 [build-dependencies]
-slint-build = "1.16.1"
+slint-build = "1.17"
 winresource = "0.1"
