@@ -48,9 +48,13 @@ pub(crate) fn items_for(kind: &CtxMenuKind, state: &AppState) -> Vec<CtxMenuItem
         "粘贴 Group".to_string()
     };
     match kind {
-        CtxMenuKind::TreeBlank => vec![
-            item("新建 Group", "tree.new-group", false),
-        ],
+        CtxMenuKind::TreeBlank => {
+            if state.engine.projects.is_empty() {
+                vec![item("新建项目", "tree.new-project", false)]
+            } else {
+                vec![item("新建 Group", "tree.new-group", false)]
+            }
+        },
         CtxMenuKind::TreeProject { project_id } => {
             if state.engine.is_opened(project_id) {
                 vec![
@@ -176,6 +180,12 @@ pub fn wire(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
                 k
             };
             match (kind, id.as_str()) {
+                (Some(CtxMenuKind::TreeBlank), "tree.new-project") => {
+                    s.borrow_mut().create_project.open_empty();
+                    if let Some(ui_h) = weak.upgrade() {
+                        dialogs::create_project::push(&ui_h, &s);
+                    }
+                }
                 (Some(CtxMenuKind::TreeBlank), "tree.new-group") => {
                     let project_id = {
                         let st = s.borrow();
