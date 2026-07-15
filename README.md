@@ -5,6 +5,18 @@
 - **`tablet`**（GUI）：Slint 写的桌面端，零参数 / `--gui` 走 GUI；其它参数转 CLI fallback
 - **`tablet-cli`**：纯命令行工具，Jenkins / 自动化批处理用
 
+## v1.2.3 重大改进
+
+- 🎯 **配置管理重构**：移除配置继承，改为模板式补全，简化配置访问路径
+- 🎨 **全局设置界面**：统一管理仓库级导出配置和 UI 偏好
+- ⚙️ **项目设置补齐**：新增导出配置 tab，可视化配置 27 个导出选项
+- 🗂️ **导出配置细化**：
+  - TypeScript 拆分为 ServerTypeScriptExport / ClientTypeScriptExport，支持 ESM/CommonJS 模块格式
+  - C# 拆分为 DotNetExport / UnityCSharpExport / GodotCSharpExport，针对不同运行时优化
+- 📦 **导出配置枚举化**：类型安全的枚举替换字符串字面量（CppJsonLib / ModuleKind 等）
+- 🧹 **代码清理**：移除单项目模式兼容代码，统一多项目架构
+- 🔧 **日志系统升级**：分级日志 + ICU4X 日志过滤优化
+
 ## GUI
 
 ![tablet 主界面](res/ui_main.png)
@@ -31,7 +43,7 @@
   - 「文件」：导入本地 `.tblschema` 文件骨架
   - 「空白」：从零起项目
 - **TreeSection 右键菜单**（按节点类型分流）：
-  - **Project**（已打开）：保存 / 导出（多语言代码 + 数据）/ 导出 Schema / 导出为本地模板 / 合并 Schema / 新建 Group / 复制（克隆）/ 项目设置（id/name/category/version/分隔符）/ 关闭 / 删除 / 在文件管理器打开
+  - **Project**（已打开）：保存 / 导出（多语言代码 + 数据）/ 导出 Schema / 导出为本地模板 / 合并 Schema / 新建 Group / 复制（克隆）/ 项目设置（身份/分隔符/导出配置）/ 关闭 / 删除 / 在文件管理器打开
   - **Project**（未打开）：打开 / 项目设置 / 在文件管理器打开 / 删除
   - **Group**：新建 Table / 新建 Constant / 新建 Enum / 用 Excel 打开（整组多 sheet xlsx）/ 复制 Group（含全部内容）/ 粘贴节点 / 粘贴 Group / 重命名 / 删除
   - **叶节点**（Table / Constant / Enum）：复制 / 粘贴 / 重命名 / 删除

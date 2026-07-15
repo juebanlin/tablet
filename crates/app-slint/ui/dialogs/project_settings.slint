@@ -212,7 +212,7 @@ export component ProjectSettingsDialog inherits Rectangle {
         cancel-clicked => { root.cancel(); }
         scrim-clicked => { root.cancel(); }
         show-secondary: root.tab == 1 || root.tab == 2;
-        secondary-text: "恢复默认";
+        secondary-text: "应用模板";
         secondary-clicked => {
             if root.tab == 1 {
                 root.reset-sep();

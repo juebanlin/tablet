@@ -16,6 +16,8 @@ tablet/
 
 `tablet-core` 持有模型、类型系统、验证、数据操作、文件 I/O；`tablet` 与 `tablet-cli` 都只是它的薄前端。UI 设计和布局见 @06，本篇专注 slint 实现细节。源码组织见 @03.1；启动分流见 @03.12。
 
+配置访问路径简化：v1.2.3 移除 `raw_config` 后，所有导出器直接使用 `project.config.export`，分隔符从 `schema.separators` 获取，不再有配置层级回退逻辑。
+
 > 历史：项目早期为对比 immediate-mode / retained / 声明式三套 GUI 范式，曾并存 `app-egui` / `app-fltk` 两个实验性实现。结论是 slint 在主题完成度、声明式响应式布局、Live Preview 调试体验上综合最好，已向正式版本靠拢；其余两份实验实现已从仓库移除。
 
 ## 2. 大区拉伸 splitter

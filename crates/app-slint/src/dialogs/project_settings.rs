@@ -720,7 +720,7 @@ pub fn wire(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
             if let Some(ui_h) = weak.upgrade() { push(&ui_h, &s); }
         });
     }
-    // 恢复默认（分隔符 tab）：恢复到当前程序内存中 globalConfig 的模板值（用于初始化新项目）
+    // 应用模板（分隔符 tab）：应用当前程序内存中 globalConfig 的模板值
     // 注意：不是恢复到 SeparatorsSection::default()，default() 仅用于 globalConfig 自身初始化
     {
         let s = state.clone();
@@ -734,7 +734,7 @@ pub fn wire(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
             if let Some(ui_h) = weak.upgrade() { push(&ui_h, &s); }
         });
     }
-    // 恢复默认（导出配置 tab）：恢复到当前程序内存中 globalConfig 的模板值（用于初始化新项目）
+    // 应用模板（导出配置 tab）：应用当前程序内存中 globalConfig 的模板值
     // 注意：不是恢复到各枚举的 ::default()，default() 仅用于 globalConfig 自身初始化
     {
         let s = state.clone();
