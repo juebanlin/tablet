@@ -602,6 +602,11 @@ impl ProjectEngine {
             with_preset,
         );
 
+        // 清除 schema 的 preset（数据已灌入 groups，项目 schema 只保留结构骨架）
+        for sec in &mut new_project.schema.sections {
+            sec.preset.clear();
+        }
+
         let avail = AvailableProject::from_project(&new_project);
         self.available_projects.push(avail);
         self.available_projects.sort_by(|a, b| a.id.cmp(&b.id));

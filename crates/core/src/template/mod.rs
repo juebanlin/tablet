@@ -94,7 +94,12 @@ pub fn instantiate_template(schema: &TblSchema, target_dir: &Path) -> Result<()>
     }
 
     // 先 dry-run 全部内容到内存，确认无错才落盘——失败时尽量不留残留。
-    let schema_text = serialize_tblschema(schema);
+    // 实例化后的项目 schema 不保留 preset（数据已灌入 .tbl 文件）
+    let mut schema_without_preset = schema.clone();
+    for sec in &mut schema_without_preset.sections {
+        sec.preset.clear();
+    }
+    let schema_text = serialize_tblschema(&schema_without_preset);
 
     let mut planned: Vec<(PathBuf, String)> = Vec::new();
     planned.push((target_dir.join(crate::project::PROJECT_SCHEMA_FILE), schema_text));
@@ -327,6 +332,10 @@ mod tests {
             std::fs::read_to_string(target.join("project.tblschema")).expect("read schema");
         assert!(schema_text.contains("# @meta id: demo"));
         assert!(schema_text.contains("[hero/HeroBase] table"));
+
+        // 验证：实例化后的 project.tblschema 不应包含 # @preset 块
+        assert!(!schema_text.contains("# @preset"),
+            "项目实例化后 project.tblschema 不应包含 preset 数据");
 
         // Table 骨架：4 行表头 + ---，没有数据行
         let hero_base = std::fs::read_to_string(target.join("config/hero/HeroBase.tbl"))
