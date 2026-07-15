@@ -537,7 +537,6 @@ pub struct EnumEntry {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Export {
-    Unselected,
     ClientServer,
     ClientOnly,
     ServerOnly,
@@ -551,13 +550,13 @@ impl Export {
             "客户端" | "c" => Self::ClientOnly,
             "服务器" | "s" => Self::ServerOnly,
             "不导出" | "-" => Self::None,
-            _ => Self::Unselected,
+            _ => Self::ClientServer,  // 无效值默认为双端导出
         }
     }
 
+    /// 展示值（界面用）：前后端 / 客户端 / 服务器 / 不导出
     pub fn display(&self) -> &str {
         match self {
-            Self::Unselected => "",
             Self::ClientServer => "前后端",
             Self::ClientOnly => "客户端",
             Self::ServerOnly => "服务器",
@@ -565,19 +564,15 @@ impl Export {
         }
     }
 
+    /// 短码形式（tbl/schema/剪贴板用）：cs / c / s / -
     pub fn to_tbl(&self) -> &str {
-        match self {
-            Self::ClientServer | Self::Unselected => "",
-            Self::ClientOnly => "客户端",
-            Self::ServerOnly => "服务器",
-            Self::None => "不导出",
-        }
+        self.code()
     }
 
-    /// 短码形式（schema/剪贴板用）：cs / c / s / -
+    /// 短码形式（tbl/schema/剪贴板用）：cs / c / s / -
     pub fn code(&self) -> &str {
         match self {
-            Self::ClientServer | Self::Unselected => "cs",
+            Self::ClientServer => "cs",
             Self::ClientOnly => "c",
             Self::ServerOnly => "s",
             Self::None => "-",

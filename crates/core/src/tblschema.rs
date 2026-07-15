@@ -458,12 +458,7 @@ pub fn schema_from_project(groups: &[Group], with_preset: bool) -> TblSchema {
 }
 
 fn export_to_code(e: &Export) -> String {
-    match e {
-        Export::ClientServer | Export::Unselected => "cs".to_string(),
-        Export::ClientOnly => "c".to_string(),
-        Export::ServerOnly => "s".to_string(),
-        Export::None => "-".to_string(),
-    }
+    e.code().to_string()
 }
 
 /// 把 schema sections 应用到 project：

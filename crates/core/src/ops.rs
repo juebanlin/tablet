@@ -1179,7 +1179,7 @@ impl ProjectEngine {
                             0 => entry.name = cell.to_string(),
                             1 => entry.tbl_type = cell.to_string(),
                             2 => entry.value = cell.to_string(),
-                            3 => entry.export = if cell.is_empty() { Export::Unselected } else { Export::from_str(cell) },
+                            3 => entry.export = Export::from_str(cell),
                             4 => entry.desc = cell.to_string(),
                             _ => {}
                         }
@@ -1213,7 +1213,7 @@ impl ProjectEngine {
                             0 => entry.name.clear(),
                             1 => entry.tbl_type.clear(),
                             2 => entry.value.clear(),
-                            3 => entry.export = Export::Unselected,
+                            3 => entry.export = Export::ClientServer,
                             4 => entry.desc.clear(),
                             _ => {}
                         }
