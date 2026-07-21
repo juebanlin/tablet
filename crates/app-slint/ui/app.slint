@@ -272,6 +272,7 @@ export component AppWindow inherits Window {
     callback si-toggle-all(bool);
     callback si-toggle-item(int);
     callback si-confirm();
+    callback si-cancel();
 
     // ── Dialog: 新建项目（统一 3 tab：空 / 文件 / 模板）──────
     in-out property <bool> dlg-create-project-open: false;
@@ -843,7 +844,7 @@ export component AppWindow inherits Window {
         toggle-all(c) => { root.si-toggle-all(c); }
         toggle-item(i) => { root.si-toggle-item(i); }
         confirm => { root.si-confirm(); root.dlg-schema-import-open = false; }
-        cancel => { root.dlg-schema-import-open = false; }
+        cancel => { root.si-cancel(); root.dlg-schema-import-open = false; }
     }
 
     CreateProjectDialog {

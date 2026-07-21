@@ -373,6 +373,17 @@ pub fn wire(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
             }
         });
     }
+    // si-cancel
+    {
+        let s = state.clone();
+        let weak = ui_h.as_weak();
+        ui_h.on_si_cancel(move || {
+            s.borrow_mut().schema_import = crate::state::SchemaImportState::default();
+            if let Some(ui_h) = weak.upgrade() {
+                push_import(&ui_h, &s);
+            }
+        });
+    }
 }
 
 /// Schema 导出：把当前勾选项 → SchemaSection → serialize → 落盘。
