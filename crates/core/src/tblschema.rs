@@ -545,6 +545,7 @@ pub fn apply_schema_to_project(
                         original_records: Vec::new(),
                         original_fields: fields,
                         saved: false,
+                        fmt_ver: crate::tbl::DEFAULT_TBL_VERSION,
                     });
                     added += 1;
                 }

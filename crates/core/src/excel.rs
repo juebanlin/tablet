@@ -546,6 +546,7 @@ fn parse_enum_sheet(range: &Range<Data>, enum_def: &EnumDef) -> Result<Vec<EnumE
 mod tests {
     use super::*;
     use crate::model::{FieldDef, TableSchema};
+    use crate::tbl::DEFAULT_TBL_VERSION;
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -563,6 +564,7 @@ mod tests {
             original_records: vec![vec!["1".into(), "alice".into()]],
             original_fields: fields,
             saved: false,
+            fmt_ver: DEFAULT_TBL_VERSION,
         }
     }
 

@@ -138,6 +138,7 @@ mod tests {
                             original_records: sec.preset.clone(),
                             original_fields: snap_fields,
                             saved: true,
+                            fmt_ver: crate::tbl::DEFAULT_TBL_VERSION,
                         });
                     }
                     SchemaMode::Constant => {

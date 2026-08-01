@@ -461,6 +461,9 @@ pub struct Table {
     /// 上次落盘时的 schema.fields 快照，用于检测表头变更。
     pub original_fields: Vec<FieldDef>,
     pub saved: bool,
+    /// 文件格式版本。load 时检测，save 时按原版本序列化。
+    /// 新建表默认 V3。
+    pub fmt_ver: crate::tbl::TblVersion,
 }
 
 impl Table {

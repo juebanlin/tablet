@@ -1,6 +1,7 @@
 ﻿use std::collections::HashSet;
 use std::path::PathBuf;
 use crate::model::*;
+use crate::tbl::DEFAULT_TBL_VERSION;
 use crate::validate::*;
 
 /// 把一条 ValidationError 格式化为日志行（统一 B 格式：`位置:[内容] -> 原因`）：
@@ -1712,6 +1713,7 @@ impl ProjectEngine {
                                 tbl_type: "int".to_string(), export: Export::ClientServer,
                             }],
                             saved: false,
+                            fmt_ver: DEFAULT_TBL_VERSION,
                         });
                         ok = true;
                     }

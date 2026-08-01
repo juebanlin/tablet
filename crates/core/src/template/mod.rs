@@ -134,61 +134,44 @@ fn render_tbl_skeleton(sec: &SchemaSection) -> String {
 
 fn render_table_skeleton(sec: &SchemaSection) -> String {
     let mut s = String::new();
-    writeln!(s, "#!tbl v2").unwrap();
+    writeln!(s, "#!tbl v3").unwrap();
     writeln!(s, "#mode table").unwrap();
     writeln!(
         s,
         "#desc {}",
-        sec.fields
-            .iter()
-            .map(|f| f.desc.as_str())
-            .collect::<Vec<_>>()
-            .join("|")
-    )
-    .unwrap();
+        sec.fields.iter().map(|f| f.desc.as_str()).collect::<Vec<_>>().join("|")
+    ).unwrap();
     writeln!(
         s,
         "#export {}",
-        sec.fields
-            .iter()
-            .map(|f| f.export_display())
-            .collect::<Vec<_>>()
-            .join("|")
-    )
-    .unwrap();
+        sec.fields.iter().map(|f| f.export_display()).collect::<Vec<_>>().join("|")
+    ).unwrap();
     writeln!(
         s,
         "#type {}",
-        sec.fields
-            .iter()
-            .map(|f| f.tbl_type.as_str())
-            .collect::<Vec<_>>()
-            .join("|")
-    )
-    .unwrap();
+        sec.fields.iter().map(|f| f.tbl_type.as_str()).collect::<Vec<_>>().join("|")
+    ).unwrap();
     writeln!(
         s,
         "#field {}",
-        sec.fields
-            .iter()
-            .map(|f| f.name.as_str())
-            .collect::<Vec<_>>()
-            .join("|")
-    )
-    .unwrap();
+        sec.fields.iter().map(|f| f.name.as_str()).collect::<Vec<_>>().join("|")
+    ).unwrap();
     writeln!(s, "---").unwrap();
-    // 预设 records：按列序补齐到 fields.len()；按列类型 encode（str 走转义，atom 原样）
+    // v3: [id] anchor + "  field:value" rows
     let n = sec.fields.len();
     for row in &sec.preset {
         let mut cells: Vec<String> = row.iter().cloned().collect();
         cells.resize(n, String::new());
-        let encoded: Vec<String> = cells.iter().enumerate().map(|(i, v)| {
+        let id_val = cells.first().map(String::as_str).unwrap_or("");
+        writeln!(s).unwrap();
+        writeln!(s, "[{}]", id_val).unwrap();
+        for (i, v) in cells.iter().enumerate().skip(1) {
             let kind = sec.fields.get(i)
                 .map(|f| crate::tbl_str::classify(&f.tbl_type))
                 .unwrap_or(crate::tbl_str::FieldKind::Text);
-            crate::tbl_str::encode(v, kind)
-        }).collect();
-        writeln!(s, "{}", encoded.join("|")).unwrap();
+            let encoded = crate::tbl_str::encode(v, kind);
+            writeln!(s, "  {}:{}", sec.fields[i].name, encoded).unwrap();
+        }
     }
     s
 }
@@ -414,8 +397,10 @@ mod tests {
         instantiate_template(&schema, &target).expect("instantiate");
         let txt = std::fs::read_to_string(target.join("config/hero/HeroBase.tbl")).expect("read tbl");
         assert!(txt.contains("---"));
-        assert!(txt.contains("1|Alice"));
-        assert!(txt.contains("2|Bob"));
+        assert!(txt.contains("[1]"));
+        assert!(txt.contains("  name:Alice"));
+        assert!(txt.contains("[2]"));
+        assert!(txt.contains("  name:Bob"));
         let _ = std::fs::remove_dir_all(&target);
     }
 
