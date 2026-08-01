@@ -558,35 +558,31 @@ mod tests {
                 FieldDef { name: "name".into(), desc: "名字".into(), tbl_type: "str".into(), export: Export::ClientServer },
             ]},
             records: vec![vec!["1".into(), "alice".into()]],
-            dirty: false, deleted: false, original: String::new(),
+            dirty: false, deleted: false, original_records: vec![vec!["1".into(), "alice".into()]], saved: false,
         }
     }
 
     fn c(name: &str) -> Constant {
+        let snap = vec![ConstEntry {
+            name: "FOO".into(), tbl_type: "int".into(), value: "42".into(),
+            export: Export::ClientServer, desc: "示例常量".into(),
+        }];
         Constant {
             name: name.into(),
             path: PathBuf::from(format!("{}.tbl", name)),
-            entries: vec![
-                ConstEntry {
-                    name: "FOO".into(),
-                    tbl_type: "int".into(),
-                    value: "42".into(),
-                    export: Export::ClientServer,
-                    desc: "示例常量".into(),
-                },
-            ],
-            dirty: false, deleted: false, original: String::new(),
+            entries: snap.clone(),
+            dirty: false, deleted: false, original_entries: snap, saved: false,
         }
     }
 
     fn e(name: &str) -> EnumDef {
         EnumDef {
             name: name.into(),
-            path: PathBuf::from(format!("{}.tbl", name)),
+        path: PathBuf::from(format!("{}.tbl", name)),
             entries: vec![
                 EnumEntry { id: "1".into(), name: "RED".into(), desc: "红".into() },
             ],
-            dirty: false, deleted: false, original: String::new(),
+            dirty: false, deleted: false, original_entries: vec![EnumEntry { id: "1".into(), name: "RED".into(), desc: "红".into() }], saved: false,
         }
     }
 

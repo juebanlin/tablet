@@ -456,12 +456,15 @@ pub struct Table {
     pub records: Vec<Vec<String>>,
     pub dirty: bool,
     pub deleted: bool,
-    pub original: String,
+    /// 上次落盘时的 records 快照，用于 update_dirty() 比对。
+    pub original_records: Vec<Vec<String>>,
+    /// 是否已落盘过（用于判断 delete 时是否需要 remove_file + tree 的"新增"标记）。
+    pub saved: bool,
 }
 
 impl Table {
     pub fn update_dirty(&mut self) {
-        self.dirty = crate::tbl::serialize_table(self) != self.original;
+        self.dirty = self.records != self.original_records;
     }
 }
 
@@ -491,16 +494,18 @@ pub struct Constant {
     pub entries: Vec<ConstEntry>,
     pub dirty: bool,
     pub deleted: bool,
-    pub original: String,
+    /// 上次落盘时的 entries 快照。
+    pub original_entries: Vec<ConstEntry>,
+    pub saved: bool,
 }
 
 impl Constant {
     pub fn update_dirty(&mut self) {
-        self.dirty = crate::tbl::serialize_constant(self) != self.original;
+        self.dirty = self.entries != self.original_entries;
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ConstEntry {
     pub name: String,
     pub tbl_type: String,
@@ -519,16 +524,18 @@ pub struct EnumDef {
     pub entries: Vec<EnumEntry>,
     pub dirty: bool,
     pub deleted: bool,
-    pub original: String,
+    /// 上次落盘时的 entries 快照。
+    pub original_entries: Vec<EnumEntry>,
+    pub saved: bool,
 }
 
 impl EnumDef {
     pub fn update_dirty(&mut self) {
-        self.dirty = crate::tbl::serialize_enum(self) != self.original;
+        self.dirty = self.entries != self.original_entries;
     }
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct EnumEntry {
     pub id: String,
     pub name: String,

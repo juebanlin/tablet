@@ -87,6 +87,7 @@ fn base_parse_fn(bt: BaseType) -> &'static str {
         BaseType::Double => "parseFloat64",
         BaseType::Str => "parseStr",
         BaseType::Bool => "parseBool",
+        BaseType::Txt => "parseStr",
     }
 }
 
@@ -117,6 +118,7 @@ fn parse_expr(raw_var: &str, t: &TblType, sep_var: &str) -> String {
             BaseType::Double => format!("parseListFloat64({}, {}.List)", raw_var, sep_var),
             BaseType::Str => format!("parseListString({}, {}.List)", raw_var, sep_var),
             BaseType::Bool => format!("parseListBool({}, {}.List)", raw_var, sep_var),
+            BaseType::Txt => unreachable!("txt not allowed in List"),
         },
         Paradigm::Set => match p[0] {
             BaseType::Int => format!("parseSetInt32({}, {}.Set)", raw_var, sep_var),
@@ -126,6 +128,7 @@ fn parse_expr(raw_var: &str, t: &TblType, sep_var: &str) -> String {
             BaseType::Str => format!("parseSetString({}, {}.Set)", raw_var, sep_var),
             // bool 集合在实际项目里几乎不会出现，但兜底
             BaseType::Bool => format!("parseSetString({}, {}.Set)", raw_var, sep_var),
+            BaseType::Txt => unreachable!("txt not allowed in Set"),
         },
 
         Paradigm::Map => format!(
@@ -196,6 +199,7 @@ fn parse_expr(raw_var: &str, t: &TblType, sep_var: &str) -> String {
                 "ParseMap({raw}, {sep}.MapListKv, {sep}.MapListEntry, {fk}, func(s string) []bool {{ return parseListBool(s, {sep}.MapListItem) }})",
                 raw=raw_var, sep=sep_var, fk=base_parse_fn(p[0])
             ),
+            BaseType::Txt => unreachable!("txt not allowed in MapList"),
         },
 
         // 引用类型默认按 table ref 处理 → int32(id)；enum ref 由调用方在生成时改写

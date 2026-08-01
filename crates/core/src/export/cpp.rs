@@ -37,6 +37,7 @@ fn cpp_base_type(bt: BaseType) -> &'static str {
         BaseType::Double => "double",
         BaseType::Str => "std::string",
         BaseType::Bool => "bool",
+        BaseType::Txt => "std::string",
     }
 }
 
@@ -46,6 +47,7 @@ fn cpp_base_default(bt: BaseType) -> &'static str {
         BaseType::Float | BaseType::Double => "0",
         BaseType::Str => "{}",
         BaseType::Bool => "false",
+        BaseType::Txt => "{}",
     }
 }
 
@@ -57,6 +59,7 @@ fn cpp_base_parse_fn(bt: BaseType) -> &'static str {
         BaseType::Double => "parse_double",
         BaseType::Str => "parse_str",
         BaseType::Bool => "parse_bool",
+        BaseType::Txt => "parse_str",
     }
 }
 
@@ -549,7 +552,7 @@ mod tests {
             ],
             dirty: false,
             deleted: false,
-            original: String::new(),
+            original_entries: Vec::new(), saved: true,
         };
         let out = gen_enum_header(&e, "game::config");
         assert!(out.contains("namespace game::config"));

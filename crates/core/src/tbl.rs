@@ -64,7 +64,7 @@ fn parse_table(
 ) -> Result<TblFile> {
     // 表头行的字段名/类型/export 不允许含 `|` 或换行（结构性字段），使用简单 split。
     // desc 允许含特殊字符（人类描述），走 Str 类型解码。
-    let descs: Vec<String> = split_row(desc_line).iter().map(|s| decode(s, FieldKind::Str)).collect();
+    let descs: Vec<String> = split_row(desc_line).iter().map(|s| decode(s, FieldKind::Text)).collect();
     let types: Vec<&str> = type_line.split('|').collect();
     let exports: Vec<&str> = export_line.split('|').collect();
     let fields: Vec<&str> = field_line.split('|').collect();
@@ -88,7 +88,7 @@ fn parse_table(
         .map(|line| {
             let raw = split_row(line);
             raw.iter().enumerate().map(|(i, s)| {
-                let kind = kinds.get(i).copied().unwrap_or(FieldKind::Str);
+                let kind = kinds.get(i).copied().unwrap_or(FieldKind::Text);
                 decode(s, kind)
             }).collect()
         })
@@ -96,18 +96,16 @@ fn parse_table(
 
     let name = path.file_stem().unwrap_or_default().to_string_lossy().to_string();
 
-    let mut table = Table {
+    let table = Table {
         name,
         path: path.to_path_buf(),
-        schema: TableSchema {
-            fields: field_defs,
-        },
+        schema: TableSchema { fields: field_defs },
+        original_records: records.clone(),
         records,
         dirty: false,
         deleted: false,
-        original: String::new(),
+        saved: true,
     };
-    table.original = serialize_table(&table);
     Ok(TblFile::Table(table))
 }
 
@@ -124,7 +122,7 @@ fn parse_constant(path: &Path, data_lines: &[&str]) -> Result<TblFile> {
         let tbl_type = decode(&raw[1], FieldKind::Atom);
         let value = decode(&raw[2], classify(&tbl_type));
         let export_raw = raw.get(3).map(|s| decode(s, FieldKind::Atom)).unwrap_or_default();
-        let desc = raw.get(4).map(|s| decode(s, FieldKind::Str)).unwrap_or_default();
+        let desc = raw.get(4).map(|s| decode(s, FieldKind::Text)).unwrap_or_default();
         entries.push(ConstEntry {
             name: name.trim().to_string(),
             tbl_type: tbl_type.trim().to_string(),
@@ -136,15 +134,15 @@ fn parse_constant(path: &Path, data_lines: &[&str]) -> Result<TblFile> {
 
     let name = path.file_stem().unwrap_or_default().to_string_lossy().to_string();
 
-    let mut constant = Constant {
+    let constant = Constant {
         name,
         path: path.to_path_buf(),
+        original_entries: entries.clone(),
         entries,
         dirty: false,
         deleted: false,
-        original: String::new(),
+        saved: true,
     };
-    constant.original = serialize_constant(&constant);
     Ok(TblFile::Constant(constant))
 }
 
@@ -160,21 +158,21 @@ fn parse_enum(path: &Path, data_lines: &[&str]) -> Result<TblFile> {
         entries.push(EnumEntry {
             id: decode(&raw[0], FieldKind::Atom).trim().to_string(),
             name: raw.get(1).map(|s| decode(s, FieldKind::Atom).trim().to_string()).unwrap_or_default(),
-            desc: raw.get(2).map(|s| decode(s, FieldKind::Str).trim().to_string()).unwrap_or_default(),
+            desc: raw.get(2).map(|s| decode(s, FieldKind::Text).trim().to_string()).unwrap_or_default(),
         });
     }
 
     let name = path.file_stem().unwrap_or_default().to_string_lossy().to_string();
 
-    let mut enum_def = EnumDef {
+    let enum_def = EnumDef {
         name,
         path: path.to_path_buf(),
+        original_entries: entries.clone(),
         entries,
         dirty: false,
         deleted: false,
-        original: String::new(),
+        saved: true,
     };
-    enum_def.original = serialize_enum(&enum_def);
     Ok(TblFile::Enum(enum_def))
 }
 
@@ -189,7 +187,7 @@ pub fn serialize_table(table: &Table) -> String {
     let mut s = String::new();
     s.push_str("#!tbl v2\n");
     s.push_str("#mode table\n");
-    s.push_str(&format!("#desc {}\n", fields.iter().map(|f| encode(&f.desc, FieldKind::Str)).collect::<Vec<_>>().join("|")));
+    s.push_str(&format!("#desc {}\n", fields.iter().map(|f| encode(&f.desc, FieldKind::Text)).collect::<Vec<_>>().join("|")));
     s.push_str(&format!("#export {}\n", fields.iter().map(|f| f.export.to_tbl().to_string()).collect::<Vec<_>>().join("|")));
     s.push_str(&format!("#type {}\n", fields.iter().map(|f| f.tbl_type.as_str()).collect::<Vec<_>>().join("|")));
     s.push_str(&format!("#field {}\n", fields.iter().map(|f| f.name.as_str()).collect::<Vec<_>>().join("|")));
@@ -197,7 +195,7 @@ pub fn serialize_table(table: &Table) -> String {
     let kinds: Vec<FieldKind> = fields.iter().map(|f| classify(&f.tbl_type)).collect();
     for row in &table.records {
         let encoded: Vec<String> = row.iter().enumerate()
-            .map(|(i, c)| encode(c, kinds.get(i).copied().unwrap_or(FieldKind::Str)))
+            .map(|(i, c)| encode(c, kinds.get(i).copied().unwrap_or(FieldKind::Text)))
             .collect();
         s.push_str(&encoded.join("|"));
         s.push('\n');
@@ -218,7 +216,7 @@ pub fn serialize_constant(constant: &Constant) -> String {
             e.tbl_type,
             encode(&e.value, value_kind),
             e.export.to_tbl(),
-            encode(&e.desc, FieldKind::Str),
+            encode(&e.desc, FieldKind::Text),
         ));
     }
     s
@@ -234,7 +232,7 @@ pub fn serialize_enum(enum_def: &EnumDef) -> String {
         s.push_str(&format!("{}|{}|{}\n",
             encode(&e.id, FieldKind::Atom),
             encode(&e.name, FieldKind::Atom),
-            encode(&e.desc, FieldKind::Str),
+            encode(&e.desc, FieldKind::Text),
         ));
     }
     s

@@ -185,7 +185,7 @@ fn render_table_skeleton(sec: &SchemaSection) -> String {
         let encoded: Vec<String> = cells.iter().enumerate().map(|(i, v)| {
             let kind = sec.fields.get(i)
                 .map(|f| crate::tbl_str::classify(&f.tbl_type))
-                .unwrap_or(crate::tbl_str::FieldKind::Str);
+                .unwrap_or(crate::tbl_str::FieldKind::Text);
             crate::tbl_str::encode(v, kind)
         }).collect();
         writeln!(s, "{}", encoded.join("|")).unwrap();
@@ -214,7 +214,7 @@ fn render_constant_skeleton(sec: &SchemaSection) -> String {
             crate::tbl_str::encode(tbl_type, crate::tbl_str::FieldKind::Atom),
             crate::tbl_str::encode(value, value_kind),
             display_export(export),
-            crate::tbl_str::encode(desc, crate::tbl_str::FieldKind::Str),
+            crate::tbl_str::encode(desc, crate::tbl_str::FieldKind::Text),
         ).unwrap();
     }
     s
@@ -234,8 +234,8 @@ fn render_enum_skeleton(sec: &SchemaSection) -> String {
             s,
             "{}|{}|{}",
             crate::tbl_str::encode(id, crate::tbl_str::FieldKind::Atom),
-            crate::tbl_str::encode(name, crate::tbl_str::FieldKind::Str),
-            crate::tbl_str::encode(desc, crate::tbl_str::FieldKind::Str),
+            crate::tbl_str::encode(name, crate::tbl_str::FieldKind::Text),
+            crate::tbl_str::encode(desc, crate::tbl_str::FieldKind::Text),
         ).unwrap();
     }
     s

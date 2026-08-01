@@ -123,45 +123,48 @@ fn save_project_files(project: &mut Project) -> (usize, usize) {
         }
         for table in &mut group.tables {
             if table.deleted {
-                if !table.original.is_empty() {
+                if table.saved {
                     let _ = std::fs::remove_file(&table.path);
                 }
                 deleted += 1;
             } else if table.dirty {
                 let content = crate::tbl::serialize_table(table);
                 if std::fs::write(&table.path, &content).is_ok() {
-                    table.original = content;
+                    table.original_records = table.records.clone();
                     table.dirty = false;
+                    table.saved = true;
                     count += 1;
                 }
             }
         }
         for constant in &mut group.constants {
             if constant.deleted {
-                if !constant.original.is_empty() {
+                if constant.saved {
                     let _ = std::fs::remove_file(&constant.path);
                 }
                 deleted += 1;
             } else if constant.dirty {
                 let content = crate::tbl::serialize_constant(constant);
                 if std::fs::write(&constant.path, &content).is_ok() {
-                    constant.original = content;
+                    constant.original_entries = constant.entries.clone();
                     constant.dirty = false;
+                    constant.saved = true;
                     count += 1;
                 }
             }
         }
         for enum_def in &mut group.enums {
             if enum_def.deleted {
-                if !enum_def.original.is_empty() {
+                if enum_def.saved {
                     let _ = std::fs::remove_file(&enum_def.path);
                 }
                 deleted += 1;
             } else if enum_def.dirty {
                 let content = crate::tbl::serialize_enum(enum_def);
                 if std::fs::write(&enum_def.path, &content).is_ok() {
-                    enum_def.original = content;
+                    enum_def.original_entries = enum_def.entries.clone();
                     enum_def.dirty = false;
+                    enum_def.saved = true;
                     count += 1;
                 }
             }
@@ -663,17 +666,18 @@ impl ProjectEngine {
             for t in &mut g.tables {
                 t.path = g.dir.join(format!("{}.tbl", t.name));
                 t.dirty = true;
-                t.original = String::new();
+                t.original_records.clear();
+                t.saved = false;
             }
             for c in &mut g.constants {
                 c.path = g.dir.join(format!("{}.tbl", c.name));
                 c.dirty = true;
-                c.original = String::new();
+                c.original_entries.clear(); c.saved = false;
             }
             for e in &mut g.enums {
                 e.path = g.dir.join(format!("{}.tbl", e.name));
                 e.dirty = true;
-                e.original = String::new();
+                e.original_entries.clear(); e.saved = false;
             }
         }
         // 同步 schema.sections 与 groups（克隆下来的 sections 已经一致，但保险起见走一次）
@@ -883,24 +887,22 @@ impl ProjectEngine {
         }
     }
 
-    pub fn paste_enum_data(&mut self, group: &str, name: &str, start_row: usize, start_col: usize, text: &str) {
-        let lines: Vec<&str> = text.lines().collect();
-        if lines.is_empty() { return; }
+    pub fn paste_enum_data(&mut self, group: &str, name: &str, start_row: usize, start_col: usize, grid: &[Vec<String>]) {
+        if grid.is_empty() { return; }
         if let Some(g) = self.project_mut().groups.iter_mut().find(|g| g.name == group) {
             if let Some(en) = g.enums.iter_mut().find(|e| e.name == name) {
-                for (i, line) in lines.iter().enumerate() {
+                for (i, row_cells) in grid.iter().enumerate() {
                     let row = start_row + i;
                     while en.entries.len() <= row {
                         en.entries.push(EnumEntry::default());
                     }
-                    let cells: Vec<&str> = line.split('\t').collect();
-                    for (j, cell) in cells.iter().enumerate() {
+                    for (j, cell) in row_cells.iter().enumerate() {
                         let col = start_col + j;
                         let entry = &mut en.entries[row];
                         match col {
-                            0 => entry.id = cell.to_string(),
-                            1 => entry.name = cell.to_string(),
-                            2 => entry.desc = cell.to_string(),
+                            0 => entry.id = cell.clone(),
+                            1 => entry.name = cell.clone(),
+                            2 => entry.desc = cell.clone(),
                             _ => {}
                         }
                     }
@@ -908,7 +910,7 @@ impl ProjectEngine {
                 en.update_dirty();
             }
         }
-        self.ui_log(format!("粘贴 {}行 数据", lines.len()));
+        self.ui_log(format!("粘贴 {}行 数据", grid.len()));
     }
 
     pub fn insert_enum_row(&mut self, group: &str, name: &str, at: usize) {
@@ -1138,37 +1140,34 @@ impl ProjectEngine {
         }
     }
 
-    pub fn paste_table_data(&mut self, group: &str, name: &str, start_row: usize, start_col: usize, text: &str) {
-        let lines: Vec<&str> = text.lines().collect();
-        if lines.is_empty() { return; }
+    pub fn paste_table_data(&mut self, group: &str, name: &str, start_row: usize, start_col: usize, grid: &[Vec<String>]) {
+        if grid.is_empty() { return; }
         if let Some(g) = self.project_mut().groups.iter_mut().find(|g| g.name == group) {
             if let Some(t) = g.tables.iter_mut().find(|t| t.name == name) {
                 let cols = t.schema.fields.len();
-                for (i, line) in lines.iter().enumerate() {
+                for (i, row_cells) in grid.iter().enumerate() {
                     let row = start_row + i;
                     while t.records.len() <= row { t.records.push(vec![String::new(); cols]); }
-                    let cells: Vec<&str> = line.split('\t').collect();
-                    for (j, cell) in cells.iter().enumerate() {
+                    for (j, cell) in row_cells.iter().enumerate() {
                         let col = start_col + j;
                         if col < cols {
                             let record = &mut t.records[row];
                             while record.len() <= col { record.push(String::new()); }
-                            record[col] = cell.to_string();
+                            record[col] = cell.clone();
                         }
                     }
                 }
                 t.update_dirty();
             }
         }
-        self.ui_log(format!("粘贴 {}行 数据", lines.len()));
+        self.ui_log(format!("粘贴 {}行 数据", grid.len()));
     }
 
-    pub fn paste_constant_data(&mut self, group: &str, name: &str, start_row: usize, start_col: usize, text: &str) {
-        let lines: Vec<&str> = text.lines().collect();
-        if lines.is_empty() { return; }
+    pub fn paste_constant_data(&mut self, group: &str, name: &str, start_row: usize, start_col: usize, grid: &[Vec<String>]) {
+        if grid.is_empty() { return; }
         if let Some(g) = self.project_mut().groups.iter_mut().find(|g| g.name == group) {
             if let Some(c) = g.constants.iter_mut().find(|c| c.name == name) {
-                for (i, line) in lines.iter().enumerate() {
+                for (i, row_cells) in grid.iter().enumerate() {
                     let row = start_row + i;
                     while c.entries.len() <= row {
                         c.entries.push(ConstEntry {
@@ -1176,16 +1175,15 @@ impl ProjectEngine {
                             value: String::new(), export: Export::ClientServer, desc: String::new(),
                         });
                     }
-                    let cells: Vec<&str> = line.split('\t').collect();
-                    for (j, cell) in cells.iter().enumerate() {
+                    for (j, cell) in row_cells.iter().enumerate() {
                         let col = start_col + j;
                         let entry = &mut c.entries[row];
                         match col {
-                            0 => entry.name = cell.to_string(),
-                            1 => entry.tbl_type = cell.to_string(),
-                            2 => entry.value = cell.to_string(),
+                            0 => entry.name = cell.clone(),
+                            1 => entry.tbl_type = cell.clone(),
+                            2 => entry.value = cell.clone(),
                             3 => entry.export = Export::from_str(cell),
-                            4 => entry.desc = cell.to_string(),
+                            4 => entry.desc = cell.clone(),
                             _ => {}
                         }
                     }
@@ -1193,7 +1191,7 @@ impl ProjectEngine {
                 c.update_dirty();
             }
         }
-        self.ui_log(format!("粘贴 {}行 数据", lines.len()));
+        self.ui_log(format!("粘贴 {}行 数据", grid.len()));
     }
 
     pub fn clear_table_cells(&mut self, group: &str, name: &str, cells: &[(usize, usize)]) {
@@ -1563,7 +1561,7 @@ impl ProjectEngine {
                 t.name = final_name.clone();
                 t.path = new_path;
                 t.dirty = true;
-                t.original = String::new();
+                t.original_records.clear(); t.saved = false;
                 g.tables.push(t);
                 "Table"
             }
@@ -1571,7 +1569,7 @@ impl ProjectEngine {
                 c.name = final_name.clone();
                 c.path = new_path;
                 c.dirty = true;
-                c.original = String::new();
+                c.original_entries.clear(); c.saved = false;
                 g.constants.push(c);
                 "Constant"
             }
@@ -1579,7 +1577,7 @@ impl ProjectEngine {
                 e.name = final_name.clone();
                 e.path = new_path;
                 e.dirty = true;
-                e.original = String::new();
+                e.original_entries.clear(); e.saved = false;
                 g.enums.push(e);
                 "Enum"
             }
@@ -1626,17 +1624,17 @@ impl ProjectEngine {
         for t in &mut new_group.tables {
             t.path = new_dir.join(format!("{}.tbl", t.name));
             t.dirty = true;
-            t.original = String::new();
+            t.original_records.clear(); t.saved = false;
         }
         for c in &mut new_group.constants {
             c.path = new_dir.join(format!("{}.tbl", c.name));
             c.dirty = true;
-            c.original = String::new();
+            c.original_entries.clear(); c.saved = false;
         }
         for e in &mut new_group.enums {
             e.path = new_dir.join(format!("{}.tbl", e.name));
             e.dirty = true;
-            e.original = String::new();
+            e.original_entries.clear(); e.saved = false;
         }
         let summary = format!(
             "T{}+C{}+E{}",
@@ -1701,7 +1699,7 @@ impl ProjectEngine {
                             records: Vec::new(),
                             dirty: true,
                             deleted: false,
-                            original: String::new(),
+                            original_records: Vec::new(), saved: false,
                         });
                         ok = true;
                     }
@@ -1722,7 +1720,7 @@ impl ProjectEngine {
                             entries: Vec::new(),
                             dirty: true,
                             deleted: false,
-                            original: String::new(),
+                            original_entries: Vec::new(), saved: false,
                         });
                         ok = true;
                     }
@@ -1743,7 +1741,7 @@ impl ProjectEngine {
                             entries: Vec::new(),
                             dirty: true,
                             deleted: false,
-                            original: String::new(),
+                            original_entries: Vec::new(), saved: false,
                         });
                         ok = true;
                     }

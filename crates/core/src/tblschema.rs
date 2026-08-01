@@ -150,7 +150,7 @@ pub fn parse_tblschema(content: &str) -> Result<TblSchema> {
                 // 这里统一按 Str 类型 decode（Atom 类型的值不含转义字符，decode 是零成本 fast-path）。
                 let cells: Vec<String> = tbl_str::split_row(trimmed)
                     .into_iter()
-                    .map(|s| tbl_str::decode(s.trim(), tbl_str::FieldKind::Str))
+                    .map(|s| tbl_str::decode(s.trim(), tbl_str::FieldKind::Text))
                     .collect();
                 sec.preset.push(cells);
             } else {
@@ -362,7 +362,7 @@ pub fn serialize_tblschema(schema: &TblSchema) -> String {
             for row in &sec.preset {
                 // 每个单元格需要 encode 转义（换行符、管道符、反斜杠等）
                 let encoded: Vec<String> = row.iter()
-                    .map(|cell| crate::tbl_str::encode(cell, crate::tbl_str::FieldKind::Str))
+                    .map(|cell| crate::tbl_str::encode(cell, crate::tbl_str::FieldKind::Text))
                     .collect();
                 writeln!(s, "{}", encoded.join(" | ")).unwrap();
             }
@@ -542,7 +542,7 @@ pub fn apply_schema_to_project(
                         records,
                         dirty: true,
                         deleted: false,
-                        original: String::new(),
+                        original_records: Vec::new(), saved: false,
                     });
                     added += 1;
                 }
@@ -569,13 +569,14 @@ pub fn apply_schema_to_project(
                     overwritten += 1;
                 } else {
                     let path = group.dir.join(format!("{}.tbl", sec.name));
+                    let snap = entries.clone();
                     group.constants.push(Constant {
                         name: sec.name.clone(),
                         path,
                         entries,
                         dirty: true,
                         deleted: false,
-                        original: String::new(),
+                        original_entries: snap, saved: false,
                     });
                     added += 1;
                 }
@@ -600,13 +601,14 @@ pub fn apply_schema_to_project(
                     overwritten += 1;
                 } else {
                     let path = group.dir.join(format!("{}.tbl", sec.name));
+                    let snap = entries.clone();
                     group.enums.push(EnumDef {
                         name: sec.name.clone(),
                         path,
                         entries,
                         dirty: true,
                         deleted: false,
-                        original: String::new(),
+                        original_entries: snap, saved: false,
                     });
                     added += 1;
                 }

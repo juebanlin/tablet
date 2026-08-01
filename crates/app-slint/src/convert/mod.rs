@@ -15,4 +15,4 @@ mod util;
 
 pub use grid::build_grid;
 pub use tree::build_tree_nodes;
-pub use util::{col_letter, raw_cell_for, EXTRA_ROWS};
+pub use util::{col_letter, raw_cell_for, EXTRA_ROWS, build_tsv, tsv_parse};

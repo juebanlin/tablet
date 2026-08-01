@@ -6,10 +6,19 @@ pub enum BaseType {
     Double,
     Str,
     Bool,
+    /// 自由文本（描述、文案、JSON/HTML/XML 等复杂内容）。
+    /// 仅允许独立列（Paradigm::Base），不可嵌套在复合类型中。
+    /// 存储时走 encode/decode 转义；代码生成映射到 string。
+    Txt,
 }
 
 impl BaseType {
     pub fn all() -> &'static [BaseType] {
+        &[BaseType::Int, BaseType::Long, BaseType::Float, BaseType::Double, BaseType::Str, BaseType::Bool, BaseType::Txt]
+    }
+
+    /// 可用于嵌套位置的基础类型（不含 `txt`，因为 `txt` 仅允许独立列）。
+    pub fn all_nestable() -> &'static [BaseType] {
         &[BaseType::Int, BaseType::Long, BaseType::Float, BaseType::Double, BaseType::Str, BaseType::Bool]
     }
 
@@ -25,6 +34,7 @@ impl BaseType {
             BaseType::Double => "double",
             BaseType::Str => "str",
             BaseType::Bool => "bool",
+            BaseType::Txt => "txt",
         }
     }
 
@@ -36,7 +46,21 @@ impl BaseType {
             "double" => Some(BaseType::Double),
             "str" => Some(BaseType::Str),
             "bool" => Some(BaseType::Bool),
+            "txt" => Some(BaseType::Txt),
             _ => None,
+        }
+    }
+
+    /// 类型中文描述，用于 UI 类型选择器提示和日志错误信息中的类型名。
+    pub fn desc(&self) -> &'static str {
+        match self {
+            BaseType::Int => "32 位整数",
+            BaseType::Long => "64 位整数",
+            BaseType::Float => "单精度浮点",
+            BaseType::Double => "双精度浮点",
+            BaseType::Str => "字符串（支持空格标点，不含 \\ | 换行制表）",
+            BaseType::Bool => "布尔值（true/false）",
+            BaseType::Txt => "自由文本（支持任意字符，自动转义换行和管道符）",
         }
     }
 
@@ -48,6 +72,7 @@ impl BaseType {
             BaseType::Double => "double",
             BaseType::Str => "String",
             BaseType::Bool => "boolean",
+            BaseType::Txt => "String",
         }
     }
 
@@ -59,6 +84,7 @@ impl BaseType {
             BaseType::Double => "Double",
             BaseType::Str => "String",
             BaseType::Bool => "Boolean",
+            BaseType::Txt => "String",
         }
     }
 
@@ -70,6 +96,7 @@ impl BaseType {
             BaseType::Double => "float64",
             BaseType::Str => "string",
             BaseType::Bool => "bool",
+            BaseType::Txt => "string",
         }
     }
 
@@ -78,16 +105,7 @@ impl BaseType {
             BaseType::Int | BaseType::Long | BaseType::Float | BaseType::Double => "number",
             BaseType::Str => "string",
             BaseType::Bool => "boolean",
-        }
-    }
-
-    pub fn validate_regex(&self) -> &'static str {
-        match self {
-            BaseType::Int => r"^-?\d+$",
-            BaseType::Long => r"^-?\d+$",
-            BaseType::Float | BaseType::Double => r"^-?\d+(\.\d+)?$",
-            BaseType::Str => r"^.*$",
-            BaseType::Bool => r"^(true|false)$",
+            BaseType::Txt => "string",
         }
     }
 
@@ -97,8 +115,9 @@ impl BaseType {
             (BaseType::Long, 0) => "1000", (BaseType::Long, 1) => "2000", (BaseType::Long, _) => "3000",
             (BaseType::Float, 0) => "1.5", (BaseType::Float, 1) => "2.5", (BaseType::Float, _) => "3.5",
             (BaseType::Double, 0) => "3.14", (BaseType::Double, 1) => "6.28", (BaseType::Double, _) => "9.42",
-            (BaseType::Str, 0) => "abc", (BaseType::Str, 1) => "def", (BaseType::Str, _) => "ghi",
+            (BaseType::Str, 0) => "fire sword", (BaseType::Str, 1) => "max hp", (BaseType::Str, _) => "hero name",
             (BaseType::Bool, 0) => "true", (BaseType::Bool, _) => "false",
+            (BaseType::Txt, 0) => "hello", (BaseType::Txt, 1) => "world", (BaseType::Txt, _) => "text",
         }
     }
 
@@ -109,6 +128,7 @@ impl BaseType {
             (BaseType::Float, 0) => "1.0", (BaseType::Float, _) => "2.0",
             (BaseType::Double, 0) => "1.0", (BaseType::Double, _) => "2.0",
             (BaseType::Str, 0) => "hp", (BaseType::Str, _) => "mp",
+            (BaseType::Txt, 0) => "txt", (BaseType::Txt, _) => "note",
             _ => "?",
         }
     }
@@ -126,6 +146,10 @@ impl BaseType {
                 words[(seed as usize) % words.len()].to_string()
             }
             BaseType::Bool => if seed % 2 == 0 { "true".to_string() } else { "false".to_string() },
+            BaseType::Txt => {
+                let phrases = ["hello world", "lorem ipsum", "some text", "game config"];
+                phrases[(seed as usize) % phrases.len()].to_string()
+            }
         }
     }
 
@@ -141,6 +165,7 @@ impl BaseType {
                 let keys = ["hp", "mp", "atk", "def", "spd", "crit"];
                 keys[(seed as usize) % keys.len()].to_string()
             }
+            BaseType::Txt => "key".to_string(),
             _ => "?".to_string(),
         }
     }
@@ -254,6 +279,16 @@ impl TblType {
     }
 
     pub fn parse(s: &str) -> Option<Self> {
+        let tt = Self::parse_inner(s)?;
+        // txt 仅允许独立列（Paradigm::Base），禁止嵌套在复合类型中。
+        if tt.paradigm != Paradigm::Base && tt.paradigm != Paradigm::Ref {
+            if tt.params.contains(&BaseType::Txt) {
+                return None;
+            }
+        }
+        Some(tt)
+    }
+    fn parse_inner(s: &str) -> Option<Self> {
         let s = s.trim();
         // 引用类型：@Xxx
         if let Some(name) = s.strip_prefix('@') {
@@ -469,13 +504,11 @@ impl TblType {
     /// Validate a cell value against this type. Returns None if valid, Some(error_msg) if invalid.
     pub fn validate_value(&self, value: &str, sep: &SeparatorsSection) -> Option<String> {
         if value.is_empty() { return None; }
-        // 中文标点检查：仅对会被分隔符切 / 按 base 类型 parse 的列做。
-        // 纯 str 列（Paradigm::Base + BaseType::Str）= 自由文本（desc / 描述 / 文案），
-        // 必须放开中文标点。复合类型如 List<str> 仍拦——值形如 `a;b;c` 写成 `a，b，c`
-        // 是分隔符错位，应直接报错。
-        let is_plain_str = self.paradigm == Paradigm::Base
-            && matches!(self.params.first(), Some(BaseType::Str));
-        if !is_plain_str {
+        // 中文标点检查：txt / str 放开（自由文本），其余类型拦。
+        // 复合类型（List / Tuple / Map）含中文标点大概率是分隔符错位，也拦。
+        let bypass_punct = matches!(self.paradigm, Paradigm::Base)
+            && matches!(self.params.first(), Some(BaseType::Txt | BaseType::Str));
+        if !bypass_punct {
             if let Some(msg) = check_chinese_punctuation(value) { return Some(msg.to_string()); }
         }
         let p = &self.params;
@@ -518,26 +551,48 @@ fn validate_base(value: &str, bt: BaseType) -> Option<&'static str> {
         BaseType::Float => { if value.parse::<f32>().is_err() { Some("不是合法float") } else { None } }
         BaseType::Double => { if value.parse::<f64>().is_err() { Some("不是合法double") } else { None } }
         BaseType::Bool => { if value != "true" && value != "false" { Some("必须是true或false") } else { None } }
-        BaseType::Str => None,
+        BaseType::Str => validate_str(value),
+        BaseType::Txt => None,
     }
+}
+
+// ===== str 验证 =====
+// str 走 Atom 编码路径，只拦 5 个会破坏 tbl 格式的字符。
+// 其余一切放行：空格、中文标点、结构字符等。
+
+/// 验证 str 值。只拦 5 个 tbl 格式元字符（`\` `|` `\n` `\r` `\t`）。
+/// 需要更自由的文本（含换行/管道符）请用 txt。
+pub fn validate_str(value: &str) -> Option<&'static str> {
+    for c in value.chars() {
+        match c {
+            '\\' | '|' | '\n' | '\r' | '\t' => {
+                return Some("str 不能含特殊字符（\\ | 换行 制表），请改用 txt");
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+/// 验证复合类型中单个子元素：trim + 空值 + base 类型验证。
+fn validate_elem(value: &str, bt: BaseType) -> Option<&'static str> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() { return Some("含有空元素"); }
+    validate_base(trimmed, bt)
 }
 
 fn validate_tuple(value: &str, types: &[BaseType], sep: &str) -> Option<&'static str> {
     let parts: Vec<&str> = value.split(sep).collect();
     if parts.len() != types.len() { return Some("元素数量不匹配"); }
     for (part, &bt) in parts.iter().zip(types.iter()) {
-        let p = part.trim();
-        if p.is_empty() { return Some("含有空元素"); }
-        if validate_base(p, bt).is_some() { return Some("元素类型不匹配"); }
+        if let Some(err) = validate_elem(part, bt) { return Some(err); }
     }
     None
 }
 
 fn validate_list(value: &str, elem: BaseType, sep: &str) -> Option<&'static str> {
     for part in value.split(sep) {
-        let p = part.trim();
-        if p.is_empty() { return Some("含有空元素"); }
-        if validate_base(p, elem).is_some() { return Some("列表元素类型不匹配"); }
+        if let Some(err) = validate_elem(part, elem) { return Some(err); }
     }
     None
 }
@@ -552,8 +607,8 @@ fn validate_map(value: &str, key: BaseType, val: BaseType, entry_sep: &str, kv_s
         let v = kv[1].trim();
         if k.is_empty() { return Some("key为空"); }
         if v.is_empty() { return Some("value为空"); }
-        if validate_base(k, key).is_some() { return Some("key类型不匹配"); }
-        if validate_base(v, val).is_some() { return Some("value类型不匹配"); }
+        if let Some(err) = validate_elem(k, key) { return Some(err); }
+        if let Some(err) = validate_elem(v, val) { return Some(err); }
     }
     None
 }
@@ -575,7 +630,7 @@ fn validate_map_tuple(value: &str, key: BaseType, val_types: &[BaseType], entry_
         if kv.len() != 2 { return Some("缺少kv分隔符"); }
         let k = kv[0].trim();
         if k.is_empty() { return Some("key为空"); }
-        if validate_base(k, key).is_some() { return Some("key类型不匹配"); }
+        if let Some(err) = validate_elem(k, key) { return Some(err); }
         if validate_tuple(kv[1].trim(), val_types, tuple_sep).is_some() { return Some("value格式错误"); }
     }
     None
@@ -953,10 +1008,10 @@ mod tests {
     }
 
     #[test]
-    fn str_value_allows_chinese_punctuation() {
-        // 纯 str 列（desc / 文案）= 自由文本，必须允许中文标点 + 全角空格
+    fn txt_value_allows_chinese_punctuation() {
+        // txt 列（desc / 文案）= 自由文本，必须允许中文标点 + 全角空格
         let sep = SeparatorsSection::default();
-        let t = TblType::parse("str").unwrap();
+        let t = TblType::parse("txt").unwrap();
         assert!(t.validate_value("步兵基础兵种，克制骑兵", &sep).is_none());
         assert!(t.validate_value("M1：[步兵]", &sep).is_none());
         assert!(t.validate_value("名称、说明、备注", &sep).is_none());
@@ -964,14 +1019,56 @@ mod tests {
     }
 
     #[test]
-    fn list_str_still_rejects_chinese_punctuation() {
-        // List<str> 的值要按分隔符切，写中文逗号是分隔符错位，仍要拦
+    fn str_allows_most_characters() {
+        // str 只拦 5 个 tbl 元字符，其余全放行
         let sep = SeparatorsSection::default();
-        let t = TblType::parse("List<str>").unwrap();
-        // 正确写法：用 ASCII ;
-        assert!(t.validate_value("战士;法师;弓手", &sep).is_none());
-        // 错误：用中文逗号当分隔符
-        assert!(t.validate_value("战士，法师，弓手", &sep).is_some());
+        let t = TblType::parse("str").unwrap();
+        // 空格
+        assert!(t.validate_value("fire sword", &sep).is_none());
+        assert!(t.validate_value("max hp", &sep).is_none());
+        // 中文标点
+        assert!(t.validate_value("步兵基础兵种，克制骑兵", &sep).is_none());
+        assert!(t.validate_value("名称、说明、备注", &sep).is_none());
+        // 结构/特殊字符
+        assert!(t.validate_value(r#"{"title":"test"}"#, &sep).is_none());
+        assert!(t.validate_value("[1,2,3]", &sep).is_none());
+        assert!(t.validate_value("<div>", &sep).is_none());
+        assert!(t.validate_value("(key)", &sep).is_none());
+        assert!(t.validate_value("@name", &sep).is_none());
+        // 分隔符字符
+        assert!(t.validate_value("a,b", &sep).is_none());
+        assert!(t.validate_value("a;b", &sep).is_none());
+        assert!(t.validate_value("a:b", &sep).is_none());
+        // 常规 ASCII / 中文
+        assert!(t.validate_value("hello_world", &sep).is_none());
+        assert!(t.validate_value("v1.2.3", &sep).is_none());
+        assert!(t.validate_value("阿尔托利亚", &sep).is_none());
+        assert!(t.validate_value("曹操", &sep).is_none());
+    }
+
+    #[test]
+    fn str_rejects_tbl_metachars() {
+        // str 只拦这 5 个 tbl 格式元字符
+        let sep = SeparatorsSection::default();
+        let t = TblType::parse("str").unwrap();
+        assert!(t.validate_value("a\\b", &sep).is_some());
+        assert!(t.validate_value("a|b", &sep).is_some());
+        assert!(t.validate_value("a\nb", &sep).is_some());
+        assert!(t.validate_value("a\rb", &sep).is_some());
+        assert!(t.validate_value("a\tb", &sep).is_some());
+    }
+
+    #[test]
+    fn nested_str_elements_split_naturally() {
+        // 嵌套 str 经 split(sep) 拆分后，每个 piece 单独做 5 字符检查。
+        // Map<str,int>：key = str
+        let sep = SeparatorsSection::default();
+        let t = TblType::parse("Map<str,int>").unwrap();
+        // 正确：key 不含元字符
+        assert!(t.validate_value("hp:100;atk:200", &sep).is_none());
+        assert!(t.validate_value("战士:100;法师:200", &sep).is_none());
+        // 错误：key 含 |
+        assert!(t.validate_value("a|b:100", &sep).is_some());
     }
 
     #[test]

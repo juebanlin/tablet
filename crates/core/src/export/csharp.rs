@@ -75,6 +75,7 @@ fn cs_base_type(bt: BaseType) -> &'static str {
         BaseType::Double => "double",
         BaseType::Str => "string",
         BaseType::Bool => "bool",
+        BaseType::Txt => "string",
     }
 }
 
@@ -85,6 +86,7 @@ fn cs_base_default(bt: BaseType) -> &'static str {
         BaseType::Double => "0d",
         BaseType::Str => "\"\"",
         BaseType::Bool => "false",
+        BaseType::Txt => "\"\"",
     }
 }
 
@@ -96,6 +98,7 @@ fn cs_base_parse_fn(bt: BaseType) -> &'static str {
         BaseType::Double => "TblParse.ParseDouble",
         BaseType::Str => "TblParse.ParseStr",
         BaseType::Bool => "TblParse.ParseBool",
+        BaseType::Txt => "TblParse.ParseStr",
     }
 }
 
@@ -541,7 +544,7 @@ mod tests {
                 EnumEntry { id: "1".to_string(), name: "Warrior".to_string(), desc: "战士".to_string() },
                 EnumEntry { id: "2".to_string(), name: "Mage".to_string(), desc: "法师".to_string() },
             ],
-            dirty: false, deleted: false, original: String::new(),
+            dirty: false, deleted: false, original_entries: Vec::new(), saved: true,
         };
         let out = gen_enum_file(&e, "Game.Config");
         assert!(out.contains("namespace Game.Config"));

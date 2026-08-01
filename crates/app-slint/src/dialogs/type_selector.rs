@@ -79,13 +79,15 @@ pub fn push(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
     ui_h.set_ts_paradigm_index(paradigm_index);
 
     let slots = ts.paradigm.param_slots();
+    let is_base = ts.paradigm == Paradigm::Base;
     let bt_all: Vec<slint::SharedString> = BaseType::all().iter().map(|b| slint::SharedString::from(b.name())).collect();
+    let bt_nestable: Vec<slint::SharedString> = BaseType::all_nestable().iter().map(|b| slint::SharedString::from(b.name())).collect();
     let bt_keys: Vec<slint::SharedString> = BaseType::map_key_types().iter().map(|b| slint::SharedString::from(b.name())).collect();
     let mut ts_slots: Vec<TsParamSlot> = Vec::with_capacity(slots.len());
     for (i, slot) in slots.iter().enumerate() {
-        let options = if slot.is_map_key { bt_keys.clone() } else { bt_all.clone() };
+        let options = if slot.is_map_key { bt_keys.clone() } else if is_base { bt_all.clone() } else { bt_nestable.clone() };
         let cur = ts.params.get(i).copied().unwrap_or(BaseType::Int);
-        let avail = if slot.is_map_key { BaseType::map_key_types() } else { BaseType::all() };
+        let avail = if slot.is_map_key { BaseType::map_key_types() } else if is_base { BaseType::all() } else { BaseType::all_nestable() };
         let cur_idx = avail.iter().position(|b| *b == cur).unwrap_or(0) as i32;
         ts_slots.push(TsParamSlot {
             label: slint::SharedString::from(slot.label),
@@ -180,7 +182,13 @@ pub fn wire(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
             let mut st = s.borrow_mut();
             let slots = st.type_selector.paradigm.param_slots();
             if let Some(slot_def) = slots.get(slot as usize) {
-                let avail = if slot_def.is_map_key { BaseType::map_key_types() } else { BaseType::all() };
+                let avail = if slot_def.is_map_key {
+                    BaseType::map_key_types()
+                } else if st.type_selector.paradigm == Paradigm::Base {
+                    BaseType::all()
+                } else {
+                    BaseType::all_nestable()
+                };
                 if let Some(bt) = avail.get(idx as usize).copied() {
                     if (slot as usize) < st.type_selector.params.len() {
                         st.type_selector.params[slot as usize] = bt;

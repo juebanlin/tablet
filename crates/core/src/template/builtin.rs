@@ -134,7 +134,7 @@ mod tests {
                             records: sec.preset.clone(),
                             dirty: false,
                             deleted: false,
-                            original: String::new(),
+                            original_records: sec.preset.clone(), saved: true,
                         });
                     }
                     SchemaMode::Constant => {
@@ -148,13 +148,14 @@ mod tests {
                                 desc: g(4),
                             }
                         }).collect();
+                        let snap = entries.clone();
                         g.constants.push(Constant {
                             name: sec.name.clone(),
                             path: std::path::PathBuf::new(),
                             entries,
                             dirty: false,
                             deleted: false,
-                            original: String::new(),
+                            original_entries: snap, saved: true,
                         });
                     }
                     SchemaMode::Enum => {
@@ -162,13 +163,14 @@ mod tests {
                             let g = |i: usize| row.get(i).cloned().unwrap_or_default();
                             EnumEntry { id: g(0), name: g(1), desc: g(2) }
                         }).collect();
+                        let snap = entries.clone();
                         g.enums.push(EnumDef {
                             name: sec.name.clone(),
                             path: std::path::PathBuf::new(),
                             entries,
                             dirty: false,
                             deleted: false,
-                            original: String::new(),
+                            original_entries: snap, saved: true,
                         });
                     }
                 }

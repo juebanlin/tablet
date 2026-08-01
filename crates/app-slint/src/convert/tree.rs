@@ -78,24 +78,24 @@ pub fn build_tree_nodes(state: &mut AppState) -> Vec<TreeNode> {
         let mut group_views: Vec<GroupView> = Vec::with_capacity(groups.len());
         for group in &groups {
             let table_hits: Vec<bool> = group.tables.iter().map(|t| {
-                passes_filter(&filter, t.deleted, t.original.is_empty(), t.dirty)
+                passes_filter(&filter, t.deleted, !t.saved, t.dirty)
                     && name_matches(&t.name, &search)
             }).collect();
             let const_hits: Vec<bool> = group.constants.iter().map(|c| {
-                passes_filter(&filter, c.deleted, c.original.is_empty(), c.dirty)
+                passes_filter(&filter, c.deleted, !c.saved, c.dirty)
                     && name_matches(&c.name, &search)
             }).collect();
             let enum_hits: Vec<bool> = group.enums.iter().map(|e| {
-                passes_filter(&filter, e.deleted, e.original.is_empty(), e.dirty)
+                passes_filter(&filter, e.deleted, !e.saved, e.dirty)
                     && name_matches(&e.name, &search)
             }).collect();
             let any_child_hit = table_hits.iter().any(|b| *b)
                 || const_hits.iter().any(|b| *b)
                 || enum_hits.iter().any(|b| *b);
             let group_filter_pass = filter == TreeFilter::All
-                || group.tables.iter().any(|t| passes_filter(&filter, t.deleted, t.original.is_empty(), t.dirty))
-                || group.constants.iter().any(|c| passes_filter(&filter, c.deleted, c.original.is_empty(), c.dirty))
-                || group.enums.iter().any(|e| passes_filter(&filter, e.deleted, e.original.is_empty(), e.dirty));
+                || group.tables.iter().any(|t| passes_filter(&filter, t.deleted, !t.saved, t.dirty))
+                || group.constants.iter().any(|c| passes_filter(&filter, c.deleted, !c.saved, c.dirty))
+                || group.enums.iter().any(|e| passes_filter(&filter, e.deleted, !e.saved, e.dirty));
             let group_self_hit = group_filter_pass && name_matches(&group.name, &search);
             let show = group_self_hit || any_child_hit;
             group_views.push(GroupView { table_hits, const_hits, enum_hits, show });
@@ -122,17 +122,17 @@ pub fn build_tree_nodes(state: &mut AppState) -> Vec<TreeNode> {
             for t in &g.tables {
                 if !t.deleted { all_deleted = false; }
                 if t.dirty && !t.deleted { has_dirty = true; }
-                if t.original.is_empty() && !t.deleted { has_new = true; }
+                if !t.saved && !t.deleted { has_new = true; }
             }
             for c in &g.constants {
                 if !c.deleted { all_deleted = false; }
                 if c.dirty && !c.deleted { has_dirty = true; }
-                if c.original.is_empty() && !c.deleted { has_new = true; }
+                if !c.saved && !c.deleted { has_new = true; }
             }
             for e in &g.enums {
                 if !e.deleted { all_deleted = false; }
                 if e.dirty && !e.deleted { has_dirty = true; }
-                if e.original.is_empty() && !e.deleted { has_new = true; }
+                if !e.saved && !e.deleted { has_new = true; }
             }
         }
         let project_deleted = all_deleted_self && all_deleted;
@@ -206,7 +206,7 @@ pub fn build_tree_nodes(state: &mut AppState) -> Vec<TreeNode> {
                     Some(SelectedNode::Table { project_id, group: g, name: n })
                         if project_id == pid && g == &group.name && n == &t.name);
                 let has_err = state.engine.has_node_error(pid, &group.name, &t.name);
-                let (mark, mc) = marker(t.deleted, t.original.is_empty(), t.dirty, has_err);
+                let (mark, mc) = marker(t.deleted, !t.saved, t.dirty, has_err);
                 nodes.push(TreeNode {
                     id: state.tree_targets.len() as i32,
                     indent: 2,
@@ -230,7 +230,7 @@ pub fn build_tree_nodes(state: &mut AppState) -> Vec<TreeNode> {
                     Some(SelectedNode::Constant { project_id, group: g, name: n })
                         if project_id == pid && g == &group.name && n == &c.name);
                 let has_err = state.engine.has_node_error(pid, &group.name, &c.name);
-                let (mark, mc) = marker(c.deleted, c.original.is_empty(), c.dirty, has_err);
+                let (mark, mc) = marker(c.deleted, !c.saved, c.dirty, has_err);
                 nodes.push(TreeNode {
                     id: state.tree_targets.len() as i32,
                     indent: 2,
@@ -254,7 +254,7 @@ pub fn build_tree_nodes(state: &mut AppState) -> Vec<TreeNode> {
                     Some(SelectedNode::Enum { project_id, group: g, name: n })
                         if project_id == pid && g == &group.name && n == &e.name);
                 let has_err = state.engine.has_node_error(pid, &group.name, &e.name);
-                let (mark, mc) = marker(e.deleted, e.original.is_empty(), e.dirty, has_err);
+                let (mark, mc) = marker(e.deleted, !e.saved, e.dirty, has_err);
                 nodes.push(TreeNode {
                     id: state.tree_targets.len() as i32,
                     indent: 2,

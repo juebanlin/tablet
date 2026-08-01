@@ -75,6 +75,7 @@ fn base_to_ts_type(bt: BaseType) -> &'static str {
         BaseType::Int | BaseType::Long | BaseType::Float | BaseType::Double => "number",
         BaseType::Str => "string",
         BaseType::Bool => "boolean",
+        BaseType::Txt => "string",
     }
 }
 
@@ -89,14 +90,14 @@ fn base_to_ts(raw: &str, bt: BaseType) -> String {
         BaseType::Bool => {
             if raw == "true" || raw == "1" { "true".to_string() } else { "false".to_string() }
         }
-        BaseType::Str => format!("\"{}\"", ts_escape(raw)),
+        BaseType::Str | BaseType::Txt => format!("\"{}\"", ts_escape(raw)),
     }
 }
 
 /// TS 字面量对象的 key：合法 identifier 不加引号，否则加引号；int/long key 直接裸数字。
 fn ts_obj_key(raw: &str, bt: BaseType) -> String {
     match bt {
-        BaseType::Str => {
+        BaseType::Str | BaseType::Txt => {
             if is_ts_identifier(raw) {
                 raw.to_string()
             } else {
@@ -341,6 +342,7 @@ fn default_for_field(tbl_type_str: &str) -> String {
             BaseType::Int | BaseType::Long | BaseType::Float | BaseType::Double => "0".to_string(),
             BaseType::Str => "\"\"".to_string(),
             BaseType::Bool => "false".to_string(),
+            BaseType::Txt => "\"\"".to_string(),
         },
         Paradigm::Ref => "0".to_string(),
         Paradigm::Tuple2 | Paradigm::Tuple3 | Paradigm::Tuple4
@@ -581,7 +583,7 @@ mod tests {
             ],
             dirty: false,
             deleted: false,
-            original: String::new(),
+            original_entries: Vec::new(), saved: true,
         };
         let out = export_enum_ts(&e, crate::enums::ModuleKind::Esm);
         assert!(out.contains("export enum HeroTypeEnum {"));

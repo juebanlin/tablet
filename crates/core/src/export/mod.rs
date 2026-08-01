@@ -249,5 +249,6 @@ pub fn parse_base_value(raw: &str, bt: &BaseType) -> Value {
         }
         BaseType::Bool => Value::from(raw == "true" || raw == "1"),
         BaseType::Str => Value::from(raw),
+        BaseType::Txt => Value::from(raw),
     }
 }

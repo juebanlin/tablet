@@ -55,10 +55,10 @@ init_items    | List<int>               | 1001;1002;1003  | cs | 初始物品 ID
 unique_skills | Set<int>                | 100;200;300     | cs | 技能 ID 集合
 attr_caps     | Map<str,int>            | hp:9999;mp:5000 | s  | 属性上限
 default_hero  | @HeroType               | 1               | cs | 默认英雄类型
-notice_json   | str                     | {"title":"公告","content":"欢迎登录","level":2,"tags":["new","hot"]} | cs | JSON 格式公告
-banner_html   | str                     | <div class="banner" style="color:red">Hello\n<b>World</b></div>      | cs | HTML 富文本示例
-config_xml    | str                     | <config><item id="1" value="a\|b"/><item id="2" value="c\nd"/></config> | cs | XML 复杂配置示例
-error_regex   | str                     | ^(?P<year>\d{4})-(?P<month>\d{2})\|error:(.+)$                        | s  | 正则表达式示例
+notice_json   | txt                     | {"title":"公告","content":"欢迎登录","level":2,"tags":["new","hot"]} | cs | JSON 格式公告
+banner_html   | txt                     | <div class="banner" style="color:red">Hello\n<b>World</b></div>      | cs | HTML 富文本示例
+config_xml    | txt                     | <config><item id="1" value="a\|b"/><item id="2" value="c\nd"/></config> | cs | XML 复杂配置示例
+error_regex   | txt                     | ^(?P<year>\d{4})-(?P<month>\d{2})\|error:(.+)$                        | s  | 正则表达式示例
 
 # ──────────────── Table 段 ────────────────
 # Table 段在 schema 里写列声明（结构）；预设 records 写在 # @preset 里。
@@ -74,7 +74,7 @@ kind    | @HeroType    | cs | 英雄类型
 quality | @ItemQuality | cs | 品质
 skills  | List<int>    | cs | 技能 ID 列表
 attrs   | Map<str,int> | s  | 属性表
-desc    | str          | cs | 描述
+desc    | txt          | cs | 描述
 # @preset
 1001 | 阿尔托利亚 | 1200 | 300 | 88.5  | 60.0 | 1 | 5 | 1;2;3   | hp:1200;atk:88   | 圆桌骑士
 1002 | 梅林       | 700  | 800 | 120.0 | 30.0 | 2 | 5 | 4;5     | mp:800;atk:120   | 大魔法师
@@ -88,7 +88,7 @@ quality   | @ItemQuality | cs | 品质
 price     | long         | s  | 价格
 weight    | float        | cs | 重量
 stack_max | int          | cs | 堆叠上限
-desc      | str          | cs | 描述
+desc      | txt          | cs | 描述
 # @preset
 2001 | 生命药水 | 1 | 100      | 0.5 | 99 | 恢复 100 点生命
 2002 | 法力药水 | 1 | 100      | 0.5 | 99 | 恢复 100 点法力
@@ -101,7 +101,7 @@ name | str             | cs | 名称
 kind | @BuildingType   | cs | 类型
 size | Tuple2<int,int> | cs | 占地 (w,h)
 cost | Map<str,int>    | s  | 建造成本
-desc | str             | cs | 描述
+desc | txt             | cs | 描述
 # @preset
 3001 | 伐木场 | 1 | 2,2 | wood:0;stone:50    | 产出木材
 3002 | 兵营   | 2 | 3,3 | wood:200;stone:100 | 训练士兵

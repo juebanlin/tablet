@@ -30,7 +30,7 @@
 # Table：英雄基础表，主键 id 必须是第一列
 [hero/HeroBase] table
 id     | int       | cs | 英雄ID
-name   | str       | cs | 名称
+name   | txt       | cs | 名称
 hp     | int       | s  | 血量（仅服务端用）
 type   | @HeroType | cs | 引用枚举：英雄类型
 boss   | @HeroBase | cs | 引用同张表：克星
@@ -42,7 +42,7 @@ buffs  | Map<str,int> | cs | buff 名 → 数值
 [global/GlobalConst] constant
 max_level   | int             | cs | 等级上限
 start_pos   | Tuple2<int,int> | cs | 出生坐标
-gm_password | str             | s  | GM 密码（仅服务端）
+gm_password | txt             | s  | GM 密码（仅服务端）
 
 # Enum：英雄类型枚举，三列固定 id|name|desc
 [hero/HeroType] enum
@@ -62,7 +62,7 @@ gm_password | str             | s  | GM 密码（仅服务端）
 #mode table
 #desc 英雄ID|名称|血量|英雄类型|技能组
 #export 前后端|前后端|服务器|前后端|前后端
-#type int|str|int|@HeroType|List<int>
+#type int|txt|int|@HeroType|List<int>
 #field id|name|hp|type|skills
 ---
 1001|战士|100|1|1;2;3
@@ -205,7 +205,7 @@ TblFieldType ::= 范式
 
 UI 类型选择器分 [数据类型] / [引用类型] 两个 tab，但只是用户视角的业务分组——schema 层、序列化、代码生成对所有 variant 一视同仁。
 
-### 7.1 基础类型（6 个）
+### 7.1 基础类型（7 个）
 
 | 类型 | 说明 | Java | Go | Lua |
 |------|------|------|----|-----|
@@ -213,8 +213,23 @@ UI 类型选择器分 [数据类型] / [引用类型] 两个 tab，但只是用�
 | long | 64 位整数 | long | int64 | number |
 | float | 单精度浮点 | float | float32 | number |
 | double | 双精度浮点 | double | float64 | number |
-| str | 字符串 | String | string | string |
+| str | 简单标识符（属性名、技能名、枚举值） | String | string | string |
 | bool | 布尔 | boolean | bool | boolean |
+| txt | 自由文本（描述、文案、JSON、HTML） | String | string | string |
+
+**`str` vs `txt`**：
+
+| 维度 | `str` | `txt` |
+|------|-------|-------|
+| 语义 | 简单标识符（如 property name） | 自由文本（如 desc / 文案 / JSON） |
+| 可嵌套 | ✅ `List<str>` `Map<str,_>` `Tuple2<str,_>` 等 | ❌ 仅独立列 |
+| 含 `\|` / `\n` / `\t` | ❌ 不允许 | ✅ 自动转义 |
+| 含 `;` `,` `:` （分隔符） | ❌ 不允许（会破坏 split） | ✅ 允许（独立列不 split） |
+| 含中文标点 | ❌ 拦截 | ✅ 允许 |
+| 存储编码 | 不转义（Atom 路径） | 反斜杠转义（Text 路径） |
+| 代码生成 | `string` / `String` | `string` / `String`（同 `str`） |
+
+> 设计理由：`str` = 程序标识符（Java 属性名语义），`txt` = 人类可读文本。`List<str>` 的每个元素是标识符，不应含分隔符或换行；`txt` 列存完整文案，走转义保证 `\|` `\n` 等字符安全穿越。
 
 ### 7.2 元组与集合
 
@@ -254,6 +269,7 @@ UI 类型选择器分 [数据类型] / [引用类型] 两个 tab，但只是用�
 | — | Ref（@Xxx） | `1001`（id） | — |
 
 同一范式内每个 P 位置可独立选择基础类型（如 `Tuple2<int,str>` `Map<str,List<int>>`）。
+> 注意：`txt` **不能进入任何复合类型**——仅 `Paradigm::Base` 允许 `txt`。嵌套字符串用 `str`。
 
 ### 7.4 分隔符配置
 
@@ -408,7 +424,7 @@ Lua 端全部展开为 table 字面量，不降级为 string。
 
 中文标点 `，；：、` 等是否拦下来，取决于**该单元格的语义角色**——不一刀切按"是不是字符串"。核心区分：
 
-> **进代码 / 要被分隔符切 → 拦；纯展示文案 → 放开。**
+> **进代码 / 要被分隔符切 → 拦；自由文案 → 放开。**
 
 | 位置 | 拦截 | 原因 |
 |------|:---:|------|
@@ -416,9 +432,10 @@ Lua 端全部展开为 table 字面量，不降级为 string。
 | Table 数据格 — int / long / float / double / bool 类型 | ✅ | 基础类型 parse 错位 |
 | Table 数据格 — 复合类型（Tuple / List / Set / Map / List\<Tuple\> 等） | ✅ | 中文逗号 ≠ ASCII 分隔符，会让 split 错位 |
 | Table 数据格 — `@TableName` / `@EnumName` 引用 | ✅ | 实际值是 int(id)，按 int 校验 |
-| **Table 数据格 — 纯 str 类型**（典型：desc 列、name 列、文案列、读屏文本） | ❌ 放开 | 玩家可见的自由文本，必须允许中文逗号 / 全角空格 / 引号等 |
-| Constant value 列 — 非 str 类型（int / 复合 / Ref） | ✅ | 同上数据格规则 |
-| **Constant value 列 — str 类型** | ❌ 放开 | 同纯 str 列 |
+| **Table 数据格 — `txt` 类型**（自由文本：desc 列、name 列、文案列、JSON/HTML/XML） | ❌ 放开 | 玩家可见的自由文本，必须允许中文逗号 / 全角空格 / 引号等 |
+| Table 数据格 — `str` 类型（独立列或嵌套） | ✅ | `str` = 简单标识符，不能含特殊字符（见 §7.1 str vs txt） |
+| Constant value 列 — `txt` 类型 | ❌ 放开 | 自由文本 |
+| Constant value 列 — `str` / 非 str 类型 | ✅ | 同数据格规则 |
 | Constant name 列 | ✅ | name 生成成代码端常量名（`MAX_LEVEL`），ASCII identifier 约束 |
 | Constant desc 列 | ❌ 不验证 | 注释 / tooltip，不进代码 |
 | Constant export 列 | ❌ 不验证 | 取值固定 `cs/c/s/-`，schema 层兜底 |

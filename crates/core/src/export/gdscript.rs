@@ -58,7 +58,7 @@ fn base_to_gd(raw: &str, bt: BaseType) -> String {
         BaseType::Bool => {
             if raw == "true" || raw == "1" { "true".to_string() } else { "false".to_string() }
         }
-        BaseType::Str => format!("\"{}\"", gd_escape(raw)),
+        BaseType::Str | BaseType::Txt => format!("\"{}\"", gd_escape(raw)),
     }
 }
 
@@ -72,7 +72,7 @@ enum GdKey {
 
 fn gd_map_key(raw: &str, bt: BaseType) -> GdKey {
     match bt {
-        BaseType::Str => {
+        BaseType::Str | BaseType::Txt => {
             if is_gd_identifier(raw) {
                 GdKey::LuaStyle(raw.to_string())
             } else {
@@ -431,7 +431,7 @@ mod tests {
             ],
             dirty: false,
             deleted: false,
-            original: String::new(),
+            original_entries: Vec::new(), saved: true,
         };
         let out = export_enum_gd(&e);
         assert!(out.contains("const HeroType = {"));

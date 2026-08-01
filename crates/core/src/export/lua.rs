@@ -49,13 +49,13 @@ fn base_to_lua(raw: &str, bt: BaseType) -> String {
         BaseType::Bool => {
             if raw == "true" || raw == "1" { "true".to_string() } else { "false".to_string() }
         }
-        BaseType::Str => format!("\"{}\"", lua_escape(raw)),
+        BaseType::Str | BaseType::Txt => format!("\"{}\"", lua_escape(raw)),
     }
 }
 
 fn lua_map_key(raw: &str, bt: BaseType) -> String {
     match bt {
-        BaseType::Str => {
+        BaseType::Str | BaseType::Txt => {
             if is_lua_identifier(raw) {
                 raw.to_string()
             } else {
