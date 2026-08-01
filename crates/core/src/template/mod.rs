@@ -136,28 +136,18 @@ fn render_table_skeleton(sec: &SchemaSection) -> String {
     let mut s = String::new();
     writeln!(s, "#!tbl v3").unwrap();
     writeln!(s, "#mode table").unwrap();
-    writeln!(
-        s,
-        "#desc {}",
-        sec.fields.iter().map(|f| f.desc.as_str()).collect::<Vec<_>>().join("|")
-    ).unwrap();
-    writeln!(
-        s,
-        "#export {}",
-        sec.fields.iter().map(|f| f.export_display()).collect::<Vec<_>>().join("|")
-    ).unwrap();
-    writeln!(
-        s,
-        "#type {}",
-        sec.fields.iter().map(|f| f.tbl_type.as_str()).collect::<Vec<_>>().join("|")
-    ).unwrap();
-    writeln!(
-        s,
-        "#field {}",
-        sec.fields.iter().map(|f| f.name.as_str()).collect::<Vec<_>>().join("|")
-    ).unwrap();
     writeln!(s, "---").unwrap();
-    // v3: [id] anchor + "  field:value" rows
+    // v3: @field blocks
+    for f in &sec.fields {
+        writeln!(s).unwrap();
+        writeln!(s, "@field {}", f.name).unwrap();
+        if !f.desc.is_empty() {
+            writeln!(s, "  desc:{}", f.desc).unwrap();
+        }
+        writeln!(s, "  export:{}", f.export_display()).unwrap();
+        writeln!(s, "  type:{}", f.tbl_type).unwrap();
+    }
+    // v3: [id] records
     let n = sec.fields.len();
     for row in &sec.preset {
         let mut cells: Vec<String> = row.iter().cloned().collect();
@@ -166,6 +156,7 @@ fn render_table_skeleton(sec: &SchemaSection) -> String {
         writeln!(s).unwrap();
         writeln!(s, "[{}]", id_val).unwrap();
         for (i, v) in cells.iter().enumerate().skip(1) {
+            if v.is_empty() { continue; }
             let kind = sec.fields.get(i)
                 .map(|f| crate::tbl_str::classify(&f.tbl_type))
                 .unwrap_or(crate::tbl_str::FieldKind::Text);
@@ -324,8 +315,9 @@ mod tests {
         let hero_base = std::fs::read_to_string(target.join("config/hero/HeroBase.tbl"))
             .expect("read HeroBase");
         assert!(hero_base.contains("#mode table"));
-        assert!(hero_base.contains("#field id|hp"));
-        assert!(hero_base.trim().ends_with("---"));
+        assert!(hero_base.contains("@field hp"));
+        assert!(hero_base.contains("@field id"));
+        assert!(hero_base.trim().contains("---"));
 
         // Enum 骨架：写入条目
         let hero_type = std::fs::read_to_string(target.join("config/hero/HeroType.tbl"))

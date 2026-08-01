@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::path::Path;
 use anyhow::{Result, bail};
 use crate::model::*;
@@ -123,58 +122,83 @@ pub struct V3Codec;
 impl TableCodec for V3Codec {
     fn parse(
         &self, path: &Path,
-        desc_line: &str, type_line: &str, export_line: &str, field_line: &str,
+        _desc_line: &str, _type_line: &str, _export_line: &str, _field_line: &str,
         data_lines: &[&str],
     ) -> Result<Table> {
-        let descs: Vec<String> = split_row(desc_line).iter()
-            .map(|s| decode(s, FieldKind::Text)).collect();
-        let types: Vec<&str> = type_line.split('|').collect();
-        let exports: Vec<&str> = export_line.split('|').collect();
-        let field_names: Vec<&str> = field_line.split('|').collect();
+        // v3 puts field definitions in @field blocks, records in [id] blocks,
+        // both after ---. Ignore the 4 legacy header lines.
 
-        let n = field_names.len();
-        let mut field_defs = Vec::with_capacity(n);
-        let mut name_to_index: HashMap<String, usize> = HashMap::new();
-        for i in 0..n {
-            let fname = field_names[i].trim().to_string();
-            name_to_index.insert(fname.clone(), i);
-            field_defs.push(FieldDef {
-                name: fname,
-                desc: descs.get(i).map(|s| s.trim().to_string()).unwrap_or_default(),
-                tbl_type: types.get(i).unwrap_or(&"str").trim().to_string(),
-                export: Export::from_str(exports.get(i).unwrap_or(&"")),
-            });
-        }
-
-        let kinds: Vec<FieldKind> = field_defs.iter().map(|f| classify(&f.tbl_type)).collect();
+        // first pass: collect @field blocks to build schema
+        let mut field_defs: Vec<FieldDef> = Vec::new();
         let mut records: Vec<Vec<String>> = Vec::new();
-        let mut cur: Vec<String> = vec![String::new(); n];
+        let mut cur_field: Option<FieldDef> = None;
+        let mut cur_record: Option<Vec<String>> = None;
 
         for line in data_lines {
             let trimmed = line.trim();
             if trimmed.is_empty() { continue; }
+            if trimmed.starts_with("#@color:") { continue; }
 
-            if let Some(rest) = trimmed.strip_prefix('[').and_then(|s| s.strip_suffix(']')) {
-                if !cur.iter().all(|c| c.is_empty()) {
-                    records.push(std::mem::replace(&mut cur, vec![String::new(); n]));
-                }
-                cur[0] = rest.to_string();
+            // @field block start
+            if let Some(fname) = trimmed.strip_prefix("@field ") {
+                if let Some(f) = cur_field.take() { field_defs.push(f); }
+                if let Some(r) = cur_record.take() { records.push(r); }
+                cur_field = Some(FieldDef {
+                    name: fname.trim().to_string(),
+                    desc: String::new(),
+                    tbl_type: String::from("str"),
+                    export: Export::ClientServer,
+                });
                 continue;
             }
 
-            if trimmed.starts_with("#@color:") { continue; }
+            // [id] record block start
+            if let Some(id_val) = trimmed.strip_prefix('[').and_then(|s| s.strip_suffix(']')) {
+                if let Some(f) = cur_field.take() { field_defs.push(f); }
+                if let Some(r) = cur_record.take() { records.push(r); }
+                cur_record = Some(vec![id_val.to_string()]);
+                continue;
+            }
 
+            // indented field property / record value
             let unindented = line.strip_prefix(INDENT).unwrap_or(line);
-            if let Some((fname, value)) = unindented.split_once(':') {
-                let fname = fname.trim();
-                if let Some(&idx) = name_to_index.get(fname) {
-                    let kind = kinds.get(idx).copied().unwrap_or(FieldKind::Text);
-                    cur[idx] = decode(value.trim(), kind);
+            if let Some((key, value)) = unindented.split_once(':') {
+                let key = key.trim();
+                let val = value.trim();
+                if let Some(ref mut f) = cur_field {
+                    match key {
+                        "desc" => f.desc = val.to_string(),
+                        "export" => f.export = Export::from_str(val),
+                        "type" => f.tbl_type = val.to_string(),
+                        _ => {}
+                    }
+                } else if let Some(ref mut r) = cur_record {
+                    // record field: key=field name, value=cell
+                    if let Some(idx) = field_defs.iter().position(|fd| fd.name == key) {
+                        let kind = classify(&field_defs[idx].tbl_type);
+                        while r.len() <= idx { r.push(String::new()); }
+                        r[idx] = decode(val, kind);
+                    }
                 }
             }
         }
 
-        if !cur.iter().all(|c| c.is_empty()) { records.push(cur); }
+        if let Some(f) = cur_field { field_defs.push(f); }
+        if let Some(r) = cur_record { records.push(r); }
+
+        // id column defaults: if user didn't define @field id, prepend it
+        if field_defs.first().map_or(true, |f| f.name != "id") {
+            field_defs.insert(0, FieldDef {
+                name: "id".into(), desc: "ID".into(),
+                tbl_type: "int".into(), export: Export::ClientServer,
+            });
+        }
+
+        // normalize records to field_defs width
+        let n = field_defs.len();
+        for r in &mut records {
+            r.resize(n, String::new());
+        }
 
         let name = path.file_stem().unwrap_or_default().to_string_lossy().to_string();
         Ok(Table {
@@ -190,21 +214,27 @@ impl TableCodec for V3Codec {
         let mut s = String::new();
         s.push_str("#!tbl v3\n");
         s.push_str("#mode table\n");
-        s.push_str(&format!("#desc {}\n", fields.iter()
-            .map(|f| encode(&f.desc, FieldKind::Text)).collect::<Vec<_>>().join("|")));
-        s.push_str(&format!("#export {}\n", fields.iter()
-            .map(|f| f.export.to_tbl().to_string()).collect::<Vec<_>>().join("|")));
-        s.push_str(&format!("#type {}\n", fields.iter()
-            .map(|f| f.tbl_type.as_str()).collect::<Vec<_>>().join("|")));
-        s.push_str(&format!("#field {}\n", fields.iter()
-            .map(|f| f.name.as_str()).collect::<Vec<_>>().join("|")));
         s.push_str("---\n");
+
+        // @field blocks
+        for f in fields {
+            s.push('\n');
+            s.push_str(&format!("@field {}\n", f.name));
+            if !f.desc.is_empty() {
+                s.push_str(&format!("  desc:{}\n", encode(&f.desc, FieldKind::Text)));
+            }
+            s.push_str(&format!("  export:{}\n", f.export.to_tbl()));
+            s.push_str(&format!("  type:{}\n", f.tbl_type));
+        }
+
+        // [id] records
         let kinds: Vec<FieldKind> = fields.iter().map(|f| classify(&f.tbl_type)).collect();
         for row in &table.records {
             let id_val = row.first().map(String::as_str).unwrap_or("");
             s.push('\n');
             s.push_str(&format!("[{}]\n", id_val));
             for (i, cell) in row.iter().enumerate().skip(1) {
+                if cell.is_empty() { continue; }
                 let kind = kinds.get(i).copied().unwrap_or(FieldKind::Text);
                 s.push_str(&format!("  {}:{}\n", fields[i].name, encode(cell, kind)));
             }
