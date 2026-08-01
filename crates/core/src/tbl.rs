@@ -99,8 +99,9 @@ fn parse_table(
     let table = Table {
         name,
         path: path.to_path_buf(),
-        schema: TableSchema { fields: field_defs },
+        schema: TableSchema { fields: field_defs.clone() },
         original_records: records.clone(),
+        original_fields: field_defs,
         records,
         dirty: false,
         deleted: false,

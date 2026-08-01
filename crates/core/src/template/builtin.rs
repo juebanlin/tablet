@@ -127,6 +127,7 @@ mod tests {
                             tbl_type: f.tbl_type.clone(),
                             export: Export::from_str(&f.export),
                         }).collect();
+                        let snap_fields = fields.clone();
                         g.tables.push(Table {
                             name: sec.name.clone(),
                             path: std::path::PathBuf::new(),
@@ -134,7 +135,9 @@ mod tests {
                             records: sec.preset.clone(),
                             dirty: false,
                             deleted: false,
-                            original_records: sec.preset.clone(), saved: true,
+                            original_records: sec.preset.clone(),
+                            original_fields: snap_fields,
+                            saved: true,
                         });
                     }
                     SchemaMode::Constant => {

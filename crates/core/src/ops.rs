@@ -58,6 +58,7 @@ fn sync_schema_from_groups(project: &mut Project) {
     // sync 永远不带 preset：project.tblschema 是「结构骨架」，行数据归项目里的 .tbl
     let mut s = crate::tblschema::schema_from_project(&project.groups, false);
     s.meta = project.schema.meta.clone();
+    s.separators = project.schema.separators.clone();
     project.schema = s;
     project.schema_dirty = true;
 }
@@ -109,6 +110,7 @@ fn save_project_files(project: &mut Project) -> (usize, usize) {
         }
     }
     if project.schema_dirty {
+        sync_schema_from_groups(project);
         let txt = crate::tblschema::serialize_tblschema(&project.schema);
         let path = project.project_root.join(crate::project::PROJECT_SCHEMA_FILE);
         if std::fs::write(&path, txt).is_ok() {
@@ -131,6 +133,7 @@ fn save_project_files(project: &mut Project) -> (usize, usize) {
                 let content = crate::tbl::serialize_table(table);
                 if std::fs::write(&table.path, &content).is_ok() {
                     table.original_records = table.records.clone();
+                    table.original_fields = table.schema.fields.clone();
                     table.dirty = false;
                     table.saved = true;
                     count += 1;
@@ -667,6 +670,7 @@ impl ProjectEngine {
                 t.path = g.dir.join(format!("{}.tbl", t.name));
                 t.dirty = true;
                 t.original_records.clear();
+                t.original_fields.clear();
                 t.saved = false;
             }
             for c in &mut g.constants {
@@ -1067,6 +1071,7 @@ impl ProjectEngine {
                 t.update_dirty();
             }
         }
+        self.project_mut().schema_dirty = true;
         if let Some(kw) = keyword_err {
             self.ui_log(format!("字段名 '{}' 是保留关键字，不允许使用", kw));
         }
@@ -1124,6 +1129,7 @@ impl ProjectEngine {
                 t.update_dirty();
             }
         }
+        self.project_mut().schema_dirty = true;
     }
 
     pub fn delete_column(&mut self, group: &str, name: &str, at: usize) {
@@ -1138,6 +1144,7 @@ impl ProjectEngine {
                 }
             }
         }
+        self.project_mut().schema_dirty = true;
     }
 
     pub fn paste_table_data(&mut self, group: &str, name: &str, start_row: usize, start_col: usize, grid: &[Vec<String>]) {
@@ -1561,7 +1568,7 @@ impl ProjectEngine {
                 t.name = final_name.clone();
                 t.path = new_path;
                 t.dirty = true;
-                t.original_records.clear(); t.saved = false;
+                t.original_records.clear(); t.original_fields.clear(); t.saved = false;
                 g.tables.push(t);
                 "Table"
             }
@@ -1624,7 +1631,7 @@ impl ProjectEngine {
         for t in &mut new_group.tables {
             t.path = new_dir.join(format!("{}.tbl", t.name));
             t.dirty = true;
-            t.original_records.clear(); t.saved = false;
+            t.original_records.clear(); t.original_fields.clear(); t.saved = false;
         }
         for c in &mut new_group.constants {
             c.path = new_dir.join(format!("{}.tbl", c.name));
@@ -1699,7 +1706,12 @@ impl ProjectEngine {
                             records: Vec::new(),
                             dirty: true,
                             deleted: false,
-                            original_records: Vec::new(), saved: false,
+                            original_records: Vec::new(),
+                            original_fields: vec![FieldDef {
+                                name: "id".to_string(), desc: "ID".to_string(),
+                                tbl_type: "int".to_string(), export: Export::ClientServer,
+                            }],
+                            saved: false,
                         });
                         ok = true;
                     }

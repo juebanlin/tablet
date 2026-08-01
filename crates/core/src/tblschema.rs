@@ -458,7 +458,7 @@ pub fn schema_from_project(groups: &[Group], with_preset: bool) -> TblSchema {
             });
         }
     }
-    TblSchema { meta: SchemaMetadata::default(), separators: SeparatorsSection::default(), sections }
+    TblSchema { meta: SchemaMetadata::default(), separators: Default::default(), sections }
 }
 
 fn export_to_code(e: &Export) -> String {
@@ -538,11 +538,13 @@ pub fn apply_schema_to_project(
                     group.tables.push(Table {
                         name: sec.name.clone(),
                         path,
-                        schema: TableSchema { fields },
+                        schema: TableSchema { fields: fields.clone() },
                         records,
                         dirty: true,
                         deleted: false,
-                        original_records: Vec::new(), saved: false,
+                        original_records: Vec::new(),
+                        original_fields: fields,
+                        saved: false,
                     });
                     added += 1;
                 }

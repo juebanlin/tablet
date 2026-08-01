@@ -550,15 +550,19 @@ mod tests {
     use std::sync::atomic::{AtomicU64, Ordering};
 
     fn t(name: &str) -> Table {
+        let fields = vec![
+            FieldDef { name: "id".into(), desc: "编号".into(), tbl_type: "int".into(), export: Export::ClientServer },
+            FieldDef { name: "name".into(), desc: "名字".into(), tbl_type: "str".into(), export: Export::ClientServer },
+        ];
         Table {
             name: name.to_string(),
             path: PathBuf::from(format!("{}.tbl", name)),
-            schema: TableSchema { fields: vec![
-                FieldDef { name: "id".into(), desc: "编号".into(), tbl_type: "int".into(), export: Export::ClientServer },
-                FieldDef { name: "name".into(), desc: "名字".into(), tbl_type: "str".into(), export: Export::ClientServer },
-            ]},
+            schema: TableSchema { fields: fields.clone() },
             records: vec![vec!["1".into(), "alice".into()]],
-            dirty: false, deleted: false, original_records: vec![vec!["1".into(), "alice".into()]], saved: false,
+            dirty: false, deleted: false,
+            original_records: vec![vec!["1".into(), "alice".into()]],
+            original_fields: fields,
+            saved: false,
         }
     }
 

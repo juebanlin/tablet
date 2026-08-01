@@ -458,17 +458,19 @@ pub struct Table {
     pub deleted: bool,
     /// 上次落盘时的 records 快照，用于 update_dirty() 比对。
     pub original_records: Vec<Vec<String>>,
-    /// 是否已落盘过（用于判断 delete 时是否需要 remove_file + tree 的"新增"标记）。
+    /// 上次落盘时的 schema.fields 快照，用于检测表头变更。
+    pub original_fields: Vec<FieldDef>,
     pub saved: bool,
 }
 
 impl Table {
     pub fn update_dirty(&mut self) {
-        self.dirty = self.records != self.original_records;
+        self.dirty = self.records != self.original_records
+            || self.schema.fields != self.original_fields;
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct TableSchema {
     pub fields: Vec<FieldDef>,
 }
@@ -479,7 +481,7 @@ impl TableSchema {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct FieldDef {
     pub name: String,
     pub desc: String,
