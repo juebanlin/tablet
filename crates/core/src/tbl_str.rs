@@ -1,51 +1,76 @@
-//! .tbl 单元格字符串编解码（黑盒接口）
+//! .tbl 单元格字符串编解码。
 //!
-//! 独立模块，与解析器解耦。
+//! 独立模块，与解析器/验证器解耦。
 //!
-//! Text / Atom 两类字段统一走转义/反转义，保证 round-trip 安全。
-//! 业务层由 types.rs 的 validate_str / validate_base 负责拦截不合规值；
-//! encode/decode 不参与业务判断，只保证格式安全。
+//! ## 分层关系
+//!
+//! 验证层 (types.rs) →  save 前拦截不合规值（str 不能含 \ | \n 等）
+//! 编解码层 (本模块) →  裸值 ↔ .tbl 存储表示
+//! 格式层 (tbl.rs)   →  文件 I/O，调用 encode/decode
+//!
+//! ## encode/decode 策略
+//!
+//! 通过 `TblType::parse(tbl_type)` 判断是否需要转义：
+//! - 参数含 BaseType::Txt → 走 encode_str / decode_str（转义 5 个特殊字符）
+//! - 参数不含 Txt         → 原样直写，但含特殊字符时防御转义 + stderr 告警
+//!
+//! 防御性 fallback：即使验证层漏了或手改文件引入特殊字符，encode/decode
+//! 也会兜底保证 .tbl 格式安全，同时 stderr 告警暴露问题。
 
-/// 字段类别 — 当前两类走相同路径，保留枚举用于语义标记。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum FieldKind {
-    /// 自由文本字段（txt 类型）。
-    Text,
-    /// 简单值字段（int/long/float/double/bool/str 等）。
-    Atom,
+use crate::types::{BaseType, TblType};
+
+const SPECIAL_CHARS: &[char] = &['\\', '|', '\n', '\r', '\t'];
+
+/// 判断 tbl_type 是否需要走转义。
+/// 规则：解析类型字符串，若任何参数是 BaseType::Txt → 走转义。
+/// 解析失败 → 兜底走转义（安全第一）。
+fn needs_escape(tbl_type: &str) -> bool {
+    TblType::parse(tbl_type)
+        .map(|tt| tt.params.iter().any(|bt| *bt == BaseType::Txt))
+        .unwrap_or(true)
 }
 
-/// 判断 tbl_type 字符串属于哪类字段。
+/// 内存字符串 → .tbl 存储表示。
 ///
-/// 当前规则：`txt` → Text，其余全 → Atom（两类走相同编码路径，
-/// 仅用于标注语义；实际行为无差别）。
-pub fn classify(tbl_type: &str) -> FieldKind {
-    if tbl_type == "txt" {
-        FieldKind::Text
+/// 参数含 Txt → 转义 `\` `|` `\n` `\r` `\t`
+/// 参数不含 Txt → 原样返回；若意外含特殊字符则防御转义 + stderr warn
+pub fn encode(value: &str, tbl_type: &str) -> String {
+    if needs_escape(tbl_type) {
+        encode_str(value)
     } else {
-        FieldKind::Atom
+        if value.contains(SPECIAL_CHARS) {
+            eprintln!(
+                "[tbl_str] WARN: 非 txt 字段({})含特殊字符，防御转义: {:?}",
+                tbl_type, value
+            );
+            return encode_str(value);
+        }
+        value.to_string()
     }
 }
 
-/// 内存字符串 -> .tbl 存储表示。
+/// .tbl 存储表示 → 内存字符串。
 ///
-/// 两类字段统一走转义，不 panic。str 字段用户可能输入反斜杠或管道符，
-/// 在 save 时由 validate_str 拦截；encode 不 panic，保证 round-trip 安全。
-pub fn encode(value: &str, _kind: FieldKind) -> String {
-    encode_str(value)
-}
-
-/// .tbl 存储表示 -> 内存字符串。
-///
-/// 两类字段统一走反转义，与 encode 对称。
-pub fn decode(value: &str, _kind: FieldKind) -> String {
-    decode_str(value)
+/// 参数含 Txt → 反向解析转义序列
+/// 参数不含 Txt → 原样返回；若意外含 `\` 则防御反转义 + stderr warn
+pub fn decode(value: &str, tbl_type: &str) -> String {
+    if needs_escape(tbl_type) {
+        decode_str(value)
+    } else {
+        if value.contains('\\') {
+            eprintln!(
+                "[tbl_str] WARN: 非 txt 字段({})含反斜杠，防御反转义: {:?}",
+                tbl_type, value
+            );
+            return decode_str(value);
+        }
+        value.to_string()
+    }
 }
 
 /// 转义实现（内部）。5 个特殊字符：\ | \n \r \t
 fn encode_str(s: &str) -> String {
-    // fast-path: 无特殊字符直接返回
-    if !s.contains(|c: char| matches!(c, '\\' | '|' | '\n' | '\r' | '\t')) {
+    if !s.contains(SPECIAL_CHARS) {
         return s.to_string();
     }
     let mut out = String::with_capacity(s.len() + 8);
@@ -87,7 +112,7 @@ fn decode_str(s: &str) -> String {
     out
 }
 
-/// 拆一行为字段（考虑转义）。
+/// 拆一行为字段（考虑转义，仅 v2 格式使用）。
 ///
 /// 返回的每个字段仍是编码状态，调用方按需 decode。
 pub fn split_row(line: &str) -> Vec<String> {
@@ -116,54 +141,47 @@ mod tests {
     use super::*;
 
     #[test]
-    fn classify_types() {
-        assert_eq!(classify("txt"), FieldKind::Text);
-        assert_eq!(classify("str"), FieldKind::Atom);
-        assert_eq!(classify("List<str>"), FieldKind::Atom);
-        assert_eq!(classify("Map<int,str>"), FieldKind::Atom);
-        assert_eq!(classify("int"), FieldKind::Atom);
-        assert_eq!(classify("bool"), FieldKind::Atom);
-        assert_eq!(classify("List<int>"), FieldKind::Atom);
+    fn needs_escape_txt() {
+        assert!(needs_escape("txt"));
+        // non-txt
+        assert!(!needs_escape("str"));
+        assert!(!needs_escape("int"));
+        assert!(!needs_escape("bool"));
+        assert!(!needs_escape("List<str>"));
+        assert!(!needs_escape("Map<int,str>"));
+        assert!(!needs_escape("Tuple2<str,int>"));
+        // invalid → safe fallback
+        assert!(needs_escape("unknown"));
     }
 
     #[test]
-    fn round_trip_all_kinds() {
-        // Text 和 Atom 都走相同转义路径，都 round-trip 正确
-        let cases = [
-            "hello",
-            "中文",
-            "a|b",
-            "line1\nline2",
-            "col1\tcol2",
-            "path\\to\\file",
-            r#"<div class="box">Hi</div>"#,
-            "",
-            "\\",
-            "||",
-            "42",
-            "true",
-            "3.14",
-            "1;2;3",
-            "1,2",
-        ];
+    fn text_round_trip() {
+        let cases = ["hello", "中文", "a|b", "line1\nline2", "col1\tcol2",
+            "path\\to\\file", r#"<div>Hi</div>"#, "", "\\", "||"];
         for s in cases {
-            let enc = encode(s, FieldKind::Text);
-            let dec = decode(&enc, FieldKind::Text);
-            assert_eq!(dec, s, "Text round-trip failed for: {:?}", s);
-
-            let enc = encode(s, FieldKind::Atom);
-            let dec = decode(&enc, FieldKind::Atom);
-            assert_eq!(dec, s, "Atom round-trip failed for: {:?}", s);
+            let enc = encode(s, "txt");
+            let dec = decode(&enc, "txt");
+            assert_eq!(dec, s, "txt round-trip failed for: {:?}", s);
         }
     }
 
     #[test]
-    fn encoding_specific_chars() {
-        assert_eq!(encode("a|b", FieldKind::Text), "a\\|b");
-        assert_eq!(encode("a\nb", FieldKind::Text), "a\\nb");
-        assert_eq!(encode("a\\b", FieldKind::Text), "a\\\\b");
-        // Atom 同样转义
-        assert_eq!(encode("a|b", FieldKind::Atom), "a\\|b");
+    fn atom_passthrough_clean() {
+        for s in ["42", "true", "3.14", "1;2;3", "1,2", "hello", "中文"] {
+            assert_eq!(encode(s, "int"), s);
+            assert_eq!(decode(s, "int"), s);
+            assert_eq!(encode(s, "str"), s);
+            assert_eq!(decode(s, "str"), s);
+            assert_eq!(encode(s, "List<str>"), s);
+            assert_eq!(decode(s, "List<str>"), s);
+        }
+    }
+
+    #[test]
+    fn txt_encoding_specific() {
+        assert_eq!(encode("a|b", "txt"), "a\\|b");
+        assert_eq!(encode("a\nb", "txt"), "a\\nb");
+        assert_eq!(encode("a\\b", "txt"), "a\\\\b");
     }
 
     #[test]
@@ -181,8 +199,9 @@ mod tests {
     #[test]
     fn fast_path_no_special_chars() {
         let s = "hello 中文 <div>";
-        assert_eq!(encode(s, FieldKind::Text), s);
-        assert_eq!(decode(s, FieldKind::Text), s);
-        assert_eq!(encode(s, FieldKind::Atom), s);
+        assert_eq!(encode(s, "txt"), s);
+        assert_eq!(decode(s, "txt"), s);
+        assert_eq!(encode(s, "int"), s);
+        assert_eq!(decode(s, "int"), s);
     }
 }

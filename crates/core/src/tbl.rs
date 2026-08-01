@@ -1,7 +1,7 @@
 use std::path::Path;
 use anyhow::{Result, bail};
 use crate::model::*;
-use crate::tbl_str::{encode, decode, classify, split_row, FieldKind};
+use crate::tbl_str::{encode, decode, split_row};
 
 const INDENT: &str = "  ";
 
@@ -53,7 +53,7 @@ impl TableCodec for V2Codec {
         data_lines: &[&str],
     ) -> Result<Table> {
         let descs: Vec<String> = split_row(desc_line).iter()
-            .map(|s| decode(s, FieldKind::Text)).collect();
+            .map(|s| decode(s, "txt")).collect();
         let types: Vec<&str> = type_line.split('|').collect();
         let exports: Vec<&str> = export_line.split('|').collect();
         let field_names: Vec<&str> = field_line.split('|').collect();
@@ -69,14 +69,13 @@ impl TableCodec for V2Codec {
             });
         }
 
-        let kinds: Vec<FieldKind> = field_defs.iter().map(|f| classify(&f.tbl_type)).collect();
         let records: Vec<Vec<String>> = data_lines.iter()
             .filter(|l| !l.trim().is_empty())
             .map(|line| {
                 let raw = split_row(line);
                 raw.iter().enumerate().map(|(i, s)| {
-                    let kind = kinds.get(i).copied().unwrap_or(FieldKind::Text);
-                    decode(s, kind)
+                    let tp = field_defs.get(i).map(|f| f.tbl_type.as_str()).unwrap_or("txt");
+                    decode(s, tp)
                 }).collect()
             }).collect();
 
@@ -95,7 +94,7 @@ impl TableCodec for V2Codec {
         s.push_str("#!tbl v2\n");
         s.push_str("#mode table\n");
         s.push_str(&format!("#desc {}\n", fields.iter()
-            .map(|f| encode(&f.desc, FieldKind::Text)).collect::<Vec<_>>().join("|")));
+            .map(|f| encode(&f.desc, "txt")).collect::<Vec<_>>().join("|")));
         s.push_str(&format!("#export {}\n", fields.iter()
             .map(|f| f.export.to_tbl().to_string()).collect::<Vec<_>>().join("|")));
         s.push_str(&format!("#type {}\n", fields.iter()
@@ -103,10 +102,9 @@ impl TableCodec for V2Codec {
         s.push_str(&format!("#field {}\n", fields.iter()
             .map(|f| f.name.as_str()).collect::<Vec<_>>().join("|")));
         s.push_str("---\n");
-        let kinds: Vec<FieldKind> = fields.iter().map(|f| classify(&f.tbl_type)).collect();
         for row in &table.records {
             let encoded: Vec<String> = row.iter().enumerate()
-                .map(|(i, c)| encode(c, kinds.get(i).copied().unwrap_or(FieldKind::Text)))
+                .map(|(i, c)| encode(c, &fields[i].tbl_type))
                 .collect();
             s.push_str(&encoded.join("|"));
             s.push('\n');
@@ -175,9 +173,9 @@ impl TableCodec for V3Codec {
                 } else if let Some(ref mut r) = cur_record {
                     // record field: key=field name, value=cell
                     if let Some(idx) = field_defs.iter().position(|fd| fd.name == key) {
-                        let kind = classify(&field_defs[idx].tbl_type);
+                        let tp = field_defs[idx].tbl_type.clone();
                         while r.len() <= idx { r.push(String::new()); }
-                        r[idx] = decode(val, kind);
+                        r[idx] = decode(val, &tp);
                     }
                 }
             }
@@ -221,22 +219,20 @@ impl TableCodec for V3Codec {
             s.push('\n');
             s.push_str(&format!("@field {}\n", f.name));
             if !f.desc.is_empty() {
-                s.push_str(&format!("  desc:{}\n", encode(&f.desc, FieldKind::Text)));
+                s.push_str(&format!("  desc:{}\n", encode(&f.desc, "txt")));
             }
             s.push_str(&format!("  export:{}\n", f.export.to_tbl()));
             s.push_str(&format!("  type:{}\n", f.tbl_type));
         }
 
         // [id] records
-        let kinds: Vec<FieldKind> = fields.iter().map(|f| classify(&f.tbl_type)).collect();
         for row in &table.records {
             let id_val = row.first().map(String::as_str).unwrap_or("");
             s.push('\n');
             s.push_str(&format!("[{}]\n", id_val));
             for (i, cell) in row.iter().enumerate().skip(1) {
                 if cell.is_empty() { continue; }
-                let kind = kinds.get(i).copied().unwrap_or(FieldKind::Text);
-                s.push_str(&format!("  {}:{}\n", fields[i].name, encode(cell, kind)));
+                s.push_str(&format!("  {}:{}\n", fields[i].name, encode(cell, &fields[i].tbl_type)));
             }
         }
         s
@@ -330,11 +326,11 @@ fn parse_constant(path: &Path, data_lines: &[&str]) -> Result<TblFile> {
     for line in data_lines {
         let raw = split_row(line);
         if raw.len() < 3 { continue; }
-        let name = decode(&raw[0], FieldKind::Atom);
-        let tbl_type = decode(&raw[1], FieldKind::Atom);
-        let value = decode(&raw[2], classify(&tbl_type));
-        let export_raw = raw.get(3).map(|s| decode(s, FieldKind::Atom)).unwrap_or_default();
-        let desc = raw.get(4).map(|s| decode(s, FieldKind::Text)).unwrap_or_default();
+        let name = decode(&raw[0], "str");
+        let tbl_type = decode(&raw[1], "str");
+        let value = decode(&raw[2], &tbl_type);
+        let export_raw = raw.get(3).map(|s| decode(s, "str")).unwrap_or_default();
+        let desc = raw.get(4).map(|s| decode(s, "txt")).unwrap_or_default();
         entries.push(ConstEntry {
             name: name.trim().to_string(), tbl_type: tbl_type.trim().to_string(),
             value: value.trim().to_string(), export: Export::from_str(&export_raw),
@@ -355,9 +351,9 @@ fn parse_enum(path: &Path, data_lines: &[&str]) -> Result<TblFile> {
         let raw = split_row(line);
         if raw.is_empty() { continue; }
         entries.push(EnumEntry {
-            id: decode(&raw[0], FieldKind::Atom).trim().to_string(),
-            name: raw.get(1).map(|s| decode(s, FieldKind::Atom).trim().to_string()).unwrap_or_default(),
-            desc: raw.get(2).map(|s| decode(s, FieldKind::Text).trim().to_string()).unwrap_or_default(),
+            id: decode(&raw[0], "int").trim().to_string(),
+            name: raw.get(1).map(|s| decode(s, "str").trim().to_string()).unwrap_or_default(),
+            desc: raw.get(2).map(|s| decode(s, "txt").trim().to_string()).unwrap_or_default(),
         });
     }
     let name = path.file_stem().unwrap_or_default().to_string_lossy().to_string();
@@ -380,11 +376,10 @@ pub fn serialize_constant(constant: &Constant) -> String {
     s.push_str("#mode constant\n");
     s.push_str("---\n");
     for e in &constant.entries {
-        let value_kind = classify(&e.tbl_type);
         s.push_str(&format!("{}|{}|{}|{}|{}\n",
-            encode(&e.name, FieldKind::Atom), e.tbl_type,
-            encode(&e.value, value_kind), e.export.to_tbl(),
-            encode(&e.desc, FieldKind::Text),
+            encode(&e.name, "str"), e.tbl_type,
+            encode(&e.value, &e.tbl_type), e.export.to_tbl(),
+            encode(&e.desc, "txt"),
         ));
     }
     s
@@ -397,9 +392,9 @@ pub fn serialize_enum(enum_def: &EnumDef) -> String {
     s.push_str("---\n");
     for e in &enum_def.entries {
         s.push_str(&format!("{}|{}|{}\n",
-            encode(&e.id, FieldKind::Atom),
-            encode(&e.name, FieldKind::Atom),
-            encode(&e.desc, FieldKind::Text),
+            encode(&e.id, "int"),
+            encode(&e.name, "str"),
+            encode(&e.desc, "txt"),
         ));
     }
     s

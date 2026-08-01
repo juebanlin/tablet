@@ -157,10 +157,8 @@ fn render_table_skeleton(sec: &SchemaSection) -> String {
         writeln!(s, "[{}]", id_val).unwrap();
         for (i, v) in cells.iter().enumerate().skip(1) {
             if v.is_empty() { continue; }
-            let kind = sec.fields.get(i)
-                .map(|f| crate::tbl_str::classify(&f.tbl_type))
-                .unwrap_or(crate::tbl_str::FieldKind::Text);
-            let encoded = crate::tbl_str::encode(v, kind);
+            let tp = &sec.fields[i].tbl_type;
+            let encoded = crate::tbl_str::encode(v, tp);
             writeln!(s, "  {}:{}", sec.fields[i].name, encoded).unwrap();
         }
     }
@@ -180,15 +178,14 @@ fn render_constant_skeleton(sec: &SchemaSection) -> String {
         let value    = row.get(2)   .map(String::as_str).unwrap_or("");
         let export   = row.get(3)   .map(String::as_str).unwrap_or("cs");
         let desc     = row.get(4)   .map(String::as_str).unwrap_or("");
-        let value_kind = crate::tbl_str::classify(tbl_type);
         writeln!(
             s,
             "{}|{}|{}|{}|{}",
-            crate::tbl_str::encode(name, crate::tbl_str::FieldKind::Atom),
-            crate::tbl_str::encode(tbl_type, crate::tbl_str::FieldKind::Atom),
-            crate::tbl_str::encode(value, value_kind),
+            crate::tbl_str::encode(name, "str"),
+            crate::tbl_str::encode(tbl_type, "str"),
+            crate::tbl_str::encode(value, tbl_type),
             display_export(export),
-            crate::tbl_str::encode(desc, crate::tbl_str::FieldKind::Text),
+            crate::tbl_str::encode(desc, "txt"),
         ).unwrap();
     }
     s
@@ -207,9 +204,9 @@ fn render_enum_skeleton(sec: &SchemaSection) -> String {
         writeln!(
             s,
             "{}|{}|{}",
-            crate::tbl_str::encode(id, crate::tbl_str::FieldKind::Atom),
-            crate::tbl_str::encode(name, crate::tbl_str::FieldKind::Text),
-            crate::tbl_str::encode(desc, crate::tbl_str::FieldKind::Text),
+            crate::tbl_str::encode(id, "int"),
+            crate::tbl_str::encode(name, "str"),
+            crate::tbl_str::encode(desc, "txt"),
         ).unwrap();
     }
     s
