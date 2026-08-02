@@ -6,8 +6,10 @@ export struct EsRow {
     group: string,
     node: string,
     checked: bool,
+    lrows: int, lcols: int,    // tablet 行数×列数
     la: int, lr: int, lm: int,
     left_only: bool,
+    rrows: int, rcols: int,    // xlsx 行数×列数
     ra: int, rr: int, rm: int,
     right_sheet: string,
     right_xlsx: string,
@@ -49,13 +51,13 @@ export component ExcelSyncDialog inherits Rectangle {
                             Text { text: "节点/Sheet"; font-size: Theme.fs-tiny; color: Theme.text-secondary; vertical-alignment: center; }
                         }
                         Rectangle { width: 60px;
-                            Text { text: "tablet"; font-size: Theme.fs-tiny; color: Theme.text-secondary; vertical-alignment: center; }
+                            Text { text: "tablet(行×列)"; font-size: Theme.fs-tiny; color: Theme.text-secondary; vertical-alignment: center; }
                         }
                         Rectangle { width: 160px;
                             Text { text: "操作"; font-size: Theme.fs-tiny; color: Theme.text-secondary; vertical-alignment: center; }
                         }
                         Rectangle { width: 60px;
-                            Text { text: "Excel"; font-size: Theme.fs-tiny; color: Theme.text-secondary; vertical-alignment: center; }
+                            Text { text: "Excel(行×列)"; font-size: Theme.fs-tiny; color: Theme.text-secondary; vertical-alignment: center; }
                         }
                     }
                 }

@@ -235,10 +235,20 @@ pub fn read_group_from_xlsx(path: &Path, group: &Group, force: bool) -> Result<G
                 let matched = classify_header(&sheet.headers, &table.schema.fields);
                 if matched == HeaderMatch::Invalid || matched == HeaderMatch::Mismatch { continue; }
             }
-            let n = table.schema.fields.len().max(1);
-            let records: Vec<Vec<String>> = sheet.rows.iter()
-                .map(|r| { let mut c = r.clone(); c.resize(n, String::new()); c })
-                .collect();
+            // Map xlsx columns to tablet columns by name, not position
+            let col_map = map_columns(&table.schema.fields, &sheet.headers);
+            let n = table.schema.fields.len();
+            let records: Vec<Vec<String>> = sheet.rows.iter().map(|xlsx_row| {
+                let mut tablet_row = vec![String::new(); n];
+                for (ci, col) in col_map.iter().enumerate() {
+                    if let Some(xcol) = col {
+                        if let Some(val) = xlsx_row.get((*xcol as usize).saturating_sub(1)) {
+                            tablet_row[ci] = val.clone();
+                        }
+                    }
+                }
+                tablet_row
+            }).collect();
             tables.push((sheet.name.clone(), records));
         }
     }

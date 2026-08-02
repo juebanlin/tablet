@@ -32,15 +32,19 @@ pub struct SyncRow {
     pub node_name: String,
     pub checked: bool,
     pub left_exists: bool,
+    pub left_rows: usize,      // tablet 行数
+    pub left_cols: usize,      // tablet 列数
     pub left_diff: DiffCount,
     pub right_exists: bool,
+    pub right_rows: usize,     // xlsx 行数
+    pub right_cols: usize,     // xlsx 列数
     pub right_diff: DiffCount,
     pub right_sheet_name: String,
     pub right_blocks_reason: String,
     pub right_xlsx_name: String,
     pub headers_match: bool,
-    pub tbl_more_cols: bool,   // tablet 比 xlsx 多了列
-    pub xlsx_more_cols: bool,  // xlsx 比 tablet 多了列（非策划附加列）
+    pub tbl_more_cols: bool,
+    pub xlsx_more_cols: bool,
     pub headers_mismatch: bool,
     pub actions: Vec<SyncAction>,
 }
@@ -85,8 +89,8 @@ pub fn load_sync_data(state: &AppState) -> Vec<SyncRow> {
                 if !exists {
                     rows.push(SyncRow {
                         group: group.name.clone(), node_name: sheet.name.clone(), checked: false,
-                        left_exists: false, left_diff: DiffCount::default(),
-                        right_exists: true, right_diff: DiffCount::default(),
+                        left_exists: false, left_rows: 0, left_cols: 0, left_diff: DiffCount::default(),
+                        right_exists: true, right_rows: 0, right_cols: 0, right_diff: DiffCount::default(),
                         right_sheet_name: sheet.name.clone(),
                         right_blocks_reason: String::new(),
                         right_xlsx_name: group.name.clone(),
@@ -107,8 +111,8 @@ fn add_table_row(
 ) {
     let mut row = SyncRow {
         group: group.name.clone(), node_name: table.name.clone(), checked: true,
-        left_exists: true, left_diff: DiffCount::default(),
-        right_exists: xlsx_sheet.is_some(), right_diff: DiffCount::default(),
+        left_exists: true, left_rows: table.records.len(), left_cols: table.schema.fields.len(), left_diff: DiffCount::default(),
+        right_exists: xlsx_sheet.is_some(), right_rows: 0, right_cols: 0, right_diff: DiffCount::default(),
         right_sheet_name: String::new(), right_blocks_reason: String::new(),
         right_xlsx_name: xlsx_name.unwrap_or("").into(),
         headers_match: false, tbl_more_cols: false, xlsx_more_cols: false, headers_mismatch: false,
@@ -117,6 +121,8 @@ fn add_table_row(
 
     if let Some(sheet) = xlsx_sheet {
         row.right_sheet_name = sheet.name.clone();
+        row.right_rows = sheet.rows.len();
+        row.right_cols = sheet.headers.len();
         let n_tablet = table.schema.fields.len();
         let n_xlsx = sheet.headers.len();
         let tbl_has_more = n_tablet > n_xlsx;
@@ -179,13 +185,11 @@ pub fn push(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
         group: r.group.clone().into(),
         node: r.node_name.clone().into(),
         checked: r.checked,
-        la: r.left_diff.added as i32,
-        lr: r.left_diff.removed as i32,
-        lm: r.left_diff.modified as i32,
+        lrows: r.left_rows as i32, lcols: r.left_cols as i32,
+        la: r.left_diff.added as i32, lr: r.left_diff.removed as i32, lm: r.left_diff.modified as i32,
         left_only: !r.right_exists && r.left_exists,
-        ra: r.right_diff.added as i32,
-        rr: r.right_diff.removed as i32,
-        rm: r.right_diff.modified as i32,
+        rrows: r.right_rows as i32, rcols: r.right_cols as i32,
+        ra: r.right_diff.added as i32, rr: r.right_diff.removed as i32, rm: r.right_diff.modified as i32,
         right_sheet: r.right_sheet_name.clone().into(),
         right_xlsx: r.right_xlsx_name.clone().into(),
         right_only: !r.left_exists && r.right_exists,
@@ -284,9 +288,18 @@ fn execute_action(state: &Rc<RefCell<AppState>>, row_idx: i32, act: i32) -> Resu
             let project = st.engine.find_project_mut(&pid).ok_or("找不到项目")?;
             let group = project.groups.iter_mut()
                 .find(|g| g.name == *group_name).ok_or("找不到组")?;
-            for (tname, records) in &patches.tables {
+            // Merge: only overwrite columns that xlsx has. Tablet-only columns are preserved.
+            for (tname, xlsx_records) in &patches.tables {
                 if let Some(table) = group.tables.iter_mut().find(|t| &t.name == tname) {
-                    table.records = records.clone();
+                    for (ri, xlsx_row) in xlsx_records.iter().enumerate() {
+                        while table.records.len() <= ri { table.records.push(vec![String::new(); table.schema.fields.len()]); }
+                        for (ci, val) in xlsx_row.iter().enumerate() {
+                            if ci < table.schema.fields.len() && !val.is_empty() {
+                                while table.records[ri].len() <= ci { table.records[ri].push(String::new()); }
+                                table.records[ri][ci] = val.clone();
+                            }
+                        }
+                    }
                     table.update_dirty();
                 }
             }
