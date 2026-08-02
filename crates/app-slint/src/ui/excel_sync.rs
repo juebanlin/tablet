@@ -235,8 +235,17 @@ fn execute_action(state: &Rc<RefCell<AppState>>, row_idx: i32, act: i32) -> Resu
         load_sync_data(&st)
     };
     let row = rows.get(row_idx as usize).ok_or("行索引无效")?;
+
+    // Guard: don't push/pull if there's no actual diff
+    if matches!(act, 1 | 2) {
+        let has_diff = row.left_diff.added > 0 || row.left_diff.modified > 0
+            || row.left_diff.removed > 0 || row.right_diff.removed > 0;
+        if !has_diff {
+            return Err("数据已同步，无需操作".into());
+        }
+    }
+
     let group_name = &row.group;
-    let _node_name = &row.node_name;
 
     let pid = {
         let st = state.borrow();
