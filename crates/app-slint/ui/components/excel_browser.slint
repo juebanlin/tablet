@@ -1,0 +1,95 @@
+// Excel 文件浏览器：列出 .excel/ 目录下的 xlsx 文件。
+// 支持多选、双击打开。
+
+import { Theme } from "../theme.slint";
+import { ScrollView } from "std-widgets.slint";
+
+export component ExcelBrowser inherits Rectangle {
+    in property <[string]> files;
+    in-out property <[bool]> selected: [];
+    in property <bool> has-selection: false;
+
+    callback sync-clicked();
+    callback delete-clicked();
+    callback refresh-clicked();
+    callback file-opened(int);
+
+    Rectangle {
+        height: 22px;
+        background: Theme.bg-toolbar;
+        border-color: Theme.border-light;
+        border-width: 1px;
+        HorizontalLayout {
+            spacing: Theme.sp-1;
+            padding-left: Theme.sp-2;
+            alignment: start;
+            Rectangle {
+                width: 40px; height: 18px;
+                background: Theme.bg-row-hover;
+                border-radius: 2px;
+                Text {
+                    text: "同步";
+                    font-size: Theme.fs-tiny;
+                    color: Theme.text-secondary;
+                    vertical-alignment: center;
+                    horizontal-alignment: center;
+                }
+                TouchArea { clicked => { root.sync-clicked(); } }
+            }
+            Rectangle {
+                width: 40px; height: 18px;
+                background: Theme.bg-row-hover;
+                border-radius: 2px;
+                Text {
+                    text: "刷新";
+                    font-size: Theme.fs-tiny;
+                    color: Theme.text-secondary;
+                    vertical-alignment: center;
+                    horizontal-alignment: center;
+                }
+                TouchArea { clicked => { root.refresh-clicked(); } }
+            }
+        }
+    }
+
+    ScrollView {
+        VerticalLayout {
+            padding: 4px;
+            spacing: 0;
+            for file[i] in root.files : Rectangle {
+                height: 22px;
+                background: Math.mod(i, 2) == 0 ? Theme.bg-panel : Theme.bg-row-alt;
+                HorizontalLayout {
+                    padding-left: 4px;
+                    spacing: 4px;
+                    Rectangle {
+                        width: 16px; height: 16px;
+                        background: Theme.bg-panel;
+                        border-color: Theme.border-light;
+                        border-width: 1px;
+                        TouchArea { clicked => { root.toggle-file(i); } }
+                        Text {
+                            text: " ";
+                            font-size: Theme.fs-tiny;
+                            color: Theme.text-primary;
+                            vertical-alignment: center;
+                            horizontal-alignment: center;
+                        }
+                    }
+                    Text {
+                        text: file;
+                        font-size: Theme.fs-small;
+                        color: Theme.text-primary;
+                        vertical-alignment: center;
+                    }
+                }
+                TouchArea {
+                    clicked => { root.toggle-file(i); }
+                    double-clicked => { root.file-opened(i); }
+                }
+            }
+        }
+    }
+
+    callback toggle-file(int);
+}

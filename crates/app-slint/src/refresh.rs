@@ -17,14 +17,14 @@ use crate::{dialogs, ui};
 pub fn after_tree_change(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
     ui::tree::push(ui_h, state);
     ui::grid::push(ui_h, state);
-    ui::log_panel::push(ui_h, state);
+    ui::bottom_panel::push_log(ui_h, state);
 }
 
 /// grid 单元格写入或表头改了。dirty 标记会冒到树面板，所以也刷树。
 pub fn after_grid_edit(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
     ui::grid::push(ui_h, state);
     ui::tree::push(ui_h, state);
-    ui::log_panel::push(ui_h, state);
+    ui::bottom_panel::push_log(ui_h, state);
 }
 
 /// PendingAction（input / confirm 对话框）走完。
@@ -33,7 +33,7 @@ pub fn after_pending_action(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
     dialogs::pending::push_confirm(ui_h, state);
     ui::tree::push(ui_h, state);
     ui::grid::push(ui_h, state);
-    ui::log_panel::push(ui_h, state);
+    ui::bottom_panel::push_log(ui_h, state);
 }
 
 /// 右键菜单 action 走完后的标准 fan-out（含可能被打开的 input/confirm/new-project / 数据导出 / schema 导出 / schema 导入合并）。
@@ -48,12 +48,12 @@ pub fn after_ctx_menu(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
     dialogs::schema_io::push_import(ui_h, state);
     ui::tree::push(ui_h, state);
     ui::grid::push(ui_h, state);
-    ui::log_panel::push(ui_h, state);
+    ui::bottom_panel::push_log(ui_h, state);
 }
 
 /// 仅日志（罕见：单独打 log 不动业务）。
 pub fn after_log(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
-    ui::log_panel::push(ui_h, state);
+    ui::bottom_panel::push_log(ui_h, state);
 }
 
 /// 全局设置对话框关闭后。
@@ -61,14 +61,15 @@ pub fn after_global_settings(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
     dialogs::global_settings::push(ui_h, state);
     ui::tree::push(ui_h, state);
     ui::grid::push(ui_h, state);
-    ui::log_panel::push(ui_h, state);
+    ui::bottom_panel::push_log(ui_h, state);
 }
 
 /// 启动时的初次 push（不调用 reset_view_after_reload，避免覆盖 AppState::load 已计算好的展开集）。
 pub fn initial(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
     ui::tree::push(ui_h, state);
     ui::grid::push(ui_h, state);
-    ui::log_panel::push(ui_h, state);
+    ui::bottom_panel::push_log(ui_h, state);
+    ui::bottom_panel::push_excel_files(ui_h, state);
     dialogs::context_menu::push(ui_h, state);
     dialogs::pending::push_input(ui_h, state);
     dialogs::pending::push_confirm(ui_h, state);

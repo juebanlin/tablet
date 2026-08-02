@@ -19,7 +19,7 @@ import { Toolbar } from "components/toolbar.slint";
 import { TreeSection, TreeNode } from "components/tree_section.slint";
 import { GridSection } from "components/grid_section.slint";
 import { GridArea, HeaderCell, DataCell, DataRow, CellKind } from "components/grid_area.slint";
-import { LogPanel, LogEntry } from "components/log_panel.slint";
+import { BottomPanel } from "components/bottom_panel.slint";
 import { TypeSelector, RefItem, TsParamSlot } from "dialogs/type_selector.slint";
 import { RefPicker, RefRow, RefHeader } from "dialogs/ref_picker.slint";
 import { ExportDialog } from "dialogs/export_dialog.slint";
@@ -32,7 +32,7 @@ import { GlobalSettingsDialog } from "dialogs/global_settings.slint";
 import { InputDialog } from "dialogs/input_dialog.slint";
 import { ConfirmDialog } from "dialogs/confirm_dialog.slint";
 
-export { TreeNode, HeaderCell, DataCell, DataRow, CellKind, LogEntry, RefItem, TsParamSlot, RefRow, RefHeader, SchemaItem, CtxMenuItem, TemplateItem }
+export { TreeNode, HeaderCell, DataCell, DataRow, CellKind, RefItem, TsParamSlot, RefRow, RefHeader, SchemaItem, CtxMenuItem, TemplateItem }
 
 export component AppWindow inherits Window {
     /// 应用版本号，启动时由 Rust 端从 env!("CARGO_PKG_VERSION") 注入。
@@ -71,6 +71,13 @@ export component AppWindow inherits Window {
 
     // ── Toolbar ─────────────────────────────────────────────
     callback toolbar-btn-clicked(string);
+    // BottomPanel
+    callback bottom-tab-changed(int);
+    callback clear-log-clicked();
+    callback excel-sync-clicked();
+    callback excel-delete-clicked();
+    callback excel-refresh-clicked();
+    callback excel-file-opened(int);
 
     // ── MenuBar 回调 ────────────────────────────────────────
     /// 「关于」菜单 → 「检查更新」点击触发；Rust 端用 open::that 跳 GitHub 仓库。
@@ -167,9 +174,12 @@ export component AppWindow inherits Window {
     in property <string> selection-info;
     in property <string> hover-info;
 
-    // ── LogPanel ────────────────────────────────────────────
-    in property <[LogEntry]> logs;
+    // ── BottomPanel (Log + Excel) ─────────────────────────
     in property <string> logs-text;
+    in property <[string]> excel-files;
+    in-out property <[bool]> excel-selected: [];
+    in property <bool> excel-has-selection: false;
+    in-out property <int> bottom-tab: 0;
 
     // ── Dialog: TypeSelector ────────────────────────────────
     in-out property <bool> dlg-type-open: false;
@@ -712,10 +722,19 @@ export component AppWindow inherits Window {
             }
         }
 
-        LogPanel {
-            log-height: root.log-h;
-            logs: root.logs;
-            text-flat: root.logs-text;
+        BottomPanel {
+            panel-height: root.log-h;
+            log-text: root.logs-text;
+            excel-files: root.excel-files;
+            excel-selected: root.excel-selected;
+            excel-has-selection: root.excel-has-selection;
+            bottom-tab <=> root.bottom-tab;
+            bottom-tab-changed(i) => { root.bottom-tab-changed(i); }
+            clear-log-clicked => { root.clear-log-clicked(); }
+            excel-sync-clicked => { root.excel-sync-clicked(); }
+            excel-delete-clicked => { root.excel-delete-clicked(); }
+            excel-refresh-clicked => { root.excel-refresh-clicked(); }
+            excel-file-opened(idx) => { root.excel-file-opened(idx); }
         }
     }
 
@@ -1243,11 +1262,7 @@ export component AppWindowPreview inherits AppWindow {
         ], row-color: #ffe0e0, selected: false },
     ];
 
-    logs: [
-        { time: "14:32:01", msg: "已加载 hero/HeroBase.tbl (3条)", level: 0 },
-        { time: "14:33:15", msg: "新建 Table: hero/HeroSkill", level: 0 },
-        { time: "14:34:02", msg: "[验证] hero/HeroBase D2: \"4,5\" 列表元素类型不匹配, 示例: 1;2;3", level: 2 },
-    ];
+    logs-text: "14:32:01 已加载 hero/HeroBase.tbl (3条)\n14:33:15 新建 Table: hero/HeroSkill\n14:34:02 [验证] hero/HeroBase D2: \"4,5\" 列表元素类型不匹配, 示例: 1;2;3";
 
     sx-items: [
         { indent: 0, icon: "📁", name: "hero", group-name: "hero", checked: true, tristate: false, is-conflict: false },

@@ -1,0 +1,106 @@
+// 底部面板：TabBar + 日志/Excel文件 两个 tab 切换。
+// 取代原独立 LogPanel，splitter 拉线位置保持不变。
+
+import { Theme } from "../theme.slint";
+import { ScrollView } from "std-widgets.slint";
+import { TabBar } from "tab_bar.slint";
+import { ExcelBrowser } from "excel_browser.slint";
+
+export component BottomPanel inherits Rectangle {
+    // 日志 tab
+    in property <string> log-text: "";
+    // Excel 文件 tab
+    in property <[string]> excel-files;
+    // 已选中的文件
+    in-out property <[bool]> excel-selected: [];
+    in property <bool> excel-has-selection: false;
+
+    // 面板高度（由 app.slint 的 root.log-h 控制，保持 splitter 兼容）
+    in property <length> panel-height: 120px;
+    height: root.panel-height;
+    background: Theme.bg-panel;
+    border-color: Theme.border-light;
+    border-width: 1px;
+
+    VerticalLayout {
+        spacing: 0;
+
+        TabBar {
+            labels: ["日志", "Excel 文件"];
+            current: root.bottom-tab;
+            changed(i) => { root.bottom-tab = i; }
+        }
+
+        // 日志内容区
+        if root.bottom-tab == 0 : Rectangle {
+            vertical-stretch: 1;
+            background: Theme.bg-panel;
+            VerticalLayout {
+                spacing: 0;
+                // 日志按钮行
+                Rectangle {
+                    height: 22px;
+                    background: Theme.bg-toolbar;
+                    border-color: Theme.border-light;
+                    border-width: 1px;
+                    HorizontalLayout {
+                        padding-left: Theme.sp-2;
+                        alignment: start;
+                        Rectangle {
+                            width: 48px; height: 18px;
+                            background: Theme.bg-row-hover;
+                            border-radius: 2px;
+                            Text {
+                                text: "清空";
+                                font-size: Theme.fs-tiny;
+                                color: Theme.text-secondary;
+                                vertical-alignment: center;
+                                horizontal-alignment: center;
+                            }
+                            TouchArea { clicked => { root.clear-log-clicked(); } }
+                        }
+                    }
+                }
+                // 日志内容
+                ScrollView {
+                    VerticalLayout {
+                        padding: Theme.sp-2;
+                        spacing: 0;
+                        TextInput {
+                            text: root.log-text;
+                            read-only: true;
+                            single-line: false;
+                            wrap: word-wrap;
+                            font-size: Theme.fs-tiny;
+                            color: Theme.text-secondary;
+                        }
+                    }
+                }
+            }
+        }
+
+        // Excel 文件内容区
+        if root.bottom-tab == 1 : Rectangle {
+            vertical-stretch: 1;
+            background: Theme.bg-panel;
+            ExcelBrowser {
+                files: root.excel-files;
+                selected: root.excel-selected;
+                has-selection: root.excel-has-selection;
+                sync-clicked => { root.excel-sync-clicked(); }
+                delete-clicked => { root.excel-delete-clicked(); }
+                refresh-clicked => { root.excel-refresh-clicked(); }
+                file-opened(idx) => { root.excel-file-opened(idx); }
+            }
+        }
+    }
+
+    // ══ properties & callbacks ══
+    in-out property <int> bottom-tab: 0;
+    callback bottom-tab-changed(int);
+    callback clear-log-clicked();
+    callback excel-sync-clicked();
+    callback excel-delete-clicked();
+    callback excel-refresh-clicked();
+    callback excel-file-opened(int);
+}
