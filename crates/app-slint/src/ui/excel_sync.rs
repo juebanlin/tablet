@@ -190,10 +190,12 @@ pub fn wire(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
     ui.on_es_action(move |row_idx, act| {
         let Some(u) = ui_h.upgrade() else { return };
         let result = execute_action(&s, row_idx, act);
-        match result {
+        match &result {
             Ok(msg) => { s.borrow_mut().engine.ui_log(format!("[同步] {}", msg)); }
             Err(e) => { s.borrow_mut().engine.ui_log(format!("[同步失败] {}", e)); }
         }
+        // 刷新主界面——同步可能修改了当前打开的表
+        crate::refresh::after_grid_edit(&u, &s);
         push(&u, &s);
     });
 }
@@ -219,16 +221,18 @@ fn execute_action(state: &Rc<RefCell<AppState>>, row_idx: i32, act: i32) -> Resu
     let xlsx_path = excel_dir.join(format!("{}.xlsx", group_name));
 
     match act {
-        // 1=PushData or 3=PushWithCols or 7=Create: tablet → xlsx
+        // 1=PushData (data only), 3=PushWithCols, 7=Create (full overwrite)
         1 | 3 | 7 => {
+            let mode = match act { 1 => excel_sync::SyncMode::DataOnly, 3 => excel_sync::SyncMode::WithColumns, _ => excel_sync::SyncMode::Full };
             std::fs::create_dir_all(&excel_dir).map_err(|e| format!("创建 .excel 目录失败: {}", e))?;
             let mut st = state.borrow_mut();
             let project = st.engine.find_project_mut(&pid).ok_or("找不到项目")?;
             let group = project.groups.iter()
                 .find(|g| g.name == *group_name).ok_or("找不到组")?;
-            excel_sync::sync_group_to_xlsx(&xlsx_path, group)
+            excel_sync::sync_group_to_xlsx(&xlsx_path, group, mode)
                 .map_err(|e| format!("写入 xlsx 失败: {}", e))?;
-            Ok(format!("已同步 {} → {}", group_name, xlsx_path.display()))
+            let mode_label = match mode { excel_sync::SyncMode::DataOnly => "(仅数据)", excel_sync::SyncMode::WithColumns => "(含列)", _ => "" };
+            Ok(format!("已同步 {} → {} {}", group_name, xlsx_path.display(), mode_label))
         }
         // 2=PullData or 8=Import: xlsx → tablet
         2 | 8 => {

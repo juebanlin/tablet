@@ -15,4 +15,4 @@ encoding_rs = "0.8"
 pinyin = "0.10"
 rust_xlsxwriter = "0.95"
 calamine = "0.35"
-# umya-spreadsheet = "3" — 保留现有格式化+编辑 xlsx，Phase 4 启用
+umya-spreadsheet = "3"
