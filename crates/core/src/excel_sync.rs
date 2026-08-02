@@ -230,14 +230,16 @@ pub struct GroupPatch {
     pub tables: Vec<(String, Vec<Vec<String>>)>,
 }
 
-pub fn read_group_from_xlsx(path: &Path, group: &Group) -> Result<GroupPatch> {
+pub fn read_group_from_xlsx(path: &Path, group: &Group, force: bool) -> Result<GroupPatch> {
     let sheets = read_xlsx_sheets(path)?;
     let mut tables = Vec::new();
     for sheet in &sheets {
         if let Some(table) = group.tables.iter().find(|t| t.name == sheet.name) {
-            let matched = classify_header(&sheet.headers, &table.schema.fields);
-            if matched == HeaderMatch::Invalid || matched == HeaderMatch::Mismatch { continue; }
-            let n = table.schema.fields.len();
+            if !force {
+                let matched = classify_header(&sheet.headers, &table.schema.fields);
+                if matched == HeaderMatch::Invalid || matched == HeaderMatch::Mismatch { continue; }
+            }
+            let n = table.schema.fields.len().max(1);
             let records: Vec<Vec<String>> = sheet.rows.iter()
                 .map(|r| { let mut c = r.clone(); c.resize(n, String::new()); c })
                 .collect();

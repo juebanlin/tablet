@@ -219,27 +219,26 @@ fn execute_action(state: &Rc<RefCell<AppState>>, row_idx: i32, act: i32) -> Resu
     let xlsx_path = excel_dir.join(format!("{}.xlsx", group_name));
 
     match act {
-        // 1=PushData (data only), 3=PushWithCols, 7=Create (full overwrite)
-        1 | 3 | 7 => {
+        // 1=PushData 3=PushWithCols 5=ForcePush 7=Create: tablet → xlsx
+        1 | 3 | 5 | 7 => {
             let mode = match act { 1 => excel_sync::SyncMode::DataOnly, 3 => excel_sync::SyncMode::WithColumns, _ => excel_sync::SyncMode::Full };
+            let mode_label = match mode { excel_sync::SyncMode::DataOnly => "(仅数据)", excel_sync::SyncMode::WithColumns => "(含列)", excel_sync::SyncMode::Full => "(强制覆写)", _ => "" };
             std::fs::create_dir_all(&excel_dir).map_err(|e| format!("创建 .excel 目录失败: {}", e))?;
             let mut st = state.borrow_mut();
             let project = st.engine.find_project_mut(&pid).ok_or("找不到项目")?;
-            let group = project.groups.iter()
-                .find(|g| g.name == *group_name).ok_or("找不到组")?;
-            excel_sync::sync_group_to_xlsx(&xlsx_path, group, mode)
-                .map_err(|e| format!("写入 xlsx 失败: {}", e))?;
-            let mode_label = match mode { excel_sync::SyncMode::DataOnly => "(仅数据)", excel_sync::SyncMode::WithColumns => "(含列)", _ => "" };
+            let group = project.groups.iter().find(|g| g.name == *group_name).ok_or("找不到组")?;
+            excel_sync::sync_group_to_xlsx(&xlsx_path, group, mode).map_err(|e| format!("写入 xlsx 失败: {}", e))?;
             Ok(format!("已同步 {} → {} {}", group_name, xlsx_path.display(), mode_label))
         }
-        // 2=PullData or 8=Import: xlsx → tablet
-        2 | 8 => {
+        // 2=PullData or 6=ForcePull or 8=Import: xlsx → tablet
+        2 | 6 | 8 => {
+            let force = act == 6;
             let mut st = state.borrow_mut();
             let patches = {
                 let project = st.engine.find_project(&pid).ok_or("找不到项目")?;
                 let group = project.groups.iter()
                     .find(|g| g.name == *group_name).ok_or("找不到组")?;
-                excel_sync::read_group_from_xlsx(&xlsx_path, group)
+                excel_sync::read_group_from_xlsx(&xlsx_path, group, force)
                     .map_err(|e| format!("读取 xlsx 失败: {}", e))?
             };
             let project = st.engine.find_project_mut(&pid).ok_or("找不到项目")?;
