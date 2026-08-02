@@ -13,6 +13,7 @@ pub mod validate;
 pub mod ops;
 pub mod export;
 pub mod excel;
+pub mod excel_sync;
 pub mod search;
 pub mod test_util;
 pub mod config_fix;
