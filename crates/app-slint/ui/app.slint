@@ -31,6 +31,7 @@ import { ProjectSettingsDialog } from "dialogs/project_settings.slint";
 import { GlobalSettingsDialog } from "dialogs/global_settings.slint";
 import { InputDialog } from "dialogs/input_dialog.slint";
 import { ConfirmDialog } from "dialogs/confirm_dialog.slint";
+import { ExcelSyncDialog, EsRow } from "dialogs/excel_sync_dialog.slint";
 
 export { TreeNode, HeaderCell, DataCell, DataRow, CellKind, RefItem, TsParamSlot, RefRow, RefHeader, SchemaItem, CtxMenuItem, TemplateItem }
 
@@ -78,6 +79,13 @@ export component AppWindow inherits Window {
     callback excel-delete-clicked();
     callback excel-refresh-clicked();
     callback excel-file-opened(int);
+
+    // ── Excel Sync Dialog ────────────────────────────────
+    in-out property <bool> dlg-excel-sync-open: false;
+    in property <[EsRow]> es-rows;
+    callback es-close();
+    callback es-refresh();
+    callback es-action(int, int);
 
     // ── MenuBar 回调 ────────────────────────────────────────
     /// 「关于」菜单 → 「检查更新」点击触发；Rust 端用 open::that 跳 GitHub 仓库。
@@ -1112,6 +1120,15 @@ export component AppWindow inherits Window {
         message: root.dlg-confirm-message;
         confirm => { root.cf-confirm(); }
         cancel => { root.cf-cancel(); }
+    }
+
+    // Excel 同步面板
+    ExcelSyncDialog {
+        open: root.dlg-excel-sync-open;
+        rows: root.es-rows;
+        refresh => { root.es-refresh(); }
+        close => { root.es-close(); }
+        action(row, act) => { root.es-action(row, act); }
     }
 
     // ContextMenu 必须放在最顶层（z 在所有 dialog 之上），点击 item 触发 ctx-menu-action

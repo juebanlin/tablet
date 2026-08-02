@@ -938,6 +938,8 @@ pub struct AppState {
     /// 当前 Excel 编辑会话（@plans §2.4）；同一时刻全局只允许一个。
     /// `Some` = 编辑中（GUI 写入禁用）；`None` = 空闲。
     pub excel_session: Option<crate::excel_bridge::ExcelSession>,
+    /// Excel 同步面板是否打开。
+    pub excel_sync_open: bool,
 }
 
 impl AppState {
@@ -1008,6 +1010,7 @@ impl AppState {
             project_sort,
             project_order,
             excel_session: None,
+            excel_sync_open: false,
         }, config_fixed))
     }
 

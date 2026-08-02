@@ -101,9 +101,10 @@ pub fn wire(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
     let s = state.clone();
     let ui_h2 = ui.as_weak();
     ui.on_excel_sync_clicked(move || {
-        let st = s.borrow();
-        let _ = st; // sync panel will be implemented in Phase 2
-        // TODO: open Excel Sync dialog
+        super::excel_sync::open(&s);
+        if let Some(u) = ui_h2.upgrade() {
+            super::excel_sync::push(&u, &s);
+        }
     });
 
     let s = state.clone();

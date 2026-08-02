@@ -239,6 +239,7 @@ fn run_gui(workdir_arg: Option<PathBuf>) -> anyhow::Result<()> {
     ui::focus::wire(&app_window, &app_state);
     ui::log_panel::wire(&app_window, &app_state);
     ui::bottom_panel::wire(&app_window, &app_state);
+    ui::excel_sync::wire(&app_window, &app_state);
     dialogs::context_menu::wire(&app_window, &app_state);
     dialogs::pending::wire(&app_window, &app_state);
     dialogs::type_selector::wire(&app_window, &app_state);
