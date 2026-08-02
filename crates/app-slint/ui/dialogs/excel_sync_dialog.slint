@@ -94,17 +94,20 @@ export component ExcelSyncDialog inherits Rectangle {
                                         TouchArea { clicked => { root.action(i, 1); } }
                                     }
                                     if row.hdr_match || row.tbl_more_cols || row.xlsx_more_cols : Rectangle {
-                                        border-color: Theme.border-light; border-width: 1px; border-radius: 2px;
-                                        width: 42px; height: 18px; background: transparent;
+                                        border-color: row.has_diff ? Theme.mark-modified : Theme.text-disabled;
+                                        border-width: 1px; border-radius: 2px; width: 42px; height: 18px;
+                                        background: transparent;
                                         Text { text: "←数据"; font-size: Theme.fs-tiny;
-                                            color: Theme.text-secondary; vertical-alignment: center; horizontal-alignment: center; }
+                                            color: row.has_diff ? Theme.mark-modified : Theme.text-disabled;
+                                            vertical-alignment: center; horizontal-alignment: center; }
                                         TouchArea { clicked => { root.action(i, 2); } }
                                     }
                                     // 补列→ (tablet has more cols)
                                     if row.tbl_more_cols : Rectangle {
                                         border-color: Theme.text-info; border-width: 1px; border-radius: 2px;
                                         width: 42px; height: 18px; background: transparent;
-                                        Text { text: "补列→"; font-size: Theme.fs-tiny; color: Theme.text-info;
+                                        Text { text: "补列→"; font-size: Theme.fs-tiny;
+                                            color: row.has_diff ? Theme.text-info : Theme.text-disabled;
                                             vertical-alignment: center; horizontal-alignment: center; }
                                         TouchArea { clicked => { root.action(i, 3); } }
                                     }
@@ -112,7 +115,8 @@ export component ExcelSyncDialog inherits Rectangle {
                                     if row.xlsx_more_cols : Rectangle {
                                         border-color: Theme.text-info; border-width: 1px; border-radius: 2px;
                                         width: 42px; height: 18px; background: transparent;
-                                        Text { text: "←补列"; font-size: Theme.fs-tiny; color: Theme.text-info;
+                                        Text { text: "←补列"; font-size: Theme.fs-tiny;
+                                            color: row.has_diff ? Theme.text-info : Theme.text-disabled;
                                             vertical-alignment: center; horizontal-alignment: center; }
                                         TouchArea { clicked => { root.action(i, 4); } }
                                     }
@@ -125,9 +129,9 @@ export component ExcelSyncDialog inherits Rectangle {
                                         TouchArea { clicked => { root.action(i, 5); } }
                                     }
                                     if row.hdr_mismatch : Rectangle {
-                                        border-color: Theme.border-light; border-width: 1px; border-radius: 2px;
+                                        border-color: Theme.mark-modified; border-width: 1px; border-radius: 2px;
                                         width: 46px; height: 18px; background: transparent;
-                                        Text { text: "←强制"; font-size: Theme.fs-tiny; color: Theme.text-secondary;
+                                        Text { text: "←强制"; font-size: Theme.fs-tiny; color: Theme.mark-modified;
                                             vertical-alignment: center; horizontal-alignment: center; }
                                         TouchArea { clicked => { root.action(i, 6); } }
                                     }
