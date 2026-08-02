@@ -39,7 +39,8 @@ pub struct SyncRow {
     pub right_blocks_reason: String,
     pub right_xlsx_name: String,
     pub headers_match: bool,
-    pub headers_tail_diff: bool,
+    pub tbl_more_cols: bool,   // tablet 比 xlsx 多了列
+    pub xlsx_more_cols: bool,  // xlsx 比 tablet 多了列（非策划附加列）
     pub headers_mismatch: bool,
     pub actions: Vec<SyncAction>,
 }
@@ -89,7 +90,7 @@ pub fn load_sync_data(state: &AppState) -> Vec<SyncRow> {
                         right_sheet_name: sheet.name.clone(),
                         right_blocks_reason: String::new(),
                         right_xlsx_name: group.name.clone(),
-                        headers_match: false, headers_tail_diff: false, headers_mismatch: false,
+                        headers_match: false, tbl_more_cols: false, xlsx_more_cols: false, headers_mismatch: false,
                         actions: vec![SyncAction::Import],
                     });
                 }
@@ -110,19 +111,46 @@ fn add_table_row(
         right_exists: xlsx_sheet.is_some(), right_diff: DiffCount::default(),
         right_sheet_name: String::new(), right_blocks_reason: String::new(),
         right_xlsx_name: xlsx_name.unwrap_or("").into(),
-        headers_match: false, headers_tail_diff: false, headers_mismatch: false,
+        headers_match: false, tbl_more_cols: false, xlsx_more_cols: false, headers_mismatch: false,
         actions: vec![],
     };
 
     if let Some(sheet) = xlsx_sheet {
         row.right_sheet_name = sheet.name.clone();
+        let n_tablet = table.schema.fields.len();
+        let n_xlsx = sheet.headers.len();
+        let tbl_has_more = n_tablet > n_xlsx;
+        let xlsx_has_more = n_xlsx > n_tablet;
+
         match excel_sync::classify_header(&sheet.headers, &table.schema.fields) {
-            excel_sync::HeaderMatch::Identical => { row.headers_match = true; row.actions = vec![SyncAction::PushData, SyncAction::PullData]; }
-            excel_sync::HeaderMatch::TailDiff => { row.headers_tail_diff = true; row.actions = vec![SyncAction::PushWithCols, SyncAction::PullWithCols]; }
-            excel_sync::HeaderMatch::Mismatch => { row.headers_mismatch = true; row.actions = vec![SyncAction::ForcePush, SyncAction::ForcePull]; }
-            excel_sync::HeaderMatch::Invalid => { row.right_blocks_reason = "表头不符合规范".into(); row.actions = vec![SyncAction::Blocked]; }
+            excel_sync::HeaderMatch::Identical => {
+                row.headers_match = true;
+                row.actions = vec![SyncAction::PushData, SyncAction::PullData];
+            }
+            excel_sync::HeaderMatch::TailDiff => {
+                row.tbl_more_cols = tbl_has_more;
+                row.xlsx_more_cols = xlsx_has_more;
+                if tbl_has_more && !xlsx_has_more {
+                    row.actions = vec![SyncAction::PushData, SyncAction::PullData, SyncAction::PushWithCols];
+                } else if xlsx_has_more && !tbl_has_more {
+                    row.actions = vec![SyncAction::PushData, SyncAction::PullData, SyncAction::PullWithCols];
+                } else {
+                    row.headers_match = true;
+                    row.actions = vec![SyncAction::PushData, SyncAction::PullData];
+                }
+            }
+            excel_sync::HeaderMatch::Mismatch => {
+                row.headers_mismatch = true;
+                row.actions = vec![SyncAction::ForcePush, SyncAction::ForcePull];
+            }
+            excel_sync::HeaderMatch::Invalid => {
+                row.right_blocks_reason = "表头不符合规范".into();
+                row.actions = vec![SyncAction::Blocked];
+            }
         }
-        if row.actions != [SyncAction::Blocked] {
+        if !row.right_blocks_reason.is_empty() {
+            // blocked — no diff
+        } else {
             let d = excel_sync::diff_rows(table.records.len(), sheet.rows.len(), &table.records, &sheet.rows);
             row.left_diff = d.clone();
             row.right_diff = d;
@@ -164,8 +192,11 @@ pub fn push(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
         blocked: !r.right_blocks_reason.is_empty(),
         blocked_reason: r.right_blocks_reason.clone().into(),
         hdr_match: r.headers_match,
-        hdr_tail: r.headers_tail_diff,
+        tbl_more_cols: r.tbl_more_cols,
+        xlsx_more_cols: r.xlsx_more_cols,
         hdr_mismatch: r.headers_mismatch,
+        has_diff: r.left_diff.added > 0 || r.left_diff.modified > 0 || r.left_diff.removed > 0
+            || r.right_diff.added > 0 || r.right_diff.modified > 0 || r.right_diff.removed > 0,
     }).collect();
     ui.set_es_rows(slint::ModelRc::new(VecModel::from(es_rows)));
 }
