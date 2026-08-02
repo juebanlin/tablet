@@ -43,6 +43,7 @@ pub struct SyncRow {
     pub right_blocks_reason: String,
     pub right_xlsx_name: String,
     pub headers_match: bool,
+    pub matched_cols: usize,    // 匹配的连续前缀列数
     pub tbl_more_cols: bool,
     pub xlsx_more_cols: bool,
     pub headers_mismatch: bool,
@@ -94,7 +95,7 @@ pub fn load_sync_data(state: &AppState) -> Vec<SyncRow> {
                         right_sheet_name: sheet.name.clone(),
                         right_blocks_reason: String::new(),
                         right_xlsx_name: group.name.clone(),
-                        headers_match: false, tbl_more_cols: false, xlsx_more_cols: false, headers_mismatch: false,
+                        headers_match: false, matched_cols: 0, tbl_more_cols: false, xlsx_more_cols: false, headers_mismatch: false,
                         actions: vec![SyncAction::Import],
                     });
                 }
@@ -115,7 +116,7 @@ fn add_table_row(
         right_exists: xlsx_sheet.is_some(), right_rows: 0, right_cols: 0, right_diff: DiffCount::default(),
         right_sheet_name: String::new(), right_blocks_reason: String::new(),
         right_xlsx_name: xlsx_name.unwrap_or("").into(),
-        headers_match: false, tbl_more_cols: false, xlsx_more_cols: false, headers_mismatch: false,
+        headers_match: false, matched_cols: 0, tbl_more_cols: false, xlsx_more_cols: false, headers_mismatch: false,
         actions: vec![],
     };
 
@@ -123,37 +124,29 @@ fn add_table_row(
         row.right_sheet_name = sheet.name.clone();
         row.right_rows = sheet.rows.len();
         row.right_cols = sheet.headers.len();
-        let n_tablet = table.schema.fields.len();
-        let n_xlsx = sheet.headers.len();
-        let tbl_has_more = n_tablet > n_xlsx;
-        let xlsx_has_more = n_xlsx > n_tablet;
+        let cm = excel_sync::compute_column_match(&table.schema.fields, &sheet.headers);
+        row.matched_cols = cm.matched_prefix;
+        let tbl_has_more = cm.tablet_only > 0;
+        let xlsx_has_more = cm.xlsx_only > 0;
 
-        match excel_sync::classify_header(&sheet.headers, &table.schema.fields) {
-            excel_sync::HeaderMatch::Identical => {
-                row.headers_match = true;
-                row.actions = vec![SyncAction::PushData, SyncAction::PullData];
-            }
-            excel_sync::HeaderMatch::TailDiff => {
-                row.tbl_more_cols = tbl_has_more;
-                row.xlsx_more_cols = xlsx_has_more;
-                if tbl_has_more && !xlsx_has_more {
-                    row.actions = vec![SyncAction::PushData, SyncAction::PullData, SyncAction::PushWithCols];
-                } else if xlsx_has_more && !tbl_has_more {
-                    row.actions = vec![SyncAction::PushData, SyncAction::PullData, SyncAction::PullWithCols];
-                } else {
-                    row.headers_match = true;
-                    row.actions = vec![SyncAction::PushData, SyncAction::PullData];
-                }
-            }
-            excel_sync::HeaderMatch::Mismatch => {
-                row.headers_mismatch = true;
-                row.actions = vec![SyncAction::ForcePush, SyncAction::ForcePull];
-            }
-            excel_sync::HeaderMatch::Invalid => {
-                row.right_blocks_reason = "表头不符合规范".into();
-                row.actions = vec![SyncAction::Blocked];
-            }
+        if cm.matched_prefix == 0 { // first col doesn't match → invalid
+            row.right_blocks_reason = "表头不符合规范".into();
+            row.actions = vec![SyncAction::Blocked];
+        } else if cm.tablet_only == 0 && cm.xlsx_only == 0 {
+            row.headers_match = true;
+            row.actions = vec![SyncAction::PushData, SyncAction::PullData];
+        } else if cm.tablet_only > 0 && cm.xlsx_only > 0 {
+            // Both sides have extra columns → mismatch → force sync
+            row.headers_mismatch = true;
+            row.actions = vec![SyncAction::ForcePush, SyncAction::ForcePull];
+        } else if tbl_has_more {
+            row.tbl_more_cols = true;
+            row.actions = vec![SyncAction::PushData, SyncAction::PullData, SyncAction::PushWithCols];
+        } else { // xlsx_has_more
+            row.xlsx_more_cols = true;
+            row.actions = vec![SyncAction::PushData, SyncAction::PullData];
         }
+
         if !row.right_blocks_reason.is_empty() {
             // blocked — no diff
         } else {
@@ -196,6 +189,7 @@ pub fn push(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
         blocked: !r.right_blocks_reason.is_empty(),
         blocked_reason: r.right_blocks_reason.clone().into(),
         hdr_match: r.headers_match,
+        matched: r.matched_cols as i32,
         tbl_more_cols: r.tbl_more_cols,
         xlsx_more_cols: r.xlsx_more_cols,
         hdr_mismatch: r.headers_mismatch,
@@ -300,7 +294,10 @@ fn execute_action(state: &Rc<RefCell<AppState>>, row_idx: i32, act: i32) -> Resu
                             }
                         }
                     }
-                    table.update_dirty();
+                    // Sync completes → update snapshot so dirty flag reflects reality
+                    table.original_records = table.records.clone();
+                    table.original_fields = table.schema.fields.clone();
+                    table.dirty = false;
                 }
             }
             Ok(format!("已同步 {} ← {}", group_name, xlsx_path.display()))
