@@ -178,4 +178,79 @@ pub fn wire(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
     ui.on_es_close(move || {
         if let Some(u) = ui_h.upgrade() { close(&s); push(&u, &s); }
     });
+
+    let s = state.clone();
+    let ui_h = ui.as_weak();
+    ui.on_es_refresh(move || {
+        if let Some(u) = ui_h.upgrade() { push(&u, &s); }
+    });
+
+    let s = state.clone();
+    let ui_h = ui.as_weak();
+    ui.on_es_action(move |row_idx, act| {
+        let Some(u) = ui_h.upgrade() else { return };
+        let result = execute_action(&s, row_idx, act);
+        match result {
+            Ok(msg) => { s.borrow_mut().engine.ui_log(format!("[同步] {}", msg)); }
+            Err(e) => { s.borrow_mut().engine.ui_log(format!("[同步失败] {}", e)); }
+        }
+        push(&u, &s);
+    });
+}
+
+fn execute_action(state: &Rc<RefCell<AppState>>, row_idx: i32, act: i32) -> Result<String, String> {
+    let rows = {
+        let st = state.borrow();
+        load_sync_data(&st)
+    };
+    let row = rows.get(row_idx as usize).ok_or("行索引无效")?;
+    let group_name = &row.group;
+    let node_name = &row.node_name;
+
+    let pid = {
+        let st = state.borrow();
+        st.engine.active_project_id().ok_or("无活动项目")?.to_string()
+    };
+    let excel_dir = {
+        let st = state.borrow();
+        let project = st.engine.find_project(&pid).ok_or("找不到项目")?;
+        project.project_root.join(".excel")
+    };
+    let xlsx_path = excel_dir.join(format!("{}.xlsx", group_name));
+
+    match act {
+        // 1=PushData or 3=PushWithCols or 7=Create: tablet → xlsx
+        1 | 3 | 7 => {
+            std::fs::create_dir_all(&excel_dir).map_err(|e| format!("创建 .excel 目录失败: {}", e))?;
+            let mut st = state.borrow_mut();
+            let project = st.engine.find_project_mut(&pid).ok_or("找不到项目")?;
+            let group = project.groups.iter()
+                .find(|g| g.name == *group_name).ok_or("找不到组")?;
+            excel_sync::sync_group_to_xlsx(&xlsx_path, group)
+                .map_err(|e| format!("写入 xlsx 失败: {}", e))?;
+            Ok(format!("已同步 {} → {}", group_name, xlsx_path.display()))
+        }
+        // 2=PullData or 8=Import: xlsx → tablet
+        2 | 8 => {
+            let mut st = state.borrow_mut();
+            let patches = {
+                let project = st.engine.find_project(&pid).ok_or("找不到项目")?;
+                let group = project.groups.iter()
+                    .find(|g| g.name == *group_name).ok_or("找不到组")?;
+                excel_sync::read_group_from_xlsx(&xlsx_path, group)
+                    .map_err(|e| format!("读取 xlsx 失败: {}", e))?
+            };
+            let project = st.engine.find_project_mut(&pid).ok_or("找不到项目")?;
+            let group = project.groups.iter_mut()
+                .find(|g| g.name == *group_name).ok_or("找不到组")?;
+            for (tname, records) in &patches.tables {
+                if let Some(table) = group.tables.iter_mut().find(|t| &t.name == tname) {
+                    table.records = records.clone();
+                    table.update_dirty();
+                }
+            }
+            Ok(format!("已同步 {} ← {}", group_name, xlsx_path.display()))
+        }
+        _ => Err("该操作待实现".into()),
+    }
 }
