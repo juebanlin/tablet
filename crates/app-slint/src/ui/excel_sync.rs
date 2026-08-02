@@ -15,8 +15,6 @@ pub use excel_sync::DiffCount;
 /// 同步面板中一行的操作按钮类型。
 #[derive(Clone, PartialEq)]
 pub enum SyncAction {
-    None,           // 无操作
-    Synced,         // 已同步
     PushData,       // [→]
     PullData,       // [←]
     PushWithCols,   // [→含列]
@@ -207,7 +205,7 @@ fn execute_action(state: &Rc<RefCell<AppState>>, row_idx: i32, act: i32) -> Resu
     };
     let row = rows.get(row_idx as usize).ok_or("行索引无效")?;
     let group_name = &row.group;
-    let node_name = &row.node_name;
+    let _node_name = &row.node_name;
 
     let pid = {
         let st = state.borrow();
