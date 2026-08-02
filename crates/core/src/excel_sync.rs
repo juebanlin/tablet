@@ -3,8 +3,6 @@
 use std::path::Path;
 
 use anyhow::{Context, Result};
-use calamine::{open_workbook, Data, Reader, Xlsx};
-
 use crate::model::Group;
 
 // ── types ──
@@ -33,45 +31,43 @@ pub struct DiffCount {
 #[derive(Clone, Copy, PartialEq)]
 pub enum SyncMode { DataOnly, WithColumns, Full }
 
-// ── cell helpers ──
-
-fn cell_to_string(cell: &Data) -> String {
-    match cell {
-        Data::Empty => String::new(),
-        Data::String(s) => s.clone(),
-        Data::Float(f) => {
-            if f.fract() == 0.0 && f.abs() < 1e15 { format!("{}", *f as i64) }
-            else { f.to_string() }
-        }
-        Data::Int(i) => i.to_string(),
-        Data::Bool(b) => b.to_string(),
-        _ => cell.to_string(),
-    }
-}
-
 // ── read ──
+// 统一使用 umya-spreadsheet 读取，value() 直接返回字符串，避免 calamine 的 Float/Int/Data 类型推断。
 
 pub fn read_xlsx_sheets(path: &Path) -> Result<Vec<XlsxSheet>> {
-    let mut wb: Xlsx<_> = open_workbook(path)
+    let book = umya_spreadsheet::reader::xlsx::read(path)
         .with_context(|| format!("打开 xlsx 失败: {}", path.display()))?;
-    let sheet_names: Vec<String> = wb.sheet_names();
+
     let mut sheets = Vec::new();
+    let sheet_count = book.get_sheet_collection_no_check().len();
 
-    for name in &sheet_names {
-        let range = wb.worksheet_range(name)
-            .with_context(|| format!("读取 sheet '{}' 失败", name))?;
-        let rows_data: Vec<&[Data]> = range.rows().collect();
-        if rows_data.is_empty() { continue; }
+    for idx in 0..sheet_count {
+        let worksheet = book.get_sheet_collection_no_check().get(idx)
+            .with_context(|| format!("获取第 {} 个 sheet 失败", idx))?;
+        let name = worksheet.get_name().to_string();
 
-        let headers: Vec<String> = rows_data[0].iter().map(cell_to_string).collect();
+        let (max_col, max_row) = worksheet.highest_column_and_row();
+
+        let mut headers = Vec::new();
         let mut data_rows: Vec<Vec<String>> = Vec::new();
-        for row in rows_data.iter().skip(1) {
-            let mut cells: Vec<String> = row.iter().map(cell_to_string).collect();
-            if cells.iter().all(|c| c.is_empty()) { continue; }
+
+        for c in 1..=max_col {
+            headers.push(worksheet.value((c, 1u32)));
+        }
+
+        for r in 2..=max_row {
+            let mut cells = Vec::new();
+            let mut all_empty = true;
+            for c in 1..=max_col {
+                let v = worksheet.value((c as u32, r as u32));
+                if !v.is_empty() { all_empty = false; }
+                cells.push(v);
+            }
+            if all_empty { continue; }
             while cells.last().map_or(false, |c| c.is_empty()) { cells.pop(); }
             data_rows.push(cells);
         }
-        sheets.push(XlsxSheet { name: name.clone(), headers, rows: data_rows });
+        sheets.push(XlsxSheet { name, headers, rows: data_rows });
     }
     Ok(sheets)
 }
