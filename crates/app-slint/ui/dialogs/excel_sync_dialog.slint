@@ -82,15 +82,14 @@ export component ExcelSyncDialog inherits Rectangle {
                                 // ACTIONS — only show buttons that match the scenario
                                 Rectangle { width: 180px;
                                     HorizontalLayout { spacing: 2px; padding-left: 4px;
-                                        // 数据→ 仅当有数据差异 + 表头匹配或尾部差异
-                                        if row.has_diff && (row.hdr_match || row.tbl_more_cols || row.xlsx_more_cols) : Rectangle {
+                                        // 数据→ ←数据: 表头完全匹配 or tablet多列（补列场景）时可用
+                                        if row.has_diff && (row.hdr_match || row.tbl_more_cols) : Rectangle {
                                             border-width: 1px; border-radius: 2px; width: 42px; height: 18px;
                                             background: transparent; border-color: Theme.border-light;
                                             Text { text: "数据→"; font-size: Theme.fs-tiny; color: Theme.text-primary; vertical-alignment: center; horizontal-alignment: center; }
                                             TouchArea { clicked => { root.action(i, 1); } }
                                         }
-                                        // ←数据
-                                        if row.has_diff && (row.hdr_match || row.tbl_more_cols || row.xlsx_more_cols) : Rectangle {
+                                        if row.has_diff && (row.hdr_match || row.tbl_more_cols) : Rectangle {
                                             border-width: 1px; border-radius: 2px; width: 42px; height: 18px;
                                             background: transparent; border-color: Theme.border-light;
                                             Text { text: "←数据"; font-size: Theme.fs-tiny; color: Theme.text-primary; vertical-alignment: center; horizontal-alignment: center; }
@@ -102,6 +101,13 @@ export component ExcelSyncDialog inherits Rectangle {
                                             background: transparent; border-color: Theme.border-light;
                                             Text { text: "补列→"; font-size: Theme.fs-tiny; color: Theme.text-primary; vertical-alignment: center; horizontal-alignment: center; }
                                             TouchArea { clicked => { root.action(i, 3); } }
+                                        }
+                                        // 强制→: 不匹配 or xlsx 多列（删列残留）
+                                        if row.hdr_mismatch || row.xlsx_more_cols : Rectangle {
+                                            border-width: 1px; border-radius: 2px; width: 46px; height: 18px;
+                                            background: transparent; border-color: Theme.border-light;
+                                            Text { text: "强制→"; font-size: Theme.fs-tiny; color: Theme.text-primary; vertical-alignment: center; horizontal-alignment: center; }
+                                            TouchArea { clicked => { root.action(i, 5); } }
                                         }
                                         // 强制→/← mismatch
                                         if row.hdr_mismatch : Rectangle {

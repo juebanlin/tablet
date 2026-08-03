@@ -141,9 +141,9 @@ fn add_table_row(
         } else if tbl_has_more {
             row.tbl_more_cols = true;
             row.actions = vec![SyncAction::PushData, SyncAction::PullData, SyncAction::PushWithCols];
-        } else { // xlsx_has_more — 策划公式列等，不做补列
+        } else { // xlsx_has_more — 策划公式列 or 删列残留，结构不同，仅强制同步
             row.xlsx_more_cols = true;
-            row.actions = vec![SyncAction::PushData, SyncAction::PullData, SyncAction::ForcePush];
+            row.actions = vec![SyncAction::ForcePush];
         }
 
         if !row.right_blocks_reason.is_empty() {
