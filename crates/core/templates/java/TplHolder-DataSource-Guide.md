@@ -2,17 +2,18 @@
 
 ## 概述
 
-TplHolder 已重构为支持数据源抽象，参考配置加载指南的 ConfigSource 架构。现在支持：
-- 文件系统数据源（默认）
-- Classpath 数据源（JAR 内加载）
-- 自定义数据源（如 MongoDB）
+TplHolder 已重构为支持数据源抽象，参考配置加载指南的 ConfigSource 架构。核心改进：
+- **数据源可切换**：文件系统 / Classpath / MongoDB / 自定义
+- **注册表解耦**：支持自定义注册表注入，不绑死 TplRegistry
+- **查询接口**：暴露已注册表名和 key ↔ Class 双向映射
+- **100% 向后兼容**：旧代码无需修改
 
 ## 向后兼容
 
 所有现有代码**无需修改**，旧 API 仍然有效：
 
 ```java
-// 旧代码继续工作（内部使用 FileSystemTblDataSource）
+// 旧代码继续工作（内部使用 FileSystemTblDataSource + TplRegistry）
 TplHolder.initXml("data/config");           // 原 init(String)，改名更明确
 TplHolder.initJson("data/config");
 
@@ -31,6 +32,55 @@ GlobalConst consts = TplHolder.getConst(GlobalConst.class);
 ```
 
 **注意**：`init(String)` 改名为 `initXml(String)` 使格式更明确。
+
+## 核心改进
+
+### 1. 注册表解耦（新增）
+
+现在 TplHolder 不再绑死 TplRegistry，支持自定义注册表注入：
+
+```java
+// 场景A：使用 TplRegistry（默认，向后兼容）
+TplHolder.init(new FileSystemTblDataSource("data/config", ".xml"));
+
+// 场景B：自定义注册表（支持外部配置）
+Map<String, Class<?>> customRegistry = new HashMap<>();
+customRegistry.put("item/Weapon", Weapon.class);
+customRegistry.put("hero/Hero", Hero.class);
+customRegistry.put("external/Plugin", PluginConfig.class);  // 外部模块配置
+TplHolder.init(new FileSystemTblDataSource("data/config", ".xml"), customRegistry);
+
+// 场景C：运行时扫描 + 手动注入
+Map<String, Class<?>> registry = new HashMap<>(TplRegistry.getAll());
+// 扫描外部插件目录，加入更多配置类
+registry.put("plugin/Quest", QuestConfig.class);
+TplHolder.init(new MongoTblDataSource(collection, ".json"), registry);
+```
+
+### 2. 查询接口（新增）
+
+暴露已注册的表名和双向映射：
+
+```java
+// 获取所有已注册的配置表名
+Set<String> keys = TplHolder.getRegisteredKeys();
+System.out.println("Registered tables: " + keys);
+
+// key → Class 查询
+Class<?> clazz = TplHolder.getConfigClass("item/Weapon");
+if (clazz != null) {
+    System.out.println("Weapon class: " + clazz.getName());
+}
+
+// Class → key 反向查询
+String key = TplHolder.getTableKey(Weapon.class);
+System.out.println("Weapon key: " + key);
+
+// GM 工具：列出所有可推送的配置
+for (String key : TplHolder.getRegisteredKeys()) {
+    System.out.println("- " + key + " → " + TplHolder.getConfigClass(key).getSimpleName());
+}
+```
 
 ## Parser 配置
 
@@ -54,12 +104,12 @@ TplHolder.setXmlParser(new CustomXmlParser());
 TplHolder.initJson("data/config");
 ```
 
-## 新功能
+## 数据源使用
 
 ### 1. 使用数据源抽象
 
 ```java
-// 文件系统数据源
+// 文件系统数据源（支持相对/绝对路径）
 TplHolder.init(new FileSystemTblDataSource("data/config", ".xml"));
 
 // Classpath 数据源（从 JAR 加载）
@@ -173,7 +223,74 @@ source.updateConfig("item/Weapon", newXml);
 // 通过 RPC 调用游戏服的热更新接口
 ```
 
-### 场景 4：动态环境切换
+### 场景 4：外部配置/插件扩展（注册表解耦）
+
+```java
+// 场景：游戏主包 + 外部插件包，插件有自己的配置类
+// 插件配置类不在 TplRegistry 中（因为不是工具生成的）
+
+// 1. 合并注册表
+Map<String, Class<?>> registry = new HashMap<>(TplRegistry.getAll());
+registry.put("plugin/Quest", QuestConfig.class);        // 外部插件
+registry.put("plugin/Activity", ActivityConfig.class);  // 外部插件
+
+// 2. 使用自定义注册表初始化
+TplHolder.init(new FileSystemTblDataSource("data/config", ".xml"), registry);
+
+// 3. 外部配置也能正常使用
+QuestConfig quest = TplHolder.get(QuestConfig.class, 1001);
+```
+
+### 场景 5：运行时扫描配置类
+
+```java
+// 场景：多模块项目，配置类分散在不同包，希望启动时自动扫描
+
+// 1. 扫描指定包下的所有配置类
+Map<String, Class<?>> registry = scanConfigClasses(
+    "com.game.base.config.tpl",
+    "com.game.battle.config.tpl",
+    "com.game.social.config.tpl"
+);
+
+// 2. 使用扫描得到的注册表
+TplHolder.init(new FileSystemTblDataSource("data/config", ".xml"), registry);
+
+// 3. 查询所有已注册的配置表
+Set<String> keys = TplHolder.getRegisteredKeys();
+System.out.println("Total tables: " + keys.size());
+```
+
+### 场景 6：GM 工具查询配置表
+
+```java
+// GM 工具需要列出所有可推送的配置表
+public class GMConfigPanel {
+    public void init() {
+        Set<String> keys = TplHolder.getRegisteredKeys();
+        for (String key : keys) {
+            Class<?> clazz = TplHolder.getConfigClass(key);
+            System.out.println("Table: " + key + " → " + clazz.getSimpleName());
+        }
+    }
+    
+    public void pushConfig(String key, String content) {
+        // 1. 验证 key 存在
+        if (TplHolder.getConfigClass(key) == null) {
+            throw new IllegalArgumentException("Unknown table: " + key);
+        }
+        
+        // 2. 推送到数据源
+        TplDataSource source = TplHolder.getDataSource();
+        source.updateConfig(key, content);
+        
+        // 3. 触发热更新
+        TplHolder.reload(key);
+    }
+}
+```
+
+### 场景 7：动态环境切换
 
 ```java
 String env = System.getProperty("env", "dev");
@@ -190,14 +307,18 @@ TplHolder.init(source);
 
 | 方法 | 说明 |
 |------|------|
-| `initXml(String dir)` | 兼容方法：XML + 文件系统 |
-| `initJson(String dir)` | 兼容方法：JSON + 文件系统 |
-| `initJson(String dir, IJsonParser parser)` | 兼容方法：JSON + 自定义解析器 |
-| `init(TblDataSource source)` | 新方法：使用数据源抽象 |
+| `initXml(String path)` | 兼容方法：XML + 文件系统 |
+| `initJson(String path)` | 兼容方法：JSON + 文件系统 |
+| `initJson(String path, IJsonParser parser)` | 兼容方法：JSON + 自定义解析器 |
+| `init(TblDataSource source)` | 新方法：使用数据源抽象（从 TplRegistry 读取注册表） |
+| `init(TblDataSource source, Map<String, Class<?>> registry)` | **新方法**：注入自定义注册表（解耦 TplRegistry） |
 | `reload(String key)` | 单表热更新 |
 | `reloadConfigs(List<String> keys)` | 批量原子热更新（Copy-on-Write） |
 | `restoreCache(Map)` | 回滚批量更新 |
 | `getDataSource()` | 获取当前数据源（供 GM 写入） |
+| `getRegisteredKeys()` | **新方法**：获取所有已注册的配置表名 |
+| `getConfigClass(String key)` | **新方法**：根据表名查询配置类 |
+| `getTableKey(Class<?> clazz)` | **新方法**：根据配置类查询表名 |
 | `get(Class, int)` | 查询单条配置（无变化） |
 | `getAll(Class)` | 查询所有配置（无变化） |
 | `getConst(Class)` | 查询常量配置（无变化） |
@@ -205,9 +326,11 @@ TplHolder.init(source);
 ## 设计亮点
 
 ✅ **参考 ConfigSource 架构**：接口设计、批量优化、启动校验完全对齐  
+✅ **注册表解耦**：不绑死 TplRegistry，支持自定义注册表注入  
+✅ **暴露查询接口**：可查询已注册表名和 key ↔ Class 双向映射  
 ✅ **零外部依赖**：所有实现都是纯 JDK，模板文件保持零依赖  
 ✅ **100% 向后兼容**：旧代码不改一行照常运行  
-✅ **灵活组合**：数据源 + 更新模式可任意组合  
+✅ **灵活组合**：数据源 + 注册表 + 更新模式可任意组合  
 ✅ **启动即校验**：配置缺失在 init 阶段抛异常，不等运行时 NPE  
 ✅ **批量原子更新**：Copy-on-Write 机制，业务线程读到一致的缓存快照
 

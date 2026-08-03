@@ -16,6 +16,11 @@ public class TplHolder {
     private static TblDataSource dataSource;
     private static String dataExt;
 
+    // 配置表注册表：key → Class 映射（init 时注入，解耦 TplRegistry）
+    private static Map<String, Class<?>> registry = new HashMap<>();
+    // 反向映射：Class → key（用于查询表名）
+    private static final Map<Class<?>, String> classToKey = new HashMap<>();
+
     /**
      * 设置 JSON 解析器（在 init 前调用）
      */
@@ -31,21 +36,34 @@ public class TplHolder {
     }
 
     /**
-     * 初始化（使用数据源抽象）
+     * 初始化（使用数据源抽象 + 注入注册表）
      * @param source 数据源实现
+     * @param tableRegistry 配置表注册表（key → Class 映射）
      */
-    public static void init(TblDataSource source) {
+    public static void init(TblDataSource source, Map<String, Class<?>> tableRegistry) {
         dataSource = source;
         dataExt = source.getDataFormat();
+        registry = new HashMap<>(tableRegistry);
 
-        // 从 TplRegistry 获取所有注册的类
-        Map<String, Class<?>> registry = TplRegistry.getAll();
+        // 建立反向映射 Class → key
+        classToKey.clear();
+        for (Map.Entry<String, Class<?>> entry : tableRegistry.entrySet()) {
+            classToKey.put(entry.getValue(), entry.getKey());
+        }
 
         // 批量校验配置完整性
         dataSource.validateRequiredData(registry.keySet());
 
         // 批量加载
         loadAllFromSource(registry.keySet());
+    }
+
+    /**
+     * 初始化（使用数据源抽象，从 TplRegistry 读取注册表）
+     * @param source 数据源实现
+     */
+    public static void init(TblDataSource source) {
+        init(source, TplRegistry.getAll());
     }
 
     /**
@@ -88,7 +106,7 @@ public class TplHolder {
     }
 
     private static TblMeta parseFromRaw(String key, String content) {
-        Class<?> clazz = TplRegistry.get(key);
+        Class<?> clazz = registry.get(key);
         if (clazz == null) return null;
         return parseFromRaw(key, clazz, content);
     }
@@ -125,7 +143,7 @@ public class TplHolder {
      * 单表热更新（直接 put，适合调试场景）
      */
     public static void reload(String key) {
-        Class<?> clazz = TplRegistry.get(key);
+        Class<?> clazz = registry.get(key);
         if (clazz == null) throw new IllegalArgumentException("Unknown registry key: " + key);
 
         String content = dataSource.loadRawData(key);
@@ -188,6 +206,31 @@ public class TplHolder {
      */
     public static TblDataSource getDataSource() {
         return dataSource;
+    }
+
+    /**
+     * 获取所有已注册的配置表名
+     */
+    public static Set<String> getRegisteredKeys() {
+        return Collections.unmodifiableSet(registry.keySet());
+    }
+
+    /**
+     * 根据表名查询对应的配置类
+     * @param key 配置表名
+     * @return 配置类，未找到返回 null
+     */
+    public static Class<?> getConfigClass(String key) {
+        return registry.get(key);
+    }
+
+    /**
+     * 根据配置类查询对应的表名
+     * @param clazz 配置类
+     * @return 表名，未找到返回 null
+     */
+    public static String getTableKey(Class<?> clazz) {
+        return classToKey.get(clazz);
     }
 
     public static <T extends ITpl> T get(Class<T> clazz, int id) {
