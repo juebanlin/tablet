@@ -15,7 +15,14 @@ TplHolder 已重构为支持数据源抽象，参考配置加载指南的 Config
 // 旧代码继续工作（内部使用 FileSystemTblDataSource）
 TplHolder.initXml("data/config");           // 原 init(String)，改名更明确
 TplHolder.initJson("data/config");
-TplHolder.initJson("data/config", customParser);
+
+// 自定义解析器（两种方式）
+// 方式1：先设置后初始化（推荐）
+TplHolder.setJsonParser(new MyJsonParser());
+TplHolder.initJson("data/config");
+
+// 方式2：一步到位（兼容旧代码）
+TplHolder.initJson("data/config", new MyJsonParser());
 
 // 查询 API 完全不变
 Weapon weapon = TplHolder.get(Weapon.class, 1001);
@@ -24,6 +31,28 @@ GlobalConst consts = TplHolder.getConst(GlobalConst.class);
 ```
 
 **注意**：`init(String)` 改名为 `initXml(String)` 使格式更明确。
+
+## Parser 配置
+
+Parser 现在支持两种配置方式：
+
+### 方式1：直接修改静态变量
+
+```java
+// 在 init 前修改（适合全局配置）
+TplHolder.jsonParser = new GsonJsonParser();
+TplHolder.xmlParser = new CustomXmlParser();
+TplHolder.initJson("data/config");
+```
+
+### 方式2：使用 setter 方法
+
+```java
+// 在 init 前调用 setter（推荐，更清晰）
+TplHolder.setJsonParser(new GsonJsonParser());
+TplHolder.setXmlParser(new CustomXmlParser());
+TplHolder.initJson("data/config");
+```
 
 ## 新功能
 

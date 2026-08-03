@@ -8,11 +8,27 @@ import java.util.*;
 public class TplHolder {
     private static volatile Map<Class<?>, Map<Integer, ? extends ITpl>> tables = new HashMap<>();
     private static final Map<Class<?>, IConstTpl> constants = new HashMap<>();
+
+    // Parser 配置：外部可直接修改静态变量，或通过 setter 在 init 前设置
     private static IJsonParser jsonParser = new SimpleJsonParser();
     private static SimpleXmlParser xmlParser = new SimpleXmlParser();
+
     private static TblDataSource dataSource;
-    private static String dataDir;
     private static String dataExt;
+
+    /**
+     * 设置 JSON 解析器（在 init 前调用）
+     */
+    public static void setJsonParser(IJsonParser parser) {
+        jsonParser = parser;
+    }
+
+    /**
+     * 设置 XML 解析器（在 init 前调用）
+     */
+    public static void setXmlParser(SimpleXmlParser parser) {
+        xmlParser = parser;
+    }
 
     /**
      * 初始化（使用数据源抽象）
@@ -21,7 +37,6 @@ public class TplHolder {
     public static void init(TblDataSource source) {
         dataSource = source;
         dataExt = source.getDataFormat();
-        dataDir = null;  // 不再依赖 dataDir
 
         // 从 TplRegistry 获取所有注册的类
         Map<String, Class<?>> registry = TplRegistry.getAll();
@@ -37,28 +52,23 @@ public class TplHolder {
      * 兼容方法：XML 格式 + 文件系统
      */
     public static void initXml(String dir) {
-        dataDir = dir;
-        dataSource = new FileSystemTblDataSource(dir, ".xml");
-        dataExt = ".xml";
-        init(dataSource);
+        init(new FileSystemTblDataSource(dir, ".xml"));
     }
 
     /**
      * 兼容方法：JSON 格式 + 文件系统
      */
     public static void initJson(String dir) {
-        initJson(dir, new SimpleJsonParser());
+        init(new FileSystemTblDataSource(dir, ".json"));
     }
 
     /**
      * 兼容方法：JSON 格式 + 自定义解析器
+     * @deprecated 推荐使用 setJsonParser() + initJson(dir)
      */
     public static void initJson(String dir, IJsonParser parser) {
-        dataDir = dir;
-        jsonParser = parser;
-        dataSource = new FileSystemTblDataSource(dir, ".json");
-        dataExt = ".json";
-        init(dataSource);
+        setJsonParser(parser);
+        initJson(dir);
     }
 
     private static void loadAllFromSource(Set<String> keys) {
@@ -71,30 +81,6 @@ public class TplHolder {
             TblMeta meta = parseFromRaw(key, content);
             if (meta != null) apply(meta);
         }
-    }
-
-    private static void loadAll() {
-        try {
-            Files.walk(Paths.get(dataDir))
-                .filter(p -> p.toString().endsWith(dataExt))
-                .forEach(p -> {
-                    TblMeta meta = parseFile(p);
-                    if (meta != null) apply(meta);
-                });
-        } catch (Exception e) { throw new RuntimeException("Failed to scan " + dataDir, e); }
-    }
-
-    public static TblMeta parseFile(Path path) {
-        try {
-            Path rel = Paths.get(dataDir).relativize(path);
-            String full = rel.toString().replace('\\', '/');
-            String key = full.replaceFirst("\\.(json|xml)$", "");
-            Class<?> clazz = TplRegistry.get(key);
-            if (clazz == null) return null;
-
-            String content = new String(Files.readAllBytes(path), "UTF-8");
-            return parseFromRaw(key, clazz, content);
-        } catch (Exception e) { throw new RuntimeException("Failed to parse " + path, e); }
     }
 
     private static TblMeta parseFromRaw(String key, String content) {
@@ -131,26 +117,14 @@ public class TplHolder {
         }
     }
 
+    /**
+     * 单表热更新（直接 put，适合调试场景）
+     */
     public static void reload(String key) {
         Class<?> clazz = TplRegistry.get(key);
         if (clazz == null) throw new IllegalArgumentException("Unknown registry key: " + key);
 
-        // 优先从 dataSource 加载
-        String content = null;
-        if (dataSource != null) {
-            content = dataSource.loadRawData(key);
-        }
-
-        // Fallback: 从文件系统加载（向后兼容）
-        if (content == null && dataDir != null) {
-            Path path = Paths.get(dataDir, key + dataExt);
-            if (!Files.exists(path)) throw new IllegalArgumentException("Data file not found: " + path);
-            TblMeta meta = parseFile(path);
-            if (meta == null) throw new IllegalStateException("Failed to parse: " + path);
-            apply(meta);
-            return;
-        }
-
+        String content = dataSource.loadRawData(key);
         if (content == null) throw new IllegalArgumentException("Data not found: " + key);
 
         TblMeta meta = parseFromRaw(key, content);
