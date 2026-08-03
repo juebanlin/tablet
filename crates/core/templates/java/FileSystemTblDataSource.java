@@ -7,13 +7,15 @@ import java.util.*;
 /**
  * 文件系统数据源实现
  * 从指定目录加载配置文件（XML 或 JSON）
+ * 支持相对路径和绝对路径
  */
 public class FileSystemTblDataSource implements TblDataSource {
     private final String baseDir;
     private final String format;  // ".xml" or ".json"
 
     public FileSystemTblDataSource(String baseDir, String format) {
-        this.baseDir = baseDir;
+        // 将相对路径转换为绝对路径，避免工作目录变化导致的问题
+        this.baseDir = Paths.get(baseDir).toAbsolutePath().normalize().toString();
         this.format = format;
     }
 
