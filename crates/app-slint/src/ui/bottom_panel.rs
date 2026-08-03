@@ -115,7 +115,7 @@ pub fn wire(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
         }
     });
 
-    // toggle-file: radio-style — click selects ONLY this file, deselects all others
+    // toggle-file: toggle one file in/out of selection
     let ui_h2 = ui.as_weak();
     ui.on_excel_toggle_file(move |idx| {
         let Some(u) = ui_h2.upgrade() else { return };
@@ -123,10 +123,10 @@ pub fn wire(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
         let n = sel_model.row_count();
         if idx >= n as i32 { return; }
         let cur = sel_model.row_data(idx as usize).unwrap_or(false);
-        u.set_excel_has_selection(!cur);
-        let mut new_sel = vec![false; n];
-        if !cur { new_sel[idx as usize] = true; }
-        u.set_excel_selected(slint::ModelRc::new(slint::VecModel::from(new_sel)));
+        let mut new_sel: Vec<bool> = (0..n).map(|i| sel_model.row_data(i).unwrap_or(false)).collect();
+        new_sel[idx as usize] = !cur;
+        u.set_excel_selected(slint::ModelRc::new(slint::VecModel::from(new_sel.clone())));
+        u.set_excel_has_selection(new_sel.iter().any(|x| *x));
     });
 
     // open-selected: open all selected files
