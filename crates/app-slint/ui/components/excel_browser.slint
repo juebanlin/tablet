@@ -14,17 +14,14 @@ export component ExcelBrowser inherits Rectangle {
     background: Theme.bg-panel;
     VerticalLayout {
         spacing: 0;
+        // Toolbar
         Rectangle {
             height: 22px;
             background: Theme.bg-toolbar;
-            border-color: Theme.border-light;
-            border-width: 1px;
+            border-color: Theme.border-light; border-width: 1px;
             HorizontalLayout {
-                spacing: Theme.sp-1;
-                padding-left: Theme.sp-2;
-                alignment: start;
-                Rectangle {
-                    width: 40px; height: 18px;
+                spacing: Theme.sp-1; padding-left: Theme.sp-2; alignment: start;
+                Rectangle { width: 40px; height: 18px;
                     background: Theme.bg-row-hover; border-radius: 2px;
                     Text { text: "同步"; font-size: Theme.fs-tiny; color: Theme.text-secondary; vertical-alignment: center; horizontal-alignment: center; }
                     TouchArea { clicked => { root.sync-clicked(); } }
@@ -34,28 +31,48 @@ export component ExcelBrowser inherits Rectangle {
                     Text { text: "刷新"; font-size: Theme.fs-tiny; color: Theme.text-secondary; vertical-alignment: center; horizontal-alignment: center; }
                     TouchArea { clicked => { root.refresh-clicked(); } }
                 }
+                Rectangle { width: 40px; height: 18px;
+                    opacity: root.has-selection ? 1.0 : 0.4;
+                    background: Theme.bg-row-hover; border-radius: 2px;
+                    Text { text: "删除"; font-size: Theme.fs-tiny; color: Theme.text-secondary; vertical-alignment: center; horizontal-alignment: center; }
+                    TouchArea { clicked => { if root.has-selection { root.delete-clicked(); } } }
+                }
             }
         }
+        // Card grid
         ScrollView {
-            VerticalLayout {
-                spacing: 0;
+            VerticalLayout { spacing: 4px; padding: 4px;
+                if root.files.length == 0 : Rectangle { height: 22px;
+                    Text { x: 6px; text: "(无 Excel 文件)"; font-size: Theme.fs-tiny; color: Theme.text-disabled; vertical-alignment: center; }
+                }
                 for file[i] in root.files : Rectangle {
-                    height: 22px;
-                    HorizontalLayout {
-                        padding-left: 6px;
-                        spacing: 4px;
+                    height: 28px;
+                    border-color: root.selected[i] ? Theme.border-selected : Theme.border-light;
+                    border-width: 1px; border-radius: 3px;
+                    background: root.selected[i] ? Theme.bg-cell-selected : Theme.bg-panel;
+                    HorizontalLayout { spacing: 6px; padding-left: 6px;
                         Text {
-                            text: file;
-                            font-size: Theme.fs-small;
-                            color: Theme.text-primary;
-                            vertical-alignment: center;
+                            text: "📄"; font-size: Theme.fs-small; vertical-alignment: center;
+                        }
+                        Text {
+                            text: file; font-size: Theme.fs-small; color: Theme.text-primary; vertical-alignment: center;
+                        }
+                        Rectangle { horizontal-stretch: 1; }
+                        Rectangle {
+                            width: 36px; height: 20px; border-radius: 2px;
+                            background: root.selected[i] ? Theme.bg-row-hover : Theme.bg-toolbar;
+                            border-color: Theme.border-light; border-width: 1px;
+                            Text { text: "打开"; font-size: Theme.fs-tiny; color: Theme.text-secondary; vertical-alignment: center; horizontal-alignment: center; }
                         }
                     }
                     TouchArea {
+                        clicked => { root.toggle-file(i); }
                         double-clicked => { root.file-opened(i); }
                     }
                 }
             }
         }
     }
+
+    callback toggle-file(int);
 }
