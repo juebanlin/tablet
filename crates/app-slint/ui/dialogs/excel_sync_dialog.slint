@@ -5,11 +5,11 @@ import { ScrollView } from "std-widgets.slint";
 export struct EsRow {
     group: string, node: string,
     checked: bool,
-    lrows: int, lcols: int,    // tablet 行数, 列数
+    lrows: int, lcols: int,
     left_only: bool,
     right_sheet: string, right_xlsx: string,
-    rrows: int, rcols: int,    // xlsx 总行, 总列
-    matched: int,               // 匹配前缀列数
+    rrows: int, rcols: int,
+    matched: int,
     right_only: bool,
     blocked: bool, blocked_reason: string,
     hdr_match: bool, tbl_more_cols: bool, xlsx_more_cols: bool,
@@ -34,28 +34,21 @@ export component ExcelSyncDialog inherits Rectangle {
 
         Rectangle { vertical-stretch: 1;
             VerticalLayout { spacing: 0; padding: 4px;
-                // Column headers
                 Rectangle { height: 22px; background: Theme.bg-header;
                     HorizontalLayout { spacing: 0;
-                        // Left: group/node
                         Rectangle { width: 200px; padding-left: 24px;
                             Text { text: "组 / 节点"; font-size: Theme.fs-tiny; color: Theme.text-secondary; vertical-alignment: center; }
                         }
-                        // Left info: row×col
-                        Rectangle { width: 100px; horizontal-stretch: 0;
-                            Text { text: "tablet(行×列)"; font-size: Theme.fs-tiny; color: Theme.text-secondary; vertical-alignment: center; }
+                        Rectangle { width: 100px;
+                            Text { text: "tablet(行x列)"; font-size: Theme.fs-tiny; color: Theme.text-secondary; vertical-alignment: center; }
                         }
-                        // Separator
                         Rectangle { width: 1px; background: Theme.border-light; }
-                        // Actions
-                        Rectangle { width: 180px; horizontal-stretch: 0;
+                        Rectangle { width: 180px;
                             Text { text: "操作"; font-size: Theme.fs-tiny; color: Theme.text-secondary; vertical-alignment: center; horizontal-alignment: center; }
                         }
-                        // Separator
                         Rectangle { width: 1px; background: Theme.border-light; }
-                        // Right info: row×col | matched+diff
-                        Rectangle { width: 180px; horizontal-stretch: 0;
-                            Text { text: "Excel(行×列│匹配+差异)"; font-size: Theme.fs-tiny; color: Theme.text-secondary; vertical-alignment: center; }
+                        Rectangle { width: 180px;
+                            Text { text: "Excel(行x列 | 匹配+差异)"; font-size: Theme.fs-tiny; color: Theme.text-secondary; vertical-alignment: center; }
                         }
                     }
                 }
@@ -63,20 +56,17 @@ export component ExcelSyncDialog inherits Rectangle {
                     VerticalLayout { spacing: 1px;
                         for row[i] in root.rows : Rectangle { height: Theme.row-h;
                             HorizontalLayout { spacing: 0;
-                                // Checkbox + group/node
+                                // checkbox + group/node
                                 Rectangle { width: 200px; HorizontalLayout { padding-left: 4px; spacing: 4px;
                                     Rectangle { width: 16px; height: 16px;
                                         background: row.checked ? Theme.bg-row-selected : Theme.bg-panel;
                                         border-color: Theme.border-light; border-width: 1px;
                                         Text { text: " "; font-size: Theme.fs-tiny; vertical-alignment: center; horizontal-alignment: center; }
                                     }
-                                    Text {
-                                        text: row.group + "/" + row.node;
-                                        font-size: Theme.fs-small; color: Theme.text-primary;
-                                        vertical-alignment: center;
-                                    }
+                                    Text { text: row.group + "/" + row.node;
+                                        font-size: Theme.fs-small; color: Theme.text-primary; vertical-alignment: center; }
                                 }}
-                                // Left counts
+                                // tablet row/col
                                 Rectangle { width: 100px; padding-left: 4px;
                                     if row.left_only : Text {
                                         text: "(新节点)"; font-size: Theme.fs-tiny; color: Theme.text-info; vertical-alignment: center;
@@ -87,36 +77,33 @@ export component ExcelSyncDialog inherits Rectangle {
                                         color: row.has_diff ? Theme.mark-modified : Theme.text-disabled;
                                     }
                                 }
-                                // Separator
+                                // separator
                                 Rectangle { width: 1px; background: Theme.border-light; }
-                                // Actions
-                                Rectangle { width: 180px; horizontal-stretch: 0;
+                                // ACTIONS — only show buttons that match the scenario
+                                Rectangle { width: 180px;
                                     HorizontalLayout { spacing: 2px; padding-left: 4px;
-                                        // → ← (match/tail-diff)
-                                        if row.hdr_match || row.tbl_more_cols || row.xlsx_more_cols : Rectangle {
+                                        // 数据→ 仅当有数据差异 + 表头匹配或尾部差异
+                                        if row.has_diff && (row.hdr_match || row.tbl_more_cols || row.xlsx_more_cols) : Rectangle {
                                             border-width: 1px; border-radius: 2px; width: 42px; height: 18px;
                                             background: transparent; border-color: Theme.border-light;
                                             Text { text: "数据→"; font-size: Theme.fs-tiny; color: Theme.text-primary; vertical-alignment: center; horizontal-alignment: center; }
                                             TouchArea { clicked => { root.action(i, 1); } }
                                         }
-                                        if row.hdr_match || row.tbl_more_cols || row.xlsx_more_cols : Rectangle {
+                                        // ←数据
+                                        if row.has_diff && (row.hdr_match || row.tbl_more_cols || row.xlsx_more_cols) : Rectangle {
                                             border-width: 1px; border-radius: 2px; width: 42px; height: 18px;
                                             background: transparent; border-color: Theme.border-light;
                                             Text { text: "←数据"; font-size: Theme.fs-tiny; color: Theme.text-primary; vertical-alignment: center; horizontal-alignment: center; }
                                             TouchArea { clicked => { root.action(i, 2); } }
                                         }
+                                        // 补列→ tablet has more columns
                                         if row.tbl_more_cols : Rectangle {
                                             border-width: 1px; border-radius: 2px; width: 42px; height: 18px;
                                             background: transparent; border-color: Theme.border-light;
                                             Text { text: "补列→"; font-size: Theme.fs-tiny; color: Theme.text-primary; vertical-alignment: center; horizontal-alignment: center; }
                                             TouchArea { clicked => { root.action(i, 3); } }
                                         }
-                                        if row.xlsx_more_cols : Rectangle {
-                                            border-width: 1px; border-radius: 2px; width: 42px; height: 18px;
-                                            background: transparent; border-color: Theme.border-light;
-                                            Text { text: "←补列"; font-size: Theme.fs-tiny; color: Theme.text-primary; vertical-alignment: center; horizontal-alignment: center; }
-                                            TouchArea { clicked => { root.action(i, 4); } }
-                                        }
+                                        // 强制→/← mismatch
                                         if row.hdr_mismatch : Rectangle {
                                             border-width: 1px; border-radius: 2px; width: 46px; height: 18px;
                                             background: transparent; border-color: Theme.border-light;
@@ -129,12 +116,14 @@ export component ExcelSyncDialog inherits Rectangle {
                                             Text { text: "←强制"; font-size: Theme.fs-tiny; color: Theme.text-primary; vertical-alignment: center; horizontal-alignment: center; }
                                             TouchArea { clicked => { root.action(i, 6); } }
                                         }
+                                        // 创建→ left only
                                         if row.left_only : Rectangle {
                                             border-width: 1px; border-radius: 2px; width: 46px; height: 18px;
                                             background: transparent; border-color: Theme.border-light;
                                             Text { text: "创建→"; font-size: Theme.fs-tiny; color: Theme.text-primary; vertical-alignment: center; horizontal-alignment: center; }
                                             TouchArea { clicked => { root.action(i, 7); } }
                                         }
+                                        // ←导入 right only, valid
                                         if row.right_only && !row.blocked : Rectangle {
                                             border-width: 1px; border-radius: 2px; width: 46px; height: 18px;
                                             background: transparent; border-color: Theme.border-light;
@@ -146,23 +135,17 @@ export component ExcelSyncDialog inherits Rectangle {
                                         }
                                     }
                                 }
-                                // Separator
+                                // separator
                                 Rectangle { width: 1px; background: Theme.border-light; }
-                                // Right info: row×col | matched+diff
+                                // right: row/col | matched+diff
                                 Rectangle { width: 180px; padding-left: 4px;
                                     if row.right_only : Text {
                                         text: "(新 sheet)"; font-size: Theme.fs-tiny; color: Theme.text-info; vertical-alignment: center;
                                     }
-                                    if !row.right_only : HorizontalLayout { spacing: 2px;
-                                        Text {
-                                            text: (row.rrows) + "行 " + (row.rcols) + "列 │ " + (row.matched) + "匹配";
-                                            font-size: Theme.fs-tiny; vertical-alignment: center;
-                                            color: row.has_diff ? Theme.mark-modified : Theme.text-disabled;
-                                        }
-                                        if row.has_diff : Text {
-                                            text: row.tbl_more_cols ? "+" + (row.lcols - row.matched) + "列" : row.xlsx_more_cols ? "+" + (row.rcols - row.matched) + "列" : "";
-                                            font-size: Theme.fs-tiny; color: Theme.text-info; vertical-alignment: center;
-                                        }
+                                    if !row.right_only : Text {
+                                        text: (row.rrows) + "行 " + (row.rcols) + "列 | " + (row.matched) + "匹配";
+                                        font-size: Theme.fs-tiny; vertical-alignment: center;
+                                        color: row.has_diff ? Theme.mark-modified : Theme.text-disabled;
                                     }
                                     if row.blocked : Text {
                                         text: row.blocked-reason;

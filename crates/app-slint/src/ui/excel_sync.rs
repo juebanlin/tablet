@@ -17,8 +17,7 @@ pub use excel_sync::DiffCount;
 pub enum SyncAction {
     PushData,       // [→]
     PullData,       // [←]
-    PushWithCols,   // [→含列]
-    PullWithCols,   // [←含列]
+    PushWithCols,   // [补列→]
     ForcePush,      // [强制→]
     ForcePull,      // [强制←]
     Create,         // [→创建]
@@ -142,9 +141,9 @@ fn add_table_row(
         } else if tbl_has_more {
             row.tbl_more_cols = true;
             row.actions = vec![SyncAction::PushData, SyncAction::PullData, SyncAction::PushWithCols];
-        } else { // xlsx_has_more
+        } else { // xlsx_has_more — 策划公式列等，不做补列
             row.xlsx_more_cols = true;
-            row.actions = vec![SyncAction::PushData, SyncAction::PullData];
+            row.actions = vec![SyncAction::PushData, SyncAction::PullData, SyncAction::ForcePush];
         }
 
         if !row.right_blocks_reason.is_empty() {
