@@ -150,12 +150,12 @@ public class TplHolder {
         if (meta.isTable) {
             Map<Integer, ITpl> map = new HashMap<>();
             for (Map<String, String> item : meta.rows) {
-                ITpl obj = (ITpl) fromMap(meta.clazz, item, meta.sep);
+                ITpl obj = (ITpl) fromMap(meta.key, meta.clazz, item, meta.sep);
                 map.put(obj.getId(), obj);
             }
             tables.put(meta.clazz, map);
         } else {
-            IConstTpl obj = (IConstTpl) fromMap(meta.clazz, meta.constData, meta.sep);
+            IConstTpl obj = (IConstTpl) fromMap(meta.key, meta.clazz, meta.constData, meta.sep);
             constants.put(meta.clazz, obj);
         }
     }
@@ -198,12 +198,12 @@ public class TplHolder {
             if (meta.isTable) {
                 Map<Integer, ITpl> map = new HashMap<>();
                 for (Map<String, String> item : meta.rows) {
-                    ITpl obj = (ITpl) fromMap(meta.clazz, item, meta.sep);
+                    ITpl obj = (ITpl) fromMap(meta.key, meta.clazz, item, meta.sep);
                     map.put(obj.getId(), obj);
                 }
                 newCache.put(meta.clazz, map);
             } else {
-                IConstTpl obj = (IConstTpl) fromMap(meta.clazz, meta.constData, meta.sep);
+                IConstTpl obj = (IConstTpl) fromMap(meta.key, meta.clazz, meta.constData, meta.sep);
                 constants.put(meta.clazz, obj);  // 常量表单独缓存
             }
         }
@@ -293,7 +293,7 @@ public class TplHolder {
         return toStringMap(raw);
     }
 
-    private static <T> T fromMap(Class<T> clazz, Map<String, String> map, SepConfig sep) {
+    private static <T> T fromMap(String tableName, Class<T> clazz, Map<String, String> map, SepConfig sep) {
         try {
             T obj = clazz.getDeclaredConstructor().newInstance();
 
@@ -310,7 +310,7 @@ public class TplHolder {
 
                 // 验证：配置类字段在数据源中缺失
                 if (raw == null && mismatchHandler != null) {
-                    mismatchHandler.onClassFieldMissing(clazz.getSimpleName(), field.getName(), ann.value());
+                    mismatchHandler.onClassFieldMissing(tableName, clazz.getSimpleName(), field.getName(), ann.value());
                 }
 
                 if (field.getType().isEnum() && ann.value().startsWith("@")) {
@@ -327,7 +327,7 @@ public class TplHolder {
                 for (Map.Entry<String, String> entry : map.entrySet()) {
                     String fieldName = entry.getKey();
                     if (!classFields.contains(fieldName)) {
-                        mismatchHandler.onSourceExtraField(clazz.getSimpleName(), fieldName, entry.getValue());
+                        mismatchHandler.onSourceExtraField(tableName, clazz.getSimpleName(), fieldName, entry.getValue());
                     }
                 }
             }

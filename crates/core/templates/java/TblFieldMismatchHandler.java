@@ -7,37 +7,39 @@ public interface TblFieldMismatchHandler {
 
     /**
      * 配置类字段在数据源中缺失
-     * @param className 配置类名
+     * @param tableName 配置表名（如 "item/Weapon"）
+     * @param className 配置类名（如 "WeaponTpl"）
      * @param fieldName 字段名
      * @param fieldType 字段类型
      */
-    void onClassFieldMissing(String className, String fieldName, String fieldType);
+    void onClassFieldMissing(String tableName, String className, String fieldName, String fieldType);
 
     /**
      * 数据源字段在配置类中不存在
-     * @param className 配置类名
+     * @param tableName 配置表名（如 "item/Weapon"）
+     * @param className 配置类名（如 "WeaponTpl"）
      * @param extraField 多余字段名
      * @param sourceValue 数据源中的值
      */
-    void onSourceExtraField(String className, String extraField, Object sourceValue);
+    void onSourceExtraField(String tableName, String className, String extraField, Object sourceValue);
 
     /**
      * 严格模式：任何不匹配都抛异常
      */
     class Strict implements TblFieldMismatchHandler {
         @Override
-        public void onClassFieldMissing(String className, String fieldName, String fieldType) {
+        public void onClassFieldMissing(String tableName, String className, String fieldName, String fieldType) {
             throw new IllegalStateException(
-                String.format("Field '%s' (%s) missing in data source for class %s",
-                    fieldName, fieldType, className)
+                String.format("Field '%s' (%s) missing in data source for table '%s' (class %s)",
+                    fieldName, fieldType, tableName, className)
             );
         }
 
         @Override
-        public void onSourceExtraField(String className, String extraField, Object sourceValue) {
+        public void onSourceExtraField(String tableName, String className, String extraField, Object sourceValue) {
             throw new IllegalStateException(
-                String.format("Extra field '%s' in data source for class %s (value: %s)",
-                    extraField, className, sourceValue)
+                String.format("Extra field '%s' in data source for table '%s' (class %s, value: %s)",
+                    extraField, tableName, className, sourceValue)
             );
         }
     }
@@ -47,12 +49,12 @@ public interface TblFieldMismatchHandler {
      */
     class Lenient implements TblFieldMismatchHandler {
         @Override
-        public void onClassFieldMissing(String className, String fieldName, String fieldType) {
+        public void onClassFieldMissing(String tableName, String className, String fieldName, String fieldType) {
             // 忽略
         }
 
         @Override
-        public void onSourceExtraField(String className, String extraField, Object sourceValue) {
+        public void onSourceExtraField(String tableName, String className, String extraField, Object sourceValue) {
             // 忽略
         }
     }
@@ -62,15 +64,15 @@ public interface TblFieldMismatchHandler {
      */
     class LogToConsole implements TblFieldMismatchHandler {
         @Override
-        public void onClassFieldMissing(String className, String fieldName, String fieldType) {
-            System.err.printf("[WARN] Field '%s' (%s) missing in data source for class %s%n",
-                fieldName, fieldType, className);
+        public void onClassFieldMissing(String tableName, String className, String fieldName, String fieldType) {
+            System.err.printf("[WARN] Field '%s' (%s) missing in data source for table '%s' (class %s)%n",
+                fieldName, fieldType, tableName, className);
         }
 
         @Override
-        public void onSourceExtraField(String className, String extraField, Object sourceValue) {
-            System.err.printf("[WARN] Extra field '%s' in data source for class %s (value: %s)%n",
-                extraField, className, sourceValue);
+        public void onSourceExtraField(String tableName, String className, String extraField, Object sourceValue) {
+            System.err.printf("[WARN] Extra field '%s' in data source for table '%s' (class %s, value: %s)%n",
+                extraField, tableName, className, sourceValue);
         }
     }
 }
