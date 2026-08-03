@@ -36,8 +36,8 @@ export component ExcelSyncDialog inherits Rectangle {
             VerticalLayout { spacing: 0; padding: 4px;
                 Rectangle { height: 22px; background: Theme.bg-header;
                     HorizontalLayout { spacing: 0;
-                        Rectangle { width: 200px; padding-left: 24px;
-                            Text { text: "组 / 节点"; font-size: Theme.fs-tiny; color: Theme.text-secondary; vertical-alignment: center; }
+                        Rectangle { width: 200px;
+                            Text { x: 24px; text: "组 / 节点"; font-size: Theme.fs-tiny; color: Theme.text-secondary; vertical-alignment: center; }
                         }
                         Rectangle { width: 100px;
                             Text { text: "tablet(行x列)"; font-size: Theme.fs-tiny; color: Theme.text-secondary; vertical-alignment: center; }
@@ -67,11 +67,11 @@ export component ExcelSyncDialog inherits Rectangle {
                                         font-size: Theme.fs-small; color: Theme.text-primary; vertical-alignment: center; }
                                 }}
                                 // tablet row/col
-                                Rectangle { width: 100px; padding-left: 4px;
-                                    if row.left_only : Text {
+                                Rectangle { width: 100px;
+                                    if row.left_only : Text { x: 4px;
                                         text: "(新节点)"; font-size: Theme.fs-tiny; color: Theme.text-info; vertical-alignment: center;
                                     }
-                                    if !row.left_only : Text {
+                                    if !row.left_only : Text { x: 4px;
                                         text: (row.lrows) + "行 " + (row.lcols) + "列";
                                         font-size: Theme.fs-tiny; vertical-alignment: center;
                                         color: row.has_diff ? Theme.mark-modified : Theme.text-disabled;
@@ -139,16 +139,16 @@ export component ExcelSyncDialog inherits Rectangle {
                                 // separator
                                 Rectangle { width: 1px; background: Theme.border-light; }
                                 // right: row/col | matched+diff
-                                Rectangle { width: 180px; padding-left: 4px;
-                                    if row.right_only : Text {
+                                Rectangle { width: 180px;
+                                    if row.right_only : Text { x: 4px;
                                         text: "(新 sheet)"; font-size: Theme.fs-tiny; color: Theme.text-info; vertical-alignment: center;
                                     }
-                                    if !row.right_only : Text {
+                                    if !row.right_only : Text { x: 4px;
                                         text: (row.rrows) + "行 " + (row.rcols) + "列 | " + (row.matched) + "匹配";
                                         font-size: Theme.fs-tiny; vertical-alignment: center;
                                         color: row.has_diff ? Theme.mark-modified : Theme.text-disabled;
                                     }
-                                    if row.blocked : Text {
+                                    if row.blocked : Text { x: 4px;
                                         text: row.blocked-reason;
                                         font-size: Theme.fs-tiny; color: Theme.text-error; vertical-alignment: center;
                                     }

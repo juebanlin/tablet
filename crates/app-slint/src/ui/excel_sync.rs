@@ -3,7 +3,7 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use slint::{ComponentHandle, Model, VecModel};
+use slint::{ComponentHandle, VecModel};
 
 use tablet_core::excel_sync;
 
@@ -125,7 +125,6 @@ fn add_table_row(
         let cm = excel_sync::compute_column_match(&table.schema.fields, &sheet.headers);
         row.matched_cols = cm.matched_prefix;
         let tbl_has_more = cm.tablet_only > 0;
-        let xlsx_has_more = cm.xlsx_only > 0;
 
         if cm.matched_prefix == 0 { // first col doesn't match → invalid
             row.right_blocks_reason = "表头不符合规范".into();
@@ -256,7 +255,7 @@ fn execute_action(state: &Rc<RefCell<AppState>>, row_idx: i32, act: i32) -> Resu
         // 1=PushData 3=PushWithCols 5=ForcePush 7=Create: tablet → xlsx
         1 | 3 | 5 | 7 => {
             let mode = match act { 1 => excel_sync::SyncMode::DataOnly, 3 => excel_sync::SyncMode::WithColumns, _ => excel_sync::SyncMode::Full };
-            let mode_label = match mode { excel_sync::SyncMode::DataOnly => "(仅数据)", excel_sync::SyncMode::WithColumns => "(含列)", excel_sync::SyncMode::Full => "(强制覆写)", _ => "" };
+            let mode_label = match mode { excel_sync::SyncMode::DataOnly => "(仅数据)", excel_sync::SyncMode::WithColumns => "(含列)", excel_sync::SyncMode::Full => "(强制覆写)" };
             std::fs::create_dir_all(&excel_dir).map_err(|e| format!("创建 .excel 目录失败: {}", e))?;
             let mut st = state.borrow_mut();
             let project = st.engine.find_project_mut(&pid).ok_or("找不到项目")?;
