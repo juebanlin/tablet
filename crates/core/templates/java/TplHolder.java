@@ -71,7 +71,7 @@ public class TplHolder {
     public static void init(TblDataSource source, String... packages) {
         Map<String, Class<?>> scannedRegistry = new HashMap<>(TplRegistry.getAll());
         for (String pkg : packages) {
-            scannedRegistry.putAll(ClassUtil.scanTblSourceClasses(pkg));
+            scannedRegistry.putAll(TplRegistry.scanTblSourceClasses(pkg));
         }
         init(source, scannedRegistry);
     }
