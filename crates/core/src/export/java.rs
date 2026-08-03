@@ -76,6 +76,9 @@ fn gen_table_tpl(table: &Table, pkg: &str, group: &str, enum_names: &HashSet<Str
     for f in &fields {
         let jtype = java_field_type(&f.tbl_type, enum_names);
         let name = to_camel_case(&f.name);
+        if !f.desc.is_empty() {
+            writeln!(s, "    /** {} */", f.desc).unwrap();
+        }
         writeln!(s, "    @TblFieldType(\"{}\")", f.tbl_type).unwrap();
         writeln!(s, "    private {} {};", jtype, name).unwrap();
     }
@@ -120,6 +123,9 @@ fn gen_constant_tpl(constant: &Constant, pkg: &str, group: &str, enum_names: &Ha
     for e in &entries {
         let jtype = java_field_type(&e.tbl_type, enum_names);
         let name = to_camel_case(&e.name);
+        if !e.desc.is_empty() {
+            writeln!(s, "    /** {} */", e.desc).unwrap();
+        }
         writeln!(s, "    @TblFieldType(\"{}\")", e.tbl_type).unwrap();
         writeln!(s, "    private {} {};", jtype, name).unwrap();
     }
