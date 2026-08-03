@@ -6,28 +6,71 @@ import java.util.*;
 
 @SuppressWarnings("unchecked")
 public class TplHolder {
-    private static final Map<Class<?>, Map<Integer, ? extends ITpl>> tables = new HashMap<>();
+    private static volatile Map<Class<?>, Map<Integer, ? extends ITpl>> tables = new HashMap<>();
     private static final Map<Class<?>, IConstTpl> constants = new HashMap<>();
     private static IJsonParser jsonParser = new SimpleJsonParser();
     private static SimpleXmlParser xmlParser = new SimpleXmlParser();
+    private static TblDataSource dataSource;
     private static String dataDir;
     private static String dataExt;
 
-    public static void init(String dir) {
-        dataDir = dir;
-        dataExt = ".xml";
-        loadAll();
+    /**
+     * 初始化（使用数据源抽象）
+     * @param source 数据源实现
+     */
+    public static void init(TblDataSource source) {
+        dataSource = source;
+        dataExt = source.getDataFormat();
+        dataDir = null;  // 不再依赖 dataDir
+
+        // 从 TplRegistry 获取所有注册的类
+        Map<String, Class<?>> registry = TplRegistry.getAll();
+
+        // 批量校验配置完整性
+        dataSource.validateRequiredData(registry.keySet());
+
+        // 批量加载
+        loadAllFromSource(registry.keySet());
     }
 
+    /**
+     * 兼容方法：XML 格式 + 文件系统
+     */
+    public static void initXml(String dir) {
+        dataDir = dir;
+        dataSource = new FileSystemTblDataSource(dir, ".xml");
+        dataExt = ".xml";
+        init(dataSource);
+    }
+
+    /**
+     * 兼容方法：JSON 格式 + 文件系统
+     */
     public static void initJson(String dir) {
         initJson(dir, new SimpleJsonParser());
     }
 
+    /**
+     * 兼容方法：JSON 格式 + 自定义解析器
+     */
     public static void initJson(String dir, IJsonParser parser) {
         dataDir = dir;
-        dataExt = ".json";
         jsonParser = parser;
-        loadAll();
+        dataSource = new FileSystemTblDataSource(dir, ".json");
+        dataExt = ".json";
+        init(dataSource);
+    }
+
+    private static void loadAllFromSource(Set<String> keys) {
+        Map<String, String> rawDataMap = dataSource.loadRawDataBatch(keys);
+        for (Map.Entry<String, String> entry : rawDataMap.entrySet()) {
+            String key = entry.getKey();
+            String content = entry.getValue();
+            if (content == null) continue;
+
+            TblMeta meta = parseFromRaw(key, content);
+            if (meta != null) apply(meta);
+        }
     }
 
     private static void loadAll() {
@@ -50,6 +93,19 @@ public class TplHolder {
             if (clazz == null) return null;
 
             String content = new String(Files.readAllBytes(path), "UTF-8");
+            return parseFromRaw(key, clazz, content);
+        } catch (Exception e) { throw new RuntimeException("Failed to parse " + path, e); }
+    }
+
+    private static TblMeta parseFromRaw(String key, String content) {
+        Class<?> clazz = TplRegistry.get(key);
+        if (clazz == null) return null;
+        return parseFromRaw(key, clazz, content);
+    }
+
+    private static TblMeta parseFromRaw(String key, Class<?> clazz, String content) {
+        try {
+            String full = key + dataExt;
             SepConfig sep = parseSep(content, full);
 
             if (ITpl.class.isAssignableFrom(clazz)) {
@@ -58,7 +114,7 @@ public class TplHolder {
                 return TblMeta.constant(key, clazz, sep, parseConstData(content, full));
             }
             return null;
-        } catch (Exception e) { throw new RuntimeException("Failed to parse " + path, e); }
+        } catch (Exception e) { throw new RuntimeException("Failed to parse " + key, e); }
     }
 
     public static void apply(TblMeta meta) {
@@ -78,11 +134,82 @@ public class TplHolder {
     public static void reload(String key) {
         Class<?> clazz = TplRegistry.get(key);
         if (clazz == null) throw new IllegalArgumentException("Unknown registry key: " + key);
-        Path path = Paths.get(dataDir, key + dataExt);
-        if (!Files.exists(path)) throw new IllegalArgumentException("Data file not found: " + path);
-        TblMeta meta = parseFile(path);
-        if (meta == null) throw new IllegalStateException("Failed to parse: " + path);
+
+        // 优先从 dataSource 加载
+        String content = null;
+        if (dataSource != null) {
+            content = dataSource.loadRawData(key);
+        }
+
+        // Fallback: 从文件系统加载（向后兼容）
+        if (content == null && dataDir != null) {
+            Path path = Paths.get(dataDir, key + dataExt);
+            if (!Files.exists(path)) throw new IllegalArgumentException("Data file not found: " + path);
+            TblMeta meta = parseFile(path);
+            if (meta == null) throw new IllegalStateException("Failed to parse: " + path);
+            apply(meta);
+            return;
+        }
+
+        if (content == null) throw new IllegalArgumentException("Data not found: " + key);
+
+        TblMeta meta = parseFromRaw(key, content);
+        if (meta == null) throw new IllegalStateException("Failed to parse: " + key);
         apply(meta);
+    }
+
+    /**
+     * 批量热更新：原子替换缓存（Copy-on-Write）
+     * @param keys 要更新的配置键列表
+     * @return 旧缓存快照（用于回滚）
+     */
+    public static Map<Class<?>, Map<Integer, ? extends ITpl>> reloadConfigs(List<String> keys) {
+        // 1. 复制当前缓存
+        Map<Class<?>, Map<Integer, ? extends ITpl>> oldCache = tables;
+        Map<Class<?>, Map<Integer, ? extends ITpl>> newCache = new HashMap<>(oldCache);
+
+        // 2. 批量加载新数据到快照
+        Map<String, String> rawDataMap = dataSource.loadRawDataBatch(keys);
+        for (Map.Entry<String, String> entry : rawDataMap.entrySet()) {
+            String key = entry.getKey();
+            String content = entry.getValue();
+            if (content == null) continue;
+
+            TblMeta meta = parseFromRaw(key, content);
+            if (meta == null) continue;
+
+            if (meta.isTable) {
+                Map<Integer, ITpl> map = new HashMap<>();
+                for (Map<String, String> item : meta.rows) {
+                    ITpl obj = (ITpl) fromMap(meta.clazz, item, meta.sep);
+                    map.put(obj.getId(), obj);
+                }
+                newCache.put(meta.clazz, map);
+            } else {
+                IConstTpl obj = (IConstTpl) fromMap(meta.clazz, meta.constData, meta.sep);
+                constants.put(meta.clazz, obj);  // 常量表单独缓存
+            }
+        }
+
+        // 3. 原子替换（volatile 写）
+        tables = newCache;
+
+        // 4. 返回旧缓存（用于回滚）
+        return oldCache;
+    }
+
+    /**
+     * 恢复缓存（回滚批量更新）
+     */
+    public static void restoreCache(Map<Class<?>, Map<Integer, ? extends ITpl>> cache) {
+        tables = cache;
+    }
+
+    /**
+     * 获取当前数据源（供 GM 工具写入配置）
+     */
+    public static TblDataSource getDataSource() {
+        return dataSource;
     }
 
     public static <T extends ITpl> T get(Class<T> clazz, int id) {

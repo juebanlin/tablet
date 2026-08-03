@@ -16,6 +16,9 @@ const TPL_REGISTRY: &str = include_str!("../../templates/java/TplRegistry.java")
 const TPL_TBL_META: &str = include_str!("../../templates/java/TblMeta.java");
 const TPL_TBL_TYPE: &str = include_str!("../../templates/java/TblFieldType.java");
 const TPL_TBL_SOURCE: &str = include_str!("../../templates/java/TblSource.java");
+const TPL_TBL_DATA_SOURCE: &str = include_str!("../../templates/java/TblDataSource.java");
+const TPL_FILE_SYSTEM_TBL_DATA_SOURCE: &str = include_str!("../../templates/java/FileSystemTblDataSource.java");
+const TPL_CLASSPATH_TBL_DATA_SOURCE: &str = include_str!("../../templates/java/ClasspathTblDataSource.java");
 const TPL_PARADIGM: &str = include_str!("../../templates/java/Paradigm.java");
 const TPL_SEP_CONFIG: &str = include_str!("../../templates/java/SepConfig.java");
 const TPL_TUPLE2: &str = include_str!("../../templates/java/Tuple2.java");
@@ -216,6 +219,9 @@ pub fn export_all_java(project: &Project) -> Result<super::ExportResult> {
     collect(&output_dir, "TblFieldType.java", &render(TPL_TBL_TYPE));
     collect(&output_dir, "TblSource.java", &render(TPL_TBL_SOURCE));
     collect(&output_dir, "TblMeta.java", &render(TPL_TBL_META));
+    collect(&output_dir, "TblDataSource.java", &render(TPL_TBL_DATA_SOURCE));
+    collect(&output_dir, "FileSystemTblDataSource.java", &render(TPL_FILE_SYSTEM_TBL_DATA_SOURCE));
+    collect(&output_dir, "ClasspathTblDataSource.java", &render(TPL_CLASSPATH_TBL_DATA_SOURCE));
     collect(&output_dir, "Paradigm.java", &render(TPL_PARADIGM));
     collect(&output_dir, "SepConfig.java", &render(TPL_SEP_CONFIG));
     collect(&types_dir, "Tuple2.java", &render(TPL_TUPLE2));

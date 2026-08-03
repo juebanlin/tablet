@@ -309,7 +309,7 @@ fn build_test_main(schema: &TblSchema, pkg: &str, format: &str) -> String {
     writeln!(s, "    public static void main(String[] args) {{").unwrap();
     writeln!(s, "        String dataDir = args.length > 0 ? args[0] : \"gen/server/data\";").unwrap();
     if format == "xml" {
-        writeln!(s, "        TplHolder.init(dataDir);").unwrap();
+        writeln!(s, "        TplHolder.initXml(dataDir);").unwrap();
     } else {
         writeln!(s, "        TplHolder.initJson(dataDir);").unwrap();
     }
