@@ -79,6 +79,8 @@ export component AppWindow inherits Window {
     callback excel-delete-clicked();
     callback excel-refresh-clicked();
     callback excel-file-opened(int);
+    callback excel-toggle-file(int);
+    callback excel-open-selected();
 
     // ── Excel Sync Dialog ────────────────────────────────
     in-out property <bool> dlg-excel-sync-open: false;
@@ -743,6 +745,8 @@ export component AppWindow inherits Window {
             excel-delete-clicked => { root.excel-delete-clicked(); }
             excel-refresh-clicked => { root.excel-refresh-clicked(); }
             excel-file-opened(idx) => { root.excel-file-opened(idx); }
+            excel-toggle-file(i) => { root.excel-toggle-file(i); }
+            excel-open-selected => { root.excel-open-selected(); }
         }
     }
 

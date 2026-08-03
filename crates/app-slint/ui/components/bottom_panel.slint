@@ -90,6 +90,8 @@ export component BottomPanel inherits Rectangle {
                 delete-clicked => { root.excel-delete-clicked(); }
                 refresh-clicked => { root.excel-refresh-clicked(); }
                 file-opened(idx) => { root.excel-file-opened(idx); }
+                toggle-file(i) => { root.excel-toggle-file(i); }
+                open-selected => { root.excel-open-selected(); }
             }
         }
     }
@@ -102,4 +104,6 @@ export component BottomPanel inherits Rectangle {
     callback excel-delete-clicked();
     callback excel-refresh-clicked();
     callback excel-file-opened(int);
+    callback excel-toggle-file(int);
+    callback excel-open-selected();
 }

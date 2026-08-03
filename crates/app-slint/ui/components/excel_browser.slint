@@ -14,7 +14,6 @@ export component ExcelBrowser inherits Rectangle {
     background: Theme.bg-panel;
     VerticalLayout {
         spacing: 0;
-        // Toolbar
         Rectangle {
             height: 22px;
             background: Theme.bg-toolbar;
@@ -37,40 +36,35 @@ export component ExcelBrowser inherits Rectangle {
                     Text { text: "删除"; font-size: Theme.fs-tiny; color: Theme.text-secondary; vertical-alignment: center; horizontal-alignment: center; }
                     TouchArea { clicked => { if root.has-selection { root.delete-clicked(); } } }
                 }
+                Rectangle { width: 40px; height: 18px;
+                    background: Theme.bg-row-hover; border-radius: 2px;
+                    Text { text: "打开"; font-size: Theme.fs-tiny; color: Theme.text-secondary; vertical-alignment: center; horizontal-alignment: center; }
+                    TouchArea { clicked => { root.open-selected(); } }
+                }
             }
         }
-        // File list
         ScrollView {
-            VerticalLayout { spacing: 2px; padding: 2px;
+            VerticalLayout { spacing: 4px; padding: 4px;
                 if root.files.length == 0 : Rectangle { height: 22px;
                     Text { x: 6px; text: "(无 Excel 文件)"; font-size: Theme.fs-tiny; color: Theme.text-disabled; vertical-alignment: center; }
                 }
                 for file[i] in root.files : Rectangle {
-                    height: 28px;
-                    border-color: Theme.border-light;
+                    height: 30px;
                     border-width: 1px; border-radius: 3px;
-                    if root.selected[i] : Rectangle {
-                        background: Theme.bg-row-selected;
-                        border-color: Theme.border-selected; border-width: 1px; border-radius: 3px;
+                    border-color: root.selected[i] ? Theme.border-selected : Theme.border-light;
+                    background: root.selected[i] ? Theme.bg-row-selected : Theme.bg-panel;
+                    Text {
+                        x: 8px; text: "📄 " + file;
+                        font-size: Theme.fs-small; color: Theme.text-primary; vertical-alignment: center;
                     }
-                    HorizontalLayout { spacing: 4px;
-                        // selectable area
-                        Rectangle {
-                            HorizontalLayout { spacing: 4px; padding-left: 4px;
-                                Text { text: "📄"; font-size: Theme.fs-small; vertical-alignment: center; width: 20px; }
-                                Text { text: file; font-size: Theme.fs-small; color: Theme.text-primary; vertical-alignment: center; }
-                            }
-                            TouchArea { clicked => { root.toggle-file(i); } }
-                        }
-                        Rectangle { horizontal-stretch: 1; }
-                        // "打开" button — separate touch area
-                        Rectangle {
-                            width: 36px; height: 20px; border-radius: 2px;
-                            background: Theme.bg-toolbar;
-                            border-color: Theme.border-light; border-width: 1px;
-                            Text { text: "打开"; font-size: Theme.fs-tiny; color: Theme.text-secondary; vertical-alignment: center; horizontal-alignment: center; }
-                            TouchArea { clicked => { root.file-opened(i); } }
-                        }
+                    if root.selected[i] : Rectangle {
+                        x: parent.width - 24px; y: 6px; width: 16px; height: 16px;
+                        border-radius: 2px; background: Theme.bg-row-selected;
+                        Text { text: "✓"; font-size: Theme.fs-tiny; color: Theme.text-secondary; vertical-alignment: center; horizontal-alignment: center; }
+                    }
+                    TouchArea {
+                        double-clicked => { root.file-opened(i); }
+                        clicked => { root.toggle-file(i); }
                     }
                 }
             }
@@ -78,4 +72,5 @@ export component ExcelBrowser inherits Rectangle {
     }
 
     callback toggle-file(int);
+    callback open-selected();
 }

@@ -115,6 +115,57 @@ pub fn wire(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
         }
     });
 
+    // toggle-file: radio-style — click selects ONLY this file, deselects all others
+    let ui_h2 = ui.as_weak();
+    ui.on_excel_toggle_file(move |idx| {
+        let Some(u) = ui_h2.upgrade() else { return };
+        let sel_model = u.get_excel_selected();
+        let n = sel_model.row_count();
+        if idx >= n as i32 { return; }
+        let cur = sel_model.row_data(idx as usize).unwrap_or(false);
+        u.set_excel_has_selection(!cur);
+        let mut new_sel = vec![false; n];
+        if !cur { new_sel[idx as usize] = true; }
+        u.set_excel_selected(slint::ModelRc::new(slint::VecModel::from(new_sel)));
+    });
+
+    // open-selected: open all selected files
+    let s = state.clone();
+    let ui_h2 = ui.as_weak();
+    ui.on_excel_open_selected(move || {
+        let Some(u) = ui_h2.upgrade() else { return };
+        let files_model = u.get_excel_files();
+        let sel_model = u.get_excel_selected();
+        let n = files_model.row_count();
+        let mut found = false;
+        for i in 0..n {
+            if sel_model.row_data(i).unwrap_or(false) {
+                found = true;
+                if let Some(name) = files_model.row_data(i) {
+                    let st = s.borrow();
+                    if let Some(pid) = st.engine.active_project_id() {
+                        if let Some(project) = st.engine.find_project(pid) {
+                            let path = project.project_root.join(".excel").join(name.as_str());
+                            let _ = open::that(&path);
+                        }
+                    }
+                }
+            }
+        }
+        if !found {
+            // open the first file as fallback
+            if let Some(name) = files_model.row_data(0) {
+                let st = s.borrow();
+                if let Some(pid) = st.engine.active_project_id() {
+                    if let Some(project) = st.engine.find_project(pid) {
+                        let path = project.project_root.join(".excel").join(name.as_str());
+                        let _ = open::that(&path);
+                    }
+                }
+            }
+        }
+    });
+
     let s = state.clone();
     let ui_h2 = ui.as_weak();
     ui.on_excel_file_opened(move |idx| {
