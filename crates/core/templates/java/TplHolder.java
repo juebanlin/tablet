@@ -250,6 +250,33 @@ public class TplHolder {
     }
 
     /**
+     * 单表热更新（通过 ITpl 类获取表名）
+     */
+    public static <T extends ITpl> void reloadTpl(Class<T> clazz) {
+        String key = getTableName(clazz);
+        reload(key);
+    }
+
+    /**
+     * 常量表热更新（通过 IConstTpl 类获取表名）
+     */
+    public static <T extends IConstTpl> void reloadConst(Class<T> clazz) {
+        String key = getTableName(clazz);
+        reload(key);
+    }
+
+    /**
+     * 从类的 @TblSource 注解中提取表名
+     */
+    private static String getTableName(Class<?> clazz) {
+        TblSource annotation = clazz.getAnnotation(TblSource.class);
+        if (annotation == null) {
+            throw new IllegalArgumentException("Class " + clazz.getName() + " is not annotated with @TblSource");
+        }
+        return annotation.name();
+    }
+
+    /**
      * 批量热更新：原子替换缓存（Copy-on-Write）
      * @param keys 要更新的配置键列表
      * @return 旧缓存快照（用于回滚）

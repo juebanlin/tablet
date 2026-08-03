@@ -17,13 +17,10 @@ TplHolder 已重构为支持数据源抽象，参考配置加载指南的 Config
 TplHolder.initXml("data/config");           // 原 init(String)，改名更明确
 TplHolder.initJson("data/config");
 
-// 自定义解析器（两种方式）
-// 方式1：先设置后初始化（推荐）
+// 自定义解析器（在 init 前设置）
 TplHolder.setJsonParser(new MyJsonParser());
+TplHolder.setXmlParser(new MyXmlParser());
 TplHolder.initJson("data/config");
-
-// 方式2：一步到位（兼容旧代码）
-TplHolder.initJson("data/config", new MyJsonParser());
 
 // 查询 API 完全不变
 Weapon weapon = TplHolder.get(Weapon.class, 1001);
@@ -35,7 +32,30 @@ GlobalConst consts = TplHolder.getConst(GlobalConst.class);
 
 ## 核心改进
 
-### 1. 注册表解耦（新增）
+### 1. 格式校验（新增）
+
+TplHolder 现在会自动校验配置文件内容格式是否与声明的格式匹配：
+
+```java
+// 示例：声明格式为 .xml，但实际内容是 JSON
+TplHolder.initXml("data/config");  // 声明使用 XML 格式
+
+// 如果 data/config/Item.xml 的内容是 {"items": [...]}，会抛出异常：
+// IllegalStateException: Format mismatch for 'Item': expected XML (.xml) but content looks like JSON
+```
+
+**校验规则**：
+- XML 格式：内容必须以 `<` 开头
+- JSON 格式：内容必须以 `{` 或 `[` 开头
+- 在 `loadAllFromSource()` 阶段对每个配置文件进行校验
+- 校验失败会抛出 `IllegalStateException` 并中断启动
+
+**好处**：
+- **快速定位问题**：不再是模糊的解析异常，而是明确指出格式不匹配
+- **避免人为错误**：防止 `.xml` 文件保存了 JSON 内容导致的运行时错误
+- **启动时校验**：问题在 init 阶段就被发现，而不是运行时访问配置时才报错
+
+### 2. 注册表解耦
 
 现在 TplHolder 不再绑死 TplRegistry，支持自定义注册表注入：
 
@@ -45,19 +65,20 @@ TplHolder.init(new FileSystemTblDataSource("data/config", ".xml"));
 
 // 场景B：自定义注册表（支持外部配置）
 Map<String, Class<?>> customRegistry = new HashMap<>();
-customRegistry.put("item/Weapon", Weapon.class);
-customRegistry.put("hero/Hero", Hero.class);
-customRegistry.put("external/Plugin", PluginConfig.class);  // 外部模块配置
+customRegistry.put("Weapon", Weapon.class);
+customRegistry.put("Hero", Hero.class);
+customRegistry.put("Plugin", PluginConfig.class);  // 外部模块配置
 TplHolder.init(new FileSystemTblDataSource("data/config", ".xml"), customRegistry);
 
-// 场景C：运行时扫描 + 手动注入
-Map<String, Class<?>> registry = new HashMap<>(TplRegistry.getAll());
-// 扫描外部插件目录，加入更多配置类
-registry.put("plugin/Quest", QuestConfig.class);
-TplHolder.init(new MongoTblDataSource(collection, ".json"), registry);
+// 场景C：运行时扫描指定包
+TplHolder.init(
+    new FileSystemTblDataSource("data/config", ".xml"),
+    "com.game.config.tpl",
+    "com.game.plugin.config.tpl"
+);
 ```
 
-### 2. 查询接口（新增）
+### 3. 查询接口（新增）
 
 暴露已注册的表名和双向映射：
 
@@ -67,14 +88,14 @@ Set<String> keys = TplHolder.getRegisteredKeys();
 System.out.println("Registered tables: " + keys);
 
 // key → Class 查询
-Class<?> clazz = TplHolder.getConfigClass("item/Weapon");
+Class<?> clazz = TplHolder.getConfigClass("Item");
 if (clazz != null) {
-    System.out.println("Weapon class: " + clazz.getName());
+    System.out.println("Item class: " + clazz.getName());
 }
 
 // Class → key 反向查询
-String key = TplHolder.getTableKey(Weapon.class);
-System.out.println("Weapon key: " + key);
+String key = TplHolder.getTableKey(ItemTpl.class);
+System.out.println("Item key: " + key);
 
 // GM 工具：列出所有可推送的配置
 for (String key : TplHolder.getRegisteredKeys()) {
@@ -82,25 +103,69 @@ for (String key : TplHolder.getRegisteredKeys()) {
 }
 ```
 
-## Parser 配置
+### 4. 热更新优化（新增）
 
-Parser 现在支持两种配置方式：
-
-### 方式1：直接修改静态变量
+新增了通过类自动获取表名的热更新方法，提供类型安全的 API：
 
 ```java
-// 在 init 前修改（适合全局配置）
-TplHolder.jsonParser = new GsonJsonParser();
-TplHolder.xmlParser = new CustomXmlParser();
-TplHolder.initJson("data/config");
+// 旧方式：需要手动输入表名字符串（容易拼错）
+TplHolder.reload("Item");
+
+// 新方式1：通过配置类自动获取表名（推荐，类型安全）
+TplHolder.reloadTpl(ItemTpl.class);  // 自动从 @TblSource(name="Item") 获取
+
+// 新方式2：常量表热更新
+TplHolder.reloadConst(GameConstTpl.class);
+
+// 批量原子更新（保持不变）
+TplHolder.reloadConfigs(Arrays.asList("Item", "HeroBase"));
 ```
 
-### 方式2：使用 setter 方法
+**优势**：
+- **类型安全**：编译时检查类是否存在，IDE 支持自动补全和重构
+- **避免拼写错误**：不需要手动输入表名字符串
+- **自动获取**：从类的 `@TblSource(name="...")` 注解自动提取表名
+
+### 5. 日志输出优化（新增）
+
+日志输出更加精简和规范：
+
+```
+==================== TplHolder Initialization START ====================
+Data Source: FileSystemTblDataSource (format: .xml)
+Registered Tables: 5
+Validating 5 registered tables...
+Loading all tables...
+loadTable: Item (42 rows) in 15ms
+loadTable: HeroBase (28 rows) in 12ms
+loadConst: GameConst in 3ms
+Summary: 4 tables, 1 constants, 70 total rows in 45ms
+==================== TplHolder Initialization END ====================
+```
+
+**日志级别规范**：
+- **info 级别**：配置加载相关日志（启动、加载、热更新、统计）
+- **warn 级别**：配置问题警告（内容为空、格式不匹配）
+- **debug 级别**：详细的调试信息（包扫描、详细步骤）
+
+**优化**：
+- 数据源和格式信息合并为一行显示
+- 不使用 debug 级别记录常规加载流程（配置加载属于关键操作）
+- 精简日志输出，避免冗余信息
+
+## Parser 配置
+
+Parser 现在支持通过 setter 方法配置：
 
 ```java
-// 在 init 前调用 setter（推荐，更清晰）
+// 在 init 前调用 setter（推荐）
 TplHolder.setJsonParser(new GsonJsonParser());
 TplHolder.setXmlParser(new CustomXmlParser());
+TplHolder.initJson("data/config");
+
+// 或者直接修改静态变量
+TplHolder.jsonParser = new GsonJsonParser();
+TplHolder.xmlParser = new CustomXmlParser();
 TplHolder.initJson("data/config");
 ```
 
@@ -130,13 +195,13 @@ TblDataSource source = TplHolder.getDataSource();
 
 // 2. 批量写入配置
 Map<String, String> configs = new HashMap<>();
-configs.put("item/Weapon", newWeaponXml);
-configs.put("hero/Hero", newHeroXml);
+configs.put("Item", newItemXml);
+configs.put("HeroBase", newHeroXml);
 Map<String, Boolean> results = source.updateConfigs(configs);
 
 // 3. 触发热更新（原子替换，Copy-on-Write）
 Map<Class<?>, Map<Integer, ? extends ITpl>> oldCache = 
-    TplHolder.reloadConfigs(Arrays.asList("item/Weapon", "hero/Hero"));
+    TplHolder.reloadConfigs(Arrays.asList("Item", "HeroBase"));
 
 // 4. 如果失败，可以回滚
 if (somethingWrong) {
@@ -147,9 +212,17 @@ if (somethingWrong) {
 ### 3. 单表热更新
 
 ```java
-// 修改单个配置文件
-source.updateConfig("item/Weapon", newXml);
-TplHolder.reload("item/Weapon");  // 单表 put，无需原子替换
+// 方式1：通过表名字符串
+source.updateConfig("Item", newXml);
+TplHolder.reload("Item");  // 单表 put，无需原子替换
+
+// 方式2：通过类获取表名（类型安全，推荐）
+source.updateConfig("Item", newXml);
+TplHolder.reloadTpl(ItemTpl.class);  // 自动从 @TblSource 注解获取表名
+
+// 方式3：常量表热更新
+source.updateConfig("GameConst", newXml);
+TplHolder.reloadConst(GameConstTpl.class);
 ```
 
 ## 数据源接口
@@ -231,8 +304,8 @@ source.updateConfig("item/Weapon", newXml);
 
 // 1. 合并注册表
 Map<String, Class<?>> registry = new HashMap<>(TplRegistry.getAll());
-registry.put("plugin/Quest", QuestConfig.class);        // 外部插件
-registry.put("plugin/Activity", ActivityConfig.class);  // 外部插件
+registry.put("Quest", QuestConfig.class);        // 外部插件
+registry.put("Activity", ActivityConfig.class);  // 外部插件
 
 // 2. 使用自定义注册表初始化
 TplHolder.init(new FileSystemTblDataSource("data/config", ".xml"), registry);
@@ -286,7 +359,7 @@ public class GMConfigPanel {
         }
         
         // 2. 推送到数据源
-        TplDataSource source = TplHolder.getDataSource();
+        TblDataSource source = TplHolder.getDataSource();
         source.updateConfig(key, content);
         
         // 3. 触发热更新
@@ -314,10 +387,12 @@ TplHolder.init(source);
 |------|------|
 | `initXml(String path)` | 兼容方法：XML + 文件系统 |
 | `initJson(String path)` | 兼容方法：JSON + 文件系统 |
-| `initJson(String path, IJsonParser parser)` | 兼容方法：JSON + 自定义解析器 |
 | `init(TblDataSource source)` | 新方法：使用数据源抽象（从 TplRegistry 读取注册表） |
 | `init(TblDataSource source, Map<String, Class<?>> registry)` | **新方法**：注入自定义注册表（解耦 TplRegistry） |
-| `reload(String key)` | 单表热更新 |
+| `init(TblDataSource source, String... packages)` | **新方法**：运行时扫描指定包下的配置类 |
+| `reload(String key)` | 单表热更新（通过表名字符串） |
+| `<T extends ITpl> reloadTpl(Class<T>)` | **新方法**：单表热更新（通过类自动获取 @TblSource 注解的表名） |
+| `<T extends IConstTpl> reloadConst(Class<T>)` | **新方法**：常量表热更新（通过类自动获取 @TblSource 注解的表名） |
 | `reloadConfigs(List<String> keys)` | 批量原子热更新（Copy-on-Write） |
 | `restoreCache(Map)` | 回滚批量更新 |
 | `getDataSource()` | 获取当前数据源（供 GM 写入） |

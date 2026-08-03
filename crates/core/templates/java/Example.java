@@ -30,8 +30,14 @@ public class Example {
         // Map<Integer, ItemTpl> allItems = TplHolder.getTable(ItemTpl.class);
         // allItems.values().forEach(item -> System.out.println(item.name));
 
-        // 热更新单个表
+        // 热更新单个表（方式1：通过表名字符串）
         // TplHolder.reload("Item");
+
+        // 热更新单个表（方式2：通过类自动获取表名，类型安全）
+        // TplHolder.reloadTpl(ItemTpl.class);
+
+        // 热更新常量表（通过类自动获取表名）
+        // TplHolder.reloadConst(GameConstTpl.class);
 
         // 批量热更新（原子替换）
         // TplHolder.reloadConfigs(Arrays.asList("Item", "HeroBase"));
