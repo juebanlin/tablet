@@ -228,7 +228,7 @@ public class TplHolder {
     private static <T> T fromMap(Class<T> clazz, Map<String, String> map, SepConfig sep) {
         try {
             T obj = clazz.getDeclaredConstructor().newInstance();
-            for (var field : clazz.getDeclaredFields()) {
+            for (java.lang.reflect.Field field : clazz.getDeclaredFields()) {
                 field.setAccessible(true);
                 TblFieldType ann = field.getAnnotation(TblFieldType.class);
                 if (ann == null) continue;
