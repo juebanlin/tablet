@@ -11,7 +11,7 @@ public class TplHolder {
 
     // Parser 配置：外部可直接修改静态变量，或通过 setter 在 init 前设置
     private static IJsonParser jsonParser = new SimpleJsonParser();
-    private static SimpleXmlParser xmlParser = new SimpleXmlParser();
+    private static IXmlParser xmlParser = new SimpleXmlParser();
 
     private static TblDataSource dataSource;
     private static String dataExt;
@@ -37,7 +37,7 @@ public class TplHolder {
     /**
      * 设置 XML 解析器（在 init 前调用）
      */
-    public static void setXmlParser(SimpleXmlParser parser) {
+    public static void setXmlParser(IXmlParser parser) {
         xmlParser = parser;
     }
 
@@ -64,8 +64,10 @@ public class TplHolder {
      */
     public static void init(TblDataSource source, Map<String, Class<?>> tableRegistry) {
         long startTime = System.currentTimeMillis();
-        logger.info("Initializing with " + source.getClass().getSimpleName() +
-                   " (format: " + source.getDataFormat() + ")");
+
+        logger.info("==================== TplHolder Initialization START ====================");
+        logger.info("Data Source: " + source.getClass().getSimpleName() + " (format: " + source.getDataFormat() + ")");
+        logger.info("Registered Tables: " + tableRegistry.size());
 
         dataSource = source;
         dataExt = source.getDataFormat();
@@ -77,8 +79,6 @@ public class TplHolder {
             classToKey.put(entry.getValue(), entry.getKey());
         }
 
-        logger.info("Registered " + registry.size() + " tables");
-
         // 校验并加载所有配置
         validateAndLoadAll();
 
@@ -87,8 +87,10 @@ public class TplHolder {
         for (Map<Integer, ? extends ITpl> map : tables.values()) {
             totalRows += map.size();
         }
-        logger.info("Initialization completed: " + tables.size() + " tables, " +
-                   constants.size() + " constants, " + totalRows + " total rows in " + elapsed + "ms");
+
+        logger.info("Summary: " + tables.size() + " tables, " + constants.size() +
+                   " constants, " + totalRows + " total rows in " + elapsed + "ms");
+        logger.info("==================== TplHolder Initialization END ====================");
     }
 
     /**
@@ -154,15 +156,21 @@ public class TplHolder {
                 continue;
             }
 
+            // 格式校验：检测 content 是否与声明的格式匹配
+            validateContentFormat(key, content);
+
+            long tableStartTime = System.currentTimeMillis();
             TblMeta meta = parseFromRaw(key, content);
             if (meta != null) {
                 apply(meta);
+                long tableElapsed = System.currentTimeMillis() - tableStartTime;
+
                 if (meta.isTable) {
                     Map<Integer, ? extends ITpl> loaded = tables.get(meta.clazz);
                     int rowCount = loaded != null ? loaded.size() : 0;
-                    logger.debug("Loaded table '" + key + "' (" + rowCount + " rows)");
+                    logger.info("loadTable: " + key + " (" + rowCount + " rows) in " + tableElapsed + "ms");
                 } else {
-                    logger.debug("Loaded constant '" + key + "'");
+                    logger.info("loadConst: " + key + " in " + tableElapsed + "ms");
                 }
             }
         }
@@ -189,6 +197,31 @@ public class TplHolder {
         } else {
             IConstTpl obj = (IConstTpl) TplUtil.fromMap(meta.key, meta.clazz, meta.constData, meta.sep, mismatchHandler);
             constants.put(meta.clazz, obj);
+        }
+    }
+
+    /**
+     * 校验内容格式是否与声明的格式匹配
+     */
+    private static void validateContentFormat(String key, String content) {
+        String trimmed = content.trim();
+        boolean looksLikeXml = trimmed.startsWith("<");
+        boolean looksLikeJson = trimmed.startsWith("{") || trimmed.startsWith("[");
+
+        if (".xml".equals(dataExt) && !looksLikeXml) {
+            throw new IllegalStateException(
+                "Format mismatch for '" + key + "': expected XML (declared format: " + dataExt +
+                "), but content looks like " + (looksLikeJson ? "JSON" : "plain text") +
+                ". Check if you are using initXml() with JSON files or vice versa."
+            );
+        }
+
+        if (".json".equals(dataExt) && !looksLikeJson) {
+            throw new IllegalStateException(
+                "Format mismatch for '" + key + "': expected JSON (declared format: " + dataExt +
+                "), but content looks like " + (looksLikeXml ? "XML" : "plain text") +
+                ". Check if you are using initJson() with XML files or vice versa."
+            );
         }
     }
 

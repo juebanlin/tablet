@@ -5,8 +5,9 @@ import org.w3c.dom.*;
 import java.io.*;
 import java.util.*;
 
-public class SimpleXmlParser {
+public class SimpleXmlParser implements IXmlParser {
 
+    @Override
     public Map<String, String> parseObject(String xml) {
         try {
             Document doc = parse(xml);
@@ -15,6 +16,7 @@ public class SimpleXmlParser {
         } catch (Exception e) { throw new RuntimeException(e); }
     }
 
+    @Override
     public List<Map<String, String>> parseArray(String xml) {
         try {
             Document doc = parse(xml);
@@ -31,6 +33,7 @@ public class SimpleXmlParser {
         } catch (Exception e) { throw new RuntimeException(e); }
     }
 
+    @Override
     public Map<String, String> parseRootAttrs(String xml) {
         try {
             Document doc = parse(xml);

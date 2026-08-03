@@ -32,7 +32,7 @@ public class TplUtil {
      * @param xmlParser XML 解析器
      * @param jsonParser JSON 解析器
      */
-    public static SepConfig parseSep(String content, String path, XmlParser xmlParser, JsonParser jsonParser) {
+    public static SepConfig parseSep(String content, String path, IXmlParser xmlParser, IJsonParser jsonParser) {
         if (path.endsWith(".xml")) {
             return SepConfig.fromMap(xmlParser.parseRootAttrs(content));
         }
@@ -43,7 +43,7 @@ public class TplUtil {
     /**
      * 解析表数据（多行）
      */
-    public static List<Map<String, String>> parseTableData(String content, String path, XmlParser xmlParser, JsonParser jsonParser) {
+    public static List<Map<String, String>> parseTableData(String content, String path, IXmlParser xmlParser, IJsonParser jsonParser) {
         if (path.endsWith(".xml")) {
             return xmlParser.parseArray(content);
         }
@@ -55,7 +55,7 @@ public class TplUtil {
     /**
      * 解析常量数据（单行）
      */
-    public static Map<String, String> parseConstData(String content, String path, XmlParser xmlParser, JsonParser jsonParser) {
+    public static Map<String, String> parseConstData(String content, String path, IXmlParser xmlParser, IJsonParser jsonParser) {
         if (path.endsWith(".xml")) {
             return xmlParser.parseObject(content);
         }
@@ -74,7 +74,7 @@ public class TplUtil {
      * @param jsonParser JSON 解析器
      */
     public static TblMeta parseFromRaw(String key, Class<?> clazz, String content, String dataExt,
-                                       XmlParser xmlParser, JsonParser jsonParser) {
+                                       IXmlParser xmlParser, IJsonParser jsonParser) {
         try {
             String full = key + dataExt;
             SepConfig sep = parseSep(content, full, xmlParser, jsonParser);

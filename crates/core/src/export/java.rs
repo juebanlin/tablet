@@ -8,6 +8,7 @@ use super::{to_camel_case, to_pascal_case, LineEnding};
 const TPL_ITPL: &str = include_str!("../../templates/java/ITpl.java");
 const TPL_ICONST: &str = include_str!("../../templates/java/IConstTpl.java");
 const TPL_IJSON_PARSER: &str = include_str!("../../templates/java/IJsonParser.java");
+const TPL_IXML_PARSER: &str = include_str!("../../templates/java/IXmlParser.java");
 const TPL_SIMPLE_JSON_PARSER: &str = include_str!("../../templates/java/SimpleJsonParser.java");
 const TPL_SIMPLE_XML_PARSER: &str = include_str!("../../templates/java/SimpleXmlParser.java");
 const TPL_UTIL: &str = include_str!("../../templates/java/TplUtil.java");
@@ -26,6 +27,7 @@ const TPL_SEP_CONFIG: &str = include_str!("../../templates/java/SepConfig.java")
 const TPL_TUPLE2: &str = include_str!("../../templates/java/Tuple2.java");
 const TPL_TUPLE3: &str = include_str!("../../templates/java/Tuple3.java");
 const TPL_TUPLE4: &str = include_str!("../../templates/java/Tuple4.java");
+const TPL_EXAMPLE: &str = include_str!("../../templates/java/Example.java");
 
 fn is_server_export(export: &Export) -> bool {
     matches!(export, Export::ClientServer | Export::ServerOnly)
@@ -221,6 +223,7 @@ pub fn export_all_java(project: &Project) -> Result<super::ExportResult> {
     collect(&output_dir, "ITpl.java", &render(TPL_ITPL));
     collect(&output_dir, "IConstTpl.java", &render(TPL_ICONST));
     collect(&output_dir, "IJsonParser.java", &render(TPL_IJSON_PARSER));
+    collect(&output_dir, "IXmlParser.java", &render(TPL_IXML_PARSER));
     collect(&output_dir, "SimpleJsonParser.java", &render(TPL_SIMPLE_JSON_PARSER));
     collect(&output_dir, "SimpleXmlParser.java", &render(TPL_SIMPLE_XML_PARSER));
     collect(&output_dir, "TplUtil.java", &render(TPL_UTIL));
@@ -234,6 +237,7 @@ pub fn export_all_java(project: &Project) -> Result<super::ExportResult> {
     collect(&output_dir, "ClasspathTblDataSource.java", &render(TPL_CLASSPATH_TBL_DATA_SOURCE));
     collect(&output_dir, "Paradigm.java", &render(TPL_PARADIGM));
     collect(&output_dir, "SepConfig.java", &render(TPL_SEP_CONFIG));
+    collect(&output_dir, "Example.java", &render(TPL_EXAMPLE));
     collect(&types_dir, "Tuple2.java", &render(TPL_TUPLE2));
     collect(&types_dir, "Tuple3.java", &render(TPL_TUPLE3));
     collect(&types_dir, "Tuple4.java", &render(TPL_TUPLE4));
