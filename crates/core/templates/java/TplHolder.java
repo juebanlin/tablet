@@ -64,6 +64,19 @@ public class TplHolder {
     }
 
     /**
+     * 初始化（使用数据源抽象 + 扫描指定包下的配置类）
+     * @param source 数据源实现
+     * @param packages 要扫描的包名（如 "com.game.config.tpl"）
+     */
+    public static void init(TblDataSource source, String... packages) {
+        Map<String, Class<?>> scannedRegistry = new HashMap<>(TplRegistry.getAll());
+        for (String pkg : packages) {
+            scannedRegistry.putAll(ClassUtil.scanTblSourceClasses(pkg));
+        }
+        init(source, scannedRegistry);
+    }
+
+    /**
      * 校验配置完整性并批量加载
      */
     private static void validateAndLoadAll() {
@@ -88,17 +101,6 @@ public class TplHolder {
      */
     public static void initJson(String path) {
         init(new FileSystemTblDataSource(path, ".json"));
-    }
-
-    /**
-     * 兼容方法：从文件系统加载 JSON 格式配置 + 自定义解析器
-     * @param path 配置文件目录路径（支持相对路径和绝对路径）
-     * @param parser 自定义 JSON 解析器
-     * @deprecated 推荐使用 setJsonParser(parser) + initJson(path)
-     */
-    public static void initJson(String path, IJsonParser parser) {
-        setJsonParser(parser);
-        initJson(path);
     }
 
     private static void loadAllFromSource(Set<String> keys) {

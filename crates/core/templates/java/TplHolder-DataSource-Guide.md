@@ -246,15 +246,20 @@ QuestConfig quest = TplHolder.get(QuestConfig.class, 1001);
 ```java
 // 场景：多模块项目，配置类分散在不同包，希望启动时自动扫描
 
-// 1. 扫描指定包下的所有配置类
-Map<String, Class<?>> registry = scanConfigClasses(
+// 方式1：直接使用 init 的包扫描重载（推荐）
+TplHolder.init(
+    new FileSystemTblDataSource("data/config", ".xml"),
     "com.game.base.config.tpl",
     "com.game.battle.config.tpl",
     "com.game.social.config.tpl"
 );
 
-// 2. 使用扫描得到的注册表
-TplHolder.init(new FileSystemTblDataSource("data/config", ".xml"), registry);
+// 方式2：与 TplRegistry 混合使用
+// init() 会自动合并 TplRegistry 和扫描结果
+TplHolder.init(
+    new FileSystemTblDataSource("data/config", ".xml"),
+    "com.game.plugin.config.tpl"  // 仅追加插件包
+);
 
 // 3. 查询所有已注册的配置表
 Set<String> keys = TplHolder.getRegisteredKeys();
