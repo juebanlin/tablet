@@ -49,26 +49,30 @@ public class TplHolder {
     }
 
     /**
-     * 兼容方法：XML 格式 + 文件系统
+     * 兼容方法：从文件系统加载 XML 格式配置
+     * @param path 配置文件目录路径（支持相对路径和绝对路径）
      */
-    public static void initXml(String dir) {
-        init(new FileSystemTblDataSource(dir, ".xml"));
+    public static void initXml(String path) {
+        init(new FileSystemTblDataSource(path, ".xml"));
     }
 
     /**
-     * 兼容方法：JSON 格式 + 文件系统
+     * 兼容方法：从文件系统加载 JSON 格式配置
+     * @param path 配置文件目录路径（支持相对路径和绝对路径）
      */
-    public static void initJson(String dir) {
-        init(new FileSystemTblDataSource(dir, ".json"));
+    public static void initJson(String path) {
+        init(new FileSystemTblDataSource(path, ".json"));
     }
 
     /**
-     * 兼容方法：JSON 格式 + 自定义解析器
-     * @deprecated 推荐使用 setJsonParser() + initJson(dir)
+     * 兼容方法：从文件系统加载 JSON 格式配置 + 自定义解析器
+     * @param path 配置文件目录路径（支持相对路径和绝对路径）
+     * @param parser 自定义 JSON 解析器
+     * @deprecated 推荐使用 setJsonParser(parser) + initJson(path)
      */
-    public static void initJson(String dir, IJsonParser parser) {
+    public static void initJson(String path, IJsonParser parser) {
         setJsonParser(parser);
-        initJson(dir);
+        initJson(path);
     }
 
     private static void loadAllFromSource(Set<String> keys) {
