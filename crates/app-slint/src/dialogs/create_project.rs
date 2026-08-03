@@ -63,6 +63,7 @@ fn on_source_loaded(st: &mut AppState, schema: TblSchema) {
     cps.project_name = if !schema.meta.name.is_empty() { schema.meta.name.clone() } else { schema.meta.id.clone() };
     cps.project_category = schema.meta.category.clone();
     cps.project_version = if !schema.meta.version.is_empty() { schema.meta.version.clone() } else { "1.0.0".into() };
+    cps.just_loaded = true; // push() 时写回 slint，覆盖旧值
     cps.with_preset = schema.meta.has_preset;
     match cps.tab {
         1 => cps.file_schema = Some(schema),
@@ -130,10 +131,13 @@ pub fn push(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
     let cps = &st.create_project;
 
     ui_h.set_cp_tab_index(cps.tab);
-    ui_h.set_cp_project_id(cps.project_id.clone().into());
-    ui_h.set_cp_project_name(cps.project_name.clone().into());
-    ui_h.set_cp_project_category(cps.project_category.clone().into());
-    ui_h.set_cp_project_version(cps.project_version.clone().into());
+    // 仅在刚加载模板/文件时写回身份字段，避免覆盖用户正在编辑但未提交的内容
+    if cps.just_loaded {
+        ui_h.set_cp_project_id(cps.project_id.clone().into());
+        ui_h.set_cp_project_name(cps.project_name.clone().into());
+        ui_h.set_cp_project_category(cps.project_category.clone().into());
+        ui_h.set_cp_project_version(cps.project_version.clone().into());
+    }
     ui_h.set_cp_open_after(cps.open_after);
     ui_h.set_cp_with_preset(cps.with_preset);
 
@@ -279,6 +283,10 @@ pub fn push(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
     ui_h.set_cp_picker_all_checked(all_checked);
     ui_h.set_cp_picker_selected_count(selected);
     ui_h.set_cp_picker_total_count(total);
+    drop(st);
+    // 身份字段已写入 slint——清除标记，后续 push() 不再覆盖用户编辑
+    let mut st = state.borrow_mut();
+    st.create_project.just_loaded = false;
 }
 
 /// 真正落地：按 tab 构造 schema → create_project_in_memory_with → set_active_by_id。
