@@ -51,11 +51,8 @@ public class TplHolder {
             classToKey.put(entry.getValue(), entry.getKey());
         }
 
-        // 批量校验配置完整性
-        dataSource.validateRequiredData(registry.keySet());
-
-        // 批量加载
-        loadAllFromSource(registry.keySet());
+        // 校验并加载所有配置
+        validateAndLoadAll();
     }
 
     /**
@@ -64,6 +61,17 @@ public class TplHolder {
      */
     public static void init(TblDataSource source) {
         init(source, TplRegistry.getAll());
+    }
+
+    /**
+     * 校验配置完整性并批量加载
+     */
+    private static void validateAndLoadAll() {
+        // 批量校验配置完整性
+        dataSource.validateRequiredData(registry.keySet());
+
+        // 批量加载
+        loadAllFromSource(registry.keySet());
     }
 
     /**
