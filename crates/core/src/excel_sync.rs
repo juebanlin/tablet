@@ -39,14 +39,12 @@ pub fn read_xlsx_sheets(path: &Path) -> Result<Vec<XlsxSheet>> {
         .with_context(|| format!("打开 xlsx 失败: {}", path.display()))?;
 
     let mut sheets = Vec::new();
-    let sheet_count = book.get_sheet_collection_no_check().len();
+    let sheet_count = book.sheet_collection_no_check().len();
 
     for idx in 0..sheet_count {
-        let worksheet = book.get_sheet_collection_no_check().get(idx)
+        let worksheet = book.sheet_collection_no_check().get(idx)
             .with_context(|| format!("获取第 {} 个 sheet 失败", idx))?;
-        let name = worksheet.get_name().to_string();
-
-        let (max_col, max_row) = worksheet.highest_column_and_row();
+        let name = worksheet.name().to_string();
 
         let mut headers = Vec::new();
         let mut data_rows: Vec<Vec<String>> = Vec::new();

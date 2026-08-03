@@ -19,7 +19,6 @@ pub enum SyncAction {
     PullData,       // [←]
     PushWithCols,   // [补列→]
     ForcePush,      // [强制→]
-    ForcePull,      // [强制←]
     Create,         // [→创建]
     Import,         // [←导入]
     Blocked,        // ⛔
@@ -137,7 +136,7 @@ fn add_table_row(
         } else if cm.tablet_only > 0 && cm.xlsx_only > 0 {
             // Both sides have extra columns → mismatch → force sync
             row.headers_mismatch = true;
-            row.actions = vec![SyncAction::ForcePush, SyncAction::ForcePull];
+            row.actions = vec![SyncAction::ForcePush];
         } else if tbl_has_more {
             row.tbl_more_cols = true;
             row.actions = vec![SyncAction::PushData, SyncAction::PullData, SyncAction::PushWithCols];
@@ -266,8 +265,7 @@ fn execute_action(state: &Rc<RefCell<AppState>>, row_idx: i32, act: i32) -> Resu
             Ok(format!("已同步 {} → {} {}", group_name, xlsx_path.display(), mode_label))
         }
         // 2=PullData or 6=ForcePull or 8=Import: xlsx → tablet
-        2 | 6 | 8 => {
-            let force = act == 6;
+        2 | 8 => {
             let mut st = state.borrow_mut();
             let patches = {
                 let project = st.engine.find_project(&pid).ok_or("找不到项目")?;

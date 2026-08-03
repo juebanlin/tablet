@@ -116,12 +116,7 @@ export component ExcelSyncDialog inherits Rectangle {
                                             Text { text: "强制→"; font-size: Theme.fs-tiny; color: Theme.text-primary; vertical-alignment: center; horizontal-alignment: center; }
                                             TouchArea { clicked => { root.action(i, 5); } }
                                         }
-                                        if row.hdr_mismatch : Rectangle {
-                                            border-width: 1px; border-radius: 2px; width: 46px; height: 18px;
-                                            background: transparent; border-color: Theme.border-light;
-                                            Text { text: "←强制"; font-size: Theme.fs-tiny; color: Theme.text-primary; vertical-alignment: center; horizontal-alignment: center; }
-                                            TouchArea { clicked => { root.action(i, 6); } }
-                                        }
+                                        // `←强制` removed — mismatch is tablet→xlsx only. xlsx→tablet handle via import or manual.
                                         // 创建→ left only
                                         if row.left_only : Rectangle {
                                             border-width: 1px; border-radius: 2px; width: 46px; height: 18px;
