@@ -596,9 +596,8 @@ pub struct CreateProjectState {
     pub project_category: String,
     pub project_version: String,
     pub open_after: bool,
-    /// push() 时才写回 slint 身份字段，避免覆盖用户未提交编辑
-    pub just_loaded: bool,
-    /// 「灌入预设数据」勾选项
+    /// 标记身份字段需要写回 slint（tab/模板切换后）
+    pub id_dirty: bool,
     pub with_preset: bool,
 
     // —— FromFile tab 专用 ——
@@ -632,7 +631,7 @@ impl Default for CreateProjectState {
             project_category: String::new(),
             project_version: "1.0.0".to_string(),
             open_after: true,
-            just_loaded: false,
+            id_dirty: false,
             with_preset: false,
             file_path: String::new(),
             file_schema: None,

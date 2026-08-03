@@ -58,13 +58,12 @@ fn on_source_loaded(st: &mut AppState, schema: TblSchema) {
     st.create_project.picker_items = build_picker_items(&schema);
     st.create_project.picker_checked = vec![true; st.create_project.picker_items.len()];
     let cps = &mut st.create_project;
-    // 选中模板/文件时始终预填身份字段（用户可以在右侧修改）
     cps.project_id = schema.meta.id.clone();
     cps.project_name = if !schema.meta.name.is_empty() { schema.meta.name.clone() } else { schema.meta.id.clone() };
     cps.project_category = schema.meta.category.clone();
     cps.project_version = if !schema.meta.version.is_empty() { schema.meta.version.clone() } else { "1.0.0".into() };
-    cps.just_loaded = true; // push() 时写回 slint，覆盖旧值
     cps.with_preset = schema.meta.has_preset;
+    cps.id_dirty = true;
     match cps.tab {
         1 => cps.file_schema = Some(schema),
         2 => cps.tpl_schema = Some(schema),
@@ -72,7 +71,7 @@ fn on_source_loaded(st: &mut AppState, schema: TblSchema) {
     }
 }
 
-/// 切 tab 时清掉 picker / source 相关字段，但保留身份输入。
+/// 切 tab 时清掉 picker / source 相关字段，重置右侧身份。
 fn reset_source_on_tab_change(cps: &mut crate::state::CreateProjectState) {
     cps.picker_items.clear();
     cps.picker_checked.clear();
@@ -85,6 +84,12 @@ fn reset_source_on_tab_change(cps: &mut crate::state::CreateProjectState) {
     cps.tpl_meta_version.clear();
     cps.tpl_search.clear();
     cps.with_preset = false;
+    // 重置右侧身份为默认
+    cps.project_id.clear();
+    cps.project_name.clear();
+    cps.project_category.clear();
+    cps.project_version = "1.0.0".into();
+    cps.id_dirty = true;  // 下一轮 push 写回 slint
 }
 
 fn list_template_metas(subtab: i32) -> Vec<TemplateMeta> {
@@ -131,8 +136,8 @@ pub fn push(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
     let cps = &st.create_project;
 
     ui_h.set_cp_tab_index(cps.tab);
-    // 仅在刚加载模板/文件时写回身份字段，避免覆盖用户正在编辑但未提交的内容
-    if cps.just_loaded {
+    // tab/模板切换时强制写回身份字段，退出编辑状态
+    if cps.id_dirty {
         ui_h.set_cp_project_id(cps.project_id.clone().into());
         ui_h.set_cp_project_name(cps.project_name.clone().into());
         ui_h.set_cp_project_category(cps.project_category.clone().into());
@@ -284,9 +289,8 @@ pub fn push(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
     ui_h.set_cp_picker_selected_count(selected);
     ui_h.set_cp_picker_total_count(total);
     drop(st);
-    // 身份字段已写入 slint——清除标记，后续 push() 不再覆盖用户编辑
     let mut st = state.borrow_mut();
-    st.create_project.just_loaded = false;
+    st.create_project.id_dirty = false;
 }
 
 /// 真正落地：按 tab 构造 schema → create_project_in_memory_with → set_active_by_id。
