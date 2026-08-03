@@ -21,6 +21,9 @@ public class TplHolder {
     // 反向映射：Class → key（用于查询表名）
     private static final Map<Class<?>, String> classToKey = new HashMap<>();
 
+    // 字段匹配验证策略：默认宽松模式（忽略不匹配）
+    private static TblFieldMismatchHandler mismatchHandler = new TblFieldMismatchHandler.Lenient();
+
     /**
      * 设置 JSON 解析器（在 init 前调用）
      */
@@ -33,6 +36,14 @@ public class TplHolder {
      */
     public static void setXmlParser(SimpleXmlParser parser) {
         xmlParser = parser;
+    }
+
+    /**
+     * 设置字段不匹配处理器（在 init 前调用）
+     * @param handler 处理器实现（Strict/Lenient/LogToConsole 或自定义）
+     */
+    public static void setMismatchHandler(TblFieldMismatchHandler handler) {
+        mismatchHandler = handler;
     }
 
     /**
@@ -285,11 +296,23 @@ public class TplHolder {
     private static <T> T fromMap(Class<T> clazz, Map<String, String> map, SepConfig sep) {
         try {
             T obj = clazz.getDeclaredConstructor().newInstance();
+
+            // 收集配置类字段名
+            Set<String> classFields = new HashSet<>();
+
             for (java.lang.reflect.Field field : clazz.getDeclaredFields()) {
                 field.setAccessible(true);
                 TblFieldType ann = field.getAnnotation(TblFieldType.class);
                 if (ann == null) continue;
+
+                classFields.add(field.getName());
                 String raw = map.get(field.getName());
+
+                // 验证：配置类字段在数据源中缺失
+                if (raw == null && mismatchHandler != null) {
+                    mismatchHandler.onClassFieldMissing(clazz.getSimpleName(), field.getName(), ann.value());
+                }
+
                 if (field.getType().isEnum() && ann.value().startsWith("@")) {
                     Object val = (raw == null || raw.isEmpty()) ? null
                         : field.getType().getMethod("fromId", int.class).invoke(null, Integer.parseInt(raw));
@@ -298,6 +321,17 @@ public class TplHolder {
                     field.set(obj, TplUtil.parseField(raw, ann.value(), sep));
                 }
             }
+
+            // 验证：数据源字段在配置类中不存在
+            if (mismatchHandler != null) {
+                for (Map.Entry<String, String> entry : map.entrySet()) {
+                    String fieldName = entry.getKey();
+                    if (!classFields.contains(fieldName)) {
+                        mismatchHandler.onSourceExtraField(clazz.getSimpleName(), fieldName, entry.getValue());
+                    }
+                }
+            }
+
             return obj;
         } catch (Exception e) { throw new RuntimeException(e); }
     }
