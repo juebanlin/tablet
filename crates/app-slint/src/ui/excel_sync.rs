@@ -271,7 +271,7 @@ fn execute_action(state: &Rc<RefCell<AppState>>, row_idx: i32, act: i32) -> Resu
                 let project = st.engine.find_project(&pid).ok_or("找不到项目")?;
                 let group = project.groups.iter()
                     .find(|g| g.name == *group_name).ok_or("找不到组")?;
-                excel_sync::read_group_from_xlsx(&xlsx_path, group, force)
+                excel_sync::read_group_from_xlsx(&xlsx_path, group, false)
                     .map_err(|e| format!("读取 xlsx 失败: {}", e))?
             };
             let project = st.engine.find_project_mut(&pid).ok_or("找不到项目")?;

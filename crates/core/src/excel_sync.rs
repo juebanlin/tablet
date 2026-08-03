@@ -45,6 +45,7 @@ pub fn read_xlsx_sheets(path: &Path) -> Result<Vec<XlsxSheet>> {
         let worksheet = book.sheet_collection_no_check().get(idx)
             .with_context(|| format!("获取第 {} 个 sheet 失败", idx))?;
         let name = worksheet.name().to_string();
+        let (max_col, max_row) = worksheet.highest_column_and_row();
 
         let mut headers = Vec::new();
         let mut data_rows: Vec<Vec<String>> = Vec::new();
@@ -120,10 +121,6 @@ pub fn classify_header(xlsx_headers: &[String], tablet_fields: &[crate::model::F
     if cm.tablet_only == 0 && cm.xlsx_only == 0 { HeaderMatch::Identical }
     else if cm.matched_prefix > 0 { HeaderMatch::TailDiff }
     else { HeaderMatch::Mismatch }
-}
-
-fn map_columns_for_sync(tablet_fields: &[crate::model::FieldDef], xlsx_headers: &[String]) -> Vec<Option<u32>> {
-    compute_column_match(tablet_fields, xlsx_headers).col_map
 }
 
 // ── diff ──
