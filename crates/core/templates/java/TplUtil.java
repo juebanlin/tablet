@@ -22,4 +22,143 @@ public class TplUtil {
         if (raw == null || raw.isEmpty()) return p.defaultValue();
         return p.parse(raw, tblType, sep);
     }
+
+    // ========== 解析工具方法 ==========
+
+    /**
+     * 解析分隔符配置
+     * @param content 文件内容
+     * @param path 文件路径（用于判断格式）
+     * @param xmlParser XML 解析器
+     * @param jsonParser JSON 解析器
+     */
+    public static SepConfig parseSep(String content, String path, XmlParser xmlParser, JsonParser jsonParser) {
+        if (path.endsWith(".xml")) {
+            return SepConfig.fromMap(xmlParser.parseRootAttrs(content));
+        }
+        Map<String, Object> wrapper = jsonParser.parseObject(content);
+        return SepConfig.fromMap(toStringMap((Map<String, Object>) wrapper.getOrDefault("_sep", Collections.emptyMap())));
+    }
+
+    /**
+     * 解析表数据（多行）
+     */
+    public static List<Map<String, String>> parseTableData(String content, String path, XmlParser xmlParser, JsonParser jsonParser) {
+        if (path.endsWith(".xml")) {
+            return xmlParser.parseArray(content);
+        }
+        Map<String, Object> wrapper = jsonParser.parseObject(content);
+        List<Map<String, Object>> raw = (List<Map<String, Object>>) wrapper.get("data");
+        return toStringMaps(raw);
+    }
+
+    /**
+     * 解析常量数据（单行）
+     */
+    public static Map<String, String> parseConstData(String content, String path, XmlParser xmlParser, JsonParser jsonParser) {
+        if (path.endsWith(".xml")) {
+            return xmlParser.parseObject(content);
+        }
+        Map<String, Object> wrapper = jsonParser.parseObject(content);
+        Map<String, Object> raw = (Map<String, Object>) wrapper.getOrDefault("data", wrapper);
+        return toStringMap(raw);
+    }
+
+    /**
+     * 从原始内容解析为 TblMeta
+     * @param key 配置表名
+     * @param clazz 配置类
+     * @param content 文件内容
+     * @param dataExt 文件扩展名（.xml 或 .json）
+     * @param xmlParser XML 解析器
+     * @param jsonParser JSON 解析器
+     */
+    public static TblMeta parseFromRaw(String key, Class<?> clazz, String content, String dataExt,
+                                       XmlParser xmlParser, JsonParser jsonParser) {
+        try {
+            String full = key + dataExt;
+            SepConfig sep = parseSep(content, full, xmlParser, jsonParser);
+
+            if (ITpl.class.isAssignableFrom(clazz)) {
+                return TblMeta.table(key, clazz, sep, parseTableData(content, full, xmlParser, jsonParser));
+            } else if (IConstTpl.class.isAssignableFrom(clazz)) {
+                return TblMeta.constant(key, clazz, sep, parseConstData(content, full, xmlParser, jsonParser));
+            }
+            return null;
+        } catch (Exception e) {
+            throw new RuntimeException("Failed to parse " + key, e);
+        }
+    }
+
+    /**
+     * 从 Map 反射创建配置对象（核心方法）
+     * @param tableName 配置表名
+     * @param clazz 配置类
+     * @param map 字段数据
+     * @param sep 分隔符配置
+     * @param mismatchHandler 字段不匹配处理器（可为 null）
+     */
+    public static <T> T fromMap(String tableName, Class<T> clazz, Map<String, String> map, SepConfig sep,
+                                TblFieldMismatchHandler mismatchHandler) {
+        try {
+            T obj = clazz.getDeclaredConstructor().newInstance();
+
+            // 收集配置类字段名
+            Set<String> classFields = new HashSet<>();
+
+            for (java.lang.reflect.Field field : clazz.getDeclaredFields()) {
+                field.setAccessible(true);
+                TblFieldType ann = field.getAnnotation(TblFieldType.class);
+                if (ann == null) continue;
+
+                classFields.add(field.getName());
+                String raw = map.get(field.getName());
+
+                // 验证：配置类字段在数据源中缺失
+                if (raw == null && mismatchHandler != null) {
+                    mismatchHandler.onClassFieldMissing(tableName, clazz.getSimpleName(), field.getName(), ann.value());
+                }
+
+                if (field.getType().isEnum() && ann.value().startsWith("@")) {
+                    Object val = (raw == null || raw.isEmpty()) ? null
+                        : field.getType().getMethod("fromId", int.class).invoke(null, Integer.parseInt(raw));
+                    field.set(obj, val);
+                } else {
+                    field.set(obj, parseField(raw, ann.value(), sep));
+                }
+            }
+
+            // 验证：数据源字段在配置类中不存在
+            if (mismatchHandler != null) {
+                for (Map.Entry<String, String> entry : map.entrySet()) {
+                    String fieldName = entry.getKey();
+                    if (!classFields.contains(fieldName)) {
+                        mismatchHandler.onSourceExtraField(tableName, clazz.getSimpleName(), fieldName, entry.getValue());
+                    }
+                }
+            }
+
+            return obj;
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    // ========== 类型转换工具 ==========
+
+    public static List<Map<String, String>> toStringMaps(List<Map<String, Object>> raw) {
+        List<Map<String, String>> result = new ArrayList<>();
+        for (Map<String, Object> m : raw) {
+            result.add(toStringMap(m));
+        }
+        return result;
+    }
+
+    public static Map<String, String> toStringMap(Map<String, Object> raw) {
+        Map<String, String> result = new LinkedHashMap<>();
+        for (Map.Entry<String, Object> e : raw.entrySet()) {
+            result.put(e.getKey(), e.getValue() == null ? "" : e.getValue().toString());
+        }
+        return result;
+    }
 }

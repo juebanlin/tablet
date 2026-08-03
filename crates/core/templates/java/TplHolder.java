@@ -175,29 +175,19 @@ public class TplHolder {
     }
 
     private static TblMeta parseFromRaw(String key, Class<?> clazz, String content) {
-        try {
-            String full = key + dataExt;
-            SepConfig sep = parseSep(content, full);
-
-            if (ITpl.class.isAssignableFrom(clazz)) {
-                return TblMeta.table(key, clazz, sep, parseTableData(content, full));
-            } else if (IConstTpl.class.isAssignableFrom(clazz)) {
-                return TblMeta.constant(key, clazz, sep, parseConstData(content, full));
-            }
-            return null;
-        } catch (Exception e) { throw new RuntimeException("Failed to parse " + key, e); }
+        return TplUtil.parseFromRaw(key, clazz, content, dataExt, xmlParser, jsonParser);
     }
 
     public static void apply(TblMeta meta) {
         if (meta.isTable) {
             Map<Integer, ITpl> map = new HashMap<>();
             for (Map<String, String> item : meta.rows) {
-                ITpl obj = (ITpl) fromMap(meta.key, meta.clazz, item, meta.sep);
+                ITpl obj = (ITpl) TplUtil.fromMap(meta.key, meta.clazz, item, meta.sep, mismatchHandler);
                 map.put(obj.getId(), obj);
             }
             tables.put(meta.clazz, map);
         } else {
-            IConstTpl obj = (IConstTpl) fromMap(meta.key, meta.clazz, meta.constData, meta.sep);
+            IConstTpl obj = (IConstTpl) TplUtil.fromMap(meta.key, meta.clazz, meta.constData, meta.sep, mismatchHandler);
             constants.put(meta.clazz, obj);
         }
     }
@@ -259,13 +249,13 @@ public class TplHolder {
             if (meta.isTable) {
                 Map<Integer, ITpl> map = new HashMap<>();
                 for (Map<String, String> item : meta.rows) {
-                    ITpl obj = (ITpl) fromMap(meta.key, meta.clazz, item, meta.sep);
+                    ITpl obj = (ITpl) TplUtil.fromMap(meta.key, meta.clazz, item, meta.sep, mismatchHandler);
                     map.put(obj.getId(), obj);
                 }
                 newCache.put(meta.clazz, map);
                 logger.debug("Reloaded table '" + key + "' (" + map.size() + " rows)");
             } else {
-                IConstTpl obj = (IConstTpl) fromMap(meta.key, meta.clazz, meta.constData, meta.sep);
+                IConstTpl obj = (IConstTpl) TplUtil.fromMap(meta.key, meta.clazz, meta.constData, meta.sep, mismatchHandler);
                 constants.put(meta.clazz, obj);  // 常量表单独缓存
                 logger.debug("Reloaded constant '" + key + "'");
             }
@@ -332,90 +322,5 @@ public class TplHolder {
 
     public static <T extends IConstTpl> T getConst(Class<T> clazz) {
         return (T) constants.get(clazz);
-    }
-
-    private static SepConfig parseSep(String content, String path) {
-        if (path.endsWith(".xml")) {
-            return SepConfig.fromMap(xmlParser.parseRootAttrs(content));
-        }
-        Map<String, Object> wrapper = jsonParser.parseObject(content);
-        return SepConfig.fromMap(toStringMap((Map<String, Object>) wrapper.getOrDefault("_sep", Collections.emptyMap())));
-    }
-
-    private static List<Map<String, String>> parseTableData(String content, String path) {
-        if (path.endsWith(".xml")) {
-            return xmlParser.parseArray(content);
-        }
-        Map<String, Object> wrapper = jsonParser.parseObject(content);
-        List<Map<String, Object>> raw = (List<Map<String, Object>>) wrapper.get("data");
-        return toStringMaps(raw);
-    }
-
-    private static Map<String, String> parseConstData(String content, String path) {
-        if (path.endsWith(".xml")) {
-            return xmlParser.parseObject(content);
-        }
-        Map<String, Object> wrapper = jsonParser.parseObject(content);
-        Map<String, Object> raw = (Map<String, Object>) wrapper.getOrDefault("data", wrapper);
-        return toStringMap(raw);
-    }
-
-    private static <T> T fromMap(String tableName, Class<T> clazz, Map<String, String> map, SepConfig sep) {
-        try {
-            T obj = clazz.getDeclaredConstructor().newInstance();
-
-            // 收集配置类字段名
-            Set<String> classFields = new HashSet<>();
-
-            for (java.lang.reflect.Field field : clazz.getDeclaredFields()) {
-                field.setAccessible(true);
-                TblFieldType ann = field.getAnnotation(TblFieldType.class);
-                if (ann == null) continue;
-
-                classFields.add(field.getName());
-                String raw = map.get(field.getName());
-
-                // 验证：配置类字段在数据源中缺失
-                if (raw == null && mismatchHandler != null) {
-                    mismatchHandler.onClassFieldMissing(tableName, clazz.getSimpleName(), field.getName(), ann.value());
-                }
-
-                if (field.getType().isEnum() && ann.value().startsWith("@")) {
-                    Object val = (raw == null || raw.isEmpty()) ? null
-                        : field.getType().getMethod("fromId", int.class).invoke(null, Integer.parseInt(raw));
-                    field.set(obj, val);
-                } else {
-                    field.set(obj, TplUtil.parseField(raw, ann.value(), sep));
-                }
-            }
-
-            // 验证：数据源字段在配置类中不存在
-            if (mismatchHandler != null) {
-                for (Map.Entry<String, String> entry : map.entrySet()) {
-                    String fieldName = entry.getKey();
-                    if (!classFields.contains(fieldName)) {
-                        mismatchHandler.onSourceExtraField(tableName, clazz.getSimpleName(), fieldName, entry.getValue());
-                    }
-                }
-            }
-
-            return obj;
-        } catch (Exception e) { throw new RuntimeException(e); }
-    }
-
-    private static List<Map<String, String>> toStringMaps(List<Map<String, Object>> raw) {
-        List<Map<String, String>> result = new ArrayList<>();
-        for (Map<String, Object> m : raw) {
-            result.add(toStringMap(m));
-        }
-        return result;
-    }
-
-    private static Map<String, String> toStringMap(Map<String, Object> raw) {
-        Map<String, String> result = new LinkedHashMap<>();
-        for (Map.Entry<String, Object> e : raw.entrySet()) {
-            result.put(e.getKey(), e.getValue() == null ? "" : e.getValue().toString());
-        }
-        return result;
     }
 }
