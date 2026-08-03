@@ -53,13 +53,18 @@ export component ExcelBrowser inherits Rectangle {
                     border-width: 1px; border-radius: 3px;
                     border-color: root.selected[i] ? Theme.border-selected : Theme.border-light;
                     background: root.selected[i] ? Theme.bg-row-selected : Theme.bg-panel;
-                    Text {
-                        x: 8px; text: "📄 " + file;
-                        font-size: Theme.fs-small; color: Theme.text-primary; vertical-alignment: center;
+                    HorizontalLayout { spacing: 4px; padding-left: 4px;
+                        Text {
+                            text: "📄"; font-size: Theme.fs-small; vertical-alignment: center; width: 20px;
+                        }
+                        Text {
+                            text: file;
+                            font-size: Theme.fs-small; color: Theme.text-primary; vertical-alignment: center;
+                        }
                     }
                     TouchArea {
-                        double-clicked => { root.file-opened(i); }
                         clicked => { root.toggle-file(i); }
+                        double-clicked => { root.file-opened(i); }
                     }
                 }
             }
