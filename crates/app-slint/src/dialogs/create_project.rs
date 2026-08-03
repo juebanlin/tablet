@@ -58,27 +58,22 @@ fn on_source_loaded(st: &mut AppState, schema: TblSchema) {
     st.create_project.picker_items = build_picker_items(&schema);
     st.create_project.picker_checked = vec![true; st.create_project.picker_items.len()];
     let cps = &mut st.create_project;
-    // id/name/category/version 仅在用户没改过时预填
-    if !cps.id_prefilled && cps.project_id.is_empty() && !schema.meta.id.is_empty() {
+    // 从模板预填身份字段：
+    // - 用户手动编辑过 → 保留用户输入
+    // - 切模板自动填的 → 用新模板覆盖
+    if !cps.id_edited {
         cps.project_id = schema.meta.id.clone();
-        cps.id_prefilled = true;
     }
-    if cps.project_name.is_empty() {
-        if !schema.meta.name.is_empty() {
-            cps.project_name = schema.meta.name.clone();
-        } else if !schema.meta.id.is_empty() {
-            cps.project_name = schema.meta.id.clone();
-        }
+    if !cps.name_edited {
+        cps.project_name = if !schema.meta.name.is_empty() { schema.meta.name.clone() } else { schema.meta.id.clone() };
     }
-    if cps.project_category.is_empty() && !schema.meta.category.is_empty() {
+    if !cps.category_edited {
         cps.project_category = schema.meta.category.clone();
     }
-    if !schema.meta.version.is_empty() {
+    if !cps.version_edited {
         cps.project_version = schema.meta.version.clone();
     }
-    // 默认勾上「灌入预设」当且仅当来源带 preset
     cps.with_preset = schema.meta.has_preset;
-    // 把 schema 存进对应槽位（按 tab 分配）
     match cps.tab {
         1 => cps.file_schema = Some(schema),
         2 => cps.tpl_schema = Some(schema),
@@ -419,7 +414,7 @@ pub fn wire(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
             {
                 let mut st = s.borrow_mut();
                 st.create_project.project_id = v.to_string();
-                st.create_project.id_prefilled = true;
+                st.create_project.id_edited = true;
             }
             if let Some(ui_h) = weak.upgrade() { push(&ui_h, &s); }
         });
@@ -428,7 +423,10 @@ pub fn wire(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
         let s = state.clone();
         let weak = ui_h.as_weak();
         ui_h.on_cp_name_edited(move |v| {
-            s.borrow_mut().create_project.project_name = v.to_string();
+            let mut st = s.borrow_mut();
+            st.create_project.project_name = v.to_string();
+            st.create_project.name_edited = true;
+            drop(st);
             if let Some(ui_h) = weak.upgrade() { push(&ui_h, &s); }
         });
     }
@@ -436,7 +434,10 @@ pub fn wire(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
         let s = state.clone();
         let weak = ui_h.as_weak();
         ui_h.on_cp_category_edited(move |v| {
-            s.borrow_mut().create_project.project_category = v.to_string();
+            let mut st = s.borrow_mut();
+            st.create_project.project_category = v.to_string();
+            st.create_project.category_edited = true;
+            drop(st);
             if let Some(ui_h) = weak.upgrade() { push(&ui_h, &s); }
         });
     }
@@ -444,7 +445,10 @@ pub fn wire(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
         let s = state.clone();
         let weak = ui_h.as_weak();
         ui_h.on_cp_version_edited(move |v| {
-            s.borrow_mut().create_project.project_version = v.to_string();
+            let mut st = s.borrow_mut();
+            st.create_project.project_version = v.to_string();
+            st.create_project.version_edited = true;
+            drop(st);
             if let Some(ui_h) = weak.upgrade() { push(&ui_h, &s); }
         });
     }

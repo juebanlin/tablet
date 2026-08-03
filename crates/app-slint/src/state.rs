@@ -595,11 +595,13 @@ pub struct CreateProjectState {
     pub project_name: String,
     pub project_category: String,
     pub project_version: String,
-    /// 「立即打开新项目」勾选项；默认 true
     pub open_after: bool,
-    /// 标记是否已经预填过 project id（避免文件/模板改变时覆盖用户手输）
-    pub id_prefilled: bool,
-    /// 「灌入预设数据」勾选项；仅 FromFile / FromTemplate tab 且来源带 preset 时显示
+    /// 用户是否手动编辑过 id（true 时切模板不覆盖）
+    pub id_edited: bool,
+    pub name_edited: bool,
+    pub category_edited: bool,
+    pub version_edited: bool,
+    /// 「灌入预设数据」勾选项
     pub with_preset: bool,
 
     // —— FromFile tab 专用 ——
@@ -633,7 +635,10 @@ impl Default for CreateProjectState {
             project_category: String::new(),
             project_version: "1.0.0".to_string(),
             open_after: true,
-            id_prefilled: false,
+            id_edited: false,
+            name_edited: false,
+            category_edited: false,
+            version_edited: false,
             with_preset: false,
             file_path: String::new(),
             file_schema: None,
