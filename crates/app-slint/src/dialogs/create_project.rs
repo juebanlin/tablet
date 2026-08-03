@@ -390,7 +390,7 @@ pub fn wire(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
         });
     }
 
-    // cp-set-tab：切 tab
+    // cp-set-tab：切 tab — 先退出编辑状态再切
     {
         let s = state.clone();
         let weak = ui_h.as_weak();
