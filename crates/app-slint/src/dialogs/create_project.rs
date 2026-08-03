@@ -58,21 +58,11 @@ fn on_source_loaded(st: &mut AppState, schema: TblSchema) {
     st.create_project.picker_items = build_picker_items(&schema);
     st.create_project.picker_checked = vec![true; st.create_project.picker_items.len()];
     let cps = &mut st.create_project;
-    // 从模板预填身份字段：
-    // - 用户手动编辑过 → 保留用户输入
-    // - 切模板自动填的 → 用新模板覆盖
-    if !cps.id_edited {
-        cps.project_id = schema.meta.id.clone();
-    }
-    if !cps.name_edited {
-        cps.project_name = if !schema.meta.name.is_empty() { schema.meta.name.clone() } else { schema.meta.id.clone() };
-    }
-    if !cps.category_edited {
-        cps.project_category = schema.meta.category.clone();
-    }
-    if !cps.version_edited {
-        cps.project_version = schema.meta.version.clone();
-    }
+    // 选中模板/文件时始终预填身份字段（用户可以在右侧修改）
+    cps.project_id = schema.meta.id.clone();
+    cps.project_name = if !schema.meta.name.is_empty() { schema.meta.name.clone() } else { schema.meta.id.clone() };
+    cps.project_category = schema.meta.category.clone();
+    cps.project_version = if !schema.meta.version.is_empty() { schema.meta.version.clone() } else { "1.0.0".into() };
     cps.with_preset = schema.meta.has_preset;
     match cps.tab {
         1 => cps.file_schema = Some(schema),
@@ -400,6 +390,17 @@ pub fn wire(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
                     reset_source_on_tab_change(&mut st.create_project);
                 }
             }
+            // 切换到模板 tab → 自动选中第一个模板
+            if i == 2 {
+                let metas = list_template_metas(0); // builtin
+                if let Some(meta) = metas.first() {
+                    if let Some(content) = load_template_content(&meta.id, meta.source) {
+                        let mut st = s.borrow_mut();
+                        st.create_project.tpl_selected_id = meta.id.clone();
+                        on_source_loaded(&mut st, content.schema);
+                    }
+                }
+            }
             if let Some(ui_h) = weak.upgrade() {
                 push(&ui_h, &s);
             }
@@ -414,7 +415,6 @@ pub fn wire(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
             {
                 let mut st = s.borrow_mut();
                 st.create_project.project_id = v.to_string();
-                st.create_project.id_edited = true;
             }
             if let Some(ui_h) = weak.upgrade() { push(&ui_h, &s); }
         });
@@ -423,10 +423,7 @@ pub fn wire(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
         let s = state.clone();
         let weak = ui_h.as_weak();
         ui_h.on_cp_name_edited(move |v| {
-            let mut st = s.borrow_mut();
-            st.create_project.project_name = v.to_string();
-            st.create_project.name_edited = true;
-            drop(st);
+            s.borrow_mut().create_project.project_name = v.to_string();
             if let Some(ui_h) = weak.upgrade() { push(&ui_h, &s); }
         });
     }
@@ -434,10 +431,7 @@ pub fn wire(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
         let s = state.clone();
         let weak = ui_h.as_weak();
         ui_h.on_cp_category_edited(move |v| {
-            let mut st = s.borrow_mut();
-            st.create_project.project_category = v.to_string();
-            st.create_project.category_edited = true;
-            drop(st);
+            s.borrow_mut().create_project.project_category = v.to_string();
             if let Some(ui_h) = weak.upgrade() { push(&ui_h, &s); }
         });
     }
@@ -445,10 +439,7 @@ pub fn wire(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
         let s = state.clone();
         let weak = ui_h.as_weak();
         ui_h.on_cp_version_edited(move |v| {
-            let mut st = s.borrow_mut();
-            st.create_project.project_version = v.to_string();
-            st.create_project.version_edited = true;
-            drop(st);
+            s.borrow_mut().create_project.project_version = v.to_string();
             if let Some(ui_h) = weak.upgrade() { push(&ui_h, &s); }
         });
     }

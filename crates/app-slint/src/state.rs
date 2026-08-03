@@ -596,11 +596,6 @@ pub struct CreateProjectState {
     pub project_category: String,
     pub project_version: String,
     pub open_after: bool,
-    /// 用户是否手动编辑过 id（true 时切模板不覆盖）
-    pub id_edited: bool,
-    pub name_edited: bool,
-    pub category_edited: bool,
-    pub version_edited: bool,
     /// 「灌入预设数据」勾选项
     pub with_preset: bool,
 
@@ -635,10 +630,6 @@ impl Default for CreateProjectState {
             project_category: String::new(),
             project_version: "1.0.0".to_string(),
             open_after: true,
-            id_edited: false,
-            name_edited: false,
-            category_edited: false,
-            version_edited: false,
             with_preset: false,
             file_path: String::new(),
             file_schema: None,
