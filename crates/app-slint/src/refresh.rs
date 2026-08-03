@@ -18,6 +18,7 @@ pub fn after_tree_change(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
     ui::tree::push(ui_h, state);
     ui::grid::push(ui_h, state);
     ui::bottom_panel::push_log(ui_h, state);
+    ui::bottom_panel::push_excel_files(ui_h, state);
 }
 
 /// grid 单元格写入或表头改了。dirty 标记会冒到树面板，所以也刷树。
