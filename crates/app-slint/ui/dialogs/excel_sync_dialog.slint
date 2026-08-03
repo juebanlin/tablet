@@ -3,25 +3,17 @@ import { DialogChrome } from "dialog_chrome.slint";
 import { ScrollView } from "std-widgets.slint";
 
 export struct EsRow {
-    group: string,
-    node: string,
+    group: string, node: string,
     checked: bool,
-    lrows: int, lcols: int,    // tablet 行数×列数
-    la: int, lr: int, lm: int,
+    lrows: int, lcols: int,    // tablet 行数, 列数
     left_only: bool,
-    rrows: int, rcols: int,    // xlsx 行数×列数
-    ra: int, rr: int, rm: int,
-    right_sheet: string,
-    right_xlsx: string,
+    right_sheet: string, right_xlsx: string,
+    rrows: int, rcols: int,    // xlsx 总行, 总列
+    matched: int,               // 匹配前缀列数
     right_only: bool,
-    blocked: bool,
-    blocked_reason: string,
-    hdr_match: bool,
-    matched: int,
-    tbl_more_cols: bool,
-    xlsx_more_cols: bool,
-    hdr_mismatch: bool,
-    has_diff: bool,
+    blocked: bool, blocked_reason: string,
+    hdr_match: bool, tbl_more_cols: bool, xlsx_more_cols: bool,
+    hdr_mismatch: bool, has_diff: bool,
 }
 
 export component ExcelSyncDialog inherits Rectangle {
@@ -34,7 +26,7 @@ export component ExcelSyncDialog inherits Rectangle {
 
     if root.open : DialogChrome {
         title: "Excel 同步";
-        dialog-w: 900px; dialog-h: 550px;
+        dialog-w: 920px; dialog-h: 550px;
         primary-text: "刷新"; cancel-text: "关闭";
         primary-clicked => { root.refresh(); }
         cancel-clicked => { root.close(); }
@@ -42,134 +34,141 @@ export component ExcelSyncDialog inherits Rectangle {
 
         Rectangle { vertical-stretch: 1;
             VerticalLayout { spacing: 0; padding: 4px;
+                // Column headers
                 Rectangle { height: 22px; background: Theme.bg-header;
-                    HorizontalLayout { padding-left: 4px; spacing: 4px;
-                        Rectangle { width: 16px; }
-                        Rectangle { width: 60px;
-                            Text { text: "组名"; font-size: Theme.fs-tiny; color: Theme.text-secondary; vertical-alignment: center; }
+                    HorizontalLayout { spacing: 0;
+                        // Left: group/node
+                        Rectangle { width: 200px; padding-left: 24px;
+                            Text { text: "组 / 节点"; font-size: Theme.fs-tiny; color: Theme.text-secondary; vertical-alignment: center; }
                         }
-                        Rectangle { width: 110px;
-                            Text { text: "节点/Sheet"; font-size: Theme.fs-tiny; color: Theme.text-secondary; vertical-alignment: center; }
-                        }
-                        Rectangle { width: 60px;
+                        // Left info: row×col
+                        Rectangle { width: 100px; horizontal-stretch: 0;
                             Text { text: "tablet(行×列)"; font-size: Theme.fs-tiny; color: Theme.text-secondary; vertical-alignment: center; }
                         }
-                        Rectangle { width: 160px;
-                            Text { text: "操作"; font-size: Theme.fs-tiny; color: Theme.text-secondary; vertical-alignment: center; }
+                        // Separator
+                        Rectangle { width: 1px; background: Theme.border-light; }
+                        // Actions
+                        Rectangle { width: 180px; horizontal-stretch: 0;
+                            Text { text: "操作"; font-size: Theme.fs-tiny; color: Theme.text-secondary; vertical-alignment: center; horizontal-alignment: center; }
                         }
-                        Rectangle { width: 60px;
-                            Text { text: "Excel(行×列)"; font-size: Theme.fs-tiny; color: Theme.text-secondary; vertical-alignment: center; }
+                        // Separator
+                        Rectangle { width: 1px; background: Theme.border-light; }
+                        // Right info: row×col | matched+diff
+                        Rectangle { width: 180px; horizontal-stretch: 0;
+                            Text { text: "Excel(行×列│匹配+差异)"; font-size: Theme.fs-tiny; color: Theme.text-secondary; vertical-alignment: center; }
                         }
                     }
                 }
                 ScrollView {
                     VerticalLayout { spacing: 1px;
                         for row[i] in root.rows : Rectangle { height: Theme.row-h;
-                            HorizontalLayout { padding-left: 4px; spacing: 4px;
-                                Rectangle { width: 16px; height: 16px;
-                                    background: row.checked ? Theme.bg-row-selected : Theme.bg-panel;
-                                    border-color: Theme.border-light; border-width: 1px;
-                                    Text { text: " "; font-size: Theme.fs-tiny; vertical-alignment: center; horizontal-alignment: center; }
-                                }
-                                Text { text: row.group + "/" + row.node; font-size: Theme.fs-small;
-                                    color: Theme.text-primary; vertical-alignment: center; width: 170px; }
-                                // tablet diff
-                                if row.left_only : Rectangle { width: 60px;
-                                    Text { text: "(新)"; font-size: Theme.fs-tiny; color: Theme.text-primary; vertical-alignment: center; }
-                                }
-                                if !row.left_only : Rectangle { width: 60px;
+                            HorizontalLayout { spacing: 0;
+                                // Checkbox + group/node
+                                Rectangle { width: 200px; HorizontalLayout { padding-left: 4px; spacing: 4px;
+                                    Rectangle { width: 16px; height: 16px;
+                                        background: row.checked ? Theme.bg-row-selected : Theme.bg-panel;
+                                        border-color: Theme.border-light; border-width: 1px;
+                                        Text { text: " "; font-size: Theme.fs-tiny; vertical-alignment: center; horizontal-alignment: center; }
+                                    }
                                     Text {
-                                        text: row.has_diff ? (row.la > 0 ? "+" + (row.la) : row.lm > 0 ? "*" + (row.lm) : "=") : "=";
-                                        font-size: Theme.fs-tiny; vertical-alignment: center;
-                                        color: Theme.text-primary;
-                                    }
-                                }
-                                // Actions
-                                Rectangle { width: 160px; HorizontalLayout { spacing: 2px;
-                                    // → ← (match/tail-diff)
-                                    if row.hdr_match || row.tbl_more_cols || row.xlsx_more_cols : Rectangle {
-                                        border-color: Theme.text-primary;
-                                        border-width: 1px; border-radius: 2px; width: 42px; height: 18px;
-                                        background: transparent;
-                                        Text { text: "数据→"; font-size: Theme.fs-tiny;
-                                            color: Theme.text-primary;
-                                            vertical-alignment: center; horizontal-alignment: center; }
-                                        TouchArea { clicked => { root.action(i, 1); } }
-                                    }
-                                    if row.hdr_match || row.tbl_more_cols || row.xlsx_more_cols : Rectangle {
-                                        border-color: Theme.text-primary;
-                                        border-width: 1px; border-radius: 2px; width: 42px; height: 18px;
-                                        background: transparent;
-                                        Text { text: "←数据"; font-size: Theme.fs-tiny;
-                                            color: Theme.text-primary;
-                                            vertical-alignment: center; horizontal-alignment: center; }
-                                        TouchArea { clicked => { root.action(i, 2); } }
-                                    }
-                                    // 补列→ (tablet has more cols)
-                                    if row.tbl_more_cols : Rectangle {
-                                        border-color: Theme.text-primary; border-width: 1px; border-radius: 2px;
-                                        width: 42px; height: 18px; background: transparent;
-                                        Text { text: "补列→"; font-size: Theme.fs-tiny;
-                                            color: Theme.text-primary;
-                                            vertical-alignment: center; horizontal-alignment: center; }
-                                        TouchArea { clicked => { root.action(i, 3); } }
-                                    }
-                                    // ←补列 (xlsx has more cols)
-                                    if row.xlsx_more_cols : Rectangle {
-                                        border-color: Theme.text-primary; border-width: 1px; border-radius: 2px;
-                                        width: 42px; height: 18px; background: transparent;
-                                        Text { text: "←补列"; font-size: Theme.fs-tiny;
-                                            color: Theme.text-primary;
-                                            vertical-alignment: center; horizontal-alignment: center; }
-                                        TouchArea { clicked => { root.action(i, 4); } }
-                                    }
-                                    // 强制→/← (mismatch)
-                                    if row.hdr_mismatch : Rectangle {
-                                        border-color: Theme.text-primary; border-width: 1px; border-radius: 2px;
-                                        width: 46px; height: 18px; background: transparent;
-                                        Text { text: "强制→"; font-size: Theme.fs-tiny; color: Theme.text-primary;
-                                            vertical-alignment: center; horizontal-alignment: center; }
-                                        TouchArea { clicked => { root.action(i, 5); } }
-                                    }
-                                    if row.hdr_mismatch : Rectangle {
-                                        border-color: Theme.text-primary; border-width: 1px; border-radius: 2px;
-                                        width: 46px; height: 18px; background: transparent;
-                                        Text { text: "←强制"; font-size: Theme.fs-tiny; color: Theme.text-primary;
-                                            vertical-alignment: center; horizontal-alignment: center; }
-                                        TouchArea { clicked => { root.action(i, 6); } }
-                                    }
-                                    // 创建→ (only left)
-                                    if row.left_only : Rectangle {
-                                        border-color: Theme.text-primary; border-width: 1px; border-radius: 2px;
-                                        width: 46px; height: 18px; background: transparent;
-                                        Text { text: "创建→"; font-size: Theme.fs-tiny; color: Theme.text-primary;
-                                            vertical-alignment: center; horizontal-alignment: center; }
-                                        TouchArea { clicked => { root.action(i, 7); } }
-                                    }
-                                    // ←导入 (only right, valid)
-                                    if row.right_only && !row.blocked : Rectangle {
-                                        border-color: Theme.text-primary; border-width: 1px; border-radius: 2px;
-                                        width: 46px; height: 18px; background: transparent;
-                                        Text { text: "←导入"; font-size: Theme.fs-tiny; color: Theme.text-primary;
-                                            vertical-alignment: center; horizontal-alignment: center; }
-                                        TouchArea { clicked => { root.action(i, 8); } }
-                                    }
-                                    if row.blocked : Rectangle { width: 28px; height: 18px;
-                                        Text { text: "⛔"; font-size: Theme.fs-tiny; color: Theme.text-error; vertical-alignment: center; horizontal-alignment: center; }
+                                        text: row.group + "/" + row.node;
+                                        font-size: Theme.fs-small; color: Theme.text-primary;
+                                        vertical-alignment: center;
                                     }
                                 }}
-                                // Excel diff
-                                if row.right_only : Rectangle { width: 60px;
-                                    Text { text: "(新)"; font-size: Theme.fs-tiny; color: Theme.text-primary; vertical-alignment: center; }
-                                }
-                                if !row.right_only : Rectangle { width: 60px;
-                                    Text {
-                                        text: row.has_diff ? (row.ra > 0 ? "+" + (row.ra) : row.rm > 0 ? "*" + (row.rm) : "=") : "=";
+                                // Left counts
+                                Rectangle { width: 100px; padding-left: 4px;
+                                    if row.left_only : Text {
+                                        text: "(新节点)"; font-size: Theme.fs-tiny; color: Theme.text-info; vertical-alignment: center;
+                                    }
+                                    if !row.left_only : Text {
+                                        text: (row.lrows) + "行 " + (row.lcols) + "列";
                                         font-size: Theme.fs-tiny; vertical-alignment: center;
-                                        color: Theme.text-primary;
+                                        color: row.has_diff ? Theme.mark-modified : Theme.text-disabled;
                                     }
                                 }
-                                if row.blocked : Text { text: row.blocked-reason; font-size: Theme.fs-tiny; color: Theme.text-error; vertical-alignment: center; width: 120px; }
+                                // Separator
+                                Rectangle { width: 1px; background: Theme.border-light; }
+                                // Actions
+                                Rectangle { width: 180px; horizontal-stretch: 0;
+                                    HorizontalLayout { spacing: 2px; padding-left: 4px;
+                                        // → ← (match/tail-diff)
+                                        if row.hdr_match || row.tbl_more_cols || row.xlsx_more_cols : Rectangle {
+                                            border-width: 1px; border-radius: 2px; width: 42px; height: 18px;
+                                            background: transparent; border-color: Theme.border-light;
+                                            Text { text: "数据→"; font-size: Theme.fs-tiny; color: Theme.text-primary; vertical-alignment: center; horizontal-alignment: center; }
+                                            TouchArea { clicked => { root.action(i, 1); } }
+                                        }
+                                        if row.hdr_match || row.tbl_more_cols || row.xlsx_more_cols : Rectangle {
+                                            border-width: 1px; border-radius: 2px; width: 42px; height: 18px;
+                                            background: transparent; border-color: Theme.border-light;
+                                            Text { text: "←数据"; font-size: Theme.fs-tiny; color: Theme.text-primary; vertical-alignment: center; horizontal-alignment: center; }
+                                            TouchArea { clicked => { root.action(i, 2); } }
+                                        }
+                                        if row.tbl_more_cols : Rectangle {
+                                            border-width: 1px; border-radius: 2px; width: 42px; height: 18px;
+                                            background: transparent; border-color: Theme.border-light;
+                                            Text { text: "补列→"; font-size: Theme.fs-tiny; color: Theme.text-primary; vertical-alignment: center; horizontal-alignment: center; }
+                                            TouchArea { clicked => { root.action(i, 3); } }
+                                        }
+                                        if row.xlsx_more_cols : Rectangle {
+                                            border-width: 1px; border-radius: 2px; width: 42px; height: 18px;
+                                            background: transparent; border-color: Theme.border-light;
+                                            Text { text: "←补列"; font-size: Theme.fs-tiny; color: Theme.text-primary; vertical-alignment: center; horizontal-alignment: center; }
+                                            TouchArea { clicked => { root.action(i, 4); } }
+                                        }
+                                        if row.hdr_mismatch : Rectangle {
+                                            border-width: 1px; border-radius: 2px; width: 46px; height: 18px;
+                                            background: transparent; border-color: Theme.border-light;
+                                            Text { text: "强制→"; font-size: Theme.fs-tiny; color: Theme.text-primary; vertical-alignment: center; horizontal-alignment: center; }
+                                            TouchArea { clicked => { root.action(i, 5); } }
+                                        }
+                                        if row.hdr_mismatch : Rectangle {
+                                            border-width: 1px; border-radius: 2px; width: 46px; height: 18px;
+                                            background: transparent; border-color: Theme.border-light;
+                                            Text { text: "←强制"; font-size: Theme.fs-tiny; color: Theme.text-primary; vertical-alignment: center; horizontal-alignment: center; }
+                                            TouchArea { clicked => { root.action(i, 6); } }
+                                        }
+                                        if row.left_only : Rectangle {
+                                            border-width: 1px; border-radius: 2px; width: 46px; height: 18px;
+                                            background: transparent; border-color: Theme.border-light;
+                                            Text { text: "创建→"; font-size: Theme.fs-tiny; color: Theme.text-primary; vertical-alignment: center; horizontal-alignment: center; }
+                                            TouchArea { clicked => { root.action(i, 7); } }
+                                        }
+                                        if row.right_only && !row.blocked : Rectangle {
+                                            border-width: 1px; border-radius: 2px; width: 46px; height: 18px;
+                                            background: transparent; border-color: Theme.border-light;
+                                            Text { text: "←导入"; font-size: Theme.fs-tiny; color: Theme.text-primary; vertical-alignment: center; horizontal-alignment: center; }
+                                            TouchArea { clicked => { root.action(i, 8); } }
+                                        }
+                                        if row.blocked : Rectangle { width: 28px; height: 18px;
+                                            Text { text: "⛔"; font-size: Theme.fs-tiny; color: Theme.text-error; vertical-alignment: center; horizontal-alignment: center; }
+                                        }
+                                    }
+                                }
+                                // Separator
+                                Rectangle { width: 1px; background: Theme.border-light; }
+                                // Right info: row×col | matched+diff
+                                Rectangle { width: 180px; padding-left: 4px;
+                                    if row.right_only : Text {
+                                        text: "(新 sheet)"; font-size: Theme.fs-tiny; color: Theme.text-info; vertical-alignment: center;
+                                    }
+                                    if !row.right_only : HorizontalLayout { spacing: 2px;
+                                        Text {
+                                            text: (row.rrows) + "行 " + (row.rcols) + "列 │ " + (row.matched) + "匹配";
+                                            font-size: Theme.fs-tiny; vertical-alignment: center;
+                                            color: row.has_diff ? Theme.mark-modified : Theme.text-disabled;
+                                        }
+                                        if row.has_diff : Text {
+                                            text: row.tbl_more_cols ? "+" + (row.lcols - row.matched) + "列" : row.xlsx_more_cols ? "+" + (row.rcols - row.matched) + "列" : "";
+                                            font-size: Theme.fs-tiny; color: Theme.text-info; vertical-alignment: center;
+                                        }
+                                    }
+                                    if row.blocked : Text {
+                                        text: row.blocked-reason;
+                                        font-size: Theme.fs-tiny; color: Theme.text-error; vertical-alignment: center;
+                                    }
+                                }
                                 Rectangle { horizontal-stretch: 1; }
                             }
                         }
