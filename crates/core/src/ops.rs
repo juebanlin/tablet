@@ -1,6 +1,7 @@
-use std::collections::HashSet;
+﻿use std::collections::HashSet;
 use std::path::PathBuf;
 use crate::model::*;
+use crate::tbl::DEFAULT_TBL_VERSION;
 use crate::validate::*;
 
 /// 把一条 ValidationError 格式化为日志行（统一 B 格式：`位置:[内容] -> 原因`）：
@@ -58,6 +59,7 @@ fn sync_schema_from_groups(project: &mut Project) {
     // sync 永远不带 preset：project.tblschema 是「结构骨架」，行数据归项目里的 .tbl
     let mut s = crate::tblschema::schema_from_project(&project.groups, false);
     s.meta = project.schema.meta.clone();
+    s.separators = project.schema.separators.clone();
     project.schema = s;
     project.schema_dirty = true;
 }
@@ -71,31 +73,45 @@ fn save_project_files(project: &mut Project) -> (usize, usize) {
     let mut count = 0;
     let mut deleted = 0;
     // 第一步：克隆出来但未落盘的项目，先建 root 目录 + 让 schema 一并落地
-    if project.root_pending_create {
+    if project.state.is_pending() {
         if let Err(e) = std::fs::create_dir_all(&project.project_root) {
             eprintln!("warn: create project root failed: {} ({})", project.project_root.display(), e);
             return (0, 0);
         }
-        project.root_pending_create = false;
+        project.state = crate::model::ProjectState::Loaded;
         project.schema_dirty = true;
-    }
-    // 项目首次落盘时写一份「全量带注释」的 project.toml 模板，让用户能直接看到
-    // 全部可改键。仅多 Project 模式（project_root != workdir）触发——老布局 fixture
-    // 的 workdir 即 project_root，不该污染那里。已存在则不覆盖（用户改过 / 手写过都保留）。
-    if project.is_multi_project_layout() {
-        let project_toml_path = project.project_root.join(crate::project::PROJECT_TOML_FILE);
-        if !project_toml_path.exists() {
-            match std::fs::write(&project_toml_path, crate::project::default_project_toml_template()) {
-                Ok(()) => count += 1,
-                Err(e) => eprintln!(
-                    "warn: write project.toml failed: {} ({})",
-                    project_toml_path.display(),
-                    e
-                ),
+
+        // 未落盘项目首次保存时，根据当前 project_root 重新推演所有路径
+        // （应对"项目设置"修改 id 的场景：id 改了、project_root 更新了，但子节点路径还是旧的）
+        let new_data_dir = project.data_dir();
+        for group in &mut project.groups {
+            group.dir = new_data_dir.join(&group.name);
+            for table in &mut group.tables {
+                table.path = group.dir.join(format!("{}.tbl", table.name));
+            }
+            for constant in &mut group.constants {
+                constant.path = group.dir.join(format!("{}.tbl", constant.name));
+            }
+            for enum_def in &mut group.enums {
+                enum_def.path = group.dir.join(format!("{}.tbl", enum_def.name));
             }
         }
     }
+    // 项目首次落盘时写一份「全量带注释」的 project.toml 模板，让用户能直接看到
+    // 全部可改键。已存在则不覆盖（用户改过 / 手写过都保留）。
+    let project_toml_path = project.project_root.join(crate::project::PROJECT_TOML_FILE);
+    if !project_toml_path.exists() {
+        match std::fs::write(&project_toml_path, crate::project::default_project_toml_template()) {
+            Ok(()) => count += 1,
+            Err(e) => eprintln!(
+                "warn: write project.toml failed: {} ({})",
+                project_toml_path.display(),
+                e
+            ),
+        }
+    }
     if project.schema_dirty {
+        sync_schema_from_groups(project);
         let txt = crate::tblschema::serialize_tblschema(&project.schema);
         let path = project.project_root.join(crate::project::PROJECT_SCHEMA_FILE);
         if std::fs::write(&path, txt).is_ok() {
@@ -110,45 +126,49 @@ fn save_project_files(project: &mut Project) -> (usize, usize) {
         }
         for table in &mut group.tables {
             if table.deleted {
-                if !table.original.is_empty() {
+                if table.saved {
                     let _ = std::fs::remove_file(&table.path);
                 }
                 deleted += 1;
             } else if table.dirty {
                 let content = crate::tbl::serialize_table(table);
                 if std::fs::write(&table.path, &content).is_ok() {
-                    table.original = content;
+                    table.original_records = table.records.clone();
+                    table.original_fields = table.schema.fields.clone();
                     table.dirty = false;
+                    table.saved = true;
                     count += 1;
                 }
             }
         }
         for constant in &mut group.constants {
             if constant.deleted {
-                if !constant.original.is_empty() {
+                if constant.saved {
                     let _ = std::fs::remove_file(&constant.path);
                 }
                 deleted += 1;
             } else if constant.dirty {
                 let content = crate::tbl::serialize_constant(constant);
                 if std::fs::write(&constant.path, &content).is_ok() {
-                    constant.original = content;
+                    constant.original_entries = constant.entries.clone();
                     constant.dirty = false;
+                    constant.saved = true;
                     count += 1;
                 }
             }
         }
         for enum_def in &mut group.enums {
             if enum_def.deleted {
-                if !enum_def.original.is_empty() {
+                if enum_def.saved {
                     let _ = std::fs::remove_file(&enum_def.path);
                 }
                 deleted += 1;
             } else if enum_def.dirty {
                 let content = crate::tbl::serialize_enum(enum_def);
                 if std::fs::write(&enum_def.path, &content).is_ok() {
-                    enum_def.original = content;
+                    enum_def.original_entries = enum_def.entries.clone();
                     enum_def.dirty = false;
+                    enum_def.saved = true;
                     count += 1;
                 }
             }
@@ -167,6 +187,8 @@ fn save_project_files(project: &mut Project) -> (usize, usize) {
 pub struct ProjectEngine {
     /// 顶层 workdir（@04.2.0 多 Project 同时管理）。所有 project 共用。
     pub workdir: PathBuf,
+    /// 全局配置（来自 tablet.toml），所有 Project 共享。
+    pub global_config: GlobalConfig,
     /// 扫描 `<workdir>/projects/` 得到的全部 project 元数据（包含未打开的）。
     /// 启动 + rename / delete project 时维护；UI 树根据它渲染所有 project。
     pub available_projects: Vec<AvailableProject>,
@@ -293,21 +315,27 @@ pub enum ProjectAction {
     NewEnum     { project_id: String, group: String, name: String },
     RenameGroup { project_id: String, old_name: String, new_name: String },
     RenameNode  { project_id: String, group: String, old_name: String, new_name: String },
-    /// 重命名 project：迁移 `projects/<old_id>/` → `projects/<new_id>/`，写 project.toml 新 name + id。
-    RenameProject { old_id: String, new_id: String, new_name: String },
     /// 删除 project：rm -rf `projects/<id>/`、从内存 `Vec<Project>` 移除。
     /// 至少要保留一个 project；删最后一个会失败（log 报错）。
     DeleteProject { project_id: String },
 }
 
 impl ProjectEngine {
-    /// 老接口：单 Project 构造（兼容 fixture / CLI）。
+    /// 构造单个 Project 实例（用于测试和简单场景）。
     /// available_projects 仅含该 project；workdir 取自该 project。
-    pub fn new(project: Project) -> Self {
+    ///
+    /// `global_config` 参数：传入真实的全局配置，避免从已 merge 的 project.config 反推。
+    /// 测试场景可传 `GlobalConfig::default()`。
+    pub fn new(project: Project, global_config: GlobalConfig) -> Self {
         let workdir = project.workdir.clone();
         let available = vec![AvailableProject::from_project(&project)];
+        let mut global_config = global_config;
+        // 更新 project_management 段以匹配当前 project
+        global_config.project_management.last_project = project.schema.meta.id.clone();
+        global_config.project_management.opened_projects = vec![project.schema.meta.id.clone()];
         Self {
             workdir,
+            global_config,
             available_projects: available,
             projects: vec![project],
             active_idx: Some(0),
@@ -320,15 +348,22 @@ impl ProjectEngine {
 
     /// 多 Project 构造（兼容 #195 老调用点：把 projects 当作"全部"且全部 opened）。
     /// projects 必须非空；available_projects 由 projects 推导。
-    pub fn new_multi(projects: Vec<Project>, last_id: Option<&str>) -> Self {
+    ///
+    /// `global_config` 参数：传入真实的全局配置，避免从已 merge 的 project.config 反推。
+    pub fn new_multi(projects: Vec<Project>, last_id: Option<&str>, global_config: GlobalConfig) -> Self {
         assert!(!projects.is_empty(), "ProjectEngine::new_multi 至少要有一个 Project");
         let workdir = projects[0].workdir.clone();
         let available = projects.iter().map(AvailableProject::from_project).collect();
         let active_idx = last_id
             .and_then(|id| projects.iter().position(|p| p.schema.meta.id == id))
             .or(Some(0));
+        let mut global_config = global_config;
+        // 更新 project_management 段以匹配当前打开的 projects
+        global_config.project_management.last_project = last_id.unwrap_or("").to_string();
+        global_config.project_management.opened_projects = projects.iter().map(|p| p.schema.meta.id.clone()).collect();
         Self {
             workdir,
+            global_config,
             available_projects: available,
             projects,
             active_idx,
@@ -344,6 +379,7 @@ impl ProjectEngine {
     /// 若 active_id 不在 opened 里，且 opened 非空，则 active = opened[0]；opened 空则 None。
     pub fn new_workspace(
         workdir: PathBuf,
+        global_config: GlobalConfig,
         available: Vec<AvailableProject>,
         opened: Vec<Project>,
         active_id: Option<&str>,
@@ -357,6 +393,7 @@ impl ProjectEngine {
         };
         Self {
             workdir,
+            global_config,
             available_projects: available,
             projects: opened,
             active_idx,
@@ -437,6 +474,12 @@ impl ProjectEngine {
             .collect();
     }
 
+    /// （已废弃）原用于重新合并配置，现在项目配置独立维护，不再需要合并。
+    /// 保留空实现以兼容旧调用点，未来可删除。
+    pub fn remerge_project_config(&mut self, _project_id: &str) {
+        // 不再需要合并：项目配置独立维护
+    }
+
     /// 打开一个 available project：从盘加载并 append 到 self.projects；
     /// 若已打开，返回 Ok(false)；找不到返回 Err。
     /// 不修改 active；UI 通常会紧跟着 set_active_by_id。
@@ -460,7 +503,7 @@ impl ProjectEngine {
     /// 不动 available_projects（关闭 ≠ 删除）。同时清掉该 pid 的 validation_errors。
     pub fn close_project(&mut self, project_id: &str) -> bool {
         let Some(idx) = self.projects.iter().position(|p| p.schema.meta.id == project_id) else {
-            self.log(format!("Project 未打开: {}", project_id));
+            self.error_log(format!("Project 未打开: {}", project_id));
             return false;
         };
         self.projects.remove(idx);
@@ -520,9 +563,9 @@ impl ProjectEngine {
     }
 
     /// 内存模式创建新 Project：与 clone_project_in_memory 行为对齐。
-    /// - 不立即落盘；root_pending_create=true、schema_dirty=true
+    /// - 不立即落盘；state=Pending、schema_dirty=true
     /// - sections 展开为 group.is_new=true、节点 original="" → 树面板 `+` 标记
-    /// - config 借用现有任意 opened project 的 WorkspaceConfig，否则用默认 fallback
+    /// - config 借用现有任意 opened project 的 ProjectConfig，否则用默认 fallback
     /// - 同时加进 available_projects（未保存前目录还不存在，但 UI 树要展示）
     /// 返回 new_id 或错误信息。
     ///
@@ -541,10 +584,10 @@ impl ProjectEngine {
         let project_id = schema.meta.id.clone();
         let project_root = self.workdir.join(crate::project::PROJECTS_DIR).join(&project_id);
 
-        // 借用任一已打开 project 的 config 当默认（与 workspace 共享段对齐）；都没有则走 toml 默认
-        let config = self.projects.first().map(|p| p.config.clone())
-            .or_else(|| toml::from_str::<WorkspaceConfig>("").ok())
-            .ok_or_else(|| "无法构造默认 WorkspaceConfig".to_string())?;
+        // 从全局配置拷贝初始配置（新项目时的种子）
+        let config = ProjectConfig {
+            export: self.global_config.export.clone().unwrap_or_default(),
+        };
 
         let mut new_project = Project {
             workdir: self.workdir.clone(),
@@ -553,7 +596,7 @@ impl ProjectEngine {
             schema: schema.clone(),
             groups: Vec::new(),
             schema_dirty: true,
-            root_pending_create: true,
+            state: crate::model::ProjectState::Pending,
         };
 
         // 用 apply_schema_to_project 把 sections 展开为 groups+nodes：
@@ -565,6 +608,11 @@ impl ProjectEngine {
             &data_dir,
             with_preset,
         );
+
+        // 清除 schema 的 preset（数据已灌入 groups，项目 schema 只保留结构骨架）
+        for sec in &mut new_project.schema.sections {
+            sec.preset.clear();
+        }
 
         let avail = AvailableProject::from_project(&new_project);
         self.available_projects.push(avail);
@@ -584,7 +632,7 @@ impl ProjectEngine {
     }
 
     /// 内存深拷贝克隆：把 source_project_id 的当前状态（含未保存改动）整体复制为新 project，
-    /// 加进 self.projects 但**不立即落盘**（root_pending_create=true，schema_dirty=true，
+    /// 加进 self.projects 但**不立即落盘**（state=Pending，schema_dirty=true，
     /// 全部 group is_new=true，所有节点 dirty=true / original=""）。用户保存时才会落盘。
     /// - source 必须是 opened（在 self.projects 里）
     /// - 同时把新 project 加进 available_projects（未保存前目录还不存在，但 UI 树要展示）
@@ -596,11 +644,11 @@ impl ProjectEngine {
         new_name: &str,
     ) -> Option<String> {
         if !crate::tblschema::is_valid_metadata_id(new_id) {
-            self.log(format!("project id 不合法: {}", new_id));
+            self.error_log(format!("project id 不合法: {}", new_id));
             return None;
         }
         if self.available_projects.iter().any(|a| a.id == new_id) {
-            self.log(format!("project id 已存在: {}", new_id));
+            self.error_log(format!("project id 已存在: {}", new_id));
             return None;
         }
         let source = self.find_project(source_project_id)?.clone();
@@ -613,7 +661,7 @@ impl ProjectEngine {
             chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
         // source_template* 沿用源（克隆来源最早还是那个 template）
         new_project.schema_dirty = true;
-        new_project.root_pending_create = true;
+        new_project.state = crate::model::ProjectState::Pending;
 
         let new_data_dir = new_project.data_dir();
         for g in &mut new_project.groups {
@@ -622,17 +670,19 @@ impl ProjectEngine {
             for t in &mut g.tables {
                 t.path = g.dir.join(format!("{}.tbl", t.name));
                 t.dirty = true;
-                t.original = String::new();
+                t.original_records.clear();
+                t.original_fields.clear();
+                t.saved = false;
             }
             for c in &mut g.constants {
                 c.path = g.dir.join(format!("{}.tbl", c.name));
                 c.dirty = true;
-                c.original = String::new();
+                c.original_entries.clear(); c.saved = false;
             }
             for e in &mut g.enums {
                 e.path = g.dir.join(format!("{}.tbl", e.name));
                 e.dirty = true;
-                e.original = String::new();
+                e.original_entries.clear(); e.saved = false;
             }
         }
         // 同步 schema.sections 与 groups（克隆下来的 sections 已经一致，但保险起见走一次）
@@ -641,7 +691,7 @@ impl ProjectEngine {
         self.available_projects.push(avail);
         self.available_projects.sort_by(|a, b| a.id.cmp(&b.id));
         self.projects.push(new_project);
-        self.log(format!(
+        self.ui_log(format!(
             "已克隆 {} → {}（内存中，需保存才落地）",
             source_project_id, new_id
         ));
@@ -698,9 +748,36 @@ impl ProjectEngine {
         self.validation_errors.iter().any(|(p, _, _, _, _)| p == project_id)
     }
 
-    pub fn log(&mut self, msg: String) {
+    /// 操作日志：显示在 UI 面板 + 写文件（info 级别）
+    pub fn ui_log(&mut self, msg: String) {
         let now = chrono::Local::now().format("%H:%M:%S").to_string();
         self.logs.push(format!("{} {}", now, msg));
+        log::info!("{}", msg);
+    }
+
+    /// 调试日志：只写文件（debug 级别），不显示 UI
+    pub fn debug_log(&mut self, msg: String) {
+        log::debug!("{}", msg);
+    }
+
+    /// 警告日志：显示在 UI 面板（带 ⚠️）+ 写文件（warn 级别）
+    pub fn warn_log(&mut self, msg: String) {
+        let now = chrono::Local::now().format("%H:%M:%S").to_string();
+        self.logs.push(format!("{} ⚠️ {}", now, msg));
+        log::warn!("{}", msg);
+    }
+
+    /// 错误日志：显示在 UI 面板（带 ❌）+ 写文件（error 级别）
+    pub fn error_log(&mut self, msg: String) {
+        let now = chrono::Local::now().format("%H:%M:%S").to_string();
+        self.logs.push(format!("{} ❌ {}", now, msg));
+        log::error!("{}", msg);
+    }
+
+    /// 旧接口兼容：默认为 ui_log
+    #[deprecated(note = "使用 ui_log/debug_log/warn_log/error_log 替代")]
+    pub fn log(&mut self, msg: String) {
+        self.ui_log(msg);
     }
 
     pub fn logs(&self) -> &[String] {
@@ -815,24 +892,22 @@ impl ProjectEngine {
         }
     }
 
-    pub fn paste_enum_data(&mut self, group: &str, name: &str, start_row: usize, start_col: usize, text: &str) {
-        let lines: Vec<&str> = text.lines().collect();
-        if lines.is_empty() { return; }
+    pub fn paste_enum_data(&mut self, group: &str, name: &str, start_row: usize, start_col: usize, grid: &[Vec<String>]) {
+        if grid.is_empty() { return; }
         if let Some(g) = self.project_mut().groups.iter_mut().find(|g| g.name == group) {
             if let Some(en) = g.enums.iter_mut().find(|e| e.name == name) {
-                for (i, line) in lines.iter().enumerate() {
+                for (i, row_cells) in grid.iter().enumerate() {
                     let row = start_row + i;
                     while en.entries.len() <= row {
                         en.entries.push(EnumEntry::default());
                     }
-                    let cells: Vec<&str> = line.split('\t').collect();
-                    for (j, cell) in cells.iter().enumerate() {
+                    for (j, cell) in row_cells.iter().enumerate() {
                         let col = start_col + j;
                         let entry = &mut en.entries[row];
                         match col {
-                            0 => entry.id = cell.to_string(),
-                            1 => entry.name = cell.to_string(),
-                            2 => entry.desc = cell.to_string(),
+                            0 => entry.id = cell.clone(),
+                            1 => entry.name = cell.clone(),
+                            2 => entry.desc = cell.clone(),
                             _ => {}
                         }
                     }
@@ -840,7 +915,7 @@ impl ProjectEngine {
                 en.update_dirty();
             }
         }
-        self.log(format!("粘贴 {}行 数据", lines.len()));
+        self.ui_log(format!("粘贴 {}行 数据", grid.len()));
     }
 
     pub fn insert_enum_row(&mut self, group: &str, name: &str, at: usize) {
@@ -871,7 +946,7 @@ impl ProjectEngine {
                 if start < end {
                     en.entries.drain(start..end);
                     en.update_dirty();
-                    self.log(format!("已删除 {} 行", end - start));
+                    self.ui_log(format!("已删除 {} 行", end - start));
                 }
             }
         }
@@ -997,8 +1072,9 @@ impl ProjectEngine {
                 t.update_dirty();
             }
         }
+        self.project_mut().schema_dirty = true;
         if let Some(kw) = keyword_err {
-            self.log(format!("字段名 '{}' 是保留关键字，不允许使用", kw));
+            self.ui_log(format!("字段名 '{}' 是保留关键字，不允许使用", kw));
         }
     }
 
@@ -1032,7 +1108,7 @@ impl ProjectEngine {
                 if start < end {
                     t.records.drain(start..end);
                     t.update_dirty();
-                    self.log(format!("已删除 {} 行", end - start));
+                    self.ui_log(format!("已删除 {} 行", end - start));
                 }
             }
         }
@@ -1054,6 +1130,7 @@ impl ProjectEngine {
                 t.update_dirty();
             }
         }
+        self.project_mut().schema_dirty = true;
     }
 
     pub fn delete_column(&mut self, group: &str, name: &str, at: usize) {
@@ -1068,39 +1145,37 @@ impl ProjectEngine {
                 }
             }
         }
+        self.project_mut().schema_dirty = true;
     }
 
-    pub fn paste_table_data(&mut self, group: &str, name: &str, start_row: usize, start_col: usize, text: &str) {
-        let lines: Vec<&str> = text.lines().collect();
-        if lines.is_empty() { return; }
+    pub fn paste_table_data(&mut self, group: &str, name: &str, start_row: usize, start_col: usize, grid: &[Vec<String>]) {
+        if grid.is_empty() { return; }
         if let Some(g) = self.project_mut().groups.iter_mut().find(|g| g.name == group) {
             if let Some(t) = g.tables.iter_mut().find(|t| t.name == name) {
                 let cols = t.schema.fields.len();
-                for (i, line) in lines.iter().enumerate() {
+                for (i, row_cells) in grid.iter().enumerate() {
                     let row = start_row + i;
                     while t.records.len() <= row { t.records.push(vec![String::new(); cols]); }
-                    let cells: Vec<&str> = line.split('\t').collect();
-                    for (j, cell) in cells.iter().enumerate() {
+                    for (j, cell) in row_cells.iter().enumerate() {
                         let col = start_col + j;
                         if col < cols {
                             let record = &mut t.records[row];
                             while record.len() <= col { record.push(String::new()); }
-                            record[col] = cell.to_string();
+                            record[col] = cell.clone();
                         }
                     }
                 }
                 t.update_dirty();
             }
         }
-        self.log(format!("粘贴 {}行 数据", lines.len()));
+        self.ui_log(format!("粘贴 {}行 数据", grid.len()));
     }
 
-    pub fn paste_constant_data(&mut self, group: &str, name: &str, start_row: usize, start_col: usize, text: &str) {
-        let lines: Vec<&str> = text.lines().collect();
-        if lines.is_empty() { return; }
+    pub fn paste_constant_data(&mut self, group: &str, name: &str, start_row: usize, start_col: usize, grid: &[Vec<String>]) {
+        if grid.is_empty() { return; }
         if let Some(g) = self.project_mut().groups.iter_mut().find(|g| g.name == group) {
             if let Some(c) = g.constants.iter_mut().find(|c| c.name == name) {
-                for (i, line) in lines.iter().enumerate() {
+                for (i, row_cells) in grid.iter().enumerate() {
                     let row = start_row + i;
                     while c.entries.len() <= row {
                         c.entries.push(ConstEntry {
@@ -1108,16 +1183,15 @@ impl ProjectEngine {
                             value: String::new(), export: Export::ClientServer, desc: String::new(),
                         });
                     }
-                    let cells: Vec<&str> = line.split('\t').collect();
-                    for (j, cell) in cells.iter().enumerate() {
+                    for (j, cell) in row_cells.iter().enumerate() {
                         let col = start_col + j;
                         let entry = &mut c.entries[row];
                         match col {
-                            0 => entry.name = cell.to_string(),
-                            1 => entry.tbl_type = cell.to_string(),
-                            2 => entry.value = cell.to_string(),
-                            3 => entry.export = if cell.is_empty() { Export::Unselected } else { Export::from_str(cell) },
-                            4 => entry.desc = cell.to_string(),
+                            0 => entry.name = cell.clone(),
+                            1 => entry.tbl_type = cell.clone(),
+                            2 => entry.value = cell.clone(),
+                            3 => entry.export = Export::from_str(cell),
+                            4 => entry.desc = cell.clone(),
                             _ => {}
                         }
                     }
@@ -1125,7 +1199,7 @@ impl ProjectEngine {
                 c.update_dirty();
             }
         }
-        self.log(format!("粘贴 {}行 数据", lines.len()));
+        self.ui_log(format!("粘贴 {}行 数据", grid.len()));
     }
 
     pub fn clear_table_cells(&mut self, group: &str, name: &str, cells: &[(usize, usize)]) {
@@ -1150,7 +1224,7 @@ impl ProjectEngine {
                             0 => entry.name.clear(),
                             1 => entry.tbl_type.clear(),
                             2 => entry.value.clear(),
-                            3 => entry.export = Export::Unselected,
+                            3 => entry.export = Export::ClientServer,
                             4 => entry.desc.clear(),
                             _ => {}
                         }
@@ -1165,9 +1239,9 @@ impl ProjectEngine {
 
     pub fn validate(&self) -> Vec<String> {
         let mut errors = Vec::new();
-        let sep = &self.project().config.separators;
+        let sep = &self.project().schema.separators;
         let refs = RefIndex::build(&self.project().groups);
-        let allow_ref = self.project().config.ui.as_ref()
+        let allow_ref = self.global_config.ui.as_ref()
             .map_or(true, |u| u.constant_ref_allowed);
         for group in &self.project().groups {
             for table in &group.tables {
@@ -1195,9 +1269,9 @@ impl ProjectEngine {
     pub fn revalidate(&mut self, group: &str, name: &str) {
         let Some(pid) = self.active_project_id().map(str::to_string) else { return; };
         self.validation_errors.retain(|(p, g, n, _, _)| p != &pid || g != group || n != name);
-        let sep = self.project().config.separators.clone();
+        let sep = self.project().schema.separators.clone();
         let refs = RefIndex::build(&self.project().groups);
-        let allow_ref = self.project().config.ui.as_ref()
+        let allow_ref = self.global_config.ui.as_ref()
             .map_or(true, |u| u.constant_ref_allowed);
         let mut new_errs: Vec<(usize, usize)> = Vec::new();
         {
@@ -1264,7 +1338,7 @@ impl ProjectEngine {
     /// 全部关闭时（无 active）直接 no-op。
     pub fn save_all(&mut self) {
         if self.active_idx.is_none() {
-            self.log("没有打开的 Project，无需保存".to_string());
+            self.ui_log("没有打开的 Project，无需保存".to_string());
             return;
         }
         self.revalidate_all();
@@ -1280,9 +1354,9 @@ impl ProjectEngine {
         }
         let (count, deleted) = save_project_files(self.project_mut());
         if count > 0 || deleted > 0 {
-            self.log(format!("已保存 {} 个文件, 删除 {} 个", count, deleted));
+            self.ui_log(format!("已保存 {} 个文件, 删除 {} 个", count, deleted));
         } else {
-            self.log("无修改需要保存".to_string());
+            self.ui_log("无修改需要保存".to_string());
         }
     }
 
@@ -1304,10 +1378,10 @@ impl ProjectEngine {
             total_deleted += d;
         }
         if total_count > 0 || total_deleted > 0 {
-            self.log(format!("已保存 {} 个文件, 删除 {} 个（{} 个 Project）",
+            self.ui_log(format!("已保存 {} 个文件, 删除 {} 个（{} 个 Project）",
                 total_count, total_deleted, self.projects.len()));
         } else {
-            self.log("无修改需要保存".to_string());
+            self.ui_log("无修改需要保存".to_string());
         }
     }
 
@@ -1315,7 +1389,7 @@ impl ProjectEngine {
         let workdir = self.workdir.clone();
         let last_id = self.active_project_id().map(str::to_string);
         match crate::project::load_workspace(&workdir) {
-            Ok(mut new_engine) => {
+            Ok((mut new_engine, _config_fixed)) => {
                 // 维持原 active：若原 active 在新 opened 列表里则保留，否则用新 active
                 if let Some(pid) = last_id.as_deref() {
                     new_engine.set_active_by_id(pid);
@@ -1327,9 +1401,9 @@ impl ProjectEngine {
                 self.projects = new_engine.projects;
                 self.active_idx = new_engine.active_idx;
                 self.validation_errors.clear();
-                self.log(format!("重新加载完成，共 {} 个 Project / {} 个 Group", pcount, group_total));
+                self.ui_log(format!("重新加载完成，共 {} 个 Project / {} 个 Group", pcount, group_total));
             }
-            Err(e) => self.log(format!("加载失败: {}", e)),
+            Err(e) => self.ui_log(format!("加载失败: {}", e)),
         }
     }
 
@@ -1337,7 +1411,7 @@ impl ProjectEngine {
     /// 全部关闭时返回 false。
     pub fn is_dirty(&self) -> bool {
         let Some(p) = self.active() else { return false; };
-        if p.root_pending_create || p.schema_dirty { return true; }
+        if p.state.is_pending() || p.schema_dirty { return true; }
         for g in &p.groups {
             if g.is_new { return true; }
             for t in &g.tables { if t.dirty || t.deleted { return true; } }
@@ -1350,7 +1424,7 @@ impl ProjectEngine {
     /// 任一 Project 有未保存改动。退出工具 / 全保存判空用。
     pub fn is_dirty_any(&self) -> bool {
         for p in &self.projects {
-            if p.root_pending_create || p.schema_dirty { return true; }
+            if p.state.is_pending() || p.schema_dirty { return true; }
             for g in &p.groups {
                 if g.is_new { return true; }
                 for t in &g.tables { if t.dirty || t.deleted { return true; } }
@@ -1365,14 +1439,14 @@ impl ProjectEngine {
         if let Some(g) = self.project().groups.iter().find(|g| g.name == group_name) {
             if g.is_new {
                 self.project_mut().groups.retain(|g| g.name != group_name);
-                self.log(format!("已移除新建 Group: {}", group_name));
+                self.ui_log(format!("已移除新建 Group: {}", group_name));
             } else {
                 if let Some(g) = self.project_mut().groups.iter_mut().find(|g| g.name == group_name) {
                     for t in &mut g.tables { t.deleted = true; }
                     for c in &mut g.constants { c.deleted = true; }
                     for e in &mut g.enums { e.deleted = true; }
                 }
-                self.log(format!("已标记删除 Group: {}", group_name));
+                self.ui_log(format!("已标记删除 Group: {}", group_name));
             }
         }
         sync_schema_from_groups(self.project_mut());
@@ -1396,7 +1470,7 @@ impl ProjectEngine {
         sync_schema_from_groups(self.project_mut());
         let Some(pid) = self.active_project_id().map(str::to_string) else { return; };
         self.validation_errors.retain(|(p, g, n, _, _)| !(p == &pid && g == group_name && n == node_name));
-        self.log(format!("已标记删除: {}/{}", group_name, node_name));
+        self.ui_log(format!("已标记删除: {}/{}", group_name, node_name));
     }
 
     /// 把指定节点深拷贝到剪贴板（不改源数据，不动 dirty 标）。
@@ -1409,11 +1483,11 @@ impl ProjectEngine {
         kind: NodeKind,
     ) {
         let Some(p) = self.find_project(project_id) else {
-            self.log(format!("Project 不存在: {}", project_id));
+            self.ui_log(format!("Project 不存在: {}", project_id));
             return;
         };
         let Some(g) = p.groups.iter().find(|g| g.name == group) else {
-            self.log(format!("Group 不存在: {}/{}", project_id, group));
+            self.ui_log(format!("Group 不存在: {}/{}", project_id, group));
             return;
         };
         let body = match kind {
@@ -1422,7 +1496,7 @@ impl ProjectEngine {
             NodeKind::Enum => g.enums.iter().find(|e| e.name == node_name).cloned().map(NodeBody::Enum),
         };
         let Some(body) = body else {
-            self.log(format!("节点不存在: {}/{}/{}", project_id, group, node_name));
+            self.ui_log(format!("节点不存在: {}/{}/{}", project_id, group, node_name));
             return;
         };
         let kind_label = match &body {
@@ -1435,17 +1509,17 @@ impl ProjectEngine {
             source_group: group.to_string(),
             body,
         });
-        self.log(format!("已复制 {} 到剪贴板: {}/{}/{}", kind_label, project_id, group, node_name));
+        self.ui_log(format!("已复制 {} 到剪贴板: {}/{}/{}", kind_label, project_id, group, node_name));
     }
 
     /// 整组深拷贝到剪贴板（含组内全部 table/constant/enum）。
     pub fn clipboard_copy_group(&mut self, project_id: &str, group: &str) {
         let Some(p) = self.find_project(project_id) else {
-            self.log(format!("Project 不存在: {}", project_id));
+            self.ui_log(format!("Project 不存在: {}", project_id));
             return;
         };
         let Some(g) = p.groups.iter().find(|g| g.name == group) else {
-            self.log(format!("Group 不存在: {}/{}", project_id, group));
+            self.ui_log(format!("Group 不存在: {}/{}", project_id, group));
             return;
         };
         let snapshot = g.clone();
@@ -1459,7 +1533,7 @@ impl ProjectEngine {
             source_project: project_id.to_string(),
             snapshot,
         });
-        self.log(format!("已复制 Group 到剪贴板: {}/{}（{}）", project_id, group, summary));
+        self.ui_log(format!("已复制 Group 到剪贴板: {}/{}（{}）", project_id, group, summary));
     }
 
     /// 粘贴单节点到目标 (project, group)。
@@ -1470,7 +1544,7 @@ impl ProjectEngine {
     /// 返回新节点名（成功时）。
     pub fn paste_node_to(&mut self, target_project: &str, target_group: &str) -> Option<String> {
         let Some(NodeClipboard::Node { body, .. }) = self.node_clipboard.clone() else {
-            self.log("剪贴板为空或类型不匹配（需要节点剪贴板）".to_string());
+            self.warn_log("剪贴板为空或类型不匹配（需要节点剪贴板）".to_string());
             return None;
         };
         let project = self.find_project_mut(target_project)?;
@@ -1495,7 +1569,7 @@ impl ProjectEngine {
                 t.name = final_name.clone();
                 t.path = new_path;
                 t.dirty = true;
-                t.original = String::new();
+                t.original_records.clear(); t.original_fields.clear(); t.saved = false;
                 g.tables.push(t);
                 "Table"
             }
@@ -1503,7 +1577,7 @@ impl ProjectEngine {
                 c.name = final_name.clone();
                 c.path = new_path;
                 c.dirty = true;
-                c.original = String::new();
+                c.original_entries.clear(); c.saved = false;
                 g.constants.push(c);
                 "Constant"
             }
@@ -1511,12 +1585,12 @@ impl ProjectEngine {
                 e.name = final_name.clone();
                 e.path = new_path;
                 e.dirty = true;
-                e.original = String::new();
+                e.original_entries.clear(); e.saved = false;
                 g.enums.push(e);
                 "Enum"
             }
         };
-        self.log(format!(
+        self.ui_log(format!(
             "已粘贴 {} 到 {}/{}/{}",
             kind_label, target_project, target_group, final_name
         ));
@@ -1540,7 +1614,7 @@ impl ProjectEngine {
     /// 返回新 group 名。
     pub fn paste_group_to(&mut self, target_project: &str) -> Option<String> {
         let Some(NodeClipboard::Group { snapshot, .. }) = self.node_clipboard.clone() else {
-            self.log("剪贴板为空或类型不匹配（需要 Group 剪贴板）".to_string());
+            self.warn_log("剪贴板为空或类型不匹配（需要 Group 剪贴板）".to_string());
             return None;
         };
         let project = self.find_project_mut(target_project)?;
@@ -1558,17 +1632,17 @@ impl ProjectEngine {
         for t in &mut new_group.tables {
             t.path = new_dir.join(format!("{}.tbl", t.name));
             t.dirty = true;
-            t.original = String::new();
+            t.original_records.clear(); t.original_fields.clear(); t.saved = false;
         }
         for c in &mut new_group.constants {
             c.path = new_dir.join(format!("{}.tbl", c.name));
             c.dirty = true;
-            c.original = String::new();
+            c.original_entries.clear(); c.saved = false;
         }
         for e in &mut new_group.enums {
             e.path = new_dir.join(format!("{}.tbl", e.name));
             e.dirty = true;
-            e.original = String::new();
+            e.original_entries.clear(); e.saved = false;
         }
         let summary = format!(
             "T{}+C{}+E{}",
@@ -1578,7 +1652,7 @@ impl ProjectEngine {
         );
         project.groups.push(new_group);
         sync_schema_from_groups(project);
-        self.log(format!("已粘贴 Group 到 {}/{}（{}）", target_project, final_name, summary));
+        self.ui_log(format!("已粘贴 Group 到 {}/{}（{}）", target_project, final_name, summary));
         let prev = self.active_idx;
         if let Some(idx) = self.projects.iter().position(|p| p.schema.meta.id == target_project) {
             self.active_idx = Some(idx);
@@ -1599,7 +1673,7 @@ impl ProjectEngine {
         match action {
             ProjectAction::NewGroup { project_id, name } => {
                 let Some(project) = self.find_project_mut(project_id) else {
-                    self.log(format!("Project 不存在: {}", project_id));
+                    self.ui_log(format!("Project 不存在: {}", project_id));
                     return;
                 };
                 let dir = project.data_dir().join(name);
@@ -1612,7 +1686,7 @@ impl ProjectEngine {
                     is_new: true,
                 });
                 sync_schema_from_groups(project);
-                self.log(format!("[{}] 新建 Group: {}", project_id, name));
+                self.ui_log(format!("[{}] 新建 Group: {}", project_id, name));
             }
             ProjectAction::NewTable { project_id, group, name } => {
                 let mut ok = false;
@@ -1633,14 +1707,20 @@ impl ProjectEngine {
                             records: Vec::new(),
                             dirty: true,
                             deleted: false,
-                            original: String::new(),
+                            original_records: Vec::new(),
+                            original_fields: vec![FieldDef {
+                                name: "id".to_string(), desc: "ID".to_string(),
+                                tbl_type: "int".to_string(), export: Export::ClientServer,
+                            }],
+                            saved: false,
+                            fmt_ver: DEFAULT_TBL_VERSION,
                         });
                         ok = true;
                     }
                     sync_schema_from_groups(project);
                 }
                 if ok {
-                    self.log(format!("[{}] 新建 Table: {}/{}", project_id, group, name));
+                    self.ui_log(format!("[{}] 新建 Table: {}/{}", project_id, group, name));
                 }
             }
             ProjectAction::NewConstant { project_id, group, name } => {
@@ -1654,14 +1734,14 @@ impl ProjectEngine {
                             entries: Vec::new(),
                             dirty: true,
                             deleted: false,
-                            original: String::new(),
+                            original_entries: Vec::new(), saved: false,
                         });
                         ok = true;
                     }
                     sync_schema_from_groups(project);
                 }
                 if ok {
-                    self.log(format!("[{}] 新建 Constant: {}/{}", project_id, group, name));
+                    self.ui_log(format!("[{}] 新建 Constant: {}/{}", project_id, group, name));
                 }
             }
             ProjectAction::NewEnum { project_id, group, name } => {
@@ -1675,14 +1755,14 @@ impl ProjectEngine {
                             entries: Vec::new(),
                             dirty: true,
                             deleted: false,
-                            original: String::new(),
+                            original_entries: Vec::new(), saved: false,
                         });
                         ok = true;
                     }
                     sync_schema_from_groups(project);
                 }
                 if ok {
-                    self.log(format!("[{}] 新建 Enum: {}/{}", project_id, group, name));
+                    self.ui_log(format!("[{}] 新建 Enum: {}/{}", project_id, group, name));
                 }
             }
             ProjectAction::RenameGroup { project_id, old_name, new_name } => {
@@ -1710,7 +1790,7 @@ impl ProjectEngine {
                 for (_, _, n, r, c) in migrated {
                     self.validation_errors.insert((project_id.clone(), new_name.clone(), n, r, c));
                 }
-                self.log(format!("[{}] 重命名 Group: {} → {}", project_id, old_name, new_name));
+                self.ui_log(format!("[{}] 重命名 Group: {} → {}", project_id, old_name, new_name));
             }
             ProjectAction::RenameNode { project_id, group, old_name, new_name } => {
                 if let Some(project) = self.find_project_mut(project_id) {
@@ -1740,10 +1820,7 @@ impl ProjectEngine {
                 for (_, g, _, r, c) in migrated {
                     self.validation_errors.insert((project_id.clone(), g, new_name.clone(), r, c));
                 }
-                self.log(format!("[{}] 重命名: {}/{} → {}", project_id, group, old_name, new_name));
-            }
-            ProjectAction::RenameProject { old_id, new_id, new_name } => {
-                self.execute_rename_project(old_id, new_id, new_name);
+                self.ui_log(format!("[{}] 重命名: {}/{} → {}", project_id, group, old_name, new_name));
             }
             ProjectAction::DeleteProject { project_id } => {
                 self.execute_delete_project(project_id);
@@ -1767,90 +1844,23 @@ impl ProjectEngine {
         }
     }
 
-    /// `RenameProject` 的实际逻辑（拆出便于阅读）。
-    fn execute_rename_project(&mut self, old_id: &str, new_id: &str, new_name: &str) {
-        if old_id == new_id && new_name == self.find_project(old_id).map(|p| p.schema.meta.name.as_str()).unwrap_or("") {
-            return;
-        }
-        let Some(idx) = self.projects.iter().position(|p| p.schema.meta.id == old_id) else {
-            self.log(format!("Project 不存在: {}", old_id));
-            return;
-        };
-        let project = &mut self.projects[idx];
-        let only_name_change = old_id == new_id;
-        if !only_name_change {
-            // 检查 new_id 不存在（含 closed 的 available）
-            if self.available_projects.iter().any(|a| a.id == new_id) {
-                self.log(format!("Project id 已存在: {}", new_id));
-                return;
-            }
-            let project = &mut self.projects[idx];
-            let old_root = project.project_root.clone();
-            let new_root = project.workdir.join(crate::project::PROJECTS_DIR).join(new_id);
-            if let Err(e) = std::fs::rename(&old_root, &new_root) {
-                self.log(format!("重命名 project 目录失败: {}", e));
-                return;
-            }
-            project.project_root = new_root.clone();
-            project.schema.meta.id = new_id.to_string();
-            project.schema.meta.name = new_name.to_string();
-            // 同步所有 group dir + 节点 path
-            let new_data_dir = project.data_dir();
-            for g in &mut project.groups {
-                let group_name = g.name.clone();
-                g.dir = new_data_dir.join(&group_name);
-                for t in &mut g.tables { t.path = g.dir.join(format!("{}.tbl", t.name)); }
-                for c in &mut g.constants { c.path = g.dir.join(format!("{}.tbl", c.name)); }
-                for e in &mut g.enums { e.path = g.dir.join(format!("{}.tbl", e.name)); }
-            }
-        } else {
-            project.schema.meta.name = new_name.to_string();
-        }
-        // 写 project.tblschema：项目身份归 schema.meta
-        let project = &mut self.projects[idx];
-        project.schema_dirty = true;
-        let schema_path = project.project_root.join(crate::project::PROJECT_SCHEMA_FILE);
-        let txt = crate::tblschema::serialize_tblschema(&project.schema);
-        if let Err(e) = std::fs::write(&schema_path, txt) {
-            self.log(format!("写 project.tblschema 失败: {}", e));
-        } else {
-            project.schema_dirty = false;
-        }
-        // 同步 available_projects（id / name / root）
-        if let Some(ap) = self.available_projects.iter_mut().find(|a| a.id == old_id) {
-            ap.id = new_id.to_string();
-            ap.name = if new_name.is_empty() { new_id.to_string() } else { new_name.to_string() };
-            ap.root = self.projects[idx].project_root.clone();
-        }
-        // 迁移 validation_errors 索引：(old_id, ...) → (new_id, ...)
-        if !only_name_change {
-            let migrated: Vec<_> = self.validation_errors.iter()
-                .filter(|(p, _, _, _, _)| p == old_id).cloned().collect();
-            for entry in &migrated { self.validation_errors.remove(entry); }
-            for (_, g, n, r, c) in migrated {
-                self.validation_errors.insert((new_id.to_string(), g, n, r, c));
-            }
-        }
-        self.log(format!("重命名 Project: {} → {} (name={})", old_id, new_id, new_name));
-    }
-
     /// `DeleteProject` 的实际逻辑（拆出便于阅读）。
     /// 用户允许删到 0 个 project（DBeaver-style 全部关闭）。
     fn execute_delete_project(&mut self, project_id: &str) {
-        // 找到要删的盘上根 + 是否仅在内存中（root_pending_create）
+        // 找到要删的盘上根 + 是否仅在内存中（state.is_pending()）
         let (project_root, in_memory_only) = if let Some(idx) = self.projects.iter().position(|p| p.schema.meta.id == project_id) {
-            (self.projects[idx].project_root.clone(), self.projects[idx].root_pending_create)
+            (self.projects[idx].project_root.clone(), self.projects[idx].state.is_pending())
         } else if let Some(ap) = self.available_projects.iter().find(|a| a.id == project_id) {
             (ap.root.clone(), false)
         } else {
-            self.log(format!("Project 不存在: {}", project_id));
+            self.ui_log(format!("Project 不存在: {}", project_id));
             return;
         };
 
         // 内存项目（还没落盘）：跳过文件系统删除；NotFound 也忽略，按"目标已不在"处理。
         if !in_memory_only && project_root.exists() {
             if let Err(e) = std::fs::remove_dir_all(&project_root) {
-                self.log(format!("删除 project 目录失败: {}", e));
+                self.ui_log(format!("删除 project 目录失败: {}", e));
                 return;
             }
         }
@@ -1872,7 +1882,7 @@ impl ProjectEngine {
         self.available_projects.retain(|a| a.id != project_id);
         // 清掉 validation_errors
         self.validation_errors.retain(|(p, _, _, _, _)| p != project_id);
-        self.log(format!("已删除 Project: {}", project_id));
+        self.ui_log(format!("已删除 Project: {}", project_id));
     }
 
     /// 该 Project 是否有未保存改动。
@@ -1880,7 +1890,7 @@ impl ProjectEngine {
         let Some(project) = self.find_project(project_id) else { return false; };
         // 内存模式新建 / 克隆出来的项目：root 还没落盘 / schema 还没落盘 → 一定 dirty。
         // 即便 groups 为空也算（空 Empty 项目也不能"关掉就没了"）
-        if project.root_pending_create || project.schema_dirty { return true; }
+        if project.state.is_pending() || project.schema_dirty { return true; }
         for g in &project.groups {
             if g.is_new { return true; }
             for t in &g.tables { if t.dirty || t.deleted { return true; } }
@@ -1917,14 +1927,14 @@ impl ProjectEngine {
             return;
         }
         let Some(project) = self.find_project_mut(project_id) else {
-            self.log(format!("Project 不存在: {}", project_id));
+            self.ui_log(format!("Project 不存在: {}", project_id));
             return;
         };
         let (count, deleted) = save_project_files(project);
         if count > 0 || deleted > 0 {
-            self.log(format!("[{}] 已保存 {} 个文件, 删除 {} 个", project_id, count, deleted));
+            self.ui_log(format!("[{}] 已保存 {} 个文件, 删除 {} 个", project_id, count, deleted));
         } else {
-            self.log(format!("[{}] 无修改需要保存", project_id));
+            self.ui_log(format!("[{}] 无修改需要保存", project_id));
         }
     }
 
@@ -1932,9 +1942,9 @@ impl ProjectEngine {
     pub fn validate_project(&self, project_id: &str) -> Vec<String> {
         let Some(project) = self.find_project(project_id) else { return Vec::new(); };
         let mut errors = Vec::new();
-        let sep = &project.config.separators;
+        let sep = &project.schema.separators;
         let refs = RefIndex::build(&project.groups);
-        let allow_ref = project.config.ui.as_ref()
+        let allow_ref = self.global_config.ui.as_ref()
             .map_or(true, |u| u.constant_ref_allowed);
         for group in &project.groups {
             for table in &group.tables {
@@ -1965,7 +1975,7 @@ impl ProjectEngine {
             let _ = std::fs::remove_dir_all(&config_dir);
             let _ = std::fs::create_dir_all(&config_dir);
         }
-        self.log("已清空所有配置文件".to_string());
+        self.ui_log("已清空所有配置文件".to_string());
         self.reload();
     }
 
@@ -2136,13 +2146,13 @@ impl ProjectEngine {
 
     fn log_export(&mut self, label: &str, result: &crate::export::ExportResult) {
         use crate::export::FileStatus;
-        self.log(format!("[{}] {} 新增, {} 修改, {} 删除, {} 不变",
+        self.ui_log(format!("[{}] {} 新增, {} 修改, {} 删除, {} 不变",
             label, result.added(), result.modified(), result.deleted(), result.unchanged()));
         for f in &result.files {
             match f.status {
-                FileStatus::Added => self.log(format!("  [新增] {}", f.path)),
-                FileStatus::Modified => self.log(format!("  [修改] {}", f.path)),
-                FileStatus::Deleted => self.log(format!("  [删除] {}", f.path)),
+                FileStatus::Added => self.ui_log(format!("  [新增] {}", f.path)),
+                FileStatus::Modified => self.ui_log(format!("  [修改] {}", f.path)),
+                FileStatus::Deleted => self.ui_log(format!("  [删除] {}", f.path)),
                 FileStatus::Unchanged => {}
             }
         }
@@ -2164,7 +2174,7 @@ mod project_toml_template_tests {
         let mut schema = crate::tblschema::TblSchema::default();
         schema.meta.id = id.to_string();
         schema.meta.name = id.to_string();
-        let config: WorkspaceConfig = toml::from_str("").expect("empty workspace config");
+        let config = ProjectConfig::default();
         Project {
             workdir,
             project_root,
@@ -2172,7 +2182,7 @@ mod project_toml_template_tests {
             schema,
             groups: Vec::new(),
             schema_dirty: true,
-            root_pending_create: true,
+            state: crate::model::ProjectState::Pending,
         }
     }
 
@@ -2195,7 +2205,7 @@ mod project_toml_template_tests {
         assert!(!txt.lines().any(|l| l.trim() == "[ui]"), "项目级 toml 不应有 [ui] 段（工作区级）");
         assert!(!txt.lines().any(|l| l.trim() == "[separators]"), "项目级 toml 不应有 [separators] 段");
         // 模板本身合法 toml
-        let _: WorkspaceConfig = toml::from_str(&txt).expect("生成的模板必须能解析");
+        let _: GlobalConfig = toml::from_str(&txt).expect("生成的模板必须能解析");
 
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -2210,8 +2220,8 @@ mod project_toml_template_tests {
         std::fs::write(&toml_path, custom).unwrap();
 
         let mut project = make_project(dir.clone(), project_root.clone(), "p1");
-        // root 已存在 → 不该再触发 root_pending_create 写盘逻辑会重新建一遍 dir，但写 project.toml 该跳过
-        project.root_pending_create = false;
+        // root 已存在 → 不该再触发 state=Pending 写盘逻辑会重新建一遍 dir，但写 project.toml 该跳过
+        project.state = crate::model::ProjectState::Loaded;
         let _ = save_project_files(&mut project);
 
         let after = std::fs::read_to_string(&toml_path).unwrap();
@@ -2220,17 +2230,34 @@ mod project_toml_template_tests {
     }
 
     #[test]
-    fn save_project_files_skips_project_toml_in_legacy_layout() {
-        // 老布局（fixture）：workdir == project_root，save 不该往里写 project.toml
-        let dir = unique_tmp("legacy");
-        std::fs::create_dir_all(&dir).unwrap();
-        let mut project = make_project(dir.clone(), dir.clone(), "default");
-        // 老布局下 root 已存在
-        project.root_pending_create = false;
-        let _ = save_project_files(&mut project);
+    fn rename_unsaved_project_only_touches_memory() {
+        // 回归：未保存的内存项目（state=Pending，目录不存在）改身份信息
+        // 不应因目录不存在而报错——只改内存，等 save 时统一落盘。
+        let dir = unique_tmp("rename_unsaved");
+        let project_root = dir.join("projects").join("p1");
+        // 注意：故意不创建 project_root 目录，模拟"新建未保存"场景
+        let project = make_project(dir.clone(), project_root.clone(), "p1");
+        assert!(project.state.is_pending(), "make_project 默认 pending");
+        let mut engine = ProjectEngine::new(project, GlobalConfig::default());
 
-        let toml_path = dir.join(crate::project::PROJECT_TOML_FILE);
-        assert!(!toml_path.exists(), "老布局不该写 project.toml: {}", toml_path.display());
+        // 直接修改内存中的 meta 字段（模拟 UI 项目设置的行为）
+        {
+            let p = engine.find_project_mut("p1").unwrap();
+            p.schema.meta.id = "p2".to_string();
+            p.schema.meta.name = "新名字".to_string();
+            p.schema_dirty = true;
+        }
+
+        // 内存中身份已更新
+        let p = engine.find_project("p2").expect("p2 应存在于内存");
+        assert_eq!(p.schema.meta.id, "p2");
+        assert_eq!(p.schema.meta.name, "新名字");
+        assert!(p.state.is_pending(), "仍未落盘");
+        assert!(p.schema_dirty, "schema 标记为 dirty，等 save 落盘");
+        // 磁盘上不应有任何文件（目录都没建）
+        assert!(!project_root.exists(), "旧目录不该被创建");
+        assert!(!dir.join("projects").join("p2").exists(), "新目录不该被创建");
+
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

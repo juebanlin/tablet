@@ -1,6 +1,29 @@
 use std::path::PathBuf;
 
+use crate::enums::{
+    Encoding, LineEnding, JsonEmptyAs, XmlEmptyAs, LogLevel,
+    PickerTrigger, RefPickerStrategy, ProjectSort,
+};
 use crate::tblschema::TblSchema;
+
+/// 项目状态：区分已落盘 vs 未落盘
+#[derive(Debug, Clone, PartialEq)]
+pub enum ProjectState {
+    /// 从磁盘加载的已存盘项目
+    Loaded,
+    /// 新建的未落盘项目（待保存）
+    Pending,
+}
+
+impl ProjectState {
+    pub fn is_loaded(&self) -> bool {
+        matches!(self, ProjectState::Loaded)
+    }
+
+    pub fn is_pending(&self) -> bool {
+        matches!(self, ProjectState::Pending)
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct Project {
@@ -8,9 +31,9 @@ pub struct Project {
     pub workdir: PathBuf,
     /// 当前 Project 的根目录：`project.tblschema` / `config/` 在它下面。
     /// - 多 Project 模式：`<workdir>/projects/<id>/`
-    /// - 老布局（test fixture / 历史仓库）：`<workdir>` 自身
     pub project_root: PathBuf,
-    pub config: WorkspaceConfig,
+    /// 项目配置（来自 project.toml），业务逻辑使用。
+    pub config: ProjectConfig,
     /// `project.tblschema` 解析结果，承担"项目身份 + 结构骨架"双职：
     /// - `schema.meta.id / name / created_at / source_template* / category / version` = 项目身份
     /// - `schema.sections` = 结构骨架，由 ops 在 group/node 变动时增量同步
@@ -18,56 +41,36 @@ pub struct Project {
     pub groups: Vec<Group>,
     /// schema 是否需要写盘：rename / 结构变动时置 true，save 时落 project.tblschema 后清零。
     pub schema_dirty: bool,
-    /// project_root 是否还没在磁盘上创建（克隆出的内存项目 = true）。
-    /// save 时先 create_dir_all 再写文件，最后清零。
-    pub root_pending_create: bool,
+    /// 项目状态：Loaded（已落盘）或 Pending（待保存）。
+    /// save 时 Pending 项目会先 create_dir_all，然后切换为 Loaded。
+    pub state: ProjectState,
 }
 
 impl Project {
-    /// 数据目录：当前 Project 的 .tbl 根目录。
-    /// - 多 Project 模式：`<project_root>/config/`
-    /// - 老布局：`<project_root>/<config_dir>`（即 `<workdir>/<config_dir>`）
+    /// 数据目录：当前 Project 的 .tbl 根目录 `<project_root>/config/`
     pub fn data_dir(&self) -> PathBuf {
-        if self.is_multi_project_layout() {
-            self.project_root.join("config")
-        } else {
-            self.project_root.join(&self.config.project.config_dir)
-        }
+        self.project_root.join("config")
     }
 
-    /// 缓存目录：当前 Project 的 .tbl-cache。
+    /// 缓存目录：当前 Project 的 .tbl-cache 目录 `<project_root>/.tbl-cache/`
     pub fn cache_dir(&self) -> PathBuf {
-        if self.is_multi_project_layout() {
-            self.project_root.join(".tbl-cache")
-        } else {
-            self.project_root.join(&self.config.project.cache_dir)
-        }
+        self.project_root.join(".tbl-cache")
     }
 
-    /// 是否为多 Project 布局（`<workdir>/projects/<id>/`）。
-    pub fn is_multi_project_layout(&self) -> bool {
-        self.project_root != self.workdir
-    }
-
-    /// 导出根：多 Project 模式 = `<project_root>`（每个 Project 独立 gen/...，避免互相覆盖），
-    /// 老布局 = `<workdir>`（保持 fixture / 历史仓库行为）。
+    /// 导出根：Project 导出目录 `<project_root>/`（每个 Project 独立 gen/，避免互相覆盖）
     pub fn export_root(&self) -> &std::path::Path {
-        if self.is_multi_project_layout() {
-            self.project_root.as_path()
-        } else {
-            self.workdir.as_path()
-        }
+        self.project_root.as_path()
     }
 }
 
-/// `tablet.toml` 反序列化的顶层结构。
-/// `[project]` 段对应 `ProjectConfig`（仓库展示信息 + Project 列表配置）；
-/// 其它段（export / ui / separators）是 Project 共享的工作空间默认值。
-#[derive(Debug, Clone, serde::Deserialize)]
-pub struct WorkspaceConfig {
-    /// 仓库级配置段：`[project]`。
-    #[serde(default = "default_project_section", rename = "project")]
-    pub project: ProjectConfig,
+/// `tablet.toml` 反序列化的顶层结构（全局配置）。
+/// `[project]` 段对应 `ProjectManagementConfig`（项目管理状态）；
+/// 其它段（export / ui / separators）是所有 Project 共享的工作空间默认值。
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
+pub struct GlobalConfig {
+    /// 项目管理配置段：`[project]`。
+    #[serde(default = "default_project_management_section", rename = "project")]
+    pub project_management: ProjectManagementConfig,
     #[serde(default)]
     pub export: Option<ExportConfig>,
     #[serde(default)]
@@ -76,137 +79,293 @@ pub struct WorkspaceConfig {
     pub separators: crate::types::SeparatorsSection,
 }
 
-fn default_project_section() -> ProjectConfig {
-    ProjectConfig {
-        last_project: String::new(),
-        opened_projects: Vec::new(),
-        project_sort: String::new(),
-        project_order: Vec::new(),
-        config_dir: default_config_dir(),
-        cache_dir: default_cache_dir(),
+impl Default for GlobalConfig {
+    fn default() -> Self {
+        Self {
+            project_management: default_project_management_section(),
+            export: Some(ExportConfig::default()),
+            ui: Some(UiConfig::default()),
+            separators: crate::types::SeparatorsSection::default(),
+        }
     }
 }
 
-#[derive(Debug, Clone, serde::Deserialize)]
+fn default_project_management_section() -> ProjectManagementConfig {
+    ProjectManagementConfig {
+        last_project: String::new(),
+        opened_projects: Vec::new(),
+        project_sort: crate::enums::ProjectSort::default(),
+        project_order: Vec::new(),
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, serde::Deserialize, serde::Serialize)]
 pub struct ExportConfig {
     pub json: Option<JsonExport>,
     pub xml: Option<XmlExport>,
     pub server: Option<ServerExport>,
     pub client: Option<ClientConfig>,
-    pub encoding: Option<String>,
-    pub line_ending: Option<String>,
+    #[serde(default)]
+    pub encoding: Option<Encoding>,
+    #[serde(default)]
+    pub line_ending: Option<LineEnding>,
 }
 
-#[derive(Debug, Clone, serde::Deserialize)]
+impl Default for ExportConfig {
+    fn default() -> Self {
+        Self {
+            json: Some(JsonExport::default()),
+            xml: Some(XmlExport::default()),
+            server: Some(ServerExport::default()),
+            client: Some(ClientConfig::default()),
+            encoding: Some(Encoding::Utf8),
+            line_ending: Some(LineEnding::Lf),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, serde::Deserialize, serde::Serialize)]
 pub struct JsonExport {
-    pub empty_as: Option<String>,
-    pub line_ending: Option<String>,
-    pub encoding: Option<String>,
+    #[serde(default)]
+    pub empty_as: Option<JsonEmptyAs>,
 }
 
-#[derive(Debug, Clone, serde::Deserialize)]
+impl Default for JsonExport {
+    fn default() -> Self {
+        Self {
+            empty_as: Some(JsonEmptyAs::Null),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, serde::Deserialize, serde::Serialize)]
 pub struct XmlExport {
-    pub empty_as: Option<String>,
-    pub line_ending: Option<String>,
-    pub encoding: Option<String>,
+    #[serde(default)]
+    pub empty_as: Option<XmlEmptyAs>,
 }
 
-#[derive(Debug, Clone, serde::Deserialize)]
+impl Default for XmlExport {
+    fn default() -> Self {
+        Self {
+            empty_as: Some(XmlEmptyAs::Empty),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, serde::Deserialize, serde::Serialize)]
 pub struct ServerExport {
     pub data_output: Option<String>,
     pub java: Option<JavaExport>,
     pub go: Option<GoExport>,
     pub cpp: Option<CppExport>,
-    pub csharp_dotnet: Option<CSharpExport>,
-    pub typescript: Option<TypeScriptExport>,
-    pub line_ending: Option<String>,
-    pub encoding: Option<String>,
+    pub csharp_dotnet: Option<DotNetExport>,
+    pub typescript: Option<ServerTypeScriptExport>,
 }
 
-#[derive(Debug, Clone, serde::Deserialize)]
+impl Default for ServerExport {
+    fn default() -> Self {
+        Self {
+            data_output: Some("gen/server/data".to_string()),
+            java: Some(JavaExport::default()),
+            go: Some(GoExport::default()),
+            cpp: Some(CppExport::default()),
+            csharp_dotnet: Some(DotNetExport::default()),
+            typescript: Some(ServerTypeScriptExport::default()),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, serde::Deserialize, serde::Serialize)]
 pub struct JavaExport {
     pub package: Option<String>,
     pub code_output: Option<String>,
-    pub line_ending: Option<String>,
-    pub encoding: Option<String>,
 }
 
-#[derive(Debug, Clone, serde::Deserialize)]
+impl Default for JavaExport {
+    fn default() -> Self {
+        Self {
+            package: Some("com.game.config".to_string()),
+            code_output: Some("gen/server/java".to_string()),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, serde::Deserialize, serde::Serialize)]
 pub struct GoExport {
     pub package: Option<String>,
     pub code_output: Option<String>,
-    pub line_ending: Option<String>,
-    pub encoding: Option<String>,
 }
 
-#[derive(Debug, Clone, serde::Deserialize)]
+impl Default for GoExport {
+    fn default() -> Self {
+        Self {
+            package: Some("config".to_string()),
+            code_output: Some("gen/server/go".to_string()),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, serde::Deserialize, serde::Serialize)]
 pub struct CppExport {
     pub namespace: Option<String>,
     pub code_output: Option<String>,
-    pub json_lib: Option<String>,
-    pub line_ending: Option<String>,
-    pub encoding: Option<String>,
+    #[serde(default)]
+    pub json_lib: Option<crate::enums::CppJsonLib>,
 }
 
-/// 三个 runtime（dotnet / unity / godot）共用同一份 schema 定义，仅 Loader 不同。
-#[derive(Debug, Clone, serde::Deserialize)]
-pub struct CSharpExport {
+impl Default for CppExport {
+    fn default() -> Self {
+        Self {
+            namespace: Some("game::config".to_string()),
+            code_output: Some("gen/server/cpp".to_string()),
+            json_lib: Some(crate::enums::CppJsonLib::Nlohmann),
+        }
+    }
+}
+
+/// .NET 服务端导出
+#[derive(Debug, Clone, PartialEq, serde::Deserialize, serde::Serialize)]
+pub struct DotNetExport {
     pub namespace: Option<String>,
     pub code_output: Option<String>,
-    pub line_ending: Option<String>,
-    pub encoding: Option<String>,
 }
 
-#[derive(Debug, Clone, serde::Deserialize)]
+impl Default for DotNetExport {
+    fn default() -> Self {
+        Self {
+            namespace: Some("Game.Config.Server".to_string()),
+            code_output: Some("gen/server/csharp".to_string()),
+        }
+    }
+}
+
+/// Unity 客户端 C# 导出
+#[derive(Debug, Clone, PartialEq, serde::Deserialize, serde::Serialize)]
+pub struct UnityCSharpExport {
+    pub namespace: Option<String>,
+    pub code_output: Option<String>,
+}
+
+impl Default for UnityCSharpExport {
+    fn default() -> Self {
+        Self {
+            namespace: Some("Game.Config.Client".to_string()),
+            code_output: Some("gen/client/csharp_unity".to_string()),
+        }
+    }
+}
+
+/// Godot 客户端 C# 导出
+#[derive(Debug, Clone, PartialEq, serde::Deserialize, serde::Serialize)]
+pub struct GodotCSharpExport {
+    pub namespace: Option<String>,
+    pub code_output: Option<String>,
+}
+
+impl Default for GodotCSharpExport {
+    fn default() -> Self {
+        Self {
+            namespace: Some("Game.Config.Client".to_string()),
+            code_output: Some("gen/client/csharp_godot".to_string()),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, serde::Deserialize, serde::Serialize)]
 pub struct ClientConfig {
     pub lua: Option<LuaExport>,
     pub gdscript: Option<GdScriptExport>,
-    pub typescript: Option<TypeScriptExport>,
-    pub csharp_unity: Option<CSharpExport>,
-    pub csharp_godot: Option<CSharpExport>,
-    pub line_ending: Option<String>,
-    pub encoding: Option<String>,
+    pub typescript: Option<ClientTypeScriptExport>,
+    pub csharp_unity: Option<UnityCSharpExport>,
+    pub csharp_godot: Option<GodotCSharpExport>,
 }
 
-#[derive(Debug, Clone, serde::Deserialize)]
+impl Default for ClientConfig {
+    fn default() -> Self {
+        Self {
+            lua: Some(LuaExport::default()),
+            gdscript: Some(GdScriptExport::default()),
+            typescript: Some(ClientTypeScriptExport::default()),
+            csharp_unity: Some(UnityCSharpExport::default()),
+            csharp_godot: Some(GodotCSharpExport::default()),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, serde::Deserialize, serde::Serialize)]
 pub struct LuaExport {
     pub output: Option<String>,
-    pub line_ending: Option<String>,
-    pub encoding: Option<String>,
 }
 
-#[derive(Debug, Clone, serde::Deserialize)]
+impl Default for LuaExport {
+    fn default() -> Self {
+        Self {
+            output: Some("gen/client".to_string()),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, serde::Deserialize, serde::Serialize)]
 pub struct GdScriptExport {
     pub output: Option<String>,
-    pub line_ending: Option<String>,
-    pub encoding: Option<String>,
 }
 
-#[derive(Debug, Clone, serde::Deserialize)]
-pub struct TypeScriptExport {
+impl Default for GdScriptExport {
+    fn default() -> Self {
+        Self {
+            output: Some("gen/client/gdscript".to_string()),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, serde::Deserialize, serde::Serialize)]
+pub struct ServerTypeScriptExport {
     pub output: Option<String>,
-    pub module_kind: Option<String>,
-    pub line_ending: Option<String>,
-    pub encoding: Option<String>,
+    pub module_kind: Option<crate::enums::ModuleKind>,
 }
 
-#[derive(Debug, Clone, serde::Deserialize)]
+impl Default for ServerTypeScriptExport {
+    fn default() -> Self {
+        Self {
+            output: Some("gen/server/typescript".to_string()),
+            module_kind: Some(crate::enums::ModuleKind::default()),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, serde::Deserialize, serde::Serialize)]
+pub struct ClientTypeScriptExport {
+    pub output: Option<String>,
+    pub module_kind: Option<crate::enums::ModuleKind>,
+}
+
+impl Default for ClientTypeScriptExport {
+    fn default() -> Self {
+        Self {
+            output: Some("gen/client/typescript".to_string()),
+            module_kind: Some(crate::enums::ModuleKind::default()),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, serde::Deserialize, serde::Serialize)]
 pub struct UiConfig {
     #[serde(default = "default_true")]
     pub auto_commit_on_blur: bool,
     #[serde(default)]
     pub realtime_validate: bool,
-    pub log_level: Option<String>,
+    #[serde(default)]
+    pub log_level: Option<LogLevel>,
     #[serde(default)]
     pub ref_picker: RefPickerConfig,
-    /// 表头 picker 单元格（Table type/export 行）的呼出方式："single" | "double"
-    /// 默认 single：表头每列一格、几乎不批量改，单击直出选择器更顺手。
+    /// 表头 picker 单元格（Table type/export 行）的呼出方式：Single | Double
+    /// 默认 Single：表头每列一格、几乎不批量改，单击直出选择器更顺手。
     #[serde(default = "default_picker_trigger_header")]
-    pub picker_trigger_header: String,
-    /// 数据区 picker 单元格（Ref / Constant type / export 列）的呼出方式："single" | "double"
-    /// 默认 double：让单击保留为"瞄准选中"，是 Ctrl+C/V 批量复制 ref id / enum 值的前提。
+    pub picker_trigger_header: PickerTrigger,
+    /// 数据区 picker 单元格（Ref / Constant type / export 列）的呼出方式：Single | Double
+    /// 默认 Double：让单击保留为"瞄准选中"，是 Ctrl+C/V 批量复制 ref id / enum 值的前提。
     #[serde(default = "default_picker_trigger_data")]
-    pub picker_trigger_data: String,
+    pub picker_trigger_data: PickerTrigger,
     /// 模板/Project 列表里展示 id 还是 name；默认 false → 显示 name。
     /// 切换效果类似枚举显示 id/name。Project 实际目录始终用 id；此开关只决定**显示文本**。
     #[serde(default)]
@@ -218,27 +377,40 @@ pub struct UiConfig {
     pub constant_ref_allowed: bool,
 }
 
-#[derive(Debug, Clone, Default, serde::Deserialize)]
-pub struct RefPickerConfig {
-    /// 引用选择弹窗对 Table 的列展示策略：
-    /// - "auto"（默认）：id + 最多 2 个 export=cs 且类型为字符串的辅助列
-    /// - "full"：schema 全部字段（除了 export=- 不导出列）
-    #[serde(default = "default_ref_strategy")]
-    pub default_strategy: String,
+impl Default for UiConfig {
+    fn default() -> Self {
+        Self {
+            auto_commit_on_blur: true,
+            realtime_validate: false,
+            log_level: Some(LogLevel::Debug),
+            ref_picker: RefPickerConfig::default(),
+            picker_trigger_header: PickerTrigger::Single,
+            picker_trigger_data: PickerTrigger::Double,
+            show_meta_id: false,
+            constant_ref_allowed: true,
+        }
+    }
 }
 
-fn default_ref_strategy() -> String { "auto".to_string() }
+#[derive(Debug, Clone, Default, PartialEq, serde::Deserialize, serde::Serialize)]
+pub struct RefPickerConfig {
+    /// 引用选择弹窗对 Table 的列展示策略：
+    /// - Auto（默认）：id + 最多 2 个 export=cs 且类型为字符串的辅助列
+    /// - Full：schema 全部字段（除了 export=- 不导出列）
+    #[serde(default)]
+    pub default_strategy: RefPickerStrategy,
+}
 
-fn default_picker_trigger_header() -> String { "single".to_string() }
-fn default_picker_trigger_data() -> String { "double".to_string() }
+fn default_picker_trigger_header() -> PickerTrigger { PickerTrigger::Single }
+fn default_picker_trigger_data() -> PickerTrigger { PickerTrigger::Double }
 
 fn default_true() -> bool { true }
 
-/// `[project]` toml 段：仓库级配置，不随 Project 切换。
+/// `[project]` toml 段：仓库级项目管理配置，不随 Project 切换。
 ///
 /// 持有 Project 列表管理状态（启动 last_project / 已打开列表 / 排序）。
-#[derive(Debug, Clone, serde::Deserialize)]
-pub struct ProjectConfig {
+#[derive(Debug, Clone, PartialEq, serde::Deserialize, serde::Serialize)]
+pub struct ProjectManagementConfig {
     /// 启动时进入的 Project id；为空 = 扫到的第一个。
     #[serde(default)]
     pub last_project: String,
@@ -246,25 +418,24 @@ pub struct ProjectConfig {
     /// 为空时仅打开 `last_project`。
     #[serde(default)]
     pub opened_projects: Vec<String>,
-    /// 项目排序方式：id / name / open / created / manual。空字符串=id。
+    /// 项目排序方式：Id / Name / Open / Created / Manual
     #[serde(default)]
-    pub project_sort: String,
-    /// project_sort = "manual" 时使用：用户拖拽得到的 id 序列。
+    pub project_sort: ProjectSort,
+    /// project_sort = Manual 时使用：用户拖拽得到的 id 序列。
     #[serde(default)]
     pub project_order: Vec<String>,
-    /// 历史字段：老布局 `<workdir>/<config_dir>/`。S15-D 之后 Project 用 `<project_root>/config/`，
-    /// 该字段仅在迁移期 / 老 fixture 使用，新版本写出时不再带它。
-    #[serde(default = "default_config_dir")]
-    pub config_dir: String,
-    /// 历史字段：同 config_dir 一样保留兼容；新版本走 `<project_root>/.tbl-cache/`。
-    #[serde(default = "default_cache_dir")]
-    pub cache_dir: String,
 }
 
-fn default_config_dir() -> String { "config".to_string() }
-
-fn default_cache_dir() -> String {
-    ".tbl-cache".to_string()
+/// 项目级配置（来自 project.toml）。
+/// 包含项目的导出配置，新建项目时从全局配置拷贝初始值，之后独立维护。
+///
+/// 注意：
+/// - UI 配置仅在全局级别（GlobalConfig），项目级不支持覆盖。
+/// - 分隔符配置存储在 TblSchema 中，不在此处。
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize, Default)]
+pub struct ProjectConfig {
+    #[serde(default)]
+    pub export: ExportConfig,
 }
 
 #[derive(Debug, Clone)]
@@ -285,16 +456,24 @@ pub struct Table {
     pub records: Vec<Vec<String>>,
     pub dirty: bool,
     pub deleted: bool,
-    pub original: String,
+    /// 上次落盘时的 records 快照，用于 update_dirty() 比对。
+    pub original_records: Vec<Vec<String>>,
+    /// 上次落盘时的 schema.fields 快照，用于检测表头变更。
+    pub original_fields: Vec<FieldDef>,
+    pub saved: bool,
+    /// 文件格式版本。load 时检测，save 时按原版本序列化。
+    /// 新建表默认 V3。
+    pub fmt_ver: crate::tbl::TblVersion,
 }
 
 impl Table {
     pub fn update_dirty(&mut self) {
-        self.dirty = crate::tbl::serialize_table(self) != self.original;
+        self.dirty = self.records != self.original_records
+            || self.schema.fields != self.original_fields;
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct TableSchema {
     pub fields: Vec<FieldDef>,
 }
@@ -305,7 +484,7 @@ impl TableSchema {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct FieldDef {
     pub name: String,
     pub desc: String,
@@ -320,16 +499,18 @@ pub struct Constant {
     pub entries: Vec<ConstEntry>,
     pub dirty: bool,
     pub deleted: bool,
-    pub original: String,
+    /// 上次落盘时的 entries 快照。
+    pub original_entries: Vec<ConstEntry>,
+    pub saved: bool,
 }
 
 impl Constant {
     pub fn update_dirty(&mut self) {
-        self.dirty = crate::tbl::serialize_constant(self) != self.original;
+        self.dirty = self.entries != self.original_entries;
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ConstEntry {
     pub name: String,
     pub tbl_type: String,
@@ -348,16 +529,18 @@ pub struct EnumDef {
     pub entries: Vec<EnumEntry>,
     pub dirty: bool,
     pub deleted: bool,
-    pub original: String,
+    /// 上次落盘时的 entries 快照。
+    pub original_entries: Vec<EnumEntry>,
+    pub saved: bool,
 }
 
 impl EnumDef {
     pub fn update_dirty(&mut self) {
-        self.dirty = crate::tbl::serialize_enum(self) != self.original;
+        self.dirty = self.entries != self.original_entries;
     }
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct EnumEntry {
     pub id: String,
     pub name: String,
@@ -366,7 +549,6 @@ pub struct EnumEntry {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Export {
-    Unselected,
     ClientServer,
     ClientOnly,
     ServerOnly,
@@ -380,13 +562,13 @@ impl Export {
             "客户端" | "c" => Self::ClientOnly,
             "服务器" | "s" => Self::ServerOnly,
             "不导出" | "-" => Self::None,
-            _ => Self::Unselected,
+            _ => Self::ClientServer,  // 无效值默认为双端导出
         }
     }
 
+    /// 展示值（界面用）：前后端 / 客户端 / 服务器 / 不导出
     pub fn display(&self) -> &str {
         match self {
-            Self::Unselected => "",
             Self::ClientServer => "前后端",
             Self::ClientOnly => "客户端",
             Self::ServerOnly => "服务器",
@@ -394,19 +576,15 @@ impl Export {
         }
     }
 
+    /// 短码形式（tbl/schema/剪贴板用）：cs / c / s / -
     pub fn to_tbl(&self) -> &str {
-        match self {
-            Self::ClientServer | Self::Unselected => "",
-            Self::ClientOnly => "客户端",
-            Self::ServerOnly => "服务器",
-            Self::None => "不导出",
-        }
+        self.code()
     }
 
-    /// 短码形式（schema/剪贴板用）：cs / c / s / -
+    /// 短码形式（tbl/schema/剪贴板用）：cs / c / s / -
     pub fn code(&self) -> &str {
         match self {
-            Self::ClientServer | Self::Unselected => "cs",
+            Self::ClientServer => "cs",
             Self::ClientOnly => "c",
             Self::ServerOnly => "s",
             Self::None => "-",

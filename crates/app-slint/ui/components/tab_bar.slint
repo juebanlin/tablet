@@ -1,0 +1,34 @@
+// 通用 TabBar 组件：用于底部面板/对话框等任意 tab 切换场景。
+// labels 列表决定 tab 数量和标签文本。
+
+import { Theme } from "../theme.slint";
+
+export component TabBar inherits Rectangle {
+    in property <[string]> labels: [""];
+    in-out property <int> current: 0;
+    callback changed(int);
+
+    height: 24px;
+    min-width: 100px;
+    background: Theme.bg-toolbar;
+    border-color: Theme.border-light;
+    border-width: 1px;
+
+    HorizontalLayout {
+        spacing: 0;
+        alignment: start;
+        for label[i] in root.labels : Rectangle {
+            background: root.current == i ? Theme.bg-row-selected : transparent;
+            horizontal-stretch: 0;
+            min-width: 80px;
+            Text {
+                text: label;
+                font-size: Theme.fs-small;
+                color: Theme.text-primary;
+                vertical-alignment: center;
+                horizontal-alignment: center;
+            }
+            TouchArea { clicked => { root.changed(i); } }
+        }
+    }
+}

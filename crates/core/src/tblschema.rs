@@ -26,7 +26,8 @@ pub struct TblSchema {
     pub meta: SchemaMetadata,
     /// 分隔符配置（25 个叶子键，对齐 `SeparatorsSection`）。
     /// 缺省 = `SeparatorsSection::default()`；schema 中 `# @sep` 行覆写。
-    /// 加载链路把它复制到 `WorkspaceConfig.separators`，作为运行时唯一来源。
+    /// 加载链路把它复制到 `ProjectConfig.separators`（`merge_config` 时以 schema 为准），
+    /// 作为运行时唯一来源。
     pub separators: SeparatorsSection,
     pub sections: Vec<SchemaSection>,
 }
@@ -149,7 +150,7 @@ pub fn parse_tblschema(content: &str) -> Result<TblSchema> {
                 // 这里统一按 Str 类型 decode（Atom 类型的值不含转义字符，decode 是零成本 fast-path）。
                 let cells: Vec<String> = tbl_str::split_row(trimmed)
                     .into_iter()
-                    .map(|s| tbl_str::decode(s.trim(), tbl_str::FieldKind::Str))
+                    .map(|s| tbl_str::decode(s.trim(), "txt"))
                     .collect();
                 sec.preset.push(cells);
             } else {
@@ -359,7 +360,11 @@ pub fn serialize_tblschema(schema: &TblSchema) -> String {
         if !sec.preset.is_empty() {
             writeln!(s, "# @preset").unwrap();
             for row in &sec.preset {
-                writeln!(s, "{}", row.join(" | ")).unwrap();
+                // 每个单元格需要 encode 转义（换行符、管道符、反斜杠等）
+                let encoded: Vec<String> = row.iter()
+                    .map(|cell| crate::tbl_str::encode(cell, "txt"))
+                    .collect();
+                writeln!(s, "{}", encoded.join(" | ")).unwrap();
             }
         }
     }
@@ -453,16 +458,11 @@ pub fn schema_from_project(groups: &[Group], with_preset: bool) -> TblSchema {
             });
         }
     }
-    TblSchema { meta: SchemaMetadata::default(), separators: SeparatorsSection::default(), sections }
+    TblSchema { meta: SchemaMetadata::default(), separators: Default::default(), sections }
 }
 
 fn export_to_code(e: &Export) -> String {
-    match e {
-        Export::ClientServer | Export::Unselected => "cs".to_string(),
-        Export::ClientOnly => "c".to_string(),
-        Export::ServerOnly => "s".to_string(),
-        Export::None => "-".to_string(),
-    }
+    e.code().to_string()
 }
 
 /// 把 schema sections 应用到 project：
@@ -538,11 +538,14 @@ pub fn apply_schema_to_project(
                     group.tables.push(Table {
                         name: sec.name.clone(),
                         path,
-                        schema: TableSchema { fields },
+                        schema: TableSchema { fields: fields.clone() },
                         records,
                         dirty: true,
                         deleted: false,
-                        original: String::new(),
+                        original_records: Vec::new(),
+                        original_fields: fields,
+                        saved: false,
+                        fmt_ver: crate::tbl::DEFAULT_TBL_VERSION,
                     });
                     added += 1;
                 }
@@ -569,13 +572,14 @@ pub fn apply_schema_to_project(
                     overwritten += 1;
                 } else {
                     let path = group.dir.join(format!("{}.tbl", sec.name));
+                    let snap = entries.clone();
                     group.constants.push(Constant {
                         name: sec.name.clone(),
                         path,
                         entries,
                         dirty: true,
                         deleted: false,
-                        original: String::new(),
+                        original_entries: snap, saved: false,
                     });
                     added += 1;
                 }
@@ -600,13 +604,14 @@ pub fn apply_schema_to_project(
                     overwritten += 1;
                 } else {
                     let path = group.dir.join(format!("{}.tbl", sec.name));
+                    let snap = entries.clone();
                     group.enums.push(EnumDef {
                         name: sec.name.clone(),
                         path,
                         entries,
                         dirty: true,
                         deleted: false,
-                        original: String::new(),
+                        original_entries: snap, saved: false,
                     });
                     added += 1;
                 }
@@ -913,6 +918,60 @@ max_level | int | cs | 最大等级
         let msg = err.to_string();
         assert!(msg.contains("enum"), "msg = {}", msg);
         assert!(msg.contains("@preset"), "msg = {}", msg);
+    }
+
+    #[test]
+    fn preset_escapes_special_characters_in_constant() {
+        // 验证 constant preset 序列化时正确转义换行符、管道符等特殊字符
+        let src = r#"#!tblschema v1
+[global/GameConst] constant
+# @preset
+html | str | <div>\n<b>Hello</b></div> | cs | 包含换行的 HTML
+regex | str | a\|b\|c | cs | 包含管道符
+path | str | C:\\test | cs | 反斜杠路径
+"#;
+        let schema = parse_tblschema(src).expect("parse");
+        let serialized = serialize_tblschema(&schema);
+        let reparsed = parse_tblschema(&serialized).expect("reparse failed");
+
+        let preset1 = &schema.sections[0].preset;
+        let preset2 = &reparsed.sections[0].preset;
+        assert_eq!(preset1.len(), 3);
+        assert_eq!(preset2.len(), 3);
+
+        // 验证换行符
+        assert_eq!(preset1[0][2], "<div>\n<b>Hello</b></div>");
+        assert_eq!(preset2[0][2], "<div>\n<b>Hello</b></div>");
+
+        // 验证管道符
+        assert_eq!(preset1[1][2], "a|b|c");
+        assert_eq!(preset2[1][2], "a|b|c");
+
+        // 验证反斜杠
+        assert_eq!(preset1[2][2], "C:\\test");
+        assert_eq!(preset2[2][2], "C:\\test");
+    }
+
+    #[test]
+    fn standard_template_preset_roundtrip() {
+        // 使用实际的 standard 模板测试完整往返（包含富文本）
+        let schema_text = include_str!("../schemas/standard.tblschema");
+        let schema1 = parse_tblschema(schema_text).expect("parse standard");
+        let serialized = serialize_tblschema(&schema1);
+        let schema2 = parse_tblschema(&serialized).expect("reparse standard");
+
+        // 验证 GameConst 段
+        let gc1 = schema1.sections.iter().find(|s| s.name == "GameConst").unwrap();
+        let gc2 = schema2.sections.iter().find(|s| s.name == "GameConst").unwrap();
+        assert_eq!(gc1.preset.len(), gc2.preset.len());
+
+        // 验证富文本字段
+        for (row1, row2) in gc1.preset.iter().zip(gc2.preset.iter()) {
+            assert_eq!(row1.len(), row2.len(), "行 {} 列数不一致", row1[0]);
+            for (i, (c1, c2)) in row1.iter().zip(row2.iter()).enumerate() {
+                assert_eq!(c1, c2, "行 {} 列 {} 不一致", row1[0], i);
+            }
+        }
     }
 
     #[test]

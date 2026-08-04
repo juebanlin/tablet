@@ -1,4 +1,4 @@
-// 复制(克隆)项目对话框：项目右键「复制(克隆)...」唯一入口。
+﻿// 复制(克隆)项目对话框：项目右键「复制(克隆)...」唯一入口。
 //
 // 与统一「新建项目」对话框不重叠：克隆是「现有 project 内存深拷贝」，没有 source 选择 / sections-picker
 // 的概念，单纯改 id/name/category/version 即可。沿用旧 NewProjectDialog 的视觉。
@@ -76,7 +76,7 @@ fn run(state: &Rc<RefCell<AppState>>) {
     let new_id = match res {
         Some(id) => id,
         None => {
-            st.engine.log(format!("[复制项目] 失败：源项目未打开 {}", source_project_id));
+            st.engine.error_log(format!("[复制项目] 失败：源项目未打开 {}", source_project_id));
             return;
         }
     };
@@ -85,7 +85,7 @@ fn run(state: &Rc<RefCell<AppState>>) {
         p.schema.meta.version = version;
         p.schema_dirty = true;
     }
-    st.engine.log(format!(
+    st.engine.ui_log(format!(
         "[复制项目] 已创建 {}（内存中，需保存才落地）",
         new_id
     ));

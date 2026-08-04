@@ -87,6 +87,7 @@ fn base_parse_fn(bt: BaseType) -> &'static str {
         BaseType::Double => "parseFloat64",
         BaseType::Str => "parseStr",
         BaseType::Bool => "parseBool",
+        BaseType::Txt => "parseStr",
     }
 }
 
@@ -117,6 +118,7 @@ fn parse_expr(raw_var: &str, t: &TblType, sep_var: &str) -> String {
             BaseType::Double => format!("parseListFloat64({}, {}.List)", raw_var, sep_var),
             BaseType::Str => format!("parseListString({}, {}.List)", raw_var, sep_var),
             BaseType::Bool => format!("parseListBool({}, {}.List)", raw_var, sep_var),
+            BaseType::Txt => unreachable!("txt not allowed in List"),
         },
         Paradigm::Set => match p[0] {
             BaseType::Int => format!("parseSetInt32({}, {}.Set)", raw_var, sep_var),
@@ -126,6 +128,7 @@ fn parse_expr(raw_var: &str, t: &TblType, sep_var: &str) -> String {
             BaseType::Str => format!("parseSetString({}, {}.Set)", raw_var, sep_var),
             // bool 集合在实际项目里几乎不会出现，但兜底
             BaseType::Bool => format!("parseSetString({}, {}.Set)", raw_var, sep_var),
+            BaseType::Txt => unreachable!("txt not allowed in Set"),
         },
 
         Paradigm::Map => format!(
@@ -196,6 +199,7 @@ fn parse_expr(raw_var: &str, t: &TblType, sep_var: &str) -> String {
                 "ParseMap({raw}, {sep}.MapListKv, {sep}.MapListEntry, {fk}, func(s string) []bool {{ return parseListBool(s, {sep}.MapListItem) }})",
                 raw=raw_var, sep=sep_var, fk=base_parse_fn(p[0])
             ),
+            BaseType::Txt => unreachable!("txt not allowed in MapList"),
         },
 
         // 引用类型默认按 table ref 处理 → int32(id)；enum ref 由调用方在生成时改写
@@ -218,8 +222,8 @@ fn parse_expr_for(raw_var: &str, t: &TblType, sep_var: &str, enum_names: &HashSe
 // PLACEHOLDER_GO_GEN_TPL
 
 pub fn export_all_go(project: &Project) -> Result<super::ExportResult> {
-    let export_cfg = project.config.export.as_ref();
-    let server = export_cfg.and_then(|e| e.server.as_ref());
+    let export_cfg = &project.config.export;
+    let server = export_cfg.server.as_ref();
     let go = server.and_then(|s| s.go.as_ref());
 
     let code_output = go
@@ -230,14 +234,10 @@ pub fn export_all_go(project: &Project) -> Result<super::ExportResult> {
         .unwrap_or("config");
 
     let line_ending = LineEnding::from_config(
-        go.and_then(|g| g.line_ending.as_deref())
-            .or_else(|| server.and_then(|s| s.line_ending.as_deref()))
-            .or_else(|| export_cfg.and_then(|e| e.line_ending.as_deref()))
+        export_cfg.line_ending.map(|l| l.as_str())
             .unwrap_or("lf")
     );
-    let encoding = go.and_then(|g| g.encoding.as_deref())
-        .or_else(|| server.and_then(|s| s.encoding.as_deref()))
-        .or_else(|| export_cfg.and_then(|e| e.encoding.as_deref()))
+    let encoding = export_cfg.encoding.map(|e| e.as_str())
         .unwrap_or("utf-8").to_string();
     let opts = super::ExportOptions { line_ending, encoding };
 

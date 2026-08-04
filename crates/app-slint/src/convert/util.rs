@@ -1,4 +1,4 @@
-// 通用工具：列字母编号、单元格 raw 读取、单格校验消息。
+// 通用工具：列字母编号、单元格 raw 读取、单格校验消息、TSV 转义/解析。
 //
 // 这些函数没有 UI 依赖，只关心「从 AppState 读出某格底层值」或纯字符串映射。
 
@@ -17,6 +17,74 @@ pub fn col_letter(idx: usize) -> String {
         n = n / 26 - 1;
     }
     s
+}
+
+// ── TSV 剪贴板 ──────────────────────────────────────────────
+// RFC 4180 风格：单元格含 \t / \n / " → 用 "..." 包裹，内部 " → "" 转义。
+// 与 Excel、WPS、Google Sheets 的纯文本剪贴板格式兼容。
+
+/// 单格值 → TSV 安全表示。
+pub fn tsv_escape_cell(cell: &str) -> String {
+    if cell.contains('\t') || cell.contains('\n') || cell.contains('"') {
+        let escaped = cell.replace('"', "\"\"");
+        format!("\"{}\"", escaped)
+    } else {
+        cell.to_string()
+    }
+}
+
+/// 解析 TSV 文本 → 二维格矩阵（已反转义）。
+pub fn tsv_parse(text: &str) -> Vec<Vec<String>> {
+    let mut rows: Vec<Vec<String>> = Vec::new();
+    let mut row: Vec<String> = Vec::new();
+    let mut cell = String::new();
+    let mut in_quoted = false;
+    let mut chars = text.chars().peekable();
+
+    while let Some(ch) = chars.next() {
+        match (ch, in_quoted) {
+            ('"', false) => { in_quoted = true; }
+            ('"', true) => {
+                if chars.peek() == Some(&'"') {
+                    cell.push('"');
+                    chars.next(); // skip doubled quote
+                } else {
+                    in_quoted = false;
+                }
+            }
+            ('\t', false) => {
+                row.push(std::mem::take(&mut cell));
+            }
+            ('\n', false) => {
+                row.push(std::mem::take(&mut cell));
+                rows.push(std::mem::take(&mut row));
+            }
+            ('\r', false) => {
+                // skip CR in CRLF
+                if chars.peek() == Some(&'\n') { continue; }
+                row.push(std::mem::take(&mut cell));
+                rows.push(std::mem::take(&mut row));
+            }
+            _ => { cell.push(ch); }
+        }
+    }
+    // 最后一条（无尾随 \n 时）
+    row.push(cell);
+    if !row.is_empty() && !(row.len() == 1 && row[0].is_empty() && rows.is_empty()) {
+        rows.push(row);
+    }
+    while rows.last().map_or(false, |r| r.iter().all(|c| c.is_empty())) {
+        rows.pop();
+    }
+    rows
+}
+
+/// Copy: 选区 → TSV 文本（cell 值经转义，与 Excel 剪贴板兼容）。
+pub fn build_tsv(state: &AppState, r1: usize, c1: usize, r2: usize, c2: usize) -> String {
+    (r1..=r2).map(|r| {
+        (c1..=c2).map(|c| tsv_escape_cell(&raw_cell_for(state, r, c)))
+            .collect::<Vec<_>>().join("\t")
+    }).collect::<Vec<_>>().join("\r\n")
 }
 
 /// 读取真实存储值（不经过 display 翻译）。供 inline 编辑等取初始文本。
@@ -53,7 +121,7 @@ pub fn raw_cell_for(state: &AppState, r: usize, c: usize) -> String {
 /// 用于 StatusBar 在选中单格时把"红框是因为什么"展示给用户，对齐文档 §5.4 实时验证 UX。
 pub(super) fn cell_validation_message(state: &AppState, r: usize, c: usize) -> Option<String> {
     use tablet_core::validate::{validate_table, validate_constant, validate_enum, RefIndex};
-    let sep = &state.engine.project().config.separators;
+    let sep = &state.engine.project().schema.separators;
     let errors = match &state.selected {
         Some(SelectedNode::Table { group, name, .. }) => {
             let table = state.engine.find_table(group, name)?;
@@ -63,7 +131,7 @@ pub(super) fn cell_validation_message(state: &AppState, r: usize, c: usize) -> O
         Some(SelectedNode::Constant { group, name, .. }) => {
             let constant = state.engine.find_constant(group, name)?;
             let refs = RefIndex::build(&state.engine.project().groups);
-            let allow_ref = state.engine.project().config.ui.as_ref()
+            let allow_ref = state.engine.global_config.ui.as_ref()
                 .map_or(true, |u| u.constant_ref_allowed);
             validate_constant(constant, sep, allow_ref, Some(&refs))
         }

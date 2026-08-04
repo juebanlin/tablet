@@ -7,3 +7,5 @@ pub mod grid_actions;
 pub mod toolbar;
 pub mod log_panel;
 pub mod focus;
+pub mod bottom_panel;
+pub mod excel_sync;

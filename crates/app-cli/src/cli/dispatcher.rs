@@ -12,6 +12,7 @@
 use anyhow::Result;
 use clap::Parser;
 use tablet_core::ops::ProjectEngine;
+use tablet_core::model::GlobalConfig;
 use tablet_core::project::{load_project, load_specific_project, load_workspace};
 
 use super::args::*;
@@ -21,7 +22,6 @@ use crate::actions::{
     export::{run_export, ExportFormats},
     list_projects::list_projects,
     list_templates::list_templates,
-    migrate::run_migrate,
     new_project::run_new_project,
     overrides::apply_overrides,
     project_clone::run_project_clone,
@@ -42,11 +42,6 @@ fn run(cli: Cli) -> Result<i32> {
         // 不需要加载 Project 的命令
         Command::ListTemplates => {
             output::print_template_list_cli(&list_templates());
-            return Ok(0);
-        }
-        Command::MigrateLegacy => {
-            let migrated = run_migrate(&cli.workdir)?;
-            output::print_migrate_outcome_cli(migrated);
             return Ok(0);
         }
         Command::Project(pa) => return dispatch_project(&cli, pa),
@@ -144,11 +139,23 @@ fn run(cli: Cli) -> Result<i32> {
     }
 
     // 以下命令需要先加载 Project
-    let project = match cli.project.as_deref() {
-        Some(pid) => load_specific_project(&cli.workdir, pid)?,
-        None => load_project(&cli.workdir)?,
+    let (project, global_config) = match cli.project.as_deref() {
+        Some(pid) => {
+            let config_path = cli.workdir.join("tablet.toml");
+            let global_text = std::fs::read_to_string(&config_path)?;
+            let global_config: GlobalConfig = toml::from_str(&global_text)?;
+            let project = load_specific_project(&cli.workdir, pid)?;
+            (project, global_config)
+        }
+        None => {
+            let config_path = cli.workdir.join("tablet.toml");
+            let global_text = std::fs::read_to_string(&config_path)?;
+            let global_config: GlobalConfig = toml::from_str(&global_text)?;
+            let project = load_project(&cli.workdir)?;
+            (project, global_config)
+        }
     };
-    let mut engine = ProjectEngine::new(project);
+    let mut engine = ProjectEngine::new(project, global_config);
 
     let warns = apply_overrides(&mut engine, &cli.overrides);
     output::print_override_warnings_cli(&warns);
@@ -346,8 +353,7 @@ fn run(cli: Cli) -> Result<i32> {
             }
         }
         // 已在上方 dispatch
-        Command::ListTemplates | Command::MigrateLegacy
-        | Command::Project(_) | Command::Util(_) => {
+        Command::ListTemplates | Command::Project(_) | Command::Util(_) => {
             unreachable!()
         }
     }
@@ -356,6 +362,11 @@ fn run(cli: Cli) -> Result<i32> {
 fn dispatch_project(cli: &Cli, pa: &ProjectArgs) -> Result<i32> {
     match &pa.action {
         ProjectAction::List => {
+            // 先触发配置加载（含自动修复），即使 list 命令不需要用到 engine
+            let (_engine, config_fixed) = load_workspace(&cli.workdir)?;
+            if config_fixed {
+                eprintln!("已自动修复 tablet.toml 中的无效配置值");
+            }
             let projects = list_projects(&cli.workdir);
             if cli.is_json() {
                 let val: Vec<serde_json::Value> = projects.iter().map(|p| {
@@ -375,7 +386,7 @@ fn dispatch_project(cli: &Cli, pa: &ProjectArgs) -> Result<i32> {
             Ok(0)
         }
         ProjectAction::Info { id } => {
-            let mut engine = load_workspace(&cli.workdir)?;
+            let (mut engine, _config_fixed) = load_workspace(&cli.workdir)?;
             if let Some(pid) = cli.project.as_deref().or(id.as_deref()) {
                 engine.set_active_by_id(pid);
             }
@@ -388,7 +399,7 @@ fn dispatch_project(cli: &Cli, pa: &ProjectArgs) -> Result<i32> {
             Ok(0)
         }
         ProjectAction::Rename { id, new_id, new_name } => {
-            let mut engine = load_workspace(&cli.workdir)?;
+            let (mut engine, _config_fixed) = load_workspace(&cli.workdir)?;
             run_project_rename(&mut engine, id, new_id.as_deref(), new_name.as_deref())?;
             println!("已重命名 Project: {}", new_id.as_deref().unwrap_or(id));
             Ok(0)
@@ -398,13 +409,13 @@ fn dispatch_project(cli: &Cli, pa: &ProjectArgs) -> Result<i32> {
                 eprintln!("错误: 删除操作不可逆，请添加 --confirm 确认");
                 return Ok(1);
             }
-            let mut engine = load_workspace(&cli.workdir)?;
+            let (mut engine, _config_fixed) = load_workspace(&cli.workdir)?;
             run_project_delete(&mut engine, id)?;
             println!("已删除 Project: {}", id);
             Ok(0)
         }
         ProjectAction::Clone { source, id, name } => {
-            let mut engine = load_workspace(&cli.workdir)?;
+            let (mut engine, _config_fixed) = load_workspace(&cli.workdir)?;
             run_project_clone(&mut engine, source, id, name.as_deref())?;
             println!("已克隆 Project: {} → {}", source, id);
             Ok(0)

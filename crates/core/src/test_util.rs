@@ -253,7 +253,12 @@ fn random_value_for_type(tbl_type: &str, rng: &mut SimpleRng) -> String {
         "long" => rng.range(1000, 99999).to_string(),
         "float" | "double" => format!("{:.1}", rng.range(1, 100) as f64 / 10.0),
         "bool" => if rng.bool_chance(50) { "true" } else { "false" }.to_string(),
-        "str" => format!("text_{}", rng.range(1, 999)),
+        "str" => {
+            let words = ["fire", "ice", "wind", "earth", "light", "dark"];
+            let i = rng.range(0, words.len() as i64 - 1) as usize;
+            words[i].to_string()
+        }
+        "txt" => format!("text_{}", rng.range(1, 999)),
         t if t.starts_with("List<") => {
             let count = rng.range(1, 5) as usize;
             (0..count).map(|_| rng.range(1, 100).to_string()).collect::<Vec<_>>().join(";")

@@ -1,4 +1,4 @@
-//! Project 加载、扫描、迁移。
+//! Project 加载、扫描、配置合并。
 //!
 //! 文档对应：@02 Project / @03.4 / @07 S15-D。
 //!
@@ -18,21 +18,14 @@
 //!
 //! 加载顺序：项目 toml > 全局 toml > 内置默认。
 //!
-//! 老仓库的根 `config/` 在 `load_project` 时**自动迁移**到 `projects/default/config/`，
-//! 不保留双结构。
-//!
-//! 历史文件名 `schema.tblschema` 在 load 时一次性 rename 为 `project.tblschema`，
-//! 保持代码路径单一。
-//!
-//! 测试 fixtures（`tests/<scenario>/`）保持兼容：当 `<workdir>/projects/` 不存在
-//! 但 `<workdir>/<config_dir>/` 存在时，把 workdir 自身当 project_root（"老布局模式"），
-//! 这样 `tablet-cli generate-test` 在 fixtures 里仍可写 `config/` 平铺。
-//! 新建项目 / GUI 启动一律走 projects/<id>/ 结构。
+//! **历史兼容**：
+//! - 配置文件 `tbl-tool.toml` 在 load 时一次性 rename 为 `tablet.toml`
+//! - 不再支持单项目模式（`<workdir>/config/` 直接存放数据），
+//!   旧仓库需要手动迁移到 `projects/default/` 结构
 
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
-use chrono::Utc;
 
 use crate::model::*;
 use crate::tbl::{self, TblFile};
@@ -73,8 +66,6 @@ macro_rules! const_concat {
     }};
 }
 
-const LEGACY_SCHEMA_FILE: &str = "schema.tblschema";
-
 /// 工作区根 `tablet.toml` banner：说明四类段的作用域差异，避免用户混淆。
 /// `[project]`（仓库级）/ `[export]`（项目默认值，可被项目级覆盖）/
 /// `[ui]`（仅工作区级，多 Project 共享）/ `[separators]`（仅新建空项目时拷贝）。
@@ -82,35 +73,35 @@ const BANNER_GLOBAL: &str = r#"# ===============================================
 # tablet 工作区配置（仓库共享）
 # ============================================================
 #
-# 本文件分四类段，作用域和覆盖关系不同：
+# 本文件分四类段，作用域不同：
 #
 #   [project]      ← 工作区状态（last_project / opened_projects 等）
-#                     仓库级；不属于任何具体 Project，不会被 Project 覆盖
+#                     仓库级；不属于任何具体 Project
 #
-#   [export]       ← Project 默认值
-#                     新建 Project 继承本段；Project 用自己的
-#                     projects/<id>/project.toml 按字段 deep-merge 覆盖
-#                     （在这里改 = 影响所有未显式覆盖的 Project）
+#   [export]       ← 新建 Project 时的导出配置初始模板
+#                     新建 Project 时拷贝一次到 projects/<id>/project.toml
+#                     之后各 Project 独立维护，互不影响
+#                     已有 Project 导出设置走 GUI「项目右键 → 项目设置 → 导出」
 #
 #   [ui]           ← 工作区级 UI 偏好（仅本文件生效）
 #                     不支持项目级覆盖：多 Project 同时打开时若按项目切换
 #                     UI 策略，"全局保存 / 实时校验"等行为会反复变动，
 #                     反而像 bug。项目级 project.toml 写 [ui] 会被忽略。
 #
-#   [separators]   ← 新建空 Project 时的分隔符初值
-#                     拷一次到 project.tblschema 后即与本段无关；
+#   [separators]   ← 新建空 Project 时的分隔符初始模板
+#                     新建时拷贝一次到 project.tblschema 后即与本段无关；
 #                     已有 Project 改分隔符走 GUI「项目右键 → 项目设置 → 分隔符」
 # ============================================================
 
 "#;
 
-/// 项目级 `project.toml` banner：说明覆盖语义、并明确禁止的三段（[project]/[ui]/[separators]）。
+/// 项目级 `project.toml` banner：说明独立配置语义、并明确禁止的三段（[project]/[ui]/[separators]）。
 const BANNER_PROJECT: &str = r#"# ============================================================
-# 项目级配置覆盖（projects/<id>/project.toml）
+# 项目级配置（projects/<id>/project.toml）
 # ============================================================
 #
-# 与 <workdir>/tablet.toml 按字段 deep-merge，项目优先；
-# 缺失字段自动回退到全局值。所有键均已声明，照需修改即可。
+# 本文件包含此项目的独立配置，与全局 tablet.toml 无运行时继承关系。
+# 新建项目时从全局配置拷贝初始值，之后各项目独立维护。
 #
 # 注意：以下三段写在这里会被加载流程剥掉，不会生效——
 #   - [project]    工作区状态（last_project / opened_projects 等），不属于单项目
@@ -180,6 +171,8 @@ code_output = "gen/server/go"
 namespace = "game::config"
 # C++ 头文件输出目录（每张表 / 常量 / 枚举一个 .h）
 code_output = "gen/server/cpp"
+# JSON 库选择: "nlohmann"（默认）| "rapidjson"
+json_lib = "nlohmann"
 
 [export.server.csharp_dotnet]
 # .NET 服务端命名空间
@@ -190,6 +183,8 @@ code_output = "gen/server/csharp"
 [export.server.typescript]
 # TypeScript Node.js 服务端代码输出目录
 output = "gen/server/typescript"
+# 模块类型: "esm" (默认) | "cjs"
+module_kind = "esm"
 
 [export.client.lua]
 # Lua 文件输出目录（每张表 / 常量 / 枚举一个 .lua）
@@ -202,6 +197,8 @@ output = "gen/client/gdscript"
 [export.client.typescript]
 # TypeScript 前端代码输出目录
 output = "gen/client/typescript"
+# 模块类型: "esm" (默认) | "cjs"
+module_kind = "esm"
 
 [export.client.csharp_unity]
 # Unity 客户端命名空间
@@ -325,14 +322,10 @@ pub fn default_project_toml_template() -> &'static str {
 /// 加载 Project（默认走 last_project 或扫描第一个）。
 ///
 /// 流程：
-/// 1. 解析 `<workdir>/tablet.toml`（不存在则写默认）—— 全局 fallback
-/// 2. 老布局迁移：若 `<workdir>/projects/` 不存在但 `<workdir>/<config_dir>/` 是非空目录，
-///    把它视作 default project（不动盘上文件，仅在内存里把 project_root=workdir）。
-///    GUI 端可在确认后调 [`migrate_legacy_to_default`] 真正搬目录。
-/// 3. 多 Project 模式：从 `last_project` / 扫描结果挑一个，project_root = `<workdir>/projects/<id>/`
-/// 4. 加载文件名迁移（schema.tblschema → project.tblschema）
-/// 5. 解析 project.tblschema：meta → 项目身份；其它段（[export]/[ui]/...）由 project.toml deep-merge 到全局 config 上
-/// 6. 扫 config/ 加载 groups
+/// 1. 解析 `<workdir>/tablet.toml`（不存在则写默认）—— 全局配置
+/// 2. 从 `<workdir>/projects/` 扫描，从 `last_project` 或第一个挑选
+/// 3. 解析 project.tblschema 和 project.toml，合并配置
+/// 4. 扫 config/ 加载 groups
 pub fn load_project(workdir: &Path) -> Result<Project> {
     let config_path = workdir.join(crate::CONFIG_FILE);
 
@@ -343,41 +336,56 @@ pub fn load_project(workdir: &Path) -> Result<Project> {
 
     let global_text = std::fs::read_to_string(&config_path)?;
 
-    // 决定 project_root
+    // 必须有 projects/ 目录
     let projects_dir = workdir.join(PROJECTS_DIR);
-    let (project_root, schema, project_text) = if projects_dir.is_dir() {
-        // 多 Project 模式：从 last_project 或扫描结果挑一个
-        let candidates = scan_projects_dir(&projects_dir);
-        // 先解析全局，仅为读 last_project；project.toml 的 overlay 一会再做
-        let temp_cfg: WorkspaceConfig = toml::from_str(&global_text)?;
-        let chosen = pick_project(&candidates, &temp_cfg.project.last_project)
-            .with_context(|| format!("projects/ 目录下没有可用 Project: {}", projects_dir.display()))?;
-        let root = projects_dir.join(&chosen.id);
-        migrate_legacy_files(&root);
-        let proj_text = std::fs::read_to_string(root.join(PROJECT_TOML_FILE)).ok();
-        let schema = read_project_schema_with_fallback(&root, &chosen.id);
-        (root, schema, proj_text)
-    } else {
-        // 老布局：workdir 自身就是 project_root，<config_dir> 即数据目录
-        let mut schema = crate::tblschema::TblSchema::default();
-        schema.meta.id = "default".to_string();
-        schema.meta.name = "默认项目".to_string();
-        (workdir.to_path_buf(), schema, None)
-    };
+    if !projects_dir.is_dir() {
+        anyhow::bail!(
+            "projects/ 目录不存在。请使用 'tablet-cli project new' 创建项目，\
+             或参考文档将旧仓库结构迁移到多项目模式。"
+        );
+    }
 
-    let mut config = merge_project_config(&global_text, project_text.as_deref())?;
-    // 分隔符以 schema.separators 为单一来源：
-    // workspace tablet.toml [separators] 与 project.toml [separators] 都被 schema 覆盖。
-    config.separators = schema.separators.clone();
+    let candidates = scan_projects_dir(&projects_dir);
+    let global_config: GlobalConfig = toml::from_str(&global_text)?;
+    let chosen = pick_project(&candidates, &global_config.project_management.last_project)
+        .with_context(|| format!("projects/ 目录下没有可用 Project: {}", projects_dir.display()))?;
 
-    // 决定 config 数据目录：多 Project 模式恒为 `<project_root>/config/`；
-    // 老布局走 `<project_root>/<config_dir>`（即 `<workdir>/<config_dir>`）
-    let data_dir = if projects_dir.is_dir() {
-        project_root.join("config")
-    } else {
-        project_root.join(&config.project.config_dir)
-    };
+    load_specific_project_impl(workdir, &projects_dir.join(&chosen.id), &global_config)
+}
 
+/// 加载指定 id 的 Project（用于 Project 切换）。
+pub fn load_specific_project(workdir: &Path, project_id: &str) -> Result<Project> {
+    let config_path = workdir.join(crate::CONFIG_FILE);
+    let global_text = std::fs::read_to_string(&config_path)?;
+    let global_config: GlobalConfig = toml::from_str(&global_text)?;
+
+    let project_root = workdir.join(PROJECTS_DIR).join(project_id);
+    if !project_root.is_dir() {
+        anyhow::bail!("Project 不存在: {}", project_root.display());
+    }
+
+    load_specific_project_impl(workdir, &project_root, &global_config)
+}
+
+/// 加载指定路径的 Project（内部实现）。
+fn load_specific_project_impl(
+    workdir: &Path,
+    project_root: &Path,
+    global_config: &GlobalConfig,
+) -> Result<Project> {
+    let proj_text = std::fs::read_to_string(project_root.join(PROJECT_TOML_FILE)).ok();
+    let schema = read_project_schema_with_fallback(
+        project_root,
+        project_root.file_name().unwrap().to_str().unwrap(),
+    );
+
+    // 解析项目级配置（仅 [export] 段）
+    let config = parse_project_config(proj_text.as_deref(), global_config);
+
+    // 分隔符始终来自 schema，不从 toml 读取
+    // （project.toml 中的 [separators] 段会被忽略）
+
+    let data_dir = project_root.join("config");
     let groups = if data_dir.is_dir() {
         load_groups_in(&data_dir)?
     } else {
@@ -388,66 +396,104 @@ pub fn load_project(workdir: &Path) -> Result<Project> {
 
     Ok(Project {
         workdir: workdir.to_path_buf(),
-        project_root,
+        project_root: project_root.to_path_buf(),
         config,
         schema,
         groups,
         schema_dirty: false,
-        root_pending_create: false,
+        state: crate::model::ProjectState::Loaded,
     })
 }
 
-/// 加载指定 id 的 Project（用于 Project 切换）。
-pub fn load_specific_project(workdir: &Path, project_id: &str) -> Result<Project> {
-    let config_path = workdir.join(crate::CONFIG_FILE);
-    let global_text = std::fs::read_to_string(&config_path)?;
+/// 解析项目级配置（仅 [export] 段）。
+///
+/// 项目级 project.toml 不允许覆盖工作区级段：
+/// - [project]    仓库状态（last_project / opened_projects），不属于单项目
+/// - [ui]         UI 偏好仅工作区级；多 Project 同时打开时按项目切 UI 策略会反复变
+/// - [separators] 分隔符以 project.tblschema 的 # @sep 为准
+///
+/// 项目级配置加载策略：
+/// - 如果 project.toml 缺失或解析失败，从全局配置拷贝完整初始值
+/// - 如果 project.toml 存在但某些字段缺失/无效，用全局配置对应字段修复
+/// - 这是加载时的一次性修复，后续内存中配置保持独立，不再继承
+fn parse_project_config(project_text: Option<&str>, global: &GlobalConfig) -> ProjectConfig {
+    let global_export = global.export.clone().unwrap_or_default();
 
-    let project_root = workdir.join(PROJECTS_DIR).join(project_id);
-    if !project_root.is_dir() {
-        anyhow::bail!("Project 不存在: {}", project_root.display());
+    let Some(text) = project_text else {
+        // 无 project.toml，从全局拷贝
+        return ProjectConfig {
+            export: global_export,
+        };
+    };
+
+    // 只取 [export] 段，其它段忽略
+    let proj_val: toml::Value = match toml::from_str(text) {
+        Ok(v) => v,
+        Err(_) => return ProjectConfig {
+            export: global_export,
+        },
+    };
+
+    let proj_export_val = match proj_val.get("export") {
+        Some(v) => v.clone(),
+        None => return ProjectConfig {
+            export: global_export,
+        },
+    };
+
+    // 将全局 export 序列化为 toml::Value，作为修复基准
+    let global_export_val = toml::Value::try_from(&global_export)
+        .unwrap_or(toml::Value::Table(toml::map::Map::new()));
+
+    // 深度合并：用全局配置补充项目配置中缺失的字段
+    let mut merged = global_export_val;
+    deep_merge_toml(&mut merged, proj_export_val);
+
+    // 反序列化为 ExportConfig，如果失败则回退到全局配置
+    let export = merged.try_into::<crate::model::ExportConfig>()
+        .unwrap_or(global_export);
+
+    ProjectConfig { export }
+}
+
+/// 深度合并 toml::Value（overlay 覆盖 base）。
+/// 用于配置修复：base 是完整的全局配置，overlay 是可能不完整的项目配置。
+/// 对于 Table：递归合并字段；对于非 Table：overlay 直接覆盖 base。
+fn deep_merge_toml(base: &mut toml::Value, overlay: toml::Value) {
+    use toml::Value;
+
+    match (base, overlay) {
+        (Value::Table(base_table), Value::Table(overlay_table)) => {
+            for (key, val) in overlay_table {
+                if let Some(base_val) = base_table.get_mut(&key) {
+                    deep_merge_toml(base_val, val);
+                } else {
+                    base_table.insert(key, val);
+                }
+            }
+        }
+        (base_val, overlay_val) => {
+            *base_val = overlay_val;
+        }
     }
-    migrate_legacy_files(&project_root);
-
-    let proj_text = std::fs::read_to_string(project_root.join(PROJECT_TOML_FILE)).ok();
-    let schema = read_project_schema_with_fallback(&project_root, project_id);
-
-    let mut config = merge_project_config(&global_text, proj_text.as_deref())?;
-    config.project.last_project = project_id.to_string();
-    // 分隔符以 schema.separators 为唯一来源
-    config.separators = schema.separators.clone();
-
-    let data_dir = project_root.join("config");
-    let groups = if data_dir.is_dir() { load_groups_in(&data_dir)? } else { Vec::new() };
-
-    Ok(Project {
-        workdir: workdir.to_path_buf(),
-        project_root,
-        config,
-        schema,
-        groups,
-        schema_dirty: false,
-        root_pending_create: false,
-    })
 }
 
 /// 加载 workdir 下**全部** Project 到内存（多 Project 同时管理模型，@04.2.0）。
 ///
-/// - 多 Project 模式：扫 `<workdir>/projects/` 列出全部 id；每个走 `load_specific_project` 全量加载
-/// - 老布局：复用 `load_project`，得到单个 default Project 包成 Vec
-/// - 没有 projects/ 也没有老 config/ 时 → load_project 会创建空 default
-///
-/// 返回的 Vec 顺序：按 project id 字典序（与 `list_projects` 一致）。
+/// - 扫描 `<workdir>/projects/` 列出全部 id；每个走 `load_specific_project` 全量加载
+/// - 返回的 Vec 顺序：按 project id 字典序（与 `list_projects` 一致）
 pub fn load_all_projects(workdir: &Path) -> Result<Vec<Project>> {
     let projects_dir = workdir.join(PROJECTS_DIR);
     if !projects_dir.is_dir() {
-        let p = load_project(workdir)?;
-        return Ok(vec![p]);
+        anyhow::bail!(
+            "projects/ 目录不存在。请使用 'tablet-cli project new' 创建项目，\
+             或参考文档将旧仓库结构迁移到多项目模式。"
+        );
     }
 
     let candidates = scan_projects_dir(&projects_dir);
     if candidates.is_empty() {
-        let p = load_project(workdir)?;
-        return Ok(vec![p]);
+        anyhow::bail!("projects/ 下没有可加载的 Project");
     }
 
     let config_path = workdir.join(crate::CONFIG_FILE);
@@ -471,14 +517,13 @@ pub fn load_all_projects(workdir: &Path) -> Result<Vec<Project>> {
 /// DBeaver-style 启动加载：扫描 available + 仅按 `[project] opened_projects` 加载若干个。
 ///
 /// 决策逻辑：
-/// 1. 若 `<workdir>/projects/` 不存在 → 走老 `load_project` 单 project 路径，available = 1 条 default。
-/// 2. 否则扫 `<workdir>/projects/` 得到 `Vec<AvailableProject>`，按 id 字典序。
-/// 3. 决定 `to_open`：
+/// 1. 扫描 `<workdir>/projects/` 得到 `Vec<AvailableProject>`，按 id 字典序
+/// 2. 决定 `to_open`：
 ///    - `opened_projects` 非空：用它过滤掉不存在的 id（保持顺序）
 ///    - 否则若 `last_project` 非空且存在：仅打开它
 ///    - 否则打开 available 第一个（保持兼容，确保启动有内容）
-/// 4. active = `last_project`（不在 opened 里则 fallback opened[0]）
-pub fn load_workspace(workdir: &Path) -> Result<crate::ops::ProjectEngine> {
+/// 3. active = `last_project`（不在 opened 里则 fallback opened[0]）
+pub fn load_workspace(workdir: &Path) -> Result<(crate::ops::ProjectEngine, bool)> {
     use crate::ops::{AvailableProject, ProjectEngine};
 
     let projects_dir = workdir.join(PROJECTS_DIR);
@@ -495,17 +540,17 @@ pub fn load_workspace(workdir: &Path) -> Result<crate::ops::ProjectEngine> {
             println!("已生成默认配置文件: {}", config_path.display());
         }
     }
-    let global_text = std::fs::read_to_string(&config_path)?;
-    let workspace_cfg: WorkspaceConfig = toml::from_str(&global_text)?;
+    let (global_config, config_fixed) = crate::config_fix::load_and_fix_global_config(&config_path)?;
 
     if !projects_dir.is_dir() {
-        // projects/ 不存在 = 空仓库；不再隐式落地 default project / 老布局兜底。
-        return Ok(ProjectEngine::new_workspace(
+        // projects/ 不存在 = 空仓库
+        return Ok((ProjectEngine::new_workspace(
             workdir.to_path_buf(),
+            global_config,
             Vec::new(),
             Vec::new(),
             None,
-        ));
+        ), config_fixed));
     }
 
     let entries = scan_projects_dir(&projects_dir);
@@ -525,17 +570,18 @@ pub fn load_workspace(workdir: &Path) -> Result<crate::ops::ProjectEngine> {
     if available.is_empty() {
         // projects/ 存在但为空（用户删光了所有 project）：保留空 workspace，
         // 不再隐式创建 default。否则启动时会冒出一个磁盘上不存在的"幽灵项目"。
-        return Ok(ProjectEngine::new_workspace(
+        return Ok((ProjectEngine::new_workspace(
             workdir.to_path_buf(),
+            global_config,
             Vec::new(),
             Vec::new(),
             None,
-        ));
+        ), config_fixed));
     }
 
     // 计算 to_open
-    let last_project = workspace_cfg.project.last_project.clone();
-    let opened_pref = &workspace_cfg.project.opened_projects;
+    let last_project = global_config.project_management.last_project.clone();
+    let opened_pref = &global_config.project_management.opened_projects;
     let avail_ids: std::collections::HashSet<&str> = available.iter().map(|a| a.id.as_str()).collect();
     let to_open: Vec<String> = if !opened_pref.is_empty() {
         opened_pref.iter()
@@ -562,106 +608,36 @@ pub fn load_workspace(workdir: &Path) -> Result<crate::ops::ProjectEngine> {
     };
     let mut engine = ProjectEngine::new_workspace(
         workdir.to_path_buf(),
+        global_config.clone(),
         available,
         opened,
         active_id.as_deref(),
     );
     // workspace tablet.toml [separators] 作为「新建空项目」时 schema.separators 的初值；
     // toml 里没写的字段走 SeparatorsSection 自身 default。
-    engine.set_default_separators(workspace_cfg.separators.clone());
-    Ok(engine)
+    engine.set_default_separators(global_config.separators.clone());
+    Ok((engine, config_fixed))
 }
 
 /// 把当前 engine 的 opened/active/sort/order 落盘到 `<workdir>/tablet.toml`。
 /// UI 在 open/close/sort 改变时调一次；失败由调用方决定如何处理（best-effort）。
 pub fn persist_workspace_state(
     engine: &crate::ops::ProjectEngine,
-    project_sort: &str,
+    project_sort: crate::enums::ProjectSort,
     project_order: &[String],
 ) -> Result<()> {
     let path = engine.workdir.join(crate::CONFIG_FILE);
     let original = std::fs::read_to_string(&path).unwrap_or_default();
-    // 取 config_dir / cache_dir：优先从已加载 project 的 config 拿，全关时反序列化原 toml
-    let (config_dir, cache_dir) = if let Some(p) = engine.active() {
-        (
-            p.config.project.config_dir.clone(),
-            p.config.project.cache_dir.clone(),
-        )
-    } else if let Some(p) = engine.projects.first() {
-        (
-            p.config.project.config_dir.clone(),
-            p.config.project.cache_dir.clone(),
-        )
-    } else {
-        match toml::from_str::<WorkspaceConfig>(&original) {
-            Ok(c) => (c.project.config_dir, c.project.cache_dir),
-            Err(_) => ("config".to_string(), ".tbl-cache".to_string()),
-        }
-    };
-    let project_cfg = ProjectConfig {
+
+    let project_cfg = crate::model::ProjectManagementConfig {
         last_project: engine.active_project_id().unwrap_or("").to_string(),
         opened_projects: engine.opened_ids(),
-        project_sort: project_sort.to_string(),
+        project_sort,
         project_order: project_order.to_vec(),
-        config_dir,
-        cache_dir,
     };
     let updated = upsert_project_config_section(&original, &project_cfg);
     std::fs::write(&path, updated)?;
     Ok(())
-}
-
-/// 把全局 tablet.toml 与 project.toml deep-merge 后反序列化成 WorkspaceConfig。
-/// project.toml 字段优先；缺失字段从全局取。
-fn merge_project_config(global_text: &str, project_text: Option<&str>) -> Result<WorkspaceConfig> {
-    let mut global_val: toml::Value = toml::from_str(global_text)?;
-    if let Some(pt) = project_text {
-        let mut proj_val: toml::Value = toml::from_str(pt).unwrap_or(toml::Value::Table(Default::default()));
-        // 项目级 toml 不允许覆盖工作区级段：
-        // - [project] = 仓库级 ProjectConfig（last_project / opened_projects 等），不属于单项目
-        // - [ui]      = UI 偏好；进程内 AppState 启动时锁定一次，多 Project 同时打开时
-        //               若按项目切策略会让"全局保存按钮 / 实时校验"行为反复变，反而像 bug
-        // - [separators] = 分隔符配置以 project.tblschema 的 # @sep 为准（项目设置对话框直接编辑那里）
-        if let toml::Value::Table(ref mut tbl) = proj_val {
-            tbl.remove("project");
-            tbl.remove("ui");
-            tbl.remove("separators");
-        }
-        deep_merge_toml(&mut global_val, proj_val);
-    }
-    Ok(global_val.try_into::<WorkspaceConfig>()?)
-}
-
-/// 深度合并：override 的 table 字段递归合 base；非 table 值直接覆盖；override 缺失字段保留 base。
-fn deep_merge_toml(base: &mut toml::Value, over: toml::Value) {
-    match (base, over) {
-        (toml::Value::Table(b), toml::Value::Table(o)) => {
-            for (k, v) in o {
-                match b.get_mut(&k) {
-                    Some(existing) => deep_merge_toml(existing, v),
-                    None => { b.insert(k, v); }
-                }
-            }
-        }
-        (slot, v) => { *slot = v; }
-    }
-}
-
-/// 老文件名迁移：rename 一次到位，让后续代码只面对新名。
-/// 仅当老文件存在且新文件不存在时才动；幂等。
-fn migrate_legacy_files(project_root: &Path) {
-    let pairs = [
-        (LEGACY_SCHEMA_FILE, PROJECT_SCHEMA_FILE),
-    ];
-    for (old, new) in pairs {
-        let old_path = project_root.join(old);
-        let new_path = project_root.join(new);
-        if old_path.exists() && !new_path.exists() {
-            if let Err(e) = std::fs::rename(&old_path, &new_path) {
-                eprintln!("warn: 迁移 {} → {} 失败: {}", old_path.display(), new_path.display(), e);
-            }
-        }
-    }
 }
 
 #[derive(Debug, Clone)]
@@ -779,77 +755,12 @@ fn read_project_created_at(project_root: &Path) -> String {
 /// - 修改 `tablet.toml` 的 `[project] last_project = "default"`。
 ///
 /// 不会复制额外的 schema/缓存（不在迁移范围）。
-pub fn migrate_legacy_to_default(workdir: &Path) -> Result<bool> {
-    let projects_dir = workdir.join(PROJECTS_DIR);
-    if projects_dir.is_dir() {
-        return Ok(false); // 已有 projects/，不迁移
-    }
-    let config_path = workdir.join(crate::CONFIG_FILE);
-    let config_str = std::fs::read_to_string(&config_path)?;
-    let mut config: WorkspaceConfig = toml::from_str(&config_str)?;
-
-    let legacy_data = workdir.join(&config.project.config_dir);
-    if !legacy_data.is_dir() {
-        return Ok(false);
-    }
-
-    // 移动目录
-    let target_root = projects_dir.join("default");
-    let target_data = target_root.join("config");
-    std::fs::create_dir_all(&target_root)?;
-    rename_dir(&legacy_data, &target_data)
-        .with_context(|| format!("迁移失败: {} → {}", legacy_data.display(), target_data.display()))?;
-
-    // 写元数据：直接写 project.tblschema（meta 段，sections 留空）
-    let mut schema = crate::tblschema::TblSchema::default();
-    schema.meta.id = "default".to_string();
-    schema.meta.name = "默认项目".to_string();
-    schema.meta.created_at = Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
-    let schema_path = target_root.join(PROJECT_SCHEMA_FILE);
-    std::fs::write(&schema_path, crate::tblschema::serialize_tblschema(&schema))?;
-
-    // 更新 last_project
-    config.project.last_project = "default".to_string();
-    write_tool_config(&config_path, &config)?;
-
-    println!("已迁移老配置目录到 projects/default/");
-    Ok(true)
-}
-
-fn rename_dir(from: &Path, to: &Path) -> Result<()> {
-    // 同卷直接 rename，跨卷或失败时回退到逐文件复制 + 删除原。
-    match std::fs::rename(from, to) {
-        Ok(()) => Ok(()),
-        Err(_) => {
-            copy_dir_all(from, to)?;
-            std::fs::remove_dir_all(from)?;
-            Ok(())
-        }
-    }
-}
-
-fn copy_dir_all(src: &Path, dst: &Path) -> Result<()> {
-    std::fs::create_dir_all(dst)?;
-    for entry in std::fs::read_dir(src)? {
-        let entry = entry?;
-        let path = entry.path();
-        let target = dst.join(entry.file_name());
-        if path.is_dir() {
-            copy_dir_all(&path, &target)?;
-        } else {
-            std::fs::copy(&path, &target)?;
-        }
-    }
-    Ok(())
-}
-
 /// 重写 tablet.toml（保留所有段，仅刷新 [project]）。
-/// 这里走简单方案：用 toml::to_string_pretty 整体序列化。
-fn write_tool_config(path: &Path, config: &WorkspaceConfig) -> Result<()> {
-    // serde::Serialize 不在 WorkspaceConfig 上：手工写 [project] + 透传其它内容会丢评论。
-    // 简化方案：读原文件，按行 upsert [project] 段字段。既保住注释又改对字段。
+/// 这里走简单方案：读原文件，按行 upsert [project] 段字段。既保住注释又改对字段。
+#[allow(dead_code)]
+fn write_tool_config(path: &Path, config: &GlobalConfig) -> Result<()> {
     let original = std::fs::read_to_string(path)?;
-    let updated = upsert_project_config_section(&original, &config.project);
+    let updated = upsert_project_config_section(&original, &config.project_management);
     std::fs::write(path, updated)?;
     Ok(())
 }
@@ -857,7 +768,7 @@ fn write_tool_config(path: &Path, config: &WorkspaceConfig) -> Result<()> {
 /// 把 toml 文本里的 `[project]` 段 upsert：
 /// `last_project / opened_projects / project_sort / project_order` 字段写新值，其它保持原状。
 /// 不再兼容历史 `[app]` 段——上层应当先 migrate。
-pub fn upsert_project_config_section(original: &str, project: &ProjectConfig) -> String {
+pub fn upsert_project_config_section(original: &str, project: &crate::model::ProjectManagementConfig) -> String {
     let app_lines = build_project_field_lines(project);
     let field_keys = ["last_project", "opened_projects", "project_sort", "project_order"];
     let mut written: std::collections::HashSet<&str> = std::collections::HashSet::new();
@@ -942,14 +853,14 @@ pub fn upsert_project_config_section(original: &str, project: &ProjectConfig) ->
 }
 
 /// 给 [project] 段每个字段拼出一行 toml 文本（用于 upsert）。
-fn build_project_field_lines(project: &ProjectConfig) -> std::collections::HashMap<&'static str, String> {
+fn build_project_field_lines(project: &crate::model::ProjectManagementConfig) -> std::collections::HashMap<&'static str, String> {
     let mut m = std::collections::HashMap::new();
     m.insert("last_project", format!("last_project = \"{}\"", escape_toml_string(&project.last_project)));
     let opened = project.opened_projects.iter()
         .map(|s| format!("\"{}\"", escape_toml_string(s)))
         .collect::<Vec<_>>().join(", ");
     m.insert("opened_projects", format!("opened_projects = [{}]", opened));
-    m.insert("project_sort", format!("project_sort = \"{}\"", escape_toml_string(&project.project_sort)));
+    m.insert("project_sort", format!("project_sort = \"{}\"", escape_toml_string(project.project_sort.as_str())));
     let order = project.project_order.iter()
         .map(|s| format!("\"{}\"", escape_toml_string(s)))
         .collect::<Vec<_>>().join(", ");
@@ -959,6 +870,116 @@ fn build_project_field_lines(project: &ProjectConfig) -> std::collections::HashM
 
 fn escape_toml_string(s: &str) -> String {
     s.replace('\\', "\\\\").replace('"', "\\\"")
+}
+
+/// 将 GlobalConfig 的 [ui], [export], [separators] 三个段写回 tablet.toml。
+/// 保留 [project] 段和文件中的注释、空行、其它段。
+pub fn persist_global_config_sections(
+    workdir: &Path,
+    global_config: &crate::model::GlobalConfig,
+) -> Result<()> {
+    let path = workdir.join(crate::CONFIG_FILE);
+    let original = std::fs::read_to_string(&path).unwrap_or_default();
+
+    let updated = upsert_global_sections(&original, global_config)?;
+    std::fs::write(&path, updated)?;
+    Ok(())
+}
+
+/// 将 [ui], [export], [separators] 三个段 upsert 到 toml 文本中。
+/// 保留 [project] 段和其它段、注释、空行。
+pub fn upsert_global_sections(
+    original: &str,
+    global_config: &crate::model::GlobalConfig,
+) -> Result<String> {
+    // 序列化三个段为 TOML 字符串
+    let ui_toml = if let Some(ref ui) = global_config.ui {
+        toml::to_string_pretty(ui)?
+    } else {
+        String::new()
+    };
+    let export_toml = if let Some(ref export) = global_config.export {
+        toml::to_string_pretty(export)?
+    } else {
+        String::new()
+    };
+    let sep_toml = toml::to_string_pretty(&global_config.separators)?;
+
+    // 解析现有内容，按段重建
+    let mut out_lines: Vec<String> = Vec::new();
+    let mut in_target_section = false;
+    let mut found_sections = std::collections::HashSet::new();
+
+    for line in original.lines() {
+        let trimmed = line.trim();
+
+        // 检测段标题
+        if trimmed.starts_with('[') && trimmed.ends_with(']') {
+            // 解析段名
+            let section_name = trimmed.trim_start_matches('[').trim_end_matches(']').trim();
+
+            // 检查是否是目标段
+            if section_name == "ui" {
+                found_sections.insert("ui");
+                if !ui_toml.is_empty() {
+                    out_lines.push("[ui]".to_string());
+                    out_lines.extend(ui_toml.lines().map(|s| s.to_string()));
+                }
+                in_target_section = true;
+                continue;
+            } else if section_name == "export" {
+                found_sections.insert("export");
+                if !export_toml.is_empty() {
+                    out_lines.push("[export]".to_string());
+                    out_lines.extend(export_toml.lines().map(|s| s.to_string()));
+                }
+                in_target_section = true;
+                continue;
+            } else if section_name == "separators" {
+                found_sections.insert("separators");
+                out_lines.push("[separators]".to_string());
+                out_lines.extend(sep_toml.lines().map(|s| s.to_string()));
+                in_target_section = true;
+                continue;
+            } else {
+                // 其它段保留
+                in_target_section = false;
+                out_lines.push(line.to_string());
+                continue;
+            }
+        }
+
+        // 跳过目标段内的旧内容
+        if in_target_section {
+            continue;
+        }
+
+        // 保留非目标段的内容
+        out_lines.push(line.to_string());
+    }
+
+    // 追加未找到的段
+    if !found_sections.contains("ui") && !ui_toml.is_empty() {
+        out_lines.push(String::new());
+        out_lines.push("[ui]".to_string());
+        out_lines.extend(ui_toml.lines().map(|s| s.to_string()));
+    }
+    if !found_sections.contains("export") && !export_toml.is_empty() {
+        out_lines.push(String::new());
+        out_lines.push("[export]".to_string());
+        out_lines.extend(export_toml.lines().map(|s| s.to_string()));
+    }
+    if !found_sections.contains("separators") {
+        out_lines.push(String::new());
+        out_lines.push("[separators]".to_string());
+        out_lines.extend(sep_toml.lines().map(|s| s.to_string()));
+    }
+
+    let mut result = out_lines.join("\n");
+    if !result.ends_with('\n') {
+        result.push('\n');
+    }
+    Ok(result)
 }
 
 fn load_groups_in(data_dir: &Path) -> Result<Vec<Group>> {
@@ -1020,32 +1041,6 @@ mod tests {
         std::env::temp_dir().join(format!("tblproj_{}_{}_{}", label, std::process::id(), n))
     }
 
-    #[test]
-    fn legacy_layout_loads_workdir_as_root() {
-        let dir = unique_tmp("legacy");
-        std::fs::create_dir_all(dir.join("config/hero")).unwrap();
-        std::fs::write(dir.join("tablet.toml"), "[project]\nname = \"x\"\nlast_project = \"\"\nconfig_dir = \"config\"\ncache_dir = \".tbl-cache\"\n").unwrap();
-        let proj = load_project(&dir).expect("load");
-        assert_eq!(proj.project_root, dir);
-        assert_eq!(proj.schema.meta.id, "default");
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn project_section_round_trip() {
-        let dir = unique_tmp("alias");
-        std::fs::create_dir_all(dir.join("config")).unwrap();
-        std::fs::write(
-            dir.join("tablet.toml"),
-            "[project]\nconfig_dir = \"config\"\ncache_dir = \".tbl-cache\"\n",
-        )
-        .unwrap();
-        let proj = load_project(&dir).expect("load");
-        assert_eq!(proj.config.project.config_dir, "config");
-        assert_eq!(proj.config.project.cache_dir, ".tbl-cache");
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
     fn write_schema(root: &Path, id: &str, name: &str) {
         std::fs::write(
             root.join(PROJECT_SCHEMA_FILE),
@@ -1089,62 +1084,13 @@ mod tests {
     }
 
     #[test]
-    fn migrate_moves_legacy_config_to_projects_default() {
-        let dir = unique_tmp("migrate");
-        std::fs::create_dir_all(dir.join("config/hero")).unwrap();
-        std::fs::write(dir.join("config/hero/HeroBase.tbl"), "#!tbl v2\n").unwrap();
-        std::fs::write(
-            dir.join("tablet.toml"),
-            "[project]\nname = \"x\"\nlast_project = \"\"\nconfig_dir = \"config\"\n",
-        )
-        .unwrap();
-
-        let migrated = migrate_legacy_to_default(&dir).expect("migrate");
-        assert!(migrated);
-
-        // 新位置存在
-        assert!(dir.join("projects/default/config/hero/HeroBase.tbl").exists());
-        // 元数据写好（schema 文件而非 toml）
-        assert!(dir.join("projects/default/project.tblschema").exists());
-        // 老 config 已清掉
-        assert!(!dir.join("config").exists());
-
-        // tablet.toml 的 last_project 被刷新
-        let cfg = std::fs::read_to_string(dir.join("tablet.toml")).unwrap();
-        assert!(cfg.contains("last_project = \"default\""));
-
-        // 后续 load 从 projects/default 加载
-        let proj = load_project(&dir).expect("load");
-        assert_eq!(proj.schema.meta.id, "default");
-        assert_eq!(proj.project_root, dir.join("projects/default"));
-
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn migrate_noop_when_projects_dir_already_exists() {
-        let dir = unique_tmp("nomigrate");
-        std::fs::create_dir_all(dir.join("projects/x/config")).unwrap();
-        std::fs::write(
-            dir.join("tablet.toml"),
-            "[project]\nname = \"x\"\nlast_project = \"\"\nconfig_dir = \"config\"\n",
-        )
-        .unwrap();
-        let result = migrate_legacy_to_default(&dir).expect("migrate");
-        assert!(!result);
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
     fn upsert_project_config_keeps_section_header() {
         let original = "[project]\nname = \"x\"\n\n[ui]\nlog_level = \"debug\"\n";
-        let project = ProjectConfig {
+        let project = ProjectManagementConfig {
             last_project: "p1".to_string(),
             opened_projects: Vec::new(),
-            project_sort: String::new(),
+            project_sort: crate::enums::ProjectSort::default(),
             project_order: Vec::new(),
-            config_dir: "config".to_string(),
-            cache_dir: ".tbl-cache".to_string(),
         };
         let result = upsert_project_config_section(original, &project);
         assert!(result.contains("[project]"));
@@ -1156,13 +1102,11 @@ mod tests {
     #[test]
     fn upsert_project_config_replaces_existing_last_project() {
         let original = "[project]\nname = \"x\"\nlast_project = \"old\"\n";
-        let project = ProjectConfig {
+        let project = ProjectManagementConfig {
             last_project: "new".to_string(),
             opened_projects: Vec::new(),
-            project_sort: String::new(),
+            project_sort: crate::enums::ProjectSort::default(),
             project_order: Vec::new(),
-            config_dir: "config".to_string(),
-            cache_dir: ".tbl-cache".to_string(),
         };
         let result = upsert_project_config_section(original, &project);
         assert!(result.contains("last_project = \"new\""));
@@ -1172,13 +1116,11 @@ mod tests {
     #[test]
     fn upsert_project_config_inserts_when_missing() {
         let original = "[ui]\nlog_level = \"debug\"\n";
-        let project = ProjectConfig {
+        let project = ProjectManagementConfig {
             last_project: "p1".to_string(),
             opened_projects: Vec::new(),
-            project_sort: String::new(),
+            project_sort: crate::enums::ProjectSort::default(),
             project_order: Vec::new(),
-            config_dir: "config".to_string(),
-            cache_dir: ".tbl-cache".to_string(),
         };
         let result = upsert_project_config_section(original, &project);
         assert!(result.starts_with("[project]"));
@@ -1189,18 +1131,33 @@ mod tests {
     #[test]
     fn upsert_project_config_persists_opened_and_order() {
         let original = "[project]\nname = \"x\"\nlast_project = \"\"\n";
-        let project = ProjectConfig {
+        let project = ProjectManagementConfig {
             last_project: "p1".to_string(),
             opened_projects: vec!["p1".to_string(), "p2".to_string()],
-            project_sort: "manual".to_string(),
+            project_sort: crate::enums::ProjectSort::Manual,
             project_order: vec!["p2".to_string(), "p1".to_string()],
-            config_dir: "config".to_string(),
-            cache_dir: ".tbl-cache".to_string(),
         };
         let result = upsert_project_config_section(original, &project);
         assert!(result.contains("opened_projects = [\"p1\", \"p2\"]"));
         assert!(result.contains("project_sort = \"manual\""));
         assert!(result.contains("project_order = [\"p2\", \"p1\"]"));
+    }
+
+    #[test]
+    fn default_config_template_matches_default_struct() {
+        // GlobalConfig::default() 应与 DEFAULT_CONFIG 反序列化结果一致
+        let from_struct = GlobalConfig::default();
+        let from_toml: GlobalConfig = toml::from_str(DEFAULT_CONFIG)
+            .expect("DEFAULT_CONFIG 应该能成功反序列化为 GlobalConfig");
+
+        assert_eq!(from_struct.project_management, from_toml.project_management,
+            "[project] 段默认值不匹配");
+        assert_eq!(from_struct.export, from_toml.export,
+            "[export] 段默认值不匹配");
+        assert_eq!(from_struct.ui, from_toml.ui,
+            "[ui] 段默认值不匹配");
+        assert_eq!(from_struct.separators, from_toml.separators,
+            "[separators] 段默认值不匹配");
     }
 
     #[test]
@@ -1255,7 +1212,7 @@ mod tests {
             "[project]\nname = \"x\"\nlast_project = \"p\"\n\n[export.server]\ndata_output = \"gen/server/data\"\n[export.server.java]\npackage = \"com.global\"\ncode_output = \"gen/server/java\"\n",
         ).unwrap();
         let proj = load_project(&dir).expect("load");
-        let java = proj.config.export.as_ref().unwrap().server.as_ref().unwrap().java.as_ref().unwrap();
+        let java = proj.config.export.server.as_ref().unwrap().java.as_ref().unwrap();
         // overlay 覆盖
         assert_eq!(java.package.as_deref(), Some("com.over.ride"));
         // 全局保留（overlay 没动 code_output）
@@ -1278,11 +1235,11 @@ mod tests {
             dir.join("tablet.toml"),
             "[project]\nlast_project = \"p\"\n\n[ui]\nrealtime_validate = true\npicker_trigger_data = \"double\"\n",
         ).unwrap();
-        let proj = load_project(&dir).expect("load");
-        let ui = proj.config.ui.as_ref().expect("[ui] present");
+        let (engine, _) = load_workspace(&dir).expect("load");
+        let ui = engine.global_config.ui.as_ref().expect("[ui] present");
         // 项目 toml 的 [ui] 该被 strip → 全局值留下来
         assert!(ui.realtime_validate, "项目级 [ui] 应被 strip，全局 realtime_validate=true 留下");
-        assert_eq!(ui.picker_trigger_data, "double", "项目级 picker_trigger_data 应被 strip");
+        assert_eq!(ui.picker_trigger_data, crate::enums::PickerTrigger::Double, "项目级 picker_trigger_data 应被 strip");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -1302,7 +1259,7 @@ mod tests {
             "[project]\nname = \"x\"\nlast_project = \"p2\"\n",
         ).unwrap();
 
-        let engine = load_workspace(&dir).expect("load_workspace");
+        let (engine, _) = load_workspace(&dir).expect("load_workspace");
         assert_eq!(engine.available().len(), 2);
         assert_eq!(engine.projects.len(), 1, "只打开 last_project");
         assert_eq!(engine.projects[0].schema.meta.id, "p2");
@@ -1321,7 +1278,7 @@ mod tests {
             "[project]\nname = \"x\"\nlast_project = \"p2\"\nopened_projects = [\"p2\", \"p1\"]\n",
         ).unwrap();
 
-        let engine = load_workspace(&dir).expect("load_workspace");
+        let (engine, _) = load_workspace(&dir).expect("load_workspace");
         let ids = engine.opened_ids();
         assert_eq!(ids, vec!["p2".to_string(), "p1".to_string()]);
         assert_eq!(engine.active_project_id(), Some("p2"));
@@ -1340,7 +1297,7 @@ mod tests {
             "[project]\nname = \"x\"\nlast_project = \"alpha\"\n",
         ).unwrap();
 
-        let engine = load_workspace(&dir).expect("load_workspace");
+        let (engine, _) = load_workspace(&dir).expect("load_workspace");
         assert_eq!(engine.available().len(), 2);
         assert_eq!(engine.projects.len(), 1);
         assert!(!engine.is_opened("beta"));
@@ -1358,7 +1315,7 @@ mod tests {
             "[project]\nname = \"x\"\nlast_project = \"a\"\n",
         ).unwrap();
 
-        let mut engine = load_workspace(&dir).expect("load_workspace");
+        let (mut engine, _) = load_workspace(&dir).expect("load_workspace");
         assert_eq!(engine.active_project_id(), Some("a"));
         let opened = engine.open_project("b").expect("open b");
         assert!(opened);
@@ -1380,7 +1337,7 @@ mod tests {
             "[project]\nname = \"x\"\nlast_project = \"a\"\nopened_projects = [\"a\", \"b\"]\n",
         ).unwrap();
 
-        let mut engine = load_workspace(&dir).expect("load_workspace");
+        let (mut engine, _) = load_workspace(&dir).expect("load_workspace");
         assert_eq!(engine.active_project_id(), Some("a"));
         let closed = engine.close_project("a");
         assert!(closed);
@@ -1401,7 +1358,7 @@ mod tests {
             dir.join("tablet.toml"),
             "[project]\nname = \"x\"\nlast_project = \"only\"\n",
         ).unwrap();
-        let mut engine = load_workspace(&dir).expect("load_workspace");
+        let (mut engine, _) = load_workspace(&dir).expect("load_workspace");
         engine.close_project("only");
         assert!(engine.projects.is_empty());
         assert_eq!(engine.active_project_id(), None);
@@ -1419,14 +1376,14 @@ mod tests {
             "[project]\nname = \"my-game\"\nlast_project = \"p1\"\n",
         ).unwrap();
 
-        let mut engine = load_workspace(&dir).expect("load");
+        let (mut engine, _) = load_workspace(&dir).expect("load");
         engine.open_project("p2").unwrap();
         engine.set_active_by_id("p2");
-        persist_workspace_state(&engine, "name", &["p2".to_string(), "p1".to_string()])
+        persist_workspace_state(&engine, crate::enums::ProjectSort::Name, &["p2".to_string(), "p1".to_string()])
             .expect("persist");
 
         // re-load
-        let engine2 = load_workspace(&dir).expect("reload");
+        let (engine2, _) = load_workspace(&dir).expect("reload");
         let opened = engine2.opened_ids();
         assert!(opened.contains(&"p1".to_string()));
         assert!(opened.contains(&"p2".to_string()));
@@ -1442,9 +1399,9 @@ mod tests {
     }
 
     #[test]
-    fn default_config_parses_as_workspace_config() {
-        let cfg: WorkspaceConfig = toml::from_str(DEFAULT_CONFIG)
-            .expect("DEFAULT_CONFIG must parse as WorkspaceConfig");
+    fn default_config_parses_as_global_config() {
+        let cfg: GlobalConfig = toml::from_str(DEFAULT_CONFIG)
+            .expect("DEFAULT_CONFIG must parse as GlobalConfig");
         let export = cfg.export.expect("[export] present");
         let server = export.server.expect("[export.server] present");
         // 服务端全部 5 项可解析
@@ -1482,8 +1439,8 @@ mod tests {
     fn default_project_toml_template_parses_as_workspace_config() {
         // 项目级模板仅含 [export] 段——[ui] 是工作区级，[project] / [separators] 同。
         let txt = default_project_toml_template();
-        let _: WorkspaceConfig = toml::from_str(txt)
-            .expect("project.toml template must parse as WorkspaceConfig");
+        let _: GlobalConfig = toml::from_str(txt)
+            .expect("project.toml template must parse as GlobalConfig");
         // 不应出现 [project] / [ui] / [separators] 段（顶部 banner 注释里允许字面量出现，这里只看真段头）
         assert!(!txt.lines().any(|l| l.trim() == "[project]"), "项目级 toml 不应有 [project] 段");
         assert!(!txt.lines().any(|l| l.trim() == "[ui]"), "项目级 toml 不应有 [ui] 段（工作区级）");

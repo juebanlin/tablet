@@ -94,7 +94,12 @@ pub fn instantiate_template(schema: &TblSchema, target_dir: &Path) -> Result<()>
     }
 
     // 先 dry-run 全部内容到内存，确认无错才落盘——失败时尽量不留残留。
-    let schema_text = serialize_tblschema(schema);
+    // 实例化后的项目 schema 不保留 preset（数据已灌入 .tbl 文件）
+    let mut schema_without_preset = schema.clone();
+    for sec in &mut schema_without_preset.sections {
+        sec.preset.clear();
+    }
+    let schema_text = serialize_tblschema(&schema_without_preset);
 
     let mut planned: Vec<(PathBuf, String)> = Vec::new();
     planned.push((target_dir.join(crate::project::PROJECT_SCHEMA_FILE), schema_text));
@@ -129,61 +134,33 @@ fn render_tbl_skeleton(sec: &SchemaSection) -> String {
 
 fn render_table_skeleton(sec: &SchemaSection) -> String {
     let mut s = String::new();
-    writeln!(s, "#!tbl v2").unwrap();
+    writeln!(s, "#!tbl v3").unwrap();
     writeln!(s, "#mode table").unwrap();
-    writeln!(
-        s,
-        "#desc {}",
-        sec.fields
-            .iter()
-            .map(|f| f.desc.as_str())
-            .collect::<Vec<_>>()
-            .join("|")
-    )
-    .unwrap();
-    writeln!(
-        s,
-        "#export {}",
-        sec.fields
-            .iter()
-            .map(|f| f.export_display())
-            .collect::<Vec<_>>()
-            .join("|")
-    )
-    .unwrap();
-    writeln!(
-        s,
-        "#type {}",
-        sec.fields
-            .iter()
-            .map(|f| f.tbl_type.as_str())
-            .collect::<Vec<_>>()
-            .join("|")
-    )
-    .unwrap();
-    writeln!(
-        s,
-        "#field {}",
-        sec.fields
-            .iter()
-            .map(|f| f.name.as_str())
-            .collect::<Vec<_>>()
-            .join("|")
-    )
-    .unwrap();
     writeln!(s, "---").unwrap();
-    // 预设 records：按列序补齐到 fields.len()；按列类型 encode（str 走转义，atom 原样）
+    // v3: @field blocks
+    for f in &sec.fields {
+        writeln!(s).unwrap();
+        writeln!(s, "@field {}", f.name).unwrap();
+        if !f.desc.is_empty() {
+            writeln!(s, "  desc:{}", f.desc).unwrap();
+        }
+        writeln!(s, "  export:{}", f.export_display()).unwrap();
+        writeln!(s, "  type:{}", f.tbl_type).unwrap();
+    }
+    // v3: [id] records
     let n = sec.fields.len();
     for row in &sec.preset {
         let mut cells: Vec<String> = row.iter().cloned().collect();
         cells.resize(n, String::new());
-        let encoded: Vec<String> = cells.iter().enumerate().map(|(i, v)| {
-            let kind = sec.fields.get(i)
-                .map(|f| crate::tbl_str::classify(&f.tbl_type))
-                .unwrap_or(crate::tbl_str::FieldKind::Str);
-            crate::tbl_str::encode(v, kind)
-        }).collect();
-        writeln!(s, "{}", encoded.join("|")).unwrap();
+        let id_val = cells.first().map(String::as_str).unwrap_or("");
+        writeln!(s).unwrap();
+        writeln!(s, "[{}]", id_val).unwrap();
+        for (i, v) in cells.iter().enumerate().skip(1) {
+            if v.is_empty() { continue; }
+            let tp = &sec.fields[i].tbl_type;
+            let encoded = crate::tbl_str::encode(v, tp);
+            writeln!(s, "  {}:{}", sec.fields[i].name, encoded).unwrap();
+        }
     }
     s
 }
@@ -201,15 +178,14 @@ fn render_constant_skeleton(sec: &SchemaSection) -> String {
         let value    = row.get(2)   .map(String::as_str).unwrap_or("");
         let export   = row.get(3)   .map(String::as_str).unwrap_or("cs");
         let desc     = row.get(4)   .map(String::as_str).unwrap_or("");
-        let value_kind = crate::tbl_str::classify(tbl_type);
         writeln!(
             s,
             "{}|{}|{}|{}|{}",
-            crate::tbl_str::encode(name, crate::tbl_str::FieldKind::Atom),
-            crate::tbl_str::encode(tbl_type, crate::tbl_str::FieldKind::Atom),
-            crate::tbl_str::encode(value, value_kind),
+            crate::tbl_str::encode(name, "str"),
+            crate::tbl_str::encode(tbl_type, "str"),
+            crate::tbl_str::encode(value, tbl_type),
             display_export(export),
-            crate::tbl_str::encode(desc, crate::tbl_str::FieldKind::Str),
+            crate::tbl_str::encode(desc, "txt"),
         ).unwrap();
     }
     s
@@ -228,9 +204,9 @@ fn render_enum_skeleton(sec: &SchemaSection) -> String {
         writeln!(
             s,
             "{}|{}|{}",
-            crate::tbl_str::encode(id, crate::tbl_str::FieldKind::Atom),
-            crate::tbl_str::encode(name, crate::tbl_str::FieldKind::Str),
-            crate::tbl_str::encode(desc, crate::tbl_str::FieldKind::Str),
+            crate::tbl_str::encode(id, "int"),
+            crate::tbl_str::encode(name, "str"),
+            crate::tbl_str::encode(desc, "txt"),
         ).unwrap();
     }
     s
@@ -328,12 +304,17 @@ mod tests {
         assert!(schema_text.contains("# @meta id: demo"));
         assert!(schema_text.contains("[hero/HeroBase] table"));
 
+        // 验证：实例化后的 project.tblschema 不应包含 # @preset 块
+        assert!(!schema_text.contains("# @preset"),
+            "项目实例化后 project.tblschema 不应包含 preset 数据");
+
         // Table 骨架：4 行表头 + ---，没有数据行
         let hero_base = std::fs::read_to_string(target.join("config/hero/HeroBase.tbl"))
             .expect("read HeroBase");
         assert!(hero_base.contains("#mode table"));
-        assert!(hero_base.contains("#field id|hp"));
-        assert!(hero_base.trim().ends_with("---"));
+        assert!(hero_base.contains("@field hp"));
+        assert!(hero_base.contains("@field id"));
+        assert!(hero_base.trim().contains("---"));
 
         // Enum 骨架：写入条目
         let hero_type = std::fs::read_to_string(target.join("config/hero/HeroType.tbl"))
@@ -405,8 +386,10 @@ mod tests {
         instantiate_template(&schema, &target).expect("instantiate");
         let txt = std::fs::read_to_string(target.join("config/hero/HeroBase.tbl")).expect("read tbl");
         assert!(txt.contains("---"));
-        assert!(txt.contains("1|Alice"));
-        assert!(txt.contains("2|Bob"));
+        assert!(txt.contains("[1]"));
+        assert!(txt.contains("  name:Alice"));
+        assert!(txt.contains("[2]"));
+        assert!(txt.contains("  name:Bob"));
         let _ = std::fs::remove_dir_all(&target);
     }
 

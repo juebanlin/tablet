@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-only
+﻿// SPDX-License-Identifier: GPL-3.0-only
 // Copyright 2026 juebanlin <juebanlin@gmail.com>
 
 // 启动壳子（@05.12 跨平台启动约定）
@@ -106,6 +106,10 @@ fn main() -> anyhow::Result<()> {
 }
 
 fn run_gui(workdir_arg: Option<PathBuf>) -> anyhow::Result<()> {
+    // 获取本地时区偏移（必须在早期单线程时获取，之后多线程环境下不安全）
+    let time_offset = time::UtcOffset::current_local_offset()
+        .unwrap_or(time::UtcOffset::UTC);
+
     // 默认 = 当前工作目录（cmd cwd / 双击启动时即 exe 所在目录）。
     // `--workdir` 仅作开发期便利覆盖（cargo run -p tablet-slint -- --gui --workdir=...）。
     let workdir = match workdir_arg {
@@ -124,16 +128,30 @@ fn run_gui(workdir_arg: Option<PathBuf>) -> anyhow::Result<()> {
     }
     std::fs::write(&lock_path, std::process::id().to_string())?;
 
-    let app_state = Rc::new(RefCell::new(AppState::load(&workdir)?));
+    // 提前初始化日志系统（在 load 之前），避免配置加载时的 ICU4X 警告无法被过滤
+    let log_path = workdir.join(tablet_core::LOG_FILE);
+    let log_file = std::fs::File::create(&log_path)?;
 
+    // 先快速读取 log_level 配置（避免完整加载）
     let log_level = {
-        let st = app_state.borrow();
-        st.engine.active()
-            .or_else(|| st.engine.projects.first())
-            .and_then(|p| p.config.ui.as_ref())
-            .and_then(|u| u.log_level.as_deref())
-            .unwrap_or("debug")
-            .to_string()
+        let config_path = workdir.join(tablet_core::CONFIG_FILE);
+        if config_path.exists() {
+            std::fs::read_to_string(&config_path)
+                .ok()
+                .and_then(|text| {
+                    // 简单正则匹配 log_level = "xxx"
+                    text.lines()
+                        .find(|line| line.trim().starts_with("log_level"))
+                        .and_then(|line| {
+                            line.split('=')
+                                .nth(1)
+                                .map(|s| s.trim().trim_matches('"').to_string())
+                        })
+                })
+                .unwrap_or_else(|| "debug".to_string())
+        } else {
+            "debug".to_string()
+        }
     };
     let file_level = match log_level.as_str() {
         "info" => LevelFilter::Info,
@@ -142,13 +160,31 @@ fn run_gui(workdir_arg: Option<PathBuf>) -> anyhow::Result<()> {
         _ => LevelFilter::Debug,
     };
 
-    let log_path = workdir.join(tablet_core::LOG_FILE);
-    let log_file = std::fs::File::create(&log_path)?;
+    // 自定义 Config：Java 风格日志格式 + 过滤 ICU4X 日语分词警告
+    let log_config = simplelog::ConfigBuilder::new()
+        .set_time_format_custom(time::macros::format_description!("[year]-[month]-[day] [hour]:[minute]:[second].[subsecond digits:3]"))
+        .set_time_offset(time_offset)
+        .set_thread_level(LevelFilter::Off)
+        .set_target_level(LevelFilter::Off)
+        .add_filter_ignore_str("icu")
+        .add_filter_ignore_str("icu4x")
+        .add_filter_ignore_str("icu_segmenter")
+        .build();
+
     CombinedLogger::init(vec![WriteLogger::new(
         file_level,
-        Config::default(),
+        log_config,
         log_file,
     )])?;
+
+    let (app_state_inner, config_fixed) = AppState::load(&workdir)?;
+    let app_state = Rc::new(RefCell::new(app_state_inner));
+
+    // 延迟记录配置修复日志（在日志系统初始化后）
+    if config_fixed {
+        log::warn!("启动时检测到配置文件无效值，已自动修复并保存");
+    }
+
     info!(
         "loaded {} opened / {} available, {} groups in active",
         app_state.borrow().engine.projects.len(),
@@ -172,11 +208,23 @@ fn run_gui(workdir_arg: Option<PathBuf>) -> anyhow::Result<()> {
         app_window.on_check_update_clicked(move || {
             const REPO_URL: &str = "https://github.com/juebanlin/tablet";
             match open::that(REPO_URL) {
-                Ok(_) => s.borrow_mut().engine.log(format!("[关于] 已打开 {}", REPO_URL)),
-                Err(e) => s.borrow_mut().engine.log(format!("[关于] 打开 GitHub 失败: {}", e)),
+                Ok(_) => s.borrow_mut().engine.ui_log(format!("[关于] 已打开 {}", REPO_URL)),
+                Err(e) => s.borrow_mut().engine.error_log(format!("[关于] 打开 GitHub 失败: {}", e)),
             }
             if let Some(ui_h) = weak.upgrade() {
                 refresh::after_log(&ui_h, &s);
+            }
+        });
+    }
+
+    // 「设置」→「全局设置...」：打开全局设置对话框
+    {
+        let s = app_state.clone();
+        let weak = app_window.as_weak();
+        app_window.on_global_settings_clicked(move || {
+            if let Some(ui_h) = weak.upgrade() {
+                dialogs::global_settings::open(&s, &ui_h);
+                dialogs::global_settings::push(&ui_h, &s);
             }
         });
     }
@@ -190,6 +238,8 @@ fn run_gui(workdir_arg: Option<PathBuf>) -> anyhow::Result<()> {
     ui::toolbar::wire(&app_window, &app_state);
     ui::focus::wire(&app_window, &app_state);
     ui::log_panel::wire(&app_window, &app_state);
+    ui::bottom_panel::wire(&app_window, &app_state);
+    ui::excel_sync::wire(&app_window, &app_state);
     dialogs::context_menu::wire(&app_window, &app_state);
     dialogs::pending::wire(&app_window, &app_state);
     dialogs::type_selector::wire(&app_window, &app_state);
@@ -199,6 +249,7 @@ fn run_gui(workdir_arg: Option<PathBuf>) -> anyhow::Result<()> {
     dialogs::create_project::wire(&app_window, &app_state);
     dialogs::clone_project::wire(&app_window, &app_state);
     dialogs::project_settings::wire(&app_window, &app_state);
+    dialogs::global_settings::wire(&app_window, &app_state);
     excel_bridge::wire(&app_window, &app_state);
 
     // 启动时扫描 Excel 编辑残留（@plans §5.6）：上次崩溃 / kill 留下的 .tbl-cache/*.xlsx

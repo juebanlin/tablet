@@ -546,47 +546,49 @@ fn parse_enum_sheet(range: &Range<Data>, enum_def: &EnumDef) -> Result<Vec<EnumE
 mod tests {
     use super::*;
     use crate::model::{FieldDef, TableSchema};
+    use crate::tbl::DEFAULT_TBL_VERSION;
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicU64, Ordering};
 
     fn t(name: &str) -> Table {
+        let fields = vec![
+            FieldDef { name: "id".into(), desc: "编号".into(), tbl_type: "int".into(), export: Export::ClientServer },
+            FieldDef { name: "name".into(), desc: "名字".into(), tbl_type: "str".into(), export: Export::ClientServer },
+        ];
         Table {
             name: name.to_string(),
             path: PathBuf::from(format!("{}.tbl", name)),
-            schema: TableSchema { fields: vec![
-                FieldDef { name: "id".into(), desc: "编号".into(), tbl_type: "int".into(), export: Export::ClientServer },
-                FieldDef { name: "name".into(), desc: "名字".into(), tbl_type: "str".into(), export: Export::ClientServer },
-            ]},
+            schema: TableSchema { fields: fields.clone() },
             records: vec![vec!["1".into(), "alice".into()]],
-            dirty: false, deleted: false, original: String::new(),
+            dirty: false, deleted: false,
+            original_records: vec![vec!["1".into(), "alice".into()]],
+            original_fields: fields,
+            saved: false,
+            fmt_ver: DEFAULT_TBL_VERSION,
         }
     }
 
     fn c(name: &str) -> Constant {
+        let snap = vec![ConstEntry {
+            name: "FOO".into(), tbl_type: "int".into(), value: "42".into(),
+            export: Export::ClientServer, desc: "示例常量".into(),
+        }];
         Constant {
             name: name.into(),
             path: PathBuf::from(format!("{}.tbl", name)),
-            entries: vec![
-                ConstEntry {
-                    name: "FOO".into(),
-                    tbl_type: "int".into(),
-                    value: "42".into(),
-                    export: Export::ClientServer,
-                    desc: "示例常量".into(),
-                },
-            ],
-            dirty: false, deleted: false, original: String::new(),
+            entries: snap.clone(),
+            dirty: false, deleted: false, original_entries: snap, saved: false,
         }
     }
 
     fn e(name: &str) -> EnumDef {
         EnumDef {
             name: name.into(),
-            path: PathBuf::from(format!("{}.tbl", name)),
+        path: PathBuf::from(format!("{}.tbl", name)),
             entries: vec![
                 EnumEntry { id: "1".into(), name: "RED".into(), desc: "红".into() },
             ],
-            dirty: false, deleted: false, original: String::new(),
+            dirty: false, deleted: false, original_entries: vec![EnumEntry { id: "1".into(), name: "RED".into(), desc: "红".into() }], saved: false,
         }
     }
 

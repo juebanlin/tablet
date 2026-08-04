@@ -108,9 +108,9 @@ fn collect_ref_rows(state: &AppState, ref_name: &str, strategy: RefDisplayStrate
 pub(crate) fn open_for_cell(state: &Rc<RefCell<AppState>>, r: usize, c: usize, ref_target: &str) {
     let mut st = state.borrow_mut();
     let default_strategy = RefDisplayStrategy::from_config(
-        st.engine.project().config.ui.as_ref()
+        st.engine.global_config.ui.as_ref()
             .map(|u| u.ref_picker.default_strategy.as_str())
-            .unwrap_or("auto"));
+            .unwrap_or(tablet_core::enums::RefPickerStrategy::default().as_str()));
     let (group, name, is_table, current) = match &st.selected {
         Some(SelectedNode::Table { group, name, .. }) => {
             let cur = st.engine.find_table(group, name)

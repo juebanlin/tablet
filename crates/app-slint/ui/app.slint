@@ -19,7 +19,7 @@ import { Toolbar } from "components/toolbar.slint";
 import { TreeSection, TreeNode } from "components/tree_section.slint";
 import { GridSection } from "components/grid_section.slint";
 import { GridArea, HeaderCell, DataCell, DataRow, CellKind } from "components/grid_area.slint";
-import { LogPanel, LogEntry } from "components/log_panel.slint";
+import { BottomPanel } from "components/bottom_panel.slint";
 import { TypeSelector, RefItem, TsParamSlot } from "dialogs/type_selector.slint";
 import { RefPicker, RefRow, RefHeader } from "dialogs/ref_picker.slint";
 import { ExportDialog } from "dialogs/export_dialog.slint";
@@ -28,10 +28,12 @@ import { NewProjectDialog, TemplateItem } from "dialogs/template_dialog.slint";
 import { CreateProjectDialog } from "dialogs/create_project.slint";
 import { ContextMenu, CtxMenuItem } from "dialogs/context_menu.slint";
 import { ProjectSettingsDialog } from "dialogs/project_settings.slint";
+import { GlobalSettingsDialog } from "dialogs/global_settings.slint";
 import { InputDialog } from "dialogs/input_dialog.slint";
 import { ConfirmDialog } from "dialogs/confirm_dialog.slint";
+import { ExcelSyncDialog, EsRow } from "dialogs/excel_sync_dialog.slint";
 
-export { TreeNode, HeaderCell, DataCell, DataRow, CellKind, LogEntry, RefItem, TsParamSlot, RefRow, RefHeader, SchemaItem, CtxMenuItem, TemplateItem }
+export { TreeNode, HeaderCell, DataCell, DataRow, CellKind, RefItem, TsParamSlot, RefRow, RefHeader, SchemaItem, CtxMenuItem, TemplateItem }
 
 export component AppWindow inherits Window {
     /// 应用版本号，启动时由 Rust 端从 env!("CARGO_PKG_VERSION") 注入。
@@ -53,6 +55,13 @@ export component AppWindow inherits Window {
     // macOS：渲染到顶部全局菜单栏；Windows / Linux：渲染在窗口顶部。
     MenuBar {
         Menu {
+            title: "设置";
+            MenuItem {
+                title: "全局设置...";
+                activated => { root.global-settings-clicked(); }
+            }
+        }
+        Menu {
             title: "关于";
             MenuItem {
                 title: "检查更新";
@@ -63,10 +72,28 @@ export component AppWindow inherits Window {
 
     // ── Toolbar ─────────────────────────────────────────────
     callback toolbar-btn-clicked(string);
+    // BottomPanel
+    callback bottom-tab-changed(int);
+    callback clear-log-clicked();
+    callback excel-sync-clicked();
+    callback excel-delete-clicked();
+    callback excel-refresh-clicked();
+    callback excel-file-opened(int);
+    callback excel-toggle-file(int);
+    callback excel-open-selected();
+
+    // ── Excel Sync Dialog ────────────────────────────────
+    in-out property <bool> dlg-excel-sync-open: false;
+    in property <[EsRow]> es-rows;
+    callback es-close();
+    callback es-refresh();
+    callback es-action(int, int);
 
     // ── MenuBar 回调 ────────────────────────────────────────
     /// 「关于」菜单 → 「检查更新」点击触发；Rust 端用 open::that 跳 GitHub 仓库。
     callback check-update-clicked();
+    /// 「设置」菜单 → 「全局设置...」点击触发；Rust 端打开全局设置对话框。
+    callback global-settings-clicked();
 
     // ── TreeSection ─────────────────────────────────────────
     in property <[TreeNode]> tree-nodes;
@@ -157,9 +184,12 @@ export component AppWindow inherits Window {
     in property <string> selection-info;
     in property <string> hover-info;
 
-    // ── LogPanel ────────────────────────────────────────────
-    in property <[LogEntry]> logs;
+    // ── BottomPanel (Log + Excel) ─────────────────────────
     in property <string> logs-text;
+    in property <[string]> excel-files;
+    in-out property <[bool]> excel-selected: [];
+    in property <bool> excel-has-selection: false;
+    in-out property <int> bottom-tab: 0;
 
     // ── Dialog: TypeSelector ────────────────────────────────
     in-out property <bool> dlg-type-open: false;
@@ -262,6 +292,7 @@ export component AppWindow inherits Window {
     callback si-toggle-all(bool);
     callback si-toggle-item(int);
     callback si-confirm();
+    callback si-cancel();
 
     // ── Dialog: 新建项目（统一 3 tab：空 / 文件 / 模板）──────
     in-out property <bool> dlg-create-project-open: false;
@@ -336,6 +367,7 @@ export component AppWindow inherits Window {
     in-out property <string> ps-version-buf;
     in property <string> ps-id-error;
     in property <bool> ps-can-confirm: true;
+    in property <bool> ps-id-editable: false;
     in-out property <string> ps-sep-tuple2;
     in-out property <string> ps-sep-tuple3;
     in-out property <string> ps-sep-tuple4;
@@ -361,15 +393,130 @@ export component AppWindow inherits Window {
     in-out property <string> ps-sep-ml-kv;
     in-out property <string> ps-sep-ml-item;
     in-out property <string> ps-sep-ml-entry;
+    in-out property <bool> ps-identity-tab-modified: false;
+    in-out property <bool> ps-sep-tab-modified: false;
+    in-out property <bool> ps-export-tab-modified: false;
+    in-out property <[string]> ps-encoding-options;
+    in-out property <[string]> ps-line-ending-options;
+    in-out property <[string]> ps-json-empty-as-options;
+    in-out property <[string]> ps-xml-empty-as-options;
+    in-out property <[string]> ps-cpp-json-lib-options;
+    in-out property <int> ps-export-encoding-index;
+    in-out property <int> ps-export-line-ending-index;
+    in-out property <int> ps-export-json-empty-as-index;
+    in-out property <int> ps-export-xml-empty-as-index;
+    in-out property <int> ps-export-cpp-json-lib-index;
+    in-out property <string> ps-export-server-data-output;
+    in-out property <string> ps-export-java-package;
+    in-out property <string> ps-export-java-code-output;
+    in-out property <string> ps-export-go-package;
+    in-out property <string> ps-export-go-code-output;
+    in-out property <string> ps-export-cpp-namespace;
+    in-out property <string> ps-export-cpp-code-output;
+    in-out property <string> ps-export-csharp-dotnet-namespace;
+    in-out property <string> ps-export-csharp-dotnet-code-output;
+    in-out property <string> ps-export-typescript-server-code-output;
+    in-out property <string> ps-export-lua-output;
+    in-out property <string> ps-export-gdscript-output;
+    in-out property <string> ps-export-typescript-client-output;
+    in-out property <string> ps-export-csharp-unity-namespace;
+    in-out property <string> ps-export-csharp-unity-code-output;
+    in-out property <string> ps-export-csharp-godot-namespace;
+    in-out property <string> ps-export-csharp-godot-code-output;
     callback ps-tab-changed(int);
     callback ps-id-edited(string);
     callback ps-name-edited(string);
     callback ps-category-edited(string);
     callback ps-version-edited(string);
     callback ps-sep-edited(string, string);
+    callback ps-export-field-edited(string, string);
     callback ps-reset-sep();
+    callback ps-reset-export();
+    callback ps-undo-clicked();
     callback ps-confirm();
     callback ps-cancel();
+
+    // ── Dialog: 全局设置（UI / 分隔符 / 导出设置）─────────────
+    in-out property <bool> dlg-gs-open: false;
+    in-out property <int> gs-tab: 0;
+    in-out property <bool> gs-ui-tab-modified: false;
+    in-out property <bool> gs-sep-tab-modified: false;
+    in-out property <bool> gs-export-tab-modified: false;
+    // 枚举选项列表
+    in property <[string]> gs-log-level-options;
+    in property <[string]> gs-picker-trigger-options;
+    in property <[string]> gs-ref-picker-strategy-options;
+    in property <[string]> gs-encoding-options;
+    in property <[string]> gs-line-ending-options;
+    // UI 设置
+    in-out property <bool> gs-ui-auto-commit-on-blur;
+    in-out property <bool> gs-ui-realtime-validate;
+    in-out property <int> gs-ui-log-level-index;
+    in-out property <int> gs-ui-picker-trigger-header-index;
+    in-out property <int> gs-ui-picker-trigger-data-index;
+    in-out property <bool> gs-ui-show-meta-id;
+    in-out property <bool> gs-ui-constant-ref-allowed;
+    in-out property <int> gs-ui-ref-picker-strategy-index;
+    // 分隔符（25 个）
+    in-out property <string> gs-sep-tuple2;
+    in-out property <string> gs-sep-tuple3;
+    in-out property <string> gs-sep-tuple4;
+    in-out property <string> gs-sep-list;
+    in-out property <string> gs-sep-set;
+    in-out property <string> gs-sep-map-kv;
+    in-out property <string> gs-sep-map-entry;
+    in-out property <string> gs-sep-lt2-tuple;
+    in-out property <string> gs-sep-lt2-list;
+    in-out property <string> gs-sep-lt3-tuple;
+    in-out property <string> gs-sep-lt3-list;
+    in-out property <string> gs-sep-lt4-tuple;
+    in-out property <string> gs-sep-lt4-list;
+    in-out property <string> gs-sep-mt2-kv;
+    in-out property <string> gs-sep-mt2-tuple;
+    in-out property <string> gs-sep-mt2-entry;
+    in-out property <string> gs-sep-mt3-kv;
+    in-out property <string> gs-sep-mt3-tuple;
+    in-out property <string> gs-sep-mt3-entry;
+    in-out property <string> gs-sep-mt4-kv;
+    in-out property <string> gs-sep-mt4-tuple;
+    in-out property <string> gs-sep-mt4-entry;
+    in-out property <string> gs-sep-ml-kv;
+    in-out property <string> gs-sep-ml-item;
+    in-out property <string> gs-sep-ml-entry;
+    // 导出设置
+    in-out property <int> gs-export-encoding-index;
+    in-out property <int> gs-export-line-ending-index;
+    in property <[string]> gs-json-empty-as-options;
+    in property <[string]> gs-xml-empty-as-options;
+    in property <[string]> gs-cpp-json-lib-options;
+    in-out property <int> gs-export-json-empty-as-index;
+    in-out property <int> gs-export-xml-empty-as-index;
+    in-out property <string> gs-export-server-data-output;
+    in-out property <string> gs-export-java-package;
+    in-out property <string> gs-export-java-code-output;
+    in-out property <string> gs-export-go-package;
+    in-out property <string> gs-export-go-code-output;
+    in-out property <string> gs-export-cpp-namespace;
+    in-out property <string> gs-export-cpp-code-output;
+    in-out property <int> gs-export-cpp-json-lib-index;
+    in-out property <string> gs-export-csharp-dotnet-namespace;
+    in-out property <string> gs-export-csharp-dotnet-code-output;
+    in-out property <string> gs-export-typescript-server-code-output;
+    in-out property <string> gs-export-lua-output;
+    in-out property <string> gs-export-gdscript-output;
+    in-out property <string> gs-export-typescript-client-output;
+    in-out property <string> gs-export-csharp-unity-namespace;
+    in-out property <string> gs-export-csharp-unity-code-output;
+    in-out property <string> gs-export-csharp-godot-namespace;
+    in-out property <string> gs-export-csharp-godot-code-output;
+    callback gs-tab-changed(int);
+    callback gs-ui-field-edited(string, string);
+    callback gs-sep-edited(string, string);
+    callback gs-export-field-edited(string, string);
+    callback gs-reset-clicked();
+    callback gs-undo-clicked();
+    callback gs-confirm();
+    callback gs-cancel();
 
     // ── ContextMenu / InputDialog / ConfirmDialog ───────────
     in property <bool> ctx-menu-open: false;
@@ -585,10 +732,21 @@ export component AppWindow inherits Window {
             }
         }
 
-        LogPanel {
-            log-height: root.log-h;
-            logs: root.logs;
-            text-flat: root.logs-text;
+        BottomPanel {
+            panel-height: root.log-h;
+            log-text: root.logs-text;
+            excel-files: root.excel-files;
+            excel-selected: root.excel-selected;
+            excel-has-selection: root.excel-has-selection;
+            bottom-tab <=> root.bottom-tab;
+            bottom-tab-changed(i) => { root.bottom-tab-changed(i); }
+            clear-log-clicked => { root.clear-log-clicked(); }
+            excel-sync-clicked => { root.excel-sync-clicked(); }
+            excel-delete-clicked => { root.excel-delete-clicked(); }
+            excel-refresh-clicked => { root.excel-refresh-clicked(); }
+            excel-file-opened(idx) => { root.excel-file-opened(idx); }
+            excel-toggle-file(i) => { root.excel-toggle-file(i); }
+            excel-open-selected => { root.excel-open-selected(); }
         }
     }
 
@@ -717,7 +875,7 @@ export component AppWindow inherits Window {
         toggle-all(c) => { root.si-toggle-all(c); }
         toggle-item(i) => { root.si-toggle-item(i); }
         confirm => { root.si-confirm(); root.dlg-schema-import-open = false; }
-        cancel => { root.dlg-schema-import-open = false; }
+        cancel => { root.si-cancel(); root.dlg-schema-import-open = false; }
     }
 
     CreateProjectDialog {
@@ -785,12 +943,25 @@ export component AppWindow inherits Window {
     ProjectSettingsDialog {
         open: root.dlg-ps-open;
         tab: root.ps-tab;
+        identity-tab-modified <=> root.ps-identity-tab-modified;
+        sep-tab-modified <=> root.ps-sep-tab-modified;
+        export-tab-modified <=> root.ps-export-tab-modified;
+        // ⚠️ 枚举下拉框选项列表传递（新增枚举时必须在此添加 xxx-options 绑定）
+        // 每个枚举 ComboBox 需要传递对应的 options，否则下拉框显示空值
+        // 后端：project_settings.rs:open_for() 调用 ui_h.set_xxx_options()
+        // 前端：此处必须传递 xxx-options: root.xxx-options
+        ps-encoding-options: root.ps-encoding-options;
+        ps-line-ending-options: root.ps-line-ending-options;
+        ps-json-empty-as-options: root.ps-json-empty-as-options;
+        ps-xml-empty-as-options: root.ps-xml-empty-as-options;
+        ps-cpp-json-lib-options: root.ps-cpp-json-lib-options;
         id-buf <=> root.ps-id-buf;
         name-buf <=> root.ps-name-buf;
         category-buf <=> root.ps-category-buf;
         version-buf <=> root.ps-version-buf;
         id-error: root.ps-id-error;
         can-confirm: root.ps-can-confirm;
+        id-editable: root.ps-id-editable;
         sep-tuple2 <=> root.ps-sep-tuple2;
         sep-tuple3 <=> root.ps-sep-tuple3;
         sep-tuple4 <=> root.ps-sep-tuple4;
@@ -816,15 +987,123 @@ export component AppWindow inherits Window {
         sep-ml-kv <=> root.ps-sep-ml-kv;
         sep-ml-item <=> root.ps-sep-ml-item;
         sep-ml-entry <=> root.ps-sep-ml-entry;
+        ps-export-encoding-index <=> root.ps-export-encoding-index;
+        ps-export-line-ending-index <=> root.ps-export-line-ending-index;
+        ps-export-json-empty-as-index <=> root.ps-export-json-empty-as-index;
+        ps-export-xml-empty-as-index <=> root.ps-export-xml-empty-as-index;
+        ps-export-cpp-json-lib-index <=> root.ps-export-cpp-json-lib-index;
+        ps-export-server-data-output <=> root.ps-export-server-data-output;
+        ps-export-java-package <=> root.ps-export-java-package;
+        ps-export-java-code-output <=> root.ps-export-java-code-output;
+        ps-export-go-package <=> root.ps-export-go-package;
+        ps-export-go-code-output <=> root.ps-export-go-code-output;
+        ps-export-cpp-namespace <=> root.ps-export-cpp-namespace;
+        ps-export-cpp-code-output <=> root.ps-export-cpp-code-output;
+        ps-export-csharp-dotnet-namespace <=> root.ps-export-csharp-dotnet-namespace;
+        ps-export-csharp-dotnet-code-output <=> root.ps-export-csharp-dotnet-code-output;
+        ps-export-typescript-server-code-output <=> root.ps-export-typescript-server-code-output;
+        ps-export-lua-output <=> root.ps-export-lua-output;
+        ps-export-gdscript-output <=> root.ps-export-gdscript-output;
+        ps-export-typescript-client-output <=> root.ps-export-typescript-client-output;
+        ps-export-csharp-unity-namespace <=> root.ps-export-csharp-unity-namespace;
+        ps-export-csharp-unity-code-output <=> root.ps-export-csharp-unity-code-output;
+        ps-export-csharp-godot-namespace <=> root.ps-export-csharp-godot-namespace;
+        ps-export-csharp-godot-code-output <=> root.ps-export-csharp-godot-code-output;
         tab-changed(i) => { root.ps-tab = i; root.ps-tab-changed(i); }
         id-edited(s) => { root.ps-id-edited(s); }
         name-edited(s) => { root.ps-name-edited(s); }
         category-edited(s) => { root.ps-category-edited(s); }
         version-edited(s) => { root.ps-version-edited(s); }
         sep-edited(k, v) => { root.ps-sep-edited(k, v); }
+        export-field-edited(k, v) => { root.ps-export-field-edited(k, v); }
         reset-sep => { root.ps-reset-sep(); }
+        reset-export => { root.ps-reset-export(); }
+        undo-clicked => { root.ps-undo-clicked(); }
         confirm => { root.ps-confirm(); }
         cancel => { root.ps-cancel(); }
+    }
+
+    GlobalSettingsDialog {
+        open: root.dlg-gs-open;
+        tab: root.gs-tab;
+        ui-tab-modified <=> root.gs-ui-tab-modified;
+        sep-tab-modified <=> root.gs-sep-tab-modified;
+        export-tab-modified <=> root.gs-export-tab-modified;
+        // ⚠️ 枚举下拉框选项列表传递（新增枚举时必须在此添加 xxx-options 绑定）
+        // 每个枚举 ComboBox 需要传递对应的 options，否则下拉框显示空值
+        // 后端：global_settings.rs:open() 调用 ui_h.set_xxx_options()
+        // 前端：此处必须传递 xxx-options: root.xxx-options
+        gs-log-level-options: root.gs-log-level-options;
+        gs-picker-trigger-options: root.gs-picker-trigger-options;
+        gs-ref-picker-strategy-options: root.gs-ref-picker-strategy-options;
+        gs-encoding-options: root.gs-encoding-options;
+        gs-line-ending-options: root.gs-line-ending-options;
+        gs-json-empty-as-options: root.gs-json-empty-as-options;
+        gs-xml-empty-as-options: root.gs-xml-empty-as-options;
+        gs-cpp-json-lib-options: root.gs-cpp-json-lib-options;
+        ui-auto-commit-on-blur <=> root.gs-ui-auto-commit-on-blur;
+        ui-realtime-validate <=> root.gs-ui-realtime-validate;
+        ui-log-level-index <=> root.gs-ui-log-level-index;
+        ui-picker-trigger-header-index <=> root.gs-ui-picker-trigger-header-index;
+        ui-picker-trigger-data-index <=> root.gs-ui-picker-trigger-data-index;
+        ui-show-meta-id <=> root.gs-ui-show-meta-id;
+        ui-constant-ref-allowed <=> root.gs-ui-constant-ref-allowed;
+        ui-ref-picker-strategy-index <=> root.gs-ui-ref-picker-strategy-index;
+        sep-tuple2 <=> root.gs-sep-tuple2;
+        sep-tuple3 <=> root.gs-sep-tuple3;
+        sep-tuple4 <=> root.gs-sep-tuple4;
+        sep-list <=> root.gs-sep-list;
+        sep-set <=> root.gs-sep-set;
+        sep-map-kv <=> root.gs-sep-map-kv;
+        sep-map-entry <=> root.gs-sep-map-entry;
+        sep-lt2-tuple <=> root.gs-sep-lt2-tuple;
+        sep-lt2-list <=> root.gs-sep-lt2-list;
+        sep-lt3-tuple <=> root.gs-sep-lt3-tuple;
+        sep-lt3-list <=> root.gs-sep-lt3-list;
+        sep-lt4-tuple <=> root.gs-sep-lt4-tuple;
+        sep-lt4-list <=> root.gs-sep-lt4-list;
+        sep-mt2-kv <=> root.gs-sep-mt2-kv;
+        sep-mt2-tuple <=> root.gs-sep-mt2-tuple;
+        sep-mt2-entry <=> root.gs-sep-mt2-entry;
+        sep-mt3-kv <=> root.gs-sep-mt3-kv;
+        sep-mt3-tuple <=> root.gs-sep-mt3-tuple;
+        sep-mt3-entry <=> root.gs-sep-mt3-entry;
+        sep-mt4-kv <=> root.gs-sep-mt4-kv;
+        sep-mt4-tuple <=> root.gs-sep-mt4-tuple;
+        sep-mt4-entry <=> root.gs-sep-mt4-entry;
+        sep-ml-kv <=> root.gs-sep-ml-kv;
+        sep-ml-item <=> root.gs-sep-ml-item;
+        sep-ml-entry <=> root.gs-sep-ml-entry;
+        gs-export-encoding-index <=> root.gs-export-encoding-index;
+        gs-export-line-ending-index <=> root.gs-export-line-ending-index;
+        gs-export-json-empty-as-index <=> root.gs-export-json-empty-as-index;
+        gs-export-xml-empty-as-index <=> root.gs-export-xml-empty-as-index;
+        gs-export-server-data-output <=> root.gs-export-server-data-output;
+        gs-export-java-package <=> root.gs-export-java-package;
+        gs-export-java-code-output <=> root.gs-export-java-code-output;
+        gs-export-go-package <=> root.gs-export-go-package;
+        gs-export-go-code-output <=> root.gs-export-go-code-output;
+        gs-export-cpp-namespace <=> root.gs-export-cpp-namespace;
+        gs-export-cpp-code-output <=> root.gs-export-cpp-code-output;
+        gs-export-cpp-json-lib-index <=> root.gs-export-cpp-json-lib-index;
+        gs-export-csharp-dotnet-namespace <=> root.gs-export-csharp-dotnet-namespace;
+        gs-export-csharp-dotnet-code-output <=> root.gs-export-csharp-dotnet-code-output;
+        gs-export-typescript-server-code-output <=> root.gs-export-typescript-server-code-output;
+        gs-export-lua-output <=> root.gs-export-lua-output;
+        gs-export-gdscript-output <=> root.gs-export-gdscript-output;
+        gs-export-typescript-client-output <=> root.gs-export-typescript-client-output;
+        gs-export-csharp-unity-namespace <=> root.gs-export-csharp-unity-namespace;
+        gs-export-csharp-unity-code-output <=> root.gs-export-csharp-unity-code-output;
+        gs-export-csharp-godot-namespace <=> root.gs-export-csharp-godot-namespace;
+        gs-export-csharp-godot-code-output <=> root.gs-export-csharp-godot-code-output;
+        tab-changed(i) => { root.gs-tab = i; root.gs-tab-changed(i); }
+        ui-field-edited(k, v) => { root.gs-ui-field-edited(k, v); }
+        sep-edited(k, v) => { root.gs-sep-edited(k, v); }
+        export-field-edited(k, v) => { root.gs-export-field-edited(k, v); }
+        reset-clicked => { root.gs-reset-clicked(); }
+        undo-clicked => { root.gs-undo-clicked(); }
+        confirm => { root.gs-confirm(); }
+        cancel => { root.gs-cancel(); }
     }
 
     InputDialog {
@@ -845,6 +1124,15 @@ export component AppWindow inherits Window {
         message: root.dlg-confirm-message;
         confirm => { root.cf-confirm(); }
         cancel => { root.cf-cancel(); }
+    }
+
+    // Excel 同步面板
+    ExcelSyncDialog {
+        open: root.dlg-excel-sync-open;
+        rows: root.es-rows;
+        refresh => { root.es-refresh(); }
+        close => { root.es-close(); }
+        action(row, act) => { root.es-action(row, act); }
     }
 
     // ContextMenu 必须放在最顶层（z 在所有 dialog 之上），点击 item 触发 ctx-menu-action
@@ -995,11 +1283,7 @@ export component AppWindowPreview inherits AppWindow {
         ], row-color: #ffe0e0, selected: false },
     ];
 
-    logs: [
-        { time: "14:32:01", msg: "已加载 hero/HeroBase.tbl (3条)", level: 0 },
-        { time: "14:33:15", msg: "新建 Table: hero/HeroSkill", level: 0 },
-        { time: "14:34:02", msg: "[验证] hero/HeroBase D2: \"4,5\" 列表元素类型不匹配, 示例: 1;2;3", level: 2 },
-    ];
+    logs-text: "14:32:01 已加载 hero/HeroBase.tbl (3条)\n14:33:15 新建 Table: hero/HeroSkill\n14:34:02 [验证] hero/HeroBase D2: \"4,5\" 列表元素类型不匹配, 示例: 1;2;3";
 
     sx-items: [
         { indent: 0, icon: "📁", name: "hero", group-name: "hero", checked: true, tristate: false, is-conflict: false },

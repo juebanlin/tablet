@@ -147,7 +147,6 @@ tablet-cli util gen-test --lang <java|go> --format <json|xml> --schema <path> -o
 
 ```bash
 tablet-cli list-templates
-tablet-cli migrate-legacy
 ```
 
 ---

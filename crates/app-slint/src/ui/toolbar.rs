@@ -1,4 +1,4 @@
-// 顶部工具栏：generate-test / clear / save / reload。
+﻿// 顶部工具栏：generate-test / clear / save / reload。
 // 导入 Schema → 项目右键「合并 Schema...」；模板库 / 新建项目 → 统一「新建项目」对话框。
 // 数据导出 / Schema 导出 已迁到 TreeProject 右键菜单。
 
@@ -76,6 +76,6 @@ pub(crate) fn reset_view_after_reload(state: &Rc<RefCell<AppState>>) {
     st.engine.revalidate_all_projects();
     if !st.engine.validation_errors.is_empty() {
         let n = st.engine.validation_errors.len();
-        st.engine.log(format!("[验证] 共 {} 个错误", n));
+        st.engine.error_log(format!("[验证] 共 {} 个错误", n));
     }
 }

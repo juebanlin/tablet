@@ -353,7 +353,7 @@ export component CreateProjectDialog inherits Rectangle {
                                 vertical-alignment: center;
                             }
                             LineEdit {
-                                text: root.project-id;
+                                text <=> root.project-id;
                                 placeholder-text: "[a-z0-9_-]{1,32}";
                                 edited(s) => { root.id-edited(s); }
                             }
@@ -373,7 +373,7 @@ export component CreateProjectDialog inherits Rectangle {
                                 vertical-alignment: center;
                             }
                             LineEdit {
-                                text: root.project-name;
+                                text <=> root.project-name;
                                 placeholder-text: "可中文，仅用于显示";
                                 edited(s) => { root.name-edited(s); }
                             }
@@ -393,7 +393,7 @@ export component CreateProjectDialog inherits Rectangle {
                                 vertical-alignment: center;
                             }
                             LineEdit {
-                                text: root.project-category;
+                                text <=> root.project-category;
                                 placeholder-text: "test / slg / rpg / ...";
                                 edited(s) => { root.category-edited(s); }
                             }
@@ -408,7 +408,7 @@ export component CreateProjectDialog inherits Rectangle {
                                 vertical-alignment: center;
                             }
                             LineEdit {
-                                text: root.project-version;
+                                text <=> root.project-version;
                                 placeholder-text: "1.0.0";
                                 edited(s) => { root.version-edited(s); }
                             }

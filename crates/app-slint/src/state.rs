@@ -1,4 +1,4 @@
-// AppState：Rust 侧的真值，所有 UI 数据从这里派生。
+﻿// AppState：Rust 侧的真值，所有 UI 数据从这里派生。
 // slint 是 retained UI，需要 Rust 显式 push 数据；AppState 持有 engine + UI 临时态。
 
 use std::collections::HashSet;
@@ -595,11 +595,9 @@ pub struct CreateProjectState {
     pub project_name: String,
     pub project_category: String,
     pub project_version: String,
-    /// 「立即打开新项目」勾选项；默认 true
     pub open_after: bool,
-    /// 标记是否已经预填过 project id（避免文件/模板改变时覆盖用户手输）
-    pub id_prefilled: bool,
-    /// 「灌入预设数据」勾选项；仅 FromFile / FromTemplate tab 且来源带 preset 时显示
+    /// 标记身份字段需要写回 slint（tab/模板切换后）
+    pub id_dirty: bool,
     pub with_preset: bool,
 
     // —— FromFile tab 专用 ——
@@ -633,7 +631,7 @@ impl Default for CreateProjectState {
             project_category: String::new(),
             project_version: "1.0.0".to_string(),
             open_after: true,
-            id_prefilled: false,
+            id_dirty: false,
             with_preset: false,
             file_path: String::new(),
             file_schema: None,
@@ -731,25 +729,44 @@ impl CloneProjectState {
 
 /// 项目设置对话框（项目右键「项目设置...」入口）。
 ///
-/// 一锁式编辑全部 project meta + 分隔符；旧两段式 RenameProject 流程已被替代。
-/// id 改动 → 复用 engine `RenameProject` 动作处理目录 rename；
-/// name/category/version/separators → 直接落 schema.meta + schema.separators，
+/// 所有改动只更新内存中的 project meta + 分隔符，标记 schema_dirty，
+/// 等"保存项目"才写盘。
 /// schema_dirty=true，写盘 + revalidate_all。
 #[derive(Default)]
 pub struct ProjectSettingsState {
     pub open: bool,
     /// 当前编辑的 project id（也是 dialog 打开时的 old_id）
     pub project_id: String,
-    /// 0=身份  1=分隔符
+    /// 0=身份  1=分隔符  2=导出设置
     pub tab: i32,
+
+    // 修改标记（对比 current 快照计算得出）
+    pub identity_tab_modified: bool,
+    pub sep_tab_modified: bool,
+    pub export_tab_modified: bool,
+
+    // —— apply buffer：待应用的编辑缓冲 ——
+    // 身份字段（来自 schema.meta）
     pub id_buf: String,
     pub name_buf: String,
     pub category_buf: String,
     pub version_buf: String,
     /// id 实时校验消息（空 = 合法）；不合法时禁用「确定」
     pub id_error: String,
-    /// 分隔符编辑缓冲
+    /// id 是否可编辑：仅未落盘项目（克隆 / 新建）允许改 id；
+    /// 已存盘项目 id 固定（改 id 需 rename 目录，风险大），UI 禁用输入。
+    pub id_editable: bool,
+
+    // 分隔符缓冲（来自 schema.separators）
     pub sep: tablet_core::types::SeparatorsSection,
+
+    // 导出配置缓冲（来自 config.export）
+    pub export: tablet_core::model::ExportConfig,
+
+    // —— current：当前已保存的值快照 ——
+    pub current_meta: Option<tablet_core::tblschema::SchemaMetadata>,
+    pub current_sep: Option<tablet_core::types::SeparatorsSection>,
+    pub current_export: Option<tablet_core::model::ExportConfig>,
 }
 
 impl ProjectSettingsState {
@@ -757,12 +774,93 @@ impl ProjectSettingsState {
         self.open = false;
         self.project_id.clear();
         self.tab = 0;
+        self.identity_tab_modified = false;
+        self.sep_tab_modified = false;
+        self.export_tab_modified = false;
         self.id_buf.clear();
         self.name_buf.clear();
         self.category_buf.clear();
         self.version_buf.clear();
         self.id_error.clear();
+        self.id_editable = false;
         self.sep = tablet_core::types::SeparatorsSection::default();
+        self.export = tablet_core::model::ExportConfig::default();
+        self.current_meta = None;
+        self.current_sep = None;
+        self.current_export = None;
+    }
+
+    pub fn undo(&mut self) {
+        match self.tab {
+            0 => {
+                if let Some(ref meta) = self.current_meta {
+                    self.id_buf = meta.id.clone();
+                    self.name_buf = meta.name.clone();
+                    self.category_buf = meta.category.clone();
+                    self.version_buf = meta.version.clone();
+                    self.identity_tab_modified = false;
+                }
+            }
+            1 => {
+                if let Some(ref sep) = self.current_sep {
+                    self.sep = sep.clone();
+                    self.sep_tab_modified = false;
+                }
+            }
+            2 => {
+                if let Some(ref export) = self.current_export {
+                    self.export = export.clone();
+                    self.export_tab_modified = false;
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// 全局设置对话框（菜单栏「设置」→「全局设置...」入口）。
+///
+/// 与项目设置的区别：点击「确定」后立即写 tablet.toml，而不是标记 dirty 等手动保存。
+/// 修改全局配置后会重新合并所有已打开项目的配置，并在分隔符改变时重新验证数据。
+///
+/// 数据范式：current + apply 模式。
+/// - current_snapshot: 当前已保存的值（打开对话框时从 engine.global_config 深拷贝，等于硬盘值）
+/// - ui/sep/export: 待应用的编辑缓冲（用户正在编辑）
+/// - modified: 后端对比计算得出（apply != current）
+///
+/// 操作语义：
+/// - open(): current = 硬盘值，apply = current，modified = false
+/// - 编辑: 修改 apply，计算 modified = (apply != current)
+/// - 撤销: apply = current，modified = false
+/// - 默认值: apply = 硬编码默认值，计算 modified = (apply != current)
+/// - 确定: current = apply，写盘，modified = false
+/// - 取消: apply = current（丢弃编辑），关闭对话框
+#[derive(Default)]
+pub struct GlobalSettingsDialogState {
+    pub open: bool,
+    /// 0=UI设置  1=分隔符  2=导出设置
+    pub tab: i32,
+    pub ui_tab_modified: bool,
+    pub sep_tab_modified: bool,
+    pub export_tab_modified: bool,
+
+    // —— apply buffer：直接复用核心类型 ——
+    pub ui: tablet_core::model::UiConfig,
+    pub sep: tablet_core::types::SeparatorsSection,
+    pub export: tablet_core::model::ExportConfig,
+
+    /// current：当前已保存的值（打开对话框时的快照，等于硬盘值）
+    pub current_snapshot: Option<tablet_core::model::GlobalConfig>,
+}
+
+impl GlobalSettingsDialogState {
+    pub fn close(&mut self) {
+        self.open = false;
+        self.tab = 0;
+        self.ui_tab_modified = false;
+        self.sep_tab_modified = false;
+        self.export_tab_modified = false;
+        self.current_snapshot = None;
     }
 }
 
@@ -829,6 +927,8 @@ pub struct AppState {
     pub clone_project: CloneProjectState,
     /// 「项目设置」对话框（id / name / category / version / 分隔符）
     pub project_settings: ProjectSettingsState,
+    /// 「全局设置」对话框（UI / 分隔符 / 导出设置）
+    pub global_settings: GlobalSettingsDialogState,
     /// "id" / "name" / "open" / "created" / "manual"。从 [project] project_sort 读初值，UI 写时持久化。
     pub project_sort: String,
     /// sort=manual 时使用；UI 拖拽顺序持久化到 [project] project_order。
@@ -836,32 +936,24 @@ pub struct AppState {
     /// 当前 Excel 编辑会话（@plans §2.4）；同一时刻全局只允许一个。
     /// `Some` = 编辑中（GUI 写入禁用）；`None` = 空闲。
     pub excel_session: Option<crate::excel_bridge::ExcelSession>,
+    /// Excel 同步面板是否打开。
+    pub excel_sync_open: bool,
 }
 
 impl AppState {
-    pub fn load(workdir: &Path) -> anyhow::Result<Self> {
-        let mut engine = load_workspace(workdir)?;
-        // active 缺失时回落到首个 opened；都没有则取 default 配置。
-        let cfg_src = engine.active().or_else(|| engine.projects.first());
-        let rt_validate = cfg_src
-            .and_then(|p| p.config.ui.as_ref())
+    pub fn load(workdir: &Path) -> anyhow::Result<(Self, bool)> {
+        let (mut engine, config_fixed) = load_workspace(workdir)?;
+        // UI 配置从全局配置读取（不随项目切换）
+        let rt_validate = engine.global_config.ui.as_ref()
             .map_or(false, |u| u.realtime_validate);
-        let header_single = cfg_src
-            .and_then(|p| p.config.ui.as_ref())
-            .map_or(true, |u| u.picker_trigger_header == "single");
-        let data_single = cfg_src
-            .and_then(|p| p.config.ui.as_ref())
-            .map_or(false, |u| u.picker_trigger_data == "single");
-        let constant_ref_allowed = cfg_src
-            .and_then(|p| p.config.ui.as_ref())
+        let header_single = engine.global_config.ui.as_ref()
+            .map_or(true, |u| u.picker_trigger_header == tablet_core::enums::PickerTrigger::Single);
+        let data_single = engine.global_config.ui.as_ref()
+            .map_or(false, |u| u.picker_trigger_data == tablet_core::enums::PickerTrigger::Single);
+        let constant_ref_allowed = engine.global_config.ui.as_ref()
             .map_or(true, |u| u.constant_ref_allowed);
-        let project_sort = cfg_src
-            .map(|p| p.config.project.project_sort.clone())
-            .filter(|s| !s.is_empty())
-            .unwrap_or_else(|| "id".to_string());
-        let project_order = cfg_src
-            .map(|p| p.config.project.project_order.clone())
-            .unwrap_or_default();
+        let project_sort = engine.global_config.project_management.project_sort.as_str().to_string();
+        let project_order = engine.global_config.project_management.project_order.clone();
         let (expanded, project_expanded) = if let Some(active) = engine.active() {
             let aid = active.schema.meta.id.clone();
             let exp: HashSet<(String, String)> = active.groups.iter()
@@ -873,13 +965,13 @@ impl AppState {
             (HashSet::new(), HashSet::new())
         };
         let group_count = engine.active().map(|p| p.groups.len()).unwrap_or(0);
-        engine.log(format!("已加载 {} 个 Group", group_count));
+        engine.ui_log(format!("已加载 {} 个 Group", group_count));
         // 加载即跑一遍全 Project 验证：让所有 project 的红框/`!` 标记打开就可见。
         engine.revalidate_all_projects();
         if !engine.validation_errors.is_empty() {
-            engine.log(format!("[验证] 加载后发现 {} 个错误", engine.validation_errors.len()));
+            engine.error_log(format!("[验证] 加载后发现 {} 个错误", engine.validation_errors.len()));
         }
-        Ok(Self {
+        Ok((Self {
             engine,
             selected: None,
             tree_filter: TreeFilter::All,
@@ -912,10 +1004,12 @@ impl AppState {
             create_project: CreateProjectState::default(),
             clone_project: CloneProjectState::default(),
             project_settings: ProjectSettingsState::default(),
+            global_settings: GlobalSettingsDialogState::default(),
             project_sort,
             project_order,
             excel_session: None,
-        })
+            excel_sync_open: false,
+        }, config_fixed))
     }
 
     /// 写一个单元格的真实存储值；按当前 selected 节点类型分发到 engine。

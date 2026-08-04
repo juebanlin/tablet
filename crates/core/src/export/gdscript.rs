@@ -58,7 +58,7 @@ fn base_to_gd(raw: &str, bt: BaseType) -> String {
         BaseType::Bool => {
             if raw == "true" || raw == "1" { "true".to_string() } else { "false".to_string() }
         }
-        BaseType::Str => format!("\"{}\"", gd_escape(raw)),
+        BaseType::Str | BaseType::Txt => format!("\"{}\"", gd_escape(raw)),
     }
 }
 
@@ -72,7 +72,7 @@ enum GdKey {
 
 fn gd_map_key(raw: &str, bt: BaseType) -> GdKey {
     match bt {
-        BaseType::Str => {
+        BaseType::Str | BaseType::Txt => {
             if is_gd_identifier(raw) {
                 GdKey::LuaStyle(raw.to_string())
             } else {
@@ -299,8 +299,8 @@ pub fn export_enum_gd(enum_def: &EnumDef) -> String {
 }
 
 pub fn export_all_gdscript(project: &Project) -> Result<super::ExportResult> {
-    let export_cfg = project.config.export.as_ref();
-    let client = export_cfg.and_then(|e| e.client.as_ref());
+    let export_cfg = &project.config.export;
+    let client = export_cfg.client.as_ref();
     let gd = client.and_then(|c| c.gdscript.as_ref());
 
     let output = gd
@@ -308,18 +308,14 @@ pub fn export_all_gdscript(project: &Project) -> Result<super::ExportResult> {
         .unwrap_or("gen/client/gdscript");
 
     let line_ending = LineEnding::from_config(
-        gd.and_then(|g| g.line_ending.as_deref())
-            .or_else(|| client.and_then(|c| c.line_ending.as_deref()))
-            .or_else(|| export_cfg.and_then(|e| e.line_ending.as_deref()))
+        export_cfg.line_ending.map(|l| l.as_str())
             .unwrap_or("lf")
     );
-    let encoding = gd.and_then(|g| g.encoding.as_deref())
-        .or_else(|| client.and_then(|c| c.encoding.as_deref()))
-        .or_else(|| export_cfg.and_then(|e| e.encoding.as_deref()))
+    let encoding = export_cfg.encoding.map(|e| e.as_str())
         .unwrap_or("utf-8").to_string();
     let opts = super::ExportOptions { line_ending, encoding };
 
-    let sep = &project.config.separators;
+    let sep = &project.schema.separators;
     let output_dir = project.export_root().join(output);
     let mut collected = Vec::new();
 
@@ -435,7 +431,7 @@ mod tests {
             ],
             dirty: false,
             deleted: false,
-            original: String::new(),
+            original_entries: Vec::new(), saved: true,
         };
         let out = export_enum_gd(&e);
         assert!(out.contains("const HeroType = {"));

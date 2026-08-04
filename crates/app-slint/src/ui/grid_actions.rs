@@ -1,4 +1,4 @@
-// grid 操作 helpers：被 grid.rs / context_menu.rs / focus.rs 共用的 perform_* 系列
+﻿// grid 操作 helpers：被 grid.rs / context_menu.rs / focus.rs 共用的 perform_* 系列
 // + commit_editing + selection 计算 + popup export 写回。
 //
 // 本模块没有自己的 UI，全部 `pub(crate) fn`。
@@ -288,10 +288,7 @@ pub(crate) fn perform_action(state: &Rc<RefCell<AppState>>, action: &str, tag: &
         "grid.cell-copy" => {
             let tsv = {
                 let st = state.borrow();
-                (r1..=r2).map(|r| {
-                    (c1..=c2).map(|c| convert::raw_cell_for(&st, r, c))
-                        .collect::<Vec<_>>().join("\t")
-                }).collect::<Vec<_>>().join("\n")
+                convert::build_tsv(&st, r1, c1, r2, c2)
             };
             match Clipboard::new().and_then(|mut cb| cb.set_text(tsv.clone())) {
                 Ok(()) => {
@@ -300,42 +297,41 @@ pub(crate) fn perform_action(state: &Rc<RefCell<AppState>>, action: &str, tag: &
                     } else {
                         format!("[{}] {}", tag, coord_label)
                     };
-                    state.borrow_mut().engine.log(msg);
+                    state.borrow_mut().engine.ui_log(msg);
                 }
-                Err(e) => state.borrow_mut().engine.log(format!("[{}] {} 失败: {}", tag, coord_label, e)),
+                Err(e) => state.borrow_mut().engine.error_log(format!("[{}] {} 失败: {}", tag, coord_label, e)),
             }
         }
         "grid.cell-paste" => {
             let text = match Clipboard::new().and_then(|mut cb| cb.get_text()) {
                 Ok(t) => t,
                 Err(e) => {
-                    state.borrow_mut().engine.log(format!("[{}] {} 读剪贴板失败: {}", tag, coord_label, e));
+                    state.borrow_mut().engine.error_log(format!("[{}] {} 读剪贴板失败: {}", tag, coord_label, e));
                     return;
                 }
             };
-            // Excel 规则：剪贴板矩形从锚点 (r1,c1) 向右下展开，跟目标选区大小无关。
-            // 单格目标 + 多格剪贴板 ⇒ 自动扩展；多格目标 + 单格剪贴板 ⇒ 只填左上角。
-            let lines: Vec<&str> = text.lines().collect();
-            let row_n = lines.len().max(1);
-            let col_n = lines.iter().map(|l| l.split('\t').count()).max().unwrap_or(1);
+            let grid = convert::tsv_parse(&text);
+            let row_n = grid.len();
+            let col_n = grid.first().map_or(0, |r| r.len());
+            if row_n == 0 || col_n == 0 { return; }
             let clip_is_single = row_n == 1 && col_n == 1;
             if clip_is_single && is_single {
-                let single = lines.first().map(|s| s.to_string()).unwrap_or_default();
+                let single = grid[0][0].clone();
                 let before = {
                     let st = state.borrow();
                     convert::raw_cell_for(&st, r1, c1)
                 };
                 let mut st = state.borrow_mut();
                 st.set_cell(r1, c1, &single);
-                st.engine.log(format!("[{}] {} \"{}\" → \"{}\"", tag, coord_label, before, single));
+                st.engine.ui_log(format!("[{}] {} \"{}\" → \"{}\"", tag, coord_label, before, single));
             } else {
-                paste_region(state, r1, c1, &text);
+                paste_region(state, r1, c1, &grid);
                 let dst = format!(
                     "{}{}:{}{}",
                     convert::col_letter(c1), r1 + 1,
                     convert::col_letter(c1 + col_n - 1), r1 + row_n,
                 );
-                state.borrow_mut().engine.log(format!("[{}] {} → {} ({}行×{}列)", tag, coord_label, dst, row_n, col_n));
+                state.borrow_mut().engine.ui_log(format!("[{}] {} → {} ({}行×{}列)", tag, coord_label, dst, row_n, col_n));
             }
         }
         "grid.cell-clear" => {
@@ -346,10 +342,10 @@ pub(crate) fn perform_action(state: &Rc<RefCell<AppState>>, action: &str, tag: &
                 };
                 let mut st = state.borrow_mut();
                 st.set_cell(r1, c1, "");
-                st.engine.log(format!("[{}] {} \"{}\" → \"\"", tag, coord_label, before));
+                st.engine.ui_log(format!("[{}] {} \"{}\" → \"\"", tag, coord_label, before));
             } else {
                 clear_region(state, r1, c1, r2, c2);
-                state.borrow_mut().engine.log(format!("[{}] {}", tag, coord_label));
+                state.borrow_mut().engine.ui_log(format!("[{}] {}", tag, coord_label));
             }
         }
         "grid.cell-cut" => {
@@ -365,13 +361,13 @@ pub(crate) fn perform_action(state: &Rc<RefCell<AppState>>, action: &str, tag: &
                     if is_single {
                         let mut st = state.borrow_mut();
                         st.set_cell(r1, c1, "");
-                        st.engine.log(format!("[{}] {} \"{}\" → \"\"", tag, coord_label, tsv));
+                        st.engine.ui_log(format!("[{}] {} \"{}\" → \"\"", tag, coord_label, tsv));
                     } else {
                         clear_region(state, r1, c1, r2, c2);
-                        state.borrow_mut().engine.log(format!("[{}] {}", tag, coord_label));
+                        state.borrow_mut().engine.ui_log(format!("[{}] {}", tag, coord_label));
                     }
                 }
-                Err(e) => state.borrow_mut().engine.log(format!("[{}] {} 失败: {}", tag, coord_label, e)),
+                Err(e) => state.borrow_mut().engine.error_log(format!("[{}] {} 失败: {}", tag, coord_label, e)),
             }
         }
         _ => {}
@@ -393,7 +389,7 @@ fn resolve_selection_rect(state: &Rc<RefCell<AppState>>) -> Option<(usize, usize
 }
 
 /// 区域粘贴：按当前选中节点类型走 engine.paste_*_data。
-fn paste_region(state: &Rc<RefCell<AppState>>, r1: usize, c1: usize, text: &str) {
+fn paste_region(state: &Rc<RefCell<AppState>>, r1: usize, c1: usize, grid: &[Vec<String>]) {
     let (group, name, kind) = match state.borrow().selected.clone() {
         Some(SelectedNode::Table { group, name, .. }) => (group, name, "table"),
         Some(SelectedNode::Constant { group, name, .. }) => (group, name, "constant"),
@@ -402,9 +398,9 @@ fn paste_region(state: &Rc<RefCell<AppState>>, r1: usize, c1: usize, text: &str)
     };
     let mut st = state.borrow_mut();
     match kind {
-        "table" => st.engine.paste_table_data(&group, &name, r1, c1, text),
-        "constant" => st.engine.paste_constant_data(&group, &name, r1, c1, text),
-        _ => st.engine.paste_enum_data(&group, &name, r1, c1, text),
+        "table" => st.engine.paste_table_data(&group, &name, r1, c1, grid),
+        "constant" => st.engine.paste_constant_data(&group, &name, r1, c1, grid),
+        _ => st.engine.paste_enum_data(&group, &name, r1, c1, grid),
     }
     if st.realtime_validate { st.engine.revalidate(&group, &name); }
 }

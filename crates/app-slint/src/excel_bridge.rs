@@ -1,4 +1,4 @@
-//! Excel 编辑桥接：UI 入口 → 调起外部 Excel → 监控关闭 → 回写到内存模型。
+﻿//! Excel 编辑桥接：UI 入口 → 调起外部 Excel → 监控关闭 → 回写到内存模型。
 //!
 //! 状态机（@docs/06-Excel桥接.md §2 / §3）：
 //! ```
@@ -166,7 +166,7 @@ pub fn launch_excel_edit(
     };
     {
         let mut st = state.borrow_mut();
-        st.engine.log(format!(
+        st.engine.ui_log(format!(
             "[Excel] 已调起 {}::{} 编辑（{}: {}）",
             project_id, group_name, launched_with, xlsx_path.display()
         ));
@@ -443,7 +443,7 @@ pub fn on_excel_closed(state: &Rc<RefCell<AppState>>) {
             Some(p) => p,
             None => {
                 drop(st);
-                state.borrow_mut().engine.log(format!(
+                state.borrow_mut().engine.ui_log(format!(
                     "[Excel] {} 回写失败: project '{}' 已关闭",
                     session.group, session.project_id,
                 ));
@@ -455,7 +455,7 @@ pub fn on_excel_closed(state: &Rc<RefCell<AppState>>) {
             Some(g) => g,
             None => {
                 drop(st);
-                state.borrow_mut().engine.log(format!(
+                state.borrow_mut().engine.ui_log(format!(
                     "[Excel] {} 回写失败: 分组已被删除",
                     session.group,
                 ));
@@ -478,14 +478,14 @@ pub fn on_excel_closed(state: &Rc<RefCell<AppState>>) {
                     }
                 }
                 st.engine.revalidate_all_projects();
-                st.engine.log(format!(
+                st.engine.ui_log(format!(
                     "[Excel] {} 回写完成（影响 {} 个节点）",
                     session.group, count,
                 ));
             }
         }
         Err(e) => {
-            state.borrow_mut().engine.log(format!(
+            state.borrow_mut().engine.ui_log(format!(
                 "[Excel] {} 回写失败: {}",
                 session.group, e
             ));
@@ -560,11 +560,11 @@ pub fn scan_residuals_on_startup(state: &Rc<RefCell<AppState>>) {
     let mut st = state.borrow_mut();
     for (project_id, group, path) in &residuals {
         match std::fs::remove_file(path) {
-            Ok(_) => st.engine.log(format!(
+            Ok(_) => st.engine.ui_log(format!(
                 "[Excel] 发现残留 {}::{} 已自动丢弃",
                 project_id, group
             )),
-            Err(_) => st.engine.log(format!(
+            Err(_) => st.engine.ui_log(format!(
                 "[Excel] 发现残留 {}::{}，但删除失败（可能 Excel 仍在打开），跳过",
                 project_id, group
             )),
@@ -616,7 +616,7 @@ pub fn abort_session(state: &Rc<RefCell<AppState>>) {
             session.group,
         ),
     };
-    state.borrow_mut().engine.log(log);
+    state.borrow_mut().engine.ui_log(log);
 }
 
 /// 注册 `excel-closed-detected` callback——监控线程的 event-loop 投递目标。
@@ -670,7 +670,7 @@ pub fn wire(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
                     }
                 };
                 if should_abort {
-                    s.borrow_mut().engine.log(
+                    s.borrow_mut().engine.ui_log(
                         "[Excel] 编辑超时（>4h），自动强制放弃".to_string(),
                     );
                     abort_session(&s);

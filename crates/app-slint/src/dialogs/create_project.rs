@@ -1,4 +1,4 @@
-// 「新建项目」统一对话框：3 tab + 单页左右分栏。
+﻿// 「新建项目」统一对话框：3 tab + 单页左右分栏。
 //
 // tab 0 = 空项目：右半填身份 → 创建一个空 project
 // tab 1 = 从文件：浏览 .tblschema → sections-picker → 创建 + 可选灌入预设
@@ -58,27 +58,12 @@ fn on_source_loaded(st: &mut AppState, schema: TblSchema) {
     st.create_project.picker_items = build_picker_items(&schema);
     st.create_project.picker_checked = vec![true; st.create_project.picker_items.len()];
     let cps = &mut st.create_project;
-    // id/name/category/version 仅在用户没改过时预填
-    if !cps.id_prefilled && cps.project_id.is_empty() && !schema.meta.id.is_empty() {
-        cps.project_id = schema.meta.id.clone();
-        cps.id_prefilled = true;
-    }
-    if cps.project_name.is_empty() {
-        if !schema.meta.name.is_empty() {
-            cps.project_name = schema.meta.name.clone();
-        } else if !schema.meta.id.is_empty() {
-            cps.project_name = schema.meta.id.clone();
-        }
-    }
-    if cps.project_category.is_empty() && !schema.meta.category.is_empty() {
-        cps.project_category = schema.meta.category.clone();
-    }
-    if !schema.meta.version.is_empty() {
-        cps.project_version = schema.meta.version.clone();
-    }
-    // 默认勾上「灌入预设」当且仅当来源带 preset
+    cps.project_id = schema.meta.id.clone();
+    cps.project_name = if !schema.meta.name.is_empty() { schema.meta.name.clone() } else { schema.meta.id.clone() };
+    cps.project_category = schema.meta.category.clone();
+    cps.project_version = if !schema.meta.version.is_empty() { schema.meta.version.clone() } else { "1.0.0".into() };
     cps.with_preset = schema.meta.has_preset;
-    // 把 schema 存进对应槽位（按 tab 分配）
+    cps.id_dirty = true;
     match cps.tab {
         1 => cps.file_schema = Some(schema),
         2 => cps.tpl_schema = Some(schema),
@@ -86,7 +71,7 @@ fn on_source_loaded(st: &mut AppState, schema: TblSchema) {
     }
 }
 
-/// 切 tab 时清掉 picker / source 相关字段，但保留身份输入。
+/// 切 tab 时清掉 picker / source 相关字段，重置右侧身份。
 fn reset_source_on_tab_change(cps: &mut crate::state::CreateProjectState) {
     cps.picker_items.clear();
     cps.picker_checked.clear();
@@ -99,6 +84,12 @@ fn reset_source_on_tab_change(cps: &mut crate::state::CreateProjectState) {
     cps.tpl_meta_version.clear();
     cps.tpl_search.clear();
     cps.with_preset = false;
+    // 重置右侧身份为默认
+    cps.project_id.clear();
+    cps.project_name.clear();
+    cps.project_category.clear();
+    cps.project_version = "1.0.0".into();
+    cps.id_dirty = true;  // 下一轮 push 写回 slint
 }
 
 fn list_template_metas(subtab: i32) -> Vec<TemplateMeta> {
@@ -145,10 +136,13 @@ pub fn push(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
     let cps = &st.create_project;
 
     ui_h.set_cp_tab_index(cps.tab);
-    ui_h.set_cp_project_id(cps.project_id.clone().into());
-    ui_h.set_cp_project_name(cps.project_name.clone().into());
-    ui_h.set_cp_project_category(cps.project_category.clone().into());
-    ui_h.set_cp_project_version(cps.project_version.clone().into());
+    // tab/模板切换时强制写回身份字段，退出编辑状态
+    if cps.id_dirty {
+        ui_h.set_cp_project_id(cps.project_id.clone().into());
+        ui_h.set_cp_project_name(cps.project_name.clone().into());
+        ui_h.set_cp_project_category(cps.project_category.clone().into());
+        ui_h.set_cp_project_version(cps.project_version.clone().into());
+    }
     ui_h.set_cp_open_after(cps.open_after);
     ui_h.set_cp_with_preset(cps.with_preset);
 
@@ -294,6 +288,9 @@ pub fn push(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
     ui_h.set_cp_picker_all_checked(all_checked);
     ui_h.set_cp_picker_selected_count(selected);
     ui_h.set_cp_picker_total_count(total);
+    drop(st);
+    let mut st = state.borrow_mut();
+    st.create_project.id_dirty = false;
 }
 
 /// 真正落地：按 tab 构造 schema → create_project_in_memory_with → set_active_by_id。
@@ -332,7 +329,7 @@ fn run(state: &Rc<RefCell<AppState>>) {
             let source = match source {
                 Some(s) => s,
                 None => {
-                    st.engine.log("[新建项目] 内部错误：source 为空".to_string());
+                    st.engine.ui_log("[新建项目] 内部错误：source 为空".to_string());
                     return;
                 }
             };
@@ -358,7 +355,7 @@ fn run(state: &Rc<RefCell<AppState>>) {
             st.engine.create_project_in_memory_with(schema, with_preset)
         }
         _ => {
-            st.engine.log(format!("[新建项目] 未知 tab: {}", tab));
+            st.engine.ui_log(format!("[新建项目] 未知 tab: {}", tab));
             return;
         }
     };
@@ -366,7 +363,7 @@ fn run(state: &Rc<RefCell<AppState>>) {
     let new_id = match result {
         Ok(id) => id,
         Err(e) => {
-            st.engine.log(format!("[新建项目] 失败: {}", e));
+            st.engine.error_log(format!("[新建项目] 失败: {}", e));
             return;
         }
     };
@@ -374,7 +371,7 @@ fn run(state: &Rc<RefCell<AppState>>) {
     if open_after {
         st.engine.set_active_by_id(&new_id);
     }
-    st.engine.log(format!(
+    st.engine.ui_log(format!(
         "[新建项目] 已创建 {}（内存中，需保存才落地）",
         new_id
     ));
@@ -393,7 +390,7 @@ pub fn wire(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
         });
     }
 
-    // cp-set-tab：切 tab
+    // cp-set-tab：切 tab — 先退出编辑状态再切
     {
         let s = state.clone();
         let weak = ui_h.as_weak();
@@ -403,6 +400,17 @@ pub fn wire(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
                 if st.create_project.tab != i {
                     st.create_project.tab = i;
                     reset_source_on_tab_change(&mut st.create_project);
+                }
+            }
+            // 切换到模板 tab → 自动选中第一个模板
+            if i == 2 {
+                let metas = list_template_metas(0); // builtin
+                if let Some(meta) = metas.first() {
+                    if let Some(content) = load_template_content(&meta.id, meta.source) {
+                        let mut st = s.borrow_mut();
+                        st.create_project.tpl_selected_id = meta.id.clone();
+                        on_source_loaded(&mut st, content.schema);
+                    }
                 }
             }
             if let Some(ui_h) = weak.upgrade() {
@@ -419,7 +427,6 @@ pub fn wire(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
             {
                 let mut st = s.borrow_mut();
                 st.create_project.project_id = v.to_string();
-                st.create_project.id_prefilled = true;
             }
             if let Some(ui_h) = weak.upgrade() { push(&ui_h, &s); }
         });
@@ -468,7 +475,7 @@ pub fn wire(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
                         st.create_project.file_schema = None;
                         st.create_project.picker_items.clear();
                         st.create_project.picker_checked.clear();
-                        st.engine.log(format!("[新建项目] 读取失败: {}", e));
+                        st.engine.error_log(format!("[新建项目] 读取失败: {}", e));
                         if let Some(ui_h) = weak.upgrade() { push(&ui_h, &s); }
                         return;
                     }
@@ -482,7 +489,7 @@ pub fn wire(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
                         st.create_project.file_schema = None;
                         st.create_project.picker_items.clear();
                         st.create_project.picker_checked.clear();
-                        st.engine.log(format!("[新建项目] 解析失败: {}", e));
+                        st.engine.error_log(format!("[新建项目] 解析失败: {}", e));
                         if let Some(ui_h) = weak.upgrade() { push(&ui_h, &s); }
                         return;
                     }

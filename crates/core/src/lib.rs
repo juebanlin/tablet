@@ -3,6 +3,7 @@
 
 pub mod model;
 pub mod types;
+pub mod enums;
 pub mod tbl;
 pub mod tbl_str;
 pub mod tblschema;
@@ -12,8 +13,10 @@ pub mod validate;
 pub mod ops;
 pub mod export;
 pub mod excel;
+pub mod excel_sync;
 pub mod search;
 pub mod test_util;
+pub mod config_fix;
 
 pub use search::name_matches;
 

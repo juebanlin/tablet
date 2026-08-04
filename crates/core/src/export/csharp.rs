@@ -75,6 +75,7 @@ fn cs_base_type(bt: BaseType) -> &'static str {
         BaseType::Double => "double",
         BaseType::Str => "string",
         BaseType::Bool => "bool",
+        BaseType::Txt => "string",
     }
 }
 
@@ -85,6 +86,7 @@ fn cs_base_default(bt: BaseType) -> &'static str {
         BaseType::Double => "0d",
         BaseType::Str => "\"\"",
         BaseType::Bool => "false",
+        BaseType::Txt => "\"\"",
     }
 }
 
@@ -96,6 +98,7 @@ fn cs_base_parse_fn(bt: BaseType) -> &'static str {
         BaseType::Double => "TblParse.ParseDouble",
         BaseType::Str => "TblParse.ParseStr",
         BaseType::Bool => "TblParse.ParseBool",
+        BaseType::Txt => "TblParse.ParseStr",
     }
 }
 
@@ -394,46 +397,38 @@ fn escape_xml(s: &str) -> String {
 }
 
 pub fn export_all_csharp(project: &Project, runtime: CSharpRuntime) -> Result<super::ExportResult> {
-    let export_cfg = project.config.export.as_ref();
+    let export_cfg = &project.config.export;
 
-    // 配置定位：按 runtime 取对应 section
-    let cs_cfg: Option<&CSharpExport> = match runtime {
-        CSharpRuntime::Dotnet => export_cfg
-            .and_then(|e| e.server.as_ref())
-            .and_then(|s| s.csharp_dotnet.as_ref()),
-        CSharpRuntime::Unity => export_cfg
-            .and_then(|e| e.client.as_ref())
-            .and_then(|c| c.csharp_unity.as_ref()),
-        CSharpRuntime::Godot => export_cfg
-            .and_then(|e| e.client.as_ref())
-            .and_then(|c| c.csharp_godot.as_ref()),
-    };
-
-    let code_output = cs_cfg
-        .and_then(|c| c.code_output.as_deref())
-        .unwrap_or(runtime.default_code_output());
-    let ns = cs_cfg
-        .and_then(|c| c.namespace.as_deref())
-        .unwrap_or(runtime.default_namespace());
-
-    let parent_ending = match runtime {
-        CSharpRuntime::Dotnet => export_cfg.and_then(|e| e.server.as_ref()).and_then(|s| s.line_ending.as_deref()),
-        _ => export_cfg.and_then(|e| e.client.as_ref()).and_then(|c| c.line_ending.as_deref()),
-    };
-    let parent_encoding = match runtime {
-        CSharpRuntime::Dotnet => export_cfg.and_then(|e| e.server.as_ref()).and_then(|s| s.encoding.as_deref()),
-        _ => export_cfg.and_then(|e| e.client.as_ref()).and_then(|c| c.encoding.as_deref()),
+    // 配置定位：按 runtime 取对应 section，提取 namespace 和 code_output
+    let (code_output, ns) = match runtime {
+        CSharpRuntime::Dotnet => {
+            let cfg = export_cfg.server.as_ref()
+                .and_then(|s| s.csharp_dotnet.as_ref());
+            let output = cfg.and_then(|c| c.code_output.as_deref()).unwrap_or(runtime.default_code_output());
+            let namespace = cfg.and_then(|c| c.namespace.as_deref()).unwrap_or(runtime.default_namespace());
+            (output, namespace)
+        }
+        CSharpRuntime::Unity => {
+            let cfg = export_cfg.client.as_ref()
+                .and_then(|c| c.csharp_unity.as_ref());
+            let output = cfg.and_then(|c| c.code_output.as_deref()).unwrap_or(runtime.default_code_output());
+            let namespace = cfg.and_then(|c| c.namespace.as_deref()).unwrap_or(runtime.default_namespace());
+            (output, namespace)
+        }
+        CSharpRuntime::Godot => {
+            let cfg = export_cfg.client.as_ref()
+                .and_then(|c| c.csharp_godot.as_ref());
+            let output = cfg.and_then(|c| c.code_output.as_deref()).unwrap_or(runtime.default_code_output());
+            let namespace = cfg.and_then(|c| c.namespace.as_deref()).unwrap_or(runtime.default_namespace());
+            (output, namespace)
+        }
     };
 
     let line_ending = LineEnding::from_config(
-        cs_cfg.and_then(|c| c.line_ending.as_deref())
-            .or(parent_ending)
-            .or_else(|| export_cfg.and_then(|e| e.line_ending.as_deref()))
+        export_cfg.line_ending.map(|l| l.as_str())
             .unwrap_or("lf")
     );
-    let encoding = cs_cfg.and_then(|c| c.encoding.as_deref())
-        .or(parent_encoding)
-        .or_else(|| export_cfg.and_then(|e| e.encoding.as_deref()))
+    let encoding = export_cfg.encoding.map(|e| e.as_str())
         .unwrap_or("utf-8").to_string();
     let opts = super::ExportOptions { line_ending, encoding };
 
@@ -549,7 +544,7 @@ mod tests {
                 EnumEntry { id: "1".to_string(), name: "Warrior".to_string(), desc: "战士".to_string() },
                 EnumEntry { id: "2".to_string(), name: "Mage".to_string(), desc: "法师".to_string() },
             ],
-            dirty: false, deleted: false, original: String::new(),
+            dirty: false, deleted: false, original_entries: Vec::new(), saved: true,
         };
         let out = gen_enum_file(&e, "Game.Config");
         assert!(out.contains("namespace Game.Config"));

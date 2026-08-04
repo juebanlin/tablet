@@ -37,6 +37,7 @@ fn cpp_base_type(bt: BaseType) -> &'static str {
         BaseType::Double => "double",
         BaseType::Str => "std::string",
         BaseType::Bool => "bool",
+        BaseType::Txt => "std::string",
     }
 }
 
@@ -46,6 +47,7 @@ fn cpp_base_default(bt: BaseType) -> &'static str {
         BaseType::Float | BaseType::Double => "0",
         BaseType::Str => "{}",
         BaseType::Bool => "false",
+        BaseType::Txt => "{}",
     }
 }
 
@@ -57,6 +59,7 @@ fn cpp_base_parse_fn(bt: BaseType) -> &'static str {
         BaseType::Double => "parse_double",
         BaseType::Str => "parse_str",
         BaseType::Bool => "parse_bool",
+        BaseType::Txt => "parse_str",
     }
 }
 
@@ -413,8 +416,8 @@ fn gen_all_header(ns: &str, table_names: &[String], constant_names: &[String], e
 }
 
 pub fn export_all_cpp(project: &Project) -> Result<super::ExportResult> {
-    let export_cfg = project.config.export.as_ref();
-    let server = export_cfg.and_then(|e| e.server.as_ref());
+    let export_cfg = &project.config.export;
+    let server = export_cfg.server.as_ref();
     let cpp = server.and_then(|s| s.cpp.as_ref());
 
     let code_output = cpp
@@ -425,14 +428,10 @@ pub fn export_all_cpp(project: &Project) -> Result<super::ExportResult> {
         .unwrap_or("game::config");
 
     let line_ending = LineEnding::from_config(
-        cpp.and_then(|c| c.line_ending.as_deref())
-            .or_else(|| server.and_then(|s| s.line_ending.as_deref()))
-            .or_else(|| export_cfg.and_then(|e| e.line_ending.as_deref()))
+        export_cfg.line_ending.map(|l| l.as_str())
             .unwrap_or("lf")
     );
-    let encoding = cpp.and_then(|c| c.encoding.as_deref())
-        .or_else(|| server.and_then(|s| s.encoding.as_deref()))
-        .or_else(|| export_cfg.and_then(|e| e.encoding.as_deref()))
+    let encoding = export_cfg.encoding.map(|e| e.as_str())
         .unwrap_or("utf-8").to_string();
     let opts = super::ExportOptions { line_ending, encoding };
 
@@ -553,7 +552,7 @@ mod tests {
             ],
             dirty: false,
             deleted: false,
-            original: String::new(),
+            original_entries: Vec::new(), saved: true,
         };
         let out = gen_enum_header(&e, "game::config");
         assert!(out.contains("namespace game::config"));
