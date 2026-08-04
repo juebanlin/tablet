@@ -16,7 +16,7 @@ fn main() {
 
     let style = std::env::var("SLINT_STYLE").ok().unwrap_or_else(|| {
         match std::env::var("CARGO_CFG_TARGET_OS").as_deref() {
-            Ok("windows") => "fluent".to_string(),
+            Ok("windows") => "fluent-light".to_string(),  // 使用 fluent-light 避免深色模式字体问题
             Ok("macos") | Ok("ios") => "cupertino".to_string(),
             _ => "cosmic".to_string(),
         }
