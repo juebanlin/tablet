@@ -47,9 +47,10 @@ export component AppWindow inherits Window {
     min-height: 500px;
     background: Theme.bg-window;
     // Windows 默认 Segoe UI fallback 链对部分 CJK 字符（如 U+FF09 全角右括号）会
-    // 命中无字形的字体导致豆腐框；显式指定 Microsoft YaHei UI 强制走系统中文字体。
+    // 命中无字形的字体导致豆腐框；显式指定中文字体确保兼容性。
+    // 使用 "Microsoft YaHei"（不带 UI 后缀）在所有 Windows 版本中兼容性更好。
     // macOS / Linux 找不到这个名字会回退到平台默认（PingFang SC / Noto Sans CJK）。
-    default-font-family: "Microsoft YaHei UI";
+    default-font-family: "Microsoft YaHei";
 
     // ── 系统级菜单栏（Slint 原生 MenuBar，平台风格）─────────
     // macOS：渲染到顶部全局菜单栏；Windows / Linux：渲染在窗口顶部。
