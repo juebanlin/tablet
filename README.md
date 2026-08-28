@@ -34,7 +34,9 @@
   - Table 4 行表头（desc 描述 / export 导出方向 / type 类型 / field 字段名）+ 数据区直接编辑
   - 单击进选区，双击进编辑，Ctrl+C/X/V 与 Excel 完全互通；列右键插入/删除列；行号右键插入/删除行
   - 类型选择器 / 引用选择器弹窗，支持 14 种范式（List / Set / Map / Tuple2-4 / @ref ...）
-- **底部 LogPanel** —— 操作日志、验证错误、Excel 桥接事件、覆盖配置警告统一打到这里。
+- **底部面板**（日志 + Excel 文件 两个 tab）——
+  - **日志 tab**：操作日志、验证错误、Excel 桥接事件、覆盖配置警告统一打到这里
+  - **Excel 文件 tab**：`.excel` 目录卡片式浏览器（单击选中 / 双击打开），顶部「同步」按钮打开同步面板
 
 ### 主要功能 / 操作入口
 
@@ -52,12 +54,9 @@
   - **列字母**（A/B/C ...）：左侧插入列 / 右侧插入列 / 删除列
   - **行号**（1/2/3 ...）：上方插入行 / 下方插入行 / 删除行
   - **单元格**：picker 弹窗（Ref / Type 列）/ 复制 / 剪切 / 粘贴 / 清空内容
-- **Excel 桥接**（@06）：
-  - 叶节点选中 → GridRibbon「Excel 编辑」按钮 → 单 sheet xlsx
-  - Group 右键「用 Excel 打开（整组）」→ 多 sheet xlsx
-  - 调起逻辑：系统默认 → 平台候选链兜底（Win Excel/WPS/LO；macOS open -a；Linux PATH）
-  - 关闭探测三层降级：lock 文件 → Linux /proc fd → OS write
-  - 编辑期间全屏 modal 屏蔽 UI 防止数据丢失；4h 超时自动放弃；用户可点「强制放弃」终止
+- **Excel 两条独立流**（@06）：
+  - **Excel 编辑桥接**：叶节点选中 → GridRibbon「Excel 编辑」/ Group 右键「用 Excel 打开」→ 导出 xlsx → 调起外部编辑器 → 监控关闭 → 自动回写内存模型。调起逻辑系统默认 → 平台候选链兜底；关闭探测三层降级（lock 文件 → Linux /proc fd → OS write）；编辑期间全屏 modal 屏蔽 UI；4h 超时自动放弃
+  - **Excel 同步面板**：底部面板「Excel 文件」tab →「同步」→ 对比 `.excel/*.xlsx` 与内存 group，逐表给同步动作（数据→ / ←数据 / 补列→ / 强制→ / 创建→ / ←导入）
 - **保存与并发**：
   - 延迟写盘——编辑全部在内存，按「保存全部」才落 .tbl 文件
   - 进程锁 `.tablet.lock` + PID 检查，防多实例并发改同一 workspace

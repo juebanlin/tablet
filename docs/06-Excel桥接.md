@@ -4,6 +4,15 @@ UI 层包装 xlsx 编辑流的工作流文档。**xlsx 文件本身的读 / 写�
 
 桥接的本质：调起策划机器上的 Excel / WPS 编辑工具核心生成的 xlsx，关闭后把策划改动回写到 .tbl。CLI 不需要这条流程（要批量出 xlsx 直接 `tablet-cli excel export ...`，要回写直接靠脚本调 import 接口）。
 
+**两条 Excel 流（注意区分）**：
+
+| 流 | 入口 | 核心模块 | 用途 |
+|----|------|---------|------|
+| **Excel 编辑桥接**（本文 §1-§6） | GridRibbon「Excel 编辑」/ Group 右键「用 Excel 打开」 | `tablet_core::excel` | 导出 xlsx → 调起外部编辑器 → 监控关闭 → 回写内存模型 |
+| **Excel 同步面板**（本文 §7） | 底部面板「Excel 文件」tab →「同步」 | `tablet_core::excel_sync` | 对比 `.excel/*.xlsx` 与内存 group，逐表给同步动作 |
+
+两条流共用 `tablet_core::excel` 的严格导出/导入 API 作为基础，但定位不同：编辑桥接是"单向给策划改完自动回填"，同步面板是"人工对比 + 选方向合并"。
+
 ## 1. 触发方式
 
 UI 入口共两处：
@@ -107,6 +116,8 @@ GridArea 单元格 / 选区支持 Excel 风格的复制粘贴：
 | 启动残留扫（静默删除）+ 退出清理 + 4h 超时自动强制放弃 | ✅ |
 | 行颜色标记（`#@c:RRGGBB` ↔ xlsx 行背景色） | ⏸ 计划独立任务（S14-Color），见本文 §6 |
 | 剪贴板 TSV 复制粘贴 | ✅ |
+| **Excel 同步面板**（底部面板「同步」，`excel_sync` 核心引擎，见本文 §7） | ✅ |
+| **Excel 文件浏览器**（卡片式，`.excel` 目录，双击打开） | ✅ |
 
 ## 6. 已知限制 / 后置项
 
@@ -115,3 +126,66 @@ GridArea 单元格 / 选区支持 Excel 风格的复制粘贴：
 - **Excel 启动瞬间窗口期**：`open::that()` 返回到 Excel 真正持锁有几百 ms 间隙，期间监控线程的 [`xlsx_is_released`] 可能立即误判为"已关闭"。已通过监控线程启动后 sleep 3s 缓解，仍是 best-effort。
 - **WPS 锁文件行为**：WPS for Windows 写 `~$file.xlsx` 与 Excel 一致；但 macOS / Linux 的 WPS 锁文件命名细节未实测全。如发现不准，参照 [`has_lock_file`] 添加新模式。
 - **极端行数性能**：中型 group（≤ 20 sheet × 2000 行）写出 + 读回 ≤ 2s 是合理目标。一组 50 万行的极端用例未测，应也工作但 UI 可能 freezing 几秒——建议大表拆 group。
+
+## 7. Excel 同步面板
+
+底部面板「Excel 文件」tab 提供独立的**同步面板**，用于对比 `.excel/*.xlsx` 与内存 group 的数据差异，并按表逐行选择同步动作。与 §1 的"Excel 编辑桥接"（调起编辑器自动回填）不同，同步面板是**人工对比 + 选方向合并**。
+
+### 7.1 Excel 文件浏览器（卡片式）
+
+底部面板「Excel 文件」tab 是 `.excel` 目录（与 excel_bridge 的 `.tbl-cache` 不同的独立目录）的文件列表：
+
+- 扫描 `project_root/.excel/*.xlsx`，按文件名排序，每文件一张卡片（📄 图标 + 文件名）
+- **单击**行 = toggle 选中（选中态高亮边框 + 背景）
+- **双击**行 = 用系统默认程序直接打开 xlsx（**纯查看**，不建编辑会话、不监控、不回写）
+- 工具栏：`同步`（打开同步对话框）/ `刷新`（重扫目录）/ `删除`（删除选中文件，需有选中）/ `打开`（系统默认打开选中文件）
+
+### 7.2 同步对话框
+
+标题「Excel 同步」（920×550），底部「刷新」+「关闭」。数据模型 `EsRow`，每行对应一个 (group, table) 或 (group, xlsx sheet) 配对。
+
+**表头 4 列**：`组 / 节点` ｜ `tablet(行x列)` ｜ `操作` ｜ `Excel(行x列 | 匹配+差异)`
+
+**每行状态**：
+
+| 状态 | 判定 | 显示 |
+|------|------|------|
+| 完全匹配 | `tablet_only==0 && xlsx_only==0` | 操作：`数据→` / `←数据` |
+| 仅 tablet 多列 | `tbl_more_cols` | 操作：`数据→` / `←数据` / `补列→` |
+| 两边各有独有列 / 仅 xlsx 多列 | `hdr_mismatch` / `xlsx_more_cols` | 操作：`强制→`（整表覆写） |
+| tablet 有、xlsx 无 | `left_only` | 操作：`创建→` |
+| xlsx 有 sheet、tablet 无 | `right_only` | 操作：`←导入` |
+| 表头首列不匹配 | `matched_prefix==0` | 仅 `⛔`，原因「表头不符合规范」 |
+
+**操作按钮**：
+
+| 按钮 | 核心调用 | 语义 |
+|------|---------|------|
+| `数据→` | `sync_group_to_xlsx(..., DataOnly)` | 仅覆盖匹配前缀列数据，不补列 |
+| `←数据` | `read_group_from_xlsx(..., force=false)` | 从 xlsx 合并回 tablet（只覆盖 xlsx 有的列） |
+| `补列→` | `sync_group_to_xlsx(..., WithColumns)` | 在匹配前缀后插入 tablet 独有列 |
+| `强制→` | `sync_group_to_xlsx(..., Full)` | 整表覆写（表头不匹配/结构冲突时用） |
+| `创建→` | `sync_group_to_xlsx(..., Full)` | xlsx 不存在则新建 |
+| `←导入` | `read_group_from_xlsx(..., force=false)` | xlsx 独有 sheet 导入 |
+
+所有操作即时执行，结果写入 UI 日志（`[同步]` / `[同步失败]`）。执行前对 `数据→` / `←数据` 做差异守卫：无差异时拒绝（`数据已同步，无需操作`）。执行完成后自动刷新主界面与对话框。
+
+### 7.3 核心引擎（`tablet_core::excel_sync`）
+
+与 `tablet_core::excel`（严格导出/导入桥）平级的新模块，**仅 GUI 同步面板使用，CLI 未暴露**：
+
+| API | 作用 |
+|-----|------|
+| `read_xlsx_sheets(path)` | 用 umya-spreadsheet 读取 xlsx 全部 sheet（value() 直接返回字符串，避免 calamine 类型推断） |
+| `compute_column_match(fields, headers)` | 计算匹配前缀列数 + 两侧独有列数 + 列映射 |
+| `classify_header(headers, fields)` | 表头分类：`Identical` / `TailDiff` / `Mismatch` / `Invalid` |
+| `diff_rows(left, right)` | 行差异统计（added / removed / modified） |
+| `sync_group_to_xlsx(path, group, mode)` | tablet → xlsx（`DataOnly` / `WithColumns` / `Full`） |
+| `read_group_from_xlsx(path, group, force)` | xlsx → tablet，返回 `GroupPatch` 合并回内存 |
+
+底层用 **umya-spreadsheet** 读写（保留已有 xlsx 格式化），与 `tablet_core::excel` 的 calamine + rust_xlsxwriter 路线不同。
+
+### 7.4 已知缺口
+
+- **`←导入` 对 xlsx 独有 sheet（right_only）实际是 no-op**——`read_group_from_xlsx` 只对 group 中已有同名表生成 patch，纯新 sheet 不会建表。按钮虽显示但无实际效果，后续需扩展为"从 sheet 新建 table"。
+- `.excel/` 目录与 `.tbl-cache/` 相互独立；启动/退出清理只处理 `.tbl-cache`，`.excel` 下的 xlsx 由用户手动管理或删除。

@@ -1,6 +1,6 @@
 ---
 name: tbl
-description: Generate, extend, and validate tablet .tblschema / .tbl file content. Use when the user asks to create a new schema template, add data / preset rows to an existing schema, design table fields and types, hand-validate .tbl content, or convert a planning doc into a tbl schema. Covers the v1 schema spec (# @meta / # @sep / # @preset directives), 14 type paradigms with separator config, three modes (table / constant / enum), and naming / validation rules. This skill is about file content only — does not cover the tablet CLI / GUI which changes frequently.
+description: Generate, extend, and validate tablet .tblschema / .tbl file content. Use when the user asks to create a new schema template, add data / preset rows to an existing schema, design table fields and types, hand-validate .tbl content, or convert a planning doc into a tbl schema. Covers the v1 schema spec (# @meta / # @sep / # @preset directives), the v3 .tbl block format for tables (plus legacy v2 CSV), 14 type paradigms with separator config, three modes (table / constant / enum), and naming / validation rules. This skill is about file content only — does not cover the tablet CLI / GUI which changes frequently.
 user-invocable: true
 allowed-tools:
   - Read
@@ -12,7 +12,7 @@ allowed-tools:
 
 # /tbl — tablet file format skill
 
-Authoritative spec for `.tblschema` (v1) and `.tbl` (v2) file content. Use when generating templates, extending preset data, hand-validating, or reverse-engineering schema from design docs.
+Authoritative spec for `.tblschema` (v1) and `.tbl` (v2 CSV / v3 block) file content. Use when generating templates, extending preset data, hand-validating, or reverse-engineering schema from design docs.
 
 **Naming clarification:**
 - `.tbl` / `.tblschema` = tablet 的数据文件格式（本技能覆盖）
@@ -98,6 +98,7 @@ List what the skill can do (schema gen / preset extend / hand-validate / type de
 3. For Table: rows go in field-order — every column must appear.
 4. For Constant: each row is `name | type | value | export | desc`.
 5. For Enum: each row is `id | name | desc`.
+6. When the project uses `.tbl` v3 (default for new tables), Table preset rows are translated to `[id]` blocks on instantiation — each preset row becomes one `[<id>]` record, non-empty fields written as `fieldname:value`.
 6. Validate against `references/validation.md`:
    - Ref values are `int` ids — reject if user passes a name string for `@EnumName`
    - Tuple values must have exactly N comma-separated parts

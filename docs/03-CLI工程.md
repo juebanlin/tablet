@@ -32,7 +32,8 @@ tablet/
     │   │   ├── validate/       ← cell / row / schema / project 四层验证
     │   │   ├── template/       ← 项目模板（TemplateSource / Builtin / Local / instantiate）
     │   │   ├── export/         ← JSON / XML / Java / Go / Lua
-    │   │   └── excel.rs        ← xlsx 互转
+    │   │   ├── excel.rs        ← xlsx 严格互转（CLI / GUI 编辑桥接共用）
+    │   │   └── excel_sync.rs   ← Excel 同步引擎（umya-spreadsheet，仅 GUI 同步面板用）
     │   ├── templates/          ← Java/Go/Lua 模板源（生成代码用）
     │   └── schemas/            ← 内置 .tblschema（include_str! 嵌入；@02 项目模板 / @08 测试驱动共用）
     │

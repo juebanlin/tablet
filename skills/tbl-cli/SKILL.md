@@ -132,6 +132,7 @@ tablet-cli util validate-type <type> <value> [--config <path>] [--schema <path>]
 
 # Convert
 tablet-cli util tbl-to-xlsx <file.tbl> -o <out.xlsx>
+tablet-cli util xlsx-to-tbl <file.xlsx> --schema <path> -o <dir>
 tablet-cli util scaffold <file.tblschema> -o <dir>
 
 # Auxiliary
