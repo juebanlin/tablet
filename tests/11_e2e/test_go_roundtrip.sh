@@ -37,6 +37,7 @@ run_cli_raw util gen-test --lang go --format json \
 assert_exit 0
 assert_file_exists "$PROJECT_ROOT/test_main_go/main.go"
 assert_file_exists "$PROJECT_ROOT/go.mod"
+assert_file_exists "$PROJECT_ROOT/gen/server/go/config/example_test.go"
 
 # 运行 Go 测试（从 project root 执行，go.mod 在此）
 DATA_DIR="$PROJECT_ROOT/gen/server/data/json"

@@ -5,8 +5,8 @@
 //! 用户在自己的 main.cpp 里：
 //!   #define TBL_JSON_LIB_NLOHMANN
 //!   #include "all_tpls.h"
-//!   tbl::init_json("gen/server/data/json");
-//!   auto* hero = tbl::HeroBaseTpl::Get(1);
+//!   game::config::init_json("gen/server/data/json");   // 命名空间默认 game::config，可在配置里改
+//!   auto* hero = game::config::HeroBaseTpl::Get(1);
 //!
 //! 设计要点：
 //! - C++17 + nlohmann/json (header-only)
@@ -24,6 +24,7 @@ use super::{to_camel_case, LineEnding};
 
 const TPL_TBL_H: &str = include_str!("../../templates/cpp/tbl.h");
 const TPL_LOADER_H: &str = include_str!("../../templates/cpp/loader.h");
+const TPL_EXAMPLE_H: &str = include_str!("../../templates/cpp/Example.h");
 
 fn is_server_export(export: &Export) -> bool {
     matches!(export, Export::ClientServer | Export::ServerOnly)
@@ -442,6 +443,13 @@ pub fn export_all_cpp(project: &Project) -> Result<super::ExportResult> {
     let server = export_cfg.server.as_ref();
     let cpp = server.and_then(|s| s.cpp.as_ref());
 
+    // json_lib 接线：当前仅实现 nlohmann/json。选 rapidjson 时显式报错，避免静默产出 nlohmann loader。
+    if let Some(cfg) = cpp {
+        if matches!(cfg.json_lib, Some(crate::enums::CppJsonLib::RapidJson)) {
+            anyhow::bail!("[export.server.cpp] json_lib=rapidjson 尚未实现，当前仅支持 nlohmann（请移除该配置或改回 nlohmann）");
+        }
+    }
+
     let code_output = cpp
         .and_then(|c| c.code_output.as_deref())
         .unwrap_or("gen/server/cpp");
@@ -501,6 +509,12 @@ pub fn export_all_cpp(project: &Project) -> Result<super::ExportResult> {
 
     let all_h = gen_all_header(ns, &all_tables, &all_constants, &all_enums);
     collect(&output_dir, "all_tpls.h", &all_h);
+
+    // 仅当项目有表时才生成使用示例（引用真实首表名，保证可编译）
+    if let Some(first_table) = all_tables.first() {
+        let content = render(TPL_EXAMPLE_H).replace("{{FIRST_TABLE}}", first_table);
+        collect(&output_dir, "Example.h", &content);
+    }
 
     super::sync_export_dir(&output_dir, "h", collected)
 }

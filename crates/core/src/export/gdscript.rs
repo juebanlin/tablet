@@ -248,6 +248,7 @@ pub fn export_table_gd(table: &Table, sep: &SeparatorsSection) -> String {
     let index_col = fields.iter().position(|f| f.name == "id").unwrap_or(0);
 
     let mut s = String::new();
+    writeln!(s, "# 使用：const {} = preload(\"res://<导出路径>/{}.gd\").{}", table.name, table.name, table.name).unwrap();
     writeln!(s, "const {} = {{", table.name).unwrap();
 
     for record in &table.records {
@@ -272,6 +273,7 @@ pub fn export_table_gd(table: &Table, sep: &SeparatorsSection) -> String {
 
 pub fn export_constant_gd(constant: &Constant, sep: &SeparatorsSection) -> String {
     let mut s = String::new();
+    writeln!(s, "# 使用：const {} = preload(\"res://<导出路径>/{}.gd\").{}", constant.name, constant.name, constant.name).unwrap();
     writeln!(s, "const {} = {{", constant.name).unwrap();
 
     for entry in &constant.entries {
@@ -289,6 +291,7 @@ pub fn export_constant_gd(constant: &Constant, sep: &SeparatorsSection) -> Strin
 
 pub fn export_enum_gd(enum_def: &EnumDef) -> String {
     let mut s = String::new();
+    writeln!(s, "# 使用：const {} = preload(\"res://<导出路径>/{}.gd\").{}", enum_def.name, enum_def.name, enum_def.name).unwrap();
     let valid: Vec<&EnumEntry> = enum_def.entries.iter()
         .filter(|e| !e.id.is_empty() && !e.name.is_empty())
         .collect();

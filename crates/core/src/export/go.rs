@@ -9,6 +9,7 @@ const TPL_LOADER: &str = include_str!("../../templates/go/loader.go");
 const TPL_PARSER: &str = include_str!("../../templates/go/parser.go");
 const TPL_SEP: &str = include_str!("../../templates/go/sep.go");
 const TPL_TUPLES: &str = include_str!("../../templates/go/tuples.go");
+const TPL_EXAMPLE_GO: &str = include_str!("../../templates/go/example_test.go");
 
 fn is_server_export(export: &Export) -> bool {
     matches!(export, Export::ClientServer | Export::ServerOnly)
@@ -275,6 +276,13 @@ pub fn export_all_go(project: &Project) -> Result<super::ExportResult> {
     collect(&output_dir, "parse_str.go", &render(GEN_PARSE_STR));
     collect(&output_dir, "sep.go", &render(TPL_SEP));
     collect(&output_dir, "tuples.go", &render(TPL_TUPLES));
+    // 仅当项目有表时才生成示例（引用真实首表名，保证可编译；_test.go 不参与 go build）
+    if let Some(first_table) = project.groups.iter()
+        .flat_map(|g| g.tables.iter())
+        .find(|t| !t.deleted) {
+        let content = render(TPL_EXAMPLE_GO).replace("{{FIRST_TABLE}}", &first_table.name);
+        collect(&output_dir, "example_test.go", &content);
+    }
 
     let enum_names: HashSet<String> = project.groups.iter()
         .flat_map(|g| g.enums.iter())

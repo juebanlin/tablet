@@ -25,6 +25,7 @@ const TPL_TBL: &str = include_str!("../../templates/csharp/Tbl.cs");
 const TPL_LOADER_DOTNET: &str = include_str!("../../templates/csharp/Loader.dotnet.cs");
 const TPL_LOADER_UNITY: &str = include_str!("../../templates/csharp/Loader.unity.cs");
 const TPL_LOADER_GODOT: &str = include_str!("../../templates/csharp/Loader.godot.cs");
+const TPL_EXAMPLE_CS: &str = include_str!("../../templates/csharp/Example.cs");
 
 /// C# 三 runtime 的拆分点：决定 Loader.cs 模板与字段可见性。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -461,6 +462,7 @@ pub fn export_all_csharp(project: &Project, runtime: CSharpRuntime) -> Result<su
 
     collect(&output_dir, "Tbl.cs", &render(TPL_TBL));
     collect(&output_dir, "Loader.cs", &render(runtime.loader_tpl()));
+    collect(&output_dir, "Example.cs", &render(TPL_EXAMPLE_CS));
 
     let enum_names: HashSet<String> = project.groups.iter()
         .flat_map(|g| g.enums.iter())

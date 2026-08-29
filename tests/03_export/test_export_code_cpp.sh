@@ -11,6 +11,7 @@ setup_workspace "$TEMPLATE"
 run_cli export code --cpp
 assert_exit 0
 assert_contains "C++"
+assert_file_exists "$WORK_DIR/projects/test/gen/server/cpp/Example.h"
 cleanup
 
 end_tests

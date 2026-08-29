@@ -11,6 +11,7 @@ setup_workspace "$TEMPLATE"
 run_cli export code --csharp
 assert_exit 0
 assert_contains "C#"
+assert_file_exists "$WORK_DIR/projects/test/gen/server/csharp/Example.cs"
 cleanup
 
 end_tests

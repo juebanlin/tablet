@@ -229,6 +229,7 @@ pub fn export_table_lua(table: &Table, sep: &SeparatorsSection) -> String {
     let index_col = fields.iter().position(|f| f.name == "id").unwrap_or(0);
 
     let mut s = String::new();
+    writeln!(s, "-- 使用：local {} = require(\"<导出路径>/{}\")  -- 返回 {{id = ...}} 表", table.name, table.name).unwrap();
     writeln!(s, "local {} = {{", table.name).unwrap();
 
     for record in &table.records {
@@ -254,6 +255,7 @@ pub fn export_table_lua(table: &Table, sep: &SeparatorsSection) -> String {
 
 pub fn export_constant_lua(constant: &Constant, sep: &SeparatorsSection) -> String {
     let mut s = String::new();
+    writeln!(s, "-- 使用：local {} = require(\"<导出路径>/{}\")", constant.name, constant.name).unwrap();
     writeln!(s, "local {} = {{", constant.name).unwrap();
 
     for entry in &constant.entries {
@@ -272,6 +274,7 @@ pub fn export_constant_lua(constant: &Constant, sep: &SeparatorsSection) -> Stri
 
 pub fn export_enum_lua(enum_def: &EnumDef) -> String {
     let mut s = String::new();
+    writeln!(s, "-- 使用：local {} = require(\"<导出路径>/{}\")", enum_def.name, enum_def.name).unwrap();
     let valid: Vec<&EnumEntry> = enum_def.entries.iter()
         .filter(|e| !e.id.is_empty() && !e.name.is_empty())
         .collect();

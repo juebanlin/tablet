@@ -10,9 +10,11 @@
 #include <filesystem>
 #include <fstream>
 #include <functional>
+#include <iostream>
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #ifdef TBL_JSON_LIB_NLOHMANN
@@ -120,15 +122,32 @@ inline void load_one(const std::filesystem::path& path, const std::string& key) 
 }
 
 /// 加载 data_dir 下所有 .json，按 stem (去 .json 后缀) 匹配 registry。
+/// 结束后对比「已注册 key」与「扫到的文件」：缺表的注册项告警；`#define TBL_STRICT` 时抛异常。
 inline void init_json(const std::string& data_dir) {
     namespace fs = std::filesystem;
     if (!fs::exists(data_dir)) throw std::runtime_error("data dir not found: " + data_dir);
+
+    std::unordered_set<std::string> found;
     for (auto& e : fs::recursive_directory_iterator(data_dir)) {
         if (!e.is_regular_file()) continue;
         if (e.path().extension() != ".json") continue;
         auto rel = fs::relative(e.path(), data_dir);
         auto key = rel.replace_extension("").generic_string();
+        found.insert(key);
         load_one(e.path(), key);
+    }
+
+    std::vector<std::string> missing;
+    for (const auto& kv : table_registry()) if (!found.count(kv.first)) missing.push_back(kv.first);
+    for (const auto& kv : constant_registry()) if (!found.count(kv.first)) missing.push_back(kv.first);
+    if (!missing.empty()) {
+#ifdef TBL_STRICT
+        std::string msg = "registered configs missing data files: ";
+        for (const auto& m : missing) msg += m + " ";
+        throw std::runtime_error(msg);
+#else
+        for (const auto& m : missing) std::cerr << "[tablet] WARN: 已注册配置缺少数据文件: " << m << "\n";
+#endif
     }
 }
 

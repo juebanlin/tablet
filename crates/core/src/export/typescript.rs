@@ -298,6 +298,7 @@ pub fn export_table_ts(table: &Table, side: TypeScriptSide, module_kind: crate::
     let index_col = fields.iter().position(|f| f.name == "id").unwrap_or(0);
 
     let mut s = String::new();
+    writeln!(s, "// 使用：import {{ {}, {}Tpl }} from './{}'", table.name, table.name, table.name).unwrap();
 
     let iface_name = format!("{}Tpl", table.name);
 
@@ -381,6 +382,7 @@ fn default_for_field(tbl_type_str: &str) -> String {
 
 pub fn export_constant_ts(constant: &Constant, sep: &SeparatorsSection, side: TypeScriptSide, module_kind: crate::enums::ModuleKind) -> String {
     let mut s = String::new();
+    writeln!(s, "// 使用：import {{ {} }} from './{}'", constant.name, constant.name).unwrap();
 
     match module_kind {
         crate::enums::ModuleKind::Esm => {
@@ -415,6 +417,7 @@ pub fn export_constant_ts(constant: &Constant, sep: &SeparatorsSection, side: Ty
 
 pub fn export_enum_ts(enum_def: &EnumDef, module_kind: crate::enums::ModuleKind) -> String {
     let mut s = String::new();
+    writeln!(s, "// 使用：import {{ {}Enum, {}EnumDesc }} from './{}'", enum_def.name, enum_def.name, enum_def.name).unwrap();
     let valid: Vec<&EnumEntry> = enum_def.entries.iter()
         .filter(|e| !e.id.is_empty() && !e.name.is_empty())
         .collect();

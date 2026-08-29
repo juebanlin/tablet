@@ -1175,7 +1175,7 @@ tablet-cli --fmt json list-templates
 | `export.server.go.code_output` | `[export.server.go] code_output` |
 | `export.server.cpp.namespace` | `[export.server.cpp] namespace` |
 | `export.server.cpp.code_output` | `[export.server.cpp] code_output` |
-| `export.server.cpp.json_lib` | `[export.server.cpp] json_lib`（`nlohmann` / `rapidjson`） |
+| `export.server.cpp.json_lib` | `[export.server.cpp] json_lib`（`nlohmann`；`rapidjson` 未实现，选了会导出报错） |
 | `export.server.csharp_dotnet.namespace` | `[export.server.csharp_dotnet] namespace` |
 | `export.server.csharp_dotnet.code_output` | `[export.server.csharp_dotnet] code_output` |
 | `export.client.csharp_unity.namespace` | `[export.client.csharp_unity] namespace` |
