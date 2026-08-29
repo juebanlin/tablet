@@ -17,7 +17,7 @@
 //! 防御性 fallback：即使验证层漏了或手改文件引入特殊字符，encode/decode
 //! 也会兜底保证 .tbl 格式安全，同时 stderr 告警暴露问题。
 
-use crate::types::{BaseType, TblType};
+use crate::types::{BaseType, TblType, TypeParam};
 
 const SPECIAL_CHARS: &[char] = &['\\', '|', '\n', '\r', '\t'];
 
@@ -26,7 +26,7 @@ const SPECIAL_CHARS: &[char] = &['\\', '|', '\n', '\r', '\t'];
 /// 解析失败 → 兜底走转义（安全第一）。
 fn needs_escape(tbl_type: &str) -> bool {
     TblType::parse(tbl_type)
-        .map(|tt| tt.params.iter().any(|bt| *bt == BaseType::Txt))
+        .map(|tt| tt.params.iter().any(|p| matches!(p, TypeParam::Base(BaseType::Txt))))
         .unwrap_or(true)
 }
 

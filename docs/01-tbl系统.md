@@ -10,7 +10,7 @@
 | 行稳定 | 一行一条记录，增删改只影响对应行 |
 | 自描述 | 文件头自带 schema 信息 |
 | 类型内置 | 类型范式在工具里固定，配置只管分隔符；升级走工具新版本 |
-| 引用平级 | `@Xxx` 与 `int / List<P> / Tuple2<P,P>` 在 schema 层都是同级 variant，不能进入嵌套 |
+| 引用平级 | `@Xxx` 与 `int / List<P> / Tuple2<P,P>` 在 schema 层同级；可作独立列，也可作为「特殊 int」进入复合类型参数位（@S24） |
 | 跨平台一致 | 同一份 .tbl 同时供 Java / Go / Lua 使用，零运行时分歧 |
 
 ## 2. 文件分两类
@@ -358,12 +358,15 @@ GUI 入口：项目右键 →「项目设置...」→「分隔符」tab（含 25
 - 数据文件层**永远存 id**（int），不存名字
 - UI 渲染时可切换显示名字（详见 @04.5.2 功能区「枚举显示名字」开关）
 - 不能引用 constant（无 id 概念）
-- 不能进入嵌套：`List<@HeroType>` `Map<int,@Skill>` 都不合法
+- **可进入复合类型**：ref 作为「特殊 int」参与嵌套，`List<@Hero>` / `Map<int,@Skill>` / `Tuple2<@Hero,int>` 均合法（@S24）
+  - 声明带目标表名；数据值仍是 int id；导出按 ref 语义退化为 int（enum 复合类型内的 XxxEnum 化暂未排期）
+  - 每个嵌套 ref 元素在 schema 层做目标存在性校验，值层逐元素做 id 存在性校验
 
 | 字段类型 | .tbl 存储 | Java 字段 | Go 字段 | Lua 字段 |
 |---------|----------|----------|---------|---------|
 | `@HeroType`（@enum） | int | `HeroTypeEnum`（fromId 加载） | `HeroTypeEnum`（typed int） | int（业务自查 enum 表） |
 | `@HeroBase`（@table） | int | `int` | `int32` | `int` |
+| `List<@Hero>` | `1001;1002` | `List<Integer>` | `[]int32` | `{1001, 1002}` |
 
 ### 7.6 不支持的组合
 
@@ -373,9 +376,8 @@ GUI 入口：项目右键 →「项目设置...」→「分隔符」tab（含 25
 | `Map<P,Map<P,P>>` | 嵌套 Map 分隔符冲突 |
 | `List<Map<P,P>>` | 同理 |
 | `Set<Tuple>` | Set 元素只能基础类型 |
-| `List<@HeroType>` 等引用嵌套 | 引用必须独立一档 |
 
-要表达「列表内引用」语义，用 `List<int>` + 字段名/desc 说明。
+`txt` 不能进入复合类型（仅允许独立列）；`ref` 可以进入复合类型（@S24）。
 
 ### 7.7 跨语言值映射详表
 

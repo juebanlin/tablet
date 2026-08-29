@@ -6,6 +6,8 @@
 
 use slint::SharedString;
 
+use tablet_core::types::{Paradigm, TblType, TypeParam};
+
 use super::util::{cell_validation_message, col_letter, raw_cell_for, EXTRA_ROWS};
 use crate::state::{AppState, ColumnKind, GridSelection, SelectedNode};
 use crate::theme::*;
@@ -143,13 +145,29 @@ fn cell_display(state: &AppState, snap: &GridSnapshot, _r: usize, c: usize, raw:
     if raw.is_empty() { return String::new(); }
     match snap.column_kinds.get(c) {
         Some(ColumnKind::Ref { target }) if state.view_show_enum_name => {
-            display_for_table_cell(state, &Some(target.clone()), raw)
+            display_for_table_cell(state, &Some((target.clone(), false, false)), raw)
+        }
+        Some(ColumnKind::RefList { target }) if state.view_show_enum_name => {
+            display_for_table_cell(state, &Some((target.clone(), true, column_is_set(state, c))), raw)
         }
         Some(ColumnKind::ExportEnumCol) => {
             tablet_core::model::Export::from_str(raw).display().to_string()
         }
         _ => raw.to_string(),
     }
+}
+
+/// 判断列类型是否为 `Set<@X>`（枚举名展示需用 set 分隔符而非 list）。仅 Table 场景有效。
+fn column_is_set(state: &AppState, c: usize) -> bool {
+    let (group, name) = match &state.selected {
+        Some(SelectedNode::Table { group, name, .. }) => (group, name),
+        _ => return false,
+    };
+    state.engine.find_table(group, name)
+        .and_then(|t| t.schema.fields.get(c))
+        .and_then(|f| tablet_core::types::TblType::parse(&f.tbl_type))
+        .map(|t| t.paradigm == tablet_core::types::Paradigm::Set)
+        .unwrap_or(false)
 }
 
 fn build_table_grid(state: &AppState, group: &str, name: &str) -> GridSnapshot {
@@ -220,14 +238,26 @@ fn build_table_grid(state: &AppState, group: &str, name: &str) -> GridSnapshot {
         .filter(|r| r.first().map_or(false, |id| !id.is_empty()))
         .count();
 
-    // 识别引用列（@TableName / @EnumName）
-    let ref_targets: Vec<Option<String>> = fields.iter()
-        .map(|f| f.tbl_type.strip_prefix('@').map(|s| s.trim().to_string()))
-        .collect();
+    // 识别引用列：@TableName / @EnumName → 单选 Ref；List<@X> / Set<@X> → 多选 RefList
+    let ref_targets: Vec<Option<(String, bool, bool)>> = fields.iter().map(|f| {
+        let s = f.tbl_type.trim();
+        if let Some(name) = s.strip_prefix('@') {
+            return Some((name.trim().to_string(), false, false));
+        }
+        if let Some(t) = TblType::parse(s) {
+            if matches!(t.paradigm, Paradigm::List | Paradigm::Set) {
+                if let Some(TypeParam::Ref(name)) = t.params.first() {
+                    return Some((name.clone(), true, t.paradigm == Paradigm::Set));
+                }
+            }
+        }
+        None
+    }).collect();
     let column_kinds: Vec<ColumnKind> = ref_targets.iter().enumerate().map(|(i, t)| {
         if i == 0 { return ColumnKind::Text; } // id 列：数据行可编辑；表头才是 ReadOnly
         match t {
-            Some(name) => ColumnKind::Ref { target: name.clone() },
+            Some((name, false, _)) => ColumnKind::Ref { target: name.clone() },
+            Some((name, true, _)) => ColumnKind::RefList { target: name.clone() },
             None => ColumnKind::Text,
         }
     }).collect();
@@ -303,10 +333,18 @@ fn build_constant_grid(state: &AppState, group: &str, name: &str) -> GridSnapsho
         let cells = match entry {
             Some(e) => {
                 let export_disp = e.export.display().to_string();
-                // value 列：若 tbl_type 是 @Xxx 引用，按 view_show_enum_name 走与 Table 相同的 id→name 翻译
-                let value_ref_target: Option<String> = tablet_core::types::TblType::parse(&e.tbl_type)
-                    .filter(|t| t.paradigm == tablet_core::types::Paradigm::Ref)
-                    .and_then(|t| t.ref_name);
+                // value 列：若 tbl_type 是 @Xxx 引用（或 List<@X>），按 view_show_enum_name 走 id→name 翻译
+                let value_ref_target: Option<(String, bool, bool)> = tablet_core::types::TblType::parse(&e.tbl_type)
+                    .and_then(|t| match t.paradigm {
+                        tablet_core::types::Paradigm::Ref => t.ref_name.map(|n| (n, false, false)),
+                        tablet_core::types::Paradigm::List | tablet_core::types::Paradigm::Set => {
+                            match t.params.first() {
+                                Some(tablet_core::types::TypeParam::Ref(n)) => Some((n.clone(), true, t.paradigm == tablet_core::types::Paradigm::Set)),
+                                _ => None,
+                            }
+                        }
+                        _ => None,
+                    });
                 let value_disp = display_for_table_cell(state, &value_ref_target, &e.value);
                 let value_has_error = state.engine.has_active_cell_error(group, name, r, 2);
                 let value_is_empty_ref = value_ref_target.is_some() && e.value.is_empty();
@@ -419,17 +457,26 @@ fn plain_cell(state: &AppState, group: &str, name: &str, r: usize, c: usize, tex
 }
 
 /// Table 单元格的 display 转换：处理 @EnumName 引用列的 id → entry.name 映射。
-fn display_for_table_cell(state: &AppState, ref_target: &Option<String>, raw: &str) -> String {
+/// `(name, multi, is_set)`：multi 时按 List/Set 分隔符切分逐 id 翻译。
+fn display_for_table_cell(state: &AppState, ref_target: &Option<(String, bool, bool)>, raw: &str) -> String {
     if raw.is_empty() { return String::new(); }
     if !state.view_show_enum_name { return raw.to_string(); }
-    let ref_name = match ref_target { Some(n) => n, None => return raw.to_string() };
+    let (ref_name, multi, is_set) = match ref_target { Some(t) => t, None => return raw.to_string() };
     for g in &state.engine.project().groups {
         for e in &g.enums {
             if e.deleted || e.name != *ref_name { continue; }
-            if let Some(entry) = e.entries.iter().find(|en| en.id == raw && !en.name.is_empty()) {
-                return entry.name.clone();
+            let lookup = |id: &str| -> String {
+                e.entries.iter()
+                    .find(|en| en.id == id && !en.name.is_empty())
+                    .map(|en| en.name.clone())
+                    .unwrap_or_else(|| id.to_string())
+            };
+            if *multi {
+                let seps = &state.engine.project().schema.separators;
+                let sep = if *is_set { &seps.set } else { &seps.list };
+                return raw.split(sep).map(|s| lookup(s.trim())).collect::<Vec<_>>().join(sep);
             }
-            return raw.to_string();
+            return lookup(raw);
         }
     }
     raw.to_string()

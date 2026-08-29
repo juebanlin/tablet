@@ -226,37 +226,42 @@ impl RefIndex {
     }
 }
 
-/// 校验 @Xxx 字段类型本身（schema 层，不看具体值）
+/// 校验字段类型的引用目标（schema 层，不看具体值）。
+/// 支持顶层 `@Xxx` 与复合类型内的嵌套 ref（`List<@Hero>` / `Map<int,@Hero>` ...）。
 pub fn validate_ref_type(type_str: &str, refs: &RefIndex) -> Option<(ValidationCode, String)> {
     let t = TblType::parse(type_str)?;
-    if t.paradigm != Paradigm::Ref { return None; }
-    let name = t.ref_name.as_deref()?;
-    match refs.lookup(name) {
-        None => Some((ValidationCode::TypeRefMissing,
-            format!("引用的配置项 {} 不存在", name))),
-        Some(RefKind::Constant) => Some((ValidationCode::TypeRefIsConstant,
-            "不能引用 constant（无 id 概念）".to_string())),
-        _ => None,
+    for name in t.ref_targets() {
+        let bad = match refs.lookup(name) {
+            None => Some((ValidationCode::TypeRefMissing,
+                format!("引用的配置项 {} 不存在", name))),
+            Some(RefKind::Constant) => Some((ValidationCode::TypeRefIsConstant,
+                "不能引用 constant（无 id 概念）".to_string())),
+            _ => None,
+        };
+        if let Some(b) = bad { return Some(b); }
     }
+    None
 }
 
-/// 校验 @Xxx 字段的具体值是否能在被引用项中找到
-fn validate_ref_value(type_str: &str, value: &str, refs: &RefIndex) -> Option<(ValidationCode, String)> {
+/// 校验字段值里所有引用元素是否能在被引用项中找到。
+/// 顶层 `@Xxx` 校验整体值；复合类型按结构切分逐元素校验。
+fn validate_ref_value(tbl_type: &TblType, value: &str, sep: &SeparatorsSection, refs: &RefIndex) -> Option<(ValidationCode, String)> {
     if value.is_empty() { return None; }
-    let t = TblType::parse(type_str)?;
-    if t.paradigm != Paradigm::Ref { return None; }
-    let name = t.ref_name.as_deref()?;
-    match refs.lookup(name) {
-        None => Some((ValidationCode::TypeRefMissing,
-            format!("引用的配置项 {} 不存在", name))),
-        Some(RefKind::Constant) => Some((ValidationCode::TypeRefIsConstant,
-            "不能引用 constant".to_string())),
-        Some(_) => {
-            if refs.id_exists(name, value) { None }
-            else { Some((ValidationCode::RefValueMissing,
-                format!("引用值 {} 不存在于 {}", value, name))) }
-        }
+    for (name, raw) in tbl_type.ref_elements(value, sep) {
+        let bad = match refs.lookup(&name) {
+            None => Some((ValidationCode::TypeRefMissing,
+                format!("引用的配置项 {} 不存在", name))),
+            Some(RefKind::Constant) => Some((ValidationCode::TypeRefIsConstant,
+                "不能引用 constant".to_string())),
+            Some(_) => {
+                if refs.id_exists(&name, raw) { None }
+                else { Some((ValidationCode::RefValueMissing,
+                    format!("引用值 {} 不存在于 {}", raw, name))) }
+            }
+        };
+        if let Some(b) = bad { return Some(b); }
     }
+    None
 }
 
 pub fn col_letter(idx: usize) -> String {
@@ -303,7 +308,7 @@ pub fn validate_table_cell_with_refs(
                 .with_pos(row, col).with_field(field_name).with_value(value));
         }
         if let Some(refs) = refs {
-            if let Some((code, msg)) = validate_ref_value(type_str, value, refs) {
+            if let Some((code, msg)) = validate_ref_value(&tbl_type, value, sep, refs) {
                 return Some(ValidationError::cell(code, msg)
                     .with_pos(row, col).with_field(field_name).with_value(value));
             }
@@ -372,7 +377,7 @@ pub fn validate_constant_cell_with_refs(
                     .with_col_field_value(col, &entry.name, value));
             }
             if let Some(refs) = refs {
-                if let Some((code, msg)) = validate_ref_value(&entry.tbl_type, value, refs) {
+                if let Some((code, msg)) = validate_ref_value(&tbl_type, value, sep, refs) {
                     return Some(ValidationError::cell(code, msg)
                         .with_col_field_value(col, &entry.name, value));
                 }
@@ -800,4 +805,66 @@ pub fn validate_enum(enum_def: &EnumDef) -> Vec<ValidationError> {
         errors.extend(validate_enum_row(enum_def, row));
     }
     errors
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    fn mk_table(name: &str, fields: &[(&str, &str)], records: &[Vec<&str>]) -> Table {
+        Table {
+            name: name.to_string(),
+            path: PathBuf::from(name),
+            schema: TableSchema {
+                fields: fields.iter().map(|(n, t)| FieldDef {
+                    name: n.to_string(),
+                    desc: String::new(),
+                    tbl_type: t.to_string(),
+                    export: Export::ClientServer,
+                }).collect(),
+            },
+            records: records.iter().map(|r| r.iter().map(|s| s.to_string()).collect()).collect(),
+            dirty: false,
+            deleted: false,
+            original_records: vec![],
+            original_fields: vec![],
+            saved: true,
+            fmt_ver: crate::tbl::TblVersion::V3,
+        }
+    }
+
+    #[test]
+    fn nested_ref_value_existence_checked_per_element() {
+        // Hero 表 id: 1001, 1002
+        let hero = mk_table("Hero", &[("id", "int"), ("name", "str")], &[vec!["1001", "A"], vec!["1002", "B"]]);
+        // Skill 表含 List<@Hero> 列
+        let skill = mk_table("Skill", &[("id", "int"), ("heroes", "List<@Hero>")], &[
+            vec!["1", "1001;1002"],   // 全部存在 → 合法
+            vec!["2", "1001;9999"],   // 9999 不存在 → RefValueMissing
+        ]);
+        let groups = vec![Group {
+            name: "g".into(), dir: PathBuf::from("g"),
+            tables: vec![hero, skill], constants: vec![], enums: vec![], is_new: false,
+        }];
+        let refs = RefIndex::build(&groups);
+        let sep = SeparatorsSection::default();
+
+        let err = validate_table_cell_with_refs(&groups[0].tables[1], 0, 1, &sep, Some(&refs));
+        assert!(err.is_none(), "合法 id 不应报错: {:?}", err);
+        let err = validate_table_cell_with_refs(&groups[0].tables[1], 1, 1, &sep, Some(&refs));
+        assert_eq!(err.map(|e| e.code), Some(ValidationCode::RefValueMissing));
+    }
+
+    #[test]
+    fn nested_ref_schema_target_checked() {
+        // 引用不存在的表 → TypeRefMissing
+        let bad = validate_ref_type("List<@Missing>", &RefIndex::default());
+        assert_eq!(bad.map(|(c, _)| c), Some(ValidationCode::TypeRefMissing));
+        // 空 RefIndex 下，Map<int,@A> 的 @A 同样缺失
+        let bad = validate_ref_type("Map<int,@A>", &RefIndex::default());
+        assert_eq!(bad.map(|(c, _)| c), Some(ValidationCode::TypeRefMissing));
+        // 纯 base 复合类型不触发 ref 校验
+        assert_eq!(validate_ref_type("Map<int,int>", &RefIndex::default()), None);
+    }
 }

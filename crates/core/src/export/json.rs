@@ -7,7 +7,10 @@ use super::sep_meta::{collect_used_sep_keys_constant, collect_used_sep_keys_tabl
 
 fn value_to_json(raw: &str, tbl_type: &TblType) -> Value {
     match tbl_type.paradigm {
-        Paradigm::Base => parse_base_value(raw, &tbl_type.params[0]),
+        Paradigm::Base => match &tbl_type.params[0] {
+            TypeParam::Base(bt) => parse_base_value(raw, bt),
+            TypeParam::Ref(_) => parse_base_value(raw, &BaseType::Int),
+        },
         // 引用类型：数据层永远是 int(id)
         Paradigm::Ref => parse_base_value(raw, &BaseType::Int),
         _ => Value::from(raw),

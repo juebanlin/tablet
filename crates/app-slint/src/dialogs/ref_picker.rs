@@ -105,7 +105,8 @@ fn collect_ref_rows(state: &AppState, ref_name: &str, strategy: RefDisplayStrate
 }
 
 /// Ref 列单击 → 打开 RefPicker。current_value 取自该 cell 的真实存储值。
-pub(crate) fn open_for_cell(state: &Rc<RefCell<AppState>>, r: usize, c: usize, ref_target: &str) {
+/// `multi` = true 时多选（List<@X> / Set<@X> 列），勾选多项拼 id 列表写回。
+pub(crate) fn open_for_cell(state: &Rc<RefCell<AppState>>, r: usize, c: usize, ref_target: &str, multi: bool) {
     let mut st = state.borrow_mut();
     let default_strategy = RefDisplayStrategy::from_config(
         st.engine.global_config.ui.as_ref()
@@ -128,7 +129,23 @@ pub(crate) fn open_for_cell(state: &Rc<RefCell<AppState>>, r: usize, c: usize, r
         }
         _ => return,
     };
-    st.ref_picker.open_with(ref_target, &current, r, c, &group, &name, is_table, default_strategy);
+    // 多选拼值分隔符：List<@X> 用 list 分隔符，Set<@X> 用 set 分隔符（可独立配置）
+    let sep_sec = &st.engine.project().schema.separators;
+    let list_sep = if multi {
+        let tbl_type_str: Option<String> = if is_table {
+            st.engine.find_table(&group, &name).and_then(|t| t.schema.fields.get(c)).map(|f| f.tbl_type.clone())
+        } else {
+            st.engine.find_constant(&group, &name).and_then(|cst| cst.entries.get(r)).map(|e| e.tbl_type.clone())
+        };
+        let is_set = tbl_type_str.as_deref()
+            .and_then(tablet_core::types::TblType::parse)
+            .map(|t| t.paradigm == tablet_core::types::Paradigm::Set)
+            .unwrap_or(false);
+        if is_set { sep_sec.set.clone() } else { sep_sec.list.clone() }
+    } else {
+        sep_sec.list.clone()
+    };
+    st.ref_picker.open_with(ref_target, &current, r, c, &group, &name, is_table, default_strategy, multi, &list_sep);
 }
 
 /// 把 RefPickerState 派生成 slint 端属性并 push。
@@ -139,6 +156,7 @@ pub fn push(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
     if !rp.open { return; }
 
     ui_h.set_rp_ref_name(rp.ref_name.clone().into());
+    ui_h.set_rp_multi(rp.multi);
     ui_h.set_rp_search(rp.search.clone().into());
     ui_h.set_rp_manual_value(rp.manual_value.clone().into());
     ui_h.set_rp_strategy_index(rp.strategy.to_index());
@@ -179,15 +197,26 @@ pub fn push(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
         extras.iter().any(|e| e.to_lowercase().contains(&search))
     }).map(|(id, extras)| {
         let extras_shared: Vec<slint::SharedString> = extras.iter().map(|e| e.clone().into()).collect();
+        let selected = if rp.multi {
+            rp.selected_ids.iter().any(|s| s == id)
+        } else {
+            rp.selected_id == *id
+        };
         RefRow {
             id: id.clone().into(),
             extras: slint::ModelRc::new(slint::VecModel::from(extras_shared)),
-            selected: rp.selected_id == *id,
+            selected,
         }
     }).collect();
     ui_h.set_rp_rows(slint::ModelRc::new(slint::VecModel::from(filtered)));
 
-    let preview = if rp.selected_id.is_empty() {
+    let preview = if rp.multi {
+        if rp.selected_ids.is_empty() {
+            String::from("（未选择）")
+        } else {
+            format!("已选 {} 项: {}", rp.selected_ids.len(), rp.selected_ids.join(&rp.list_sep))
+        }
+    } else if rp.selected_id.is_empty() {
         String::from("（未选择）")
     } else {
         rows.iter().find(|(id, _)| id == &rp.selected_id)
@@ -227,6 +256,19 @@ fn sync_search(state: &Rc<RefCell<AppState>>, ui_weak: &slint::Weak<AppWindow>) 
     }
 }
 
+/// 多选模式：勾选/取消一个 id，并同步 manual_value（拼成列表）。
+fn toggle_multi(state: &Rc<RefCell<AppState>>, id: &str) {
+    let mut st = state.borrow_mut();
+    if let Some(pos) = st.ref_picker.selected_ids.iter().position(|s| s == id) {
+        st.ref_picker.selected_ids.remove(pos);
+    } else {
+        st.ref_picker.selected_ids.push(id.to_string());
+    }
+    let joined = st.ref_picker.selected_ids.join(&st.ref_picker.list_sep);
+    st.ref_picker.selected_id = joined.clone();
+    st.ref_picker.manual_value = joined;
+}
+
 pub fn wire(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
     {
         let s = state.clone();
@@ -250,7 +292,10 @@ pub fn wire(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
                 filtered.get(i as usize).map(|(id, _)| id.clone())
             };
             if let Some(id) = chosen {
-                {
+                if s.borrow().ref_picker.multi {
+                    // 多选：勾选/取消
+                    toggle_multi(&s, &id);
+                } else {
                     let mut st = s.borrow_mut();
                     st.ref_picker.selected_id = id.clone();
                     st.ref_picker.manual_value = id;
@@ -281,15 +326,19 @@ pub fn wire(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
                 filtered.get(i as usize).map(|(id, _)| id.clone())
             };
             if let Some(id) = chosen {
-                {
+                if s.borrow().ref_picker.multi {
+                    // 多选：双击等同单击勾选，不立即提交
+                    toggle_multi(&s, &id);
+                    if let Some(ui_h) = weak.upgrade() { push(&ui_h, &s); }
+                } else {
                     let mut st = s.borrow_mut();
                     st.ref_picker.selected_id = id.clone();
                     st.ref_picker.manual_value = id.clone();
-                }
-                commit(&s, id);
-                if let Some(ui_h) = weak.upgrade() {
-                    refresh::after_grid_edit(&ui_h, &s);
-                    push(&ui_h, &s);
+                    commit(&s, id);
+                    if let Some(ui_h) = weak.upgrade() {
+                        refresh::after_grid_edit(&ui_h, &s);
+                        push(&ui_h, &s);
+                    }
                 }
             }
         });
@@ -301,7 +350,14 @@ pub fn wire(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
             sync_search(&s, &weak);
             let val = {
                 let st = s.borrow();
-                if !st.ref_picker.manual_value.is_empty() {
+                if st.ref_picker.multi {
+                    // 多选：手动框为准（可输入列表里没有的组合），否则已勾选 id 拼列表
+                    if st.ref_picker.manual_value.trim().is_empty() {
+                        st.ref_picker.selected_ids.join(&st.ref_picker.list_sep)
+                    } else {
+                        st.ref_picker.manual_value.clone()
+                    }
+                } else if !st.ref_picker.manual_value.is_empty() {
                     st.ref_picker.manual_value.clone()
                 } else {
                     st.ref_picker.selected_id.clone()
@@ -359,7 +415,17 @@ pub fn wire(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
             {
                 let mut st = s.borrow_mut();
                 st.ref_picker.manual_value = q.to_string();
-                st.ref_picker.selected_id = q.to_string();
+                if st.ref_picker.multi {
+                    // 多选：手动框是列表文本，按分隔符解析回 selected_ids 让行高亮跟随
+                    st.ref_picker.selected_ids = q.split(&st.ref_picker.list_sep)
+                        .map(|x| x.trim().to_string())
+                        .filter(|x| !x.is_empty())
+                        .collect();
+                    let joined = st.ref_picker.selected_ids.join(&st.ref_picker.list_sep);
+                    st.ref_picker.selected_id = joined;
+                } else {
+                    st.ref_picker.selected_id = q.to_string();
+                }
             }
             if let Some(ui_h) = weak.upgrade() { push(&ui_h, &s); }
         });

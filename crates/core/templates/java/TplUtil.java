@@ -123,6 +123,9 @@ public class TplUtil {
                     Object val = (raw == null || raw.isEmpty()) ? null
                         : field.getType().getMethod("fromId", int.class).invoke(null, Integer.parseInt(raw));
                     field.set(obj, val);
+                } else if (ann.value().trim().startsWith("@")) {
+                    // 顶层 table ref：字段类型是 int，值永远是 int id
+                    field.set(obj, (raw == null || raw.isEmpty()) ? 0 : Integer.parseInt(raw));
                 } else {
                     field.set(obj, parseField(raw, ann.value(), sep));
                 }

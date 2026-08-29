@@ -63,24 +63,40 @@ fn cpp_base_parse_fn(bt: BaseType) -> &'static str {
     }
 }
 
+// 参数位的 C++ 类型：ref 元素退化为 int32_t（id）
+fn cpp_param_type(param: &TypeParam) -> String {
+    match param {
+        TypeParam::Base(bt) => cpp_base_type(*bt).to_string(),
+        TypeParam::Ref(_) => "int32_t".to_string(),
+    }
+}
+
+// 参数位的 string→C++ 解析函数名：ref 元素按 int 解析
+fn cpp_param_parse_fn(param: &TypeParam) -> &'static str {
+    match param {
+        TypeParam::Base(bt) => cpp_base_parse_fn(*bt),
+        TypeParam::Ref(_) => cpp_base_parse_fn(BaseType::Int),
+    }
+}
+
 fn cpp_field_type(tbl_type_str: &str, enum_names: &HashSet<String>) -> String {
     let Some(t) = TblType::parse(tbl_type_str) else { return "std::string".to_string() };
     let p = &t.params;
     match &t.paradigm {
-        Paradigm::Base => cpp_base_type(p[0]).to_string(),
-        Paradigm::Tuple2 => format!("Tuple2<{}, {}>", cpp_base_type(p[0]), cpp_base_type(p[1])),
-        Paradigm::Tuple3 => format!("Tuple3<{}, {}, {}>", cpp_base_type(p[0]), cpp_base_type(p[1]), cpp_base_type(p[2])),
-        Paradigm::Tuple4 => format!("Tuple4<{}, {}, {}, {}>", cpp_base_type(p[0]), cpp_base_type(p[1]), cpp_base_type(p[2]), cpp_base_type(p[3])),
-        Paradigm::List => format!("std::vector<{}>", cpp_base_type(p[0])),
-        Paradigm::Set => format!("std::unordered_set<{}>", cpp_base_type(p[0])),
-        Paradigm::Map => format!("std::unordered_map<{}, {}>", cpp_base_type(p[0]), cpp_base_type(p[1])),
-        Paradigm::ListTuple2 => format!("std::vector<Tuple2<{}, {}>>", cpp_base_type(p[0]), cpp_base_type(p[1])),
-        Paradigm::ListTuple3 => format!("std::vector<Tuple3<{}, {}, {}>>", cpp_base_type(p[0]), cpp_base_type(p[1]), cpp_base_type(p[2])),
-        Paradigm::ListTuple4 => format!("std::vector<Tuple4<{}, {}, {}, {}>>", cpp_base_type(p[0]), cpp_base_type(p[1]), cpp_base_type(p[2]), cpp_base_type(p[3])),
-        Paradigm::MapTuple2 => format!("std::unordered_map<{}, Tuple2<{}, {}>>", cpp_base_type(p[0]), cpp_base_type(p[1]), cpp_base_type(p[2])),
-        Paradigm::MapTuple3 => format!("std::unordered_map<{}, Tuple3<{}, {}, {}>>", cpp_base_type(p[0]), cpp_base_type(p[1]), cpp_base_type(p[2]), cpp_base_type(p[3])),
-        Paradigm::MapTuple4 => format!("std::unordered_map<{}, Tuple4<{}, {}, {}, {}>>", cpp_base_type(p[0]), cpp_base_type(p[1]), cpp_base_type(p[2]), cpp_base_type(p[3]), cpp_base_type(p[4])),
-        Paradigm::MapList => format!("std::unordered_map<{}, std::vector<{}>>", cpp_base_type(p[0]), cpp_base_type(p[1])),
+        Paradigm::Base => cpp_param_type(&p[0]).to_string(),
+        Paradigm::Tuple2 => format!("Tuple2<{}, {}>", cpp_param_type(&p[0]), cpp_param_type(&p[1])),
+        Paradigm::Tuple3 => format!("Tuple3<{}, {}, {}>", cpp_param_type(&p[0]), cpp_param_type(&p[1]), cpp_param_type(&p[2])),
+        Paradigm::Tuple4 => format!("Tuple4<{}, {}, {}, {}>", cpp_param_type(&p[0]), cpp_param_type(&p[1]), cpp_param_type(&p[2]), cpp_param_type(&p[3])),
+        Paradigm::List => format!("std::vector<{}>", cpp_param_type(&p[0])),
+        Paradigm::Set => format!("std::unordered_set<{}>", cpp_param_type(&p[0])),
+        Paradigm::Map => format!("std::unordered_map<{}, {}>", cpp_param_type(&p[0]), cpp_param_type(&p[1])),
+        Paradigm::ListTuple2 => format!("std::vector<Tuple2<{}, {}>>", cpp_param_type(&p[0]), cpp_param_type(&p[1])),
+        Paradigm::ListTuple3 => format!("std::vector<Tuple3<{}, {}, {}>>", cpp_param_type(&p[0]), cpp_param_type(&p[1]), cpp_param_type(&p[2])),
+        Paradigm::ListTuple4 => format!("std::vector<Tuple4<{}, {}, {}, {}>>", cpp_param_type(&p[0]), cpp_param_type(&p[1]), cpp_param_type(&p[2]), cpp_param_type(&p[3])),
+        Paradigm::MapTuple2 => format!("std::unordered_map<{}, Tuple2<{}, {}>>", cpp_param_type(&p[0]), cpp_param_type(&p[1]), cpp_param_type(&p[2])),
+        Paradigm::MapTuple3 => format!("std::unordered_map<{}, Tuple3<{}, {}, {}>>", cpp_param_type(&p[0]), cpp_param_type(&p[1]), cpp_param_type(&p[2]), cpp_param_type(&p[3])),
+        Paradigm::MapTuple4 => format!("std::unordered_map<{}, Tuple4<{}, {}, {}, {}>>", cpp_param_type(&p[0]), cpp_param_type(&p[1]), cpp_param_type(&p[2]), cpp_param_type(&p[3]), cpp_param_type(&p[4])),
+        Paradigm::MapList => format!("std::unordered_map<{}, std::vector<{}>>", cpp_param_type(&p[0]), cpp_param_type(&p[1])),
         Paradigm::Ref => {
             if let Some(name) = &t.ref_name {
                 if enum_names.contains(name) {
@@ -96,85 +112,85 @@ fn cpp_field_type(tbl_type_str: &str, enum_names: &HashSet<String>) -> String {
 fn cpp_parse_expr(raw_var: &str, t: &TblType, sep: &str, enum_names: &HashSet<String>) -> String {
     let p = &t.params;
     match &t.paradigm {
-        Paradigm::Base => format!("{}({})", cpp_base_parse_fn(p[0]), raw_var),
+        Paradigm::Base => format!("{}({})", cpp_param_parse_fn(&p[0]), raw_var),
 
         Paradigm::Tuple2 => format!(
             "parse_tuple2<{ta}, {tb}>({raw}, {sep}.tuple2, {fa}, {fb})",
-            ta=cpp_base_type(p[0]), tb=cpp_base_type(p[1]),
+            ta=cpp_param_type(&p[0]), tb=cpp_param_type(&p[1]),
             raw=raw_var, sep=sep,
-            fa=cpp_base_parse_fn(p[0]), fb=cpp_base_parse_fn(p[1])
+            fa=cpp_param_parse_fn(&p[0]), fb=cpp_param_parse_fn(&p[1])
         ),
         Paradigm::Tuple3 => format!(
             "parse_tuple3<{ta}, {tb}, {tc}>({raw}, {sep}.tuple3, {fa}, {fb}, {fc})",
-            ta=cpp_base_type(p[0]), tb=cpp_base_type(p[1]), tc=cpp_base_type(p[2]),
+            ta=cpp_param_type(&p[0]), tb=cpp_param_type(&p[1]), tc=cpp_param_type(&p[2]),
             raw=raw_var, sep=sep,
-            fa=cpp_base_parse_fn(p[0]), fb=cpp_base_parse_fn(p[1]), fc=cpp_base_parse_fn(p[2])
+            fa=cpp_param_parse_fn(&p[0]), fb=cpp_param_parse_fn(&p[1]), fc=cpp_param_parse_fn(&p[2])
         ),
         Paradigm::Tuple4 => format!(
             "parse_tuple4<{ta}, {tb}, {tc}, {td}>({raw}, {sep}.tuple4, {fa}, {fb}, {fc}, {fd})",
-            ta=cpp_base_type(p[0]), tb=cpp_base_type(p[1]), tc=cpp_base_type(p[2]), td=cpp_base_type(p[3]),
+            ta=cpp_param_type(&p[0]), tb=cpp_param_type(&p[1]), tc=cpp_param_type(&p[2]), td=cpp_param_type(&p[3]),
             raw=raw_var, sep=sep,
-            fa=cpp_base_parse_fn(p[0]), fb=cpp_base_parse_fn(p[1]), fc=cpp_base_parse_fn(p[2]), fd=cpp_base_parse_fn(p[3])
+            fa=cpp_param_parse_fn(&p[0]), fb=cpp_param_parse_fn(&p[1]), fc=cpp_param_parse_fn(&p[2]), fd=cpp_param_parse_fn(&p[3])
         ),
 
         Paradigm::List => format!(
             "parse_list<{t}>({raw}, {sep}.list, {f})",
-            t=cpp_base_type(p[0]), raw=raw_var, sep=sep, f=cpp_base_parse_fn(p[0])
+            t=cpp_param_type(&p[0]), raw=raw_var, sep=sep, f=cpp_param_parse_fn(&p[0])
         ),
         Paradigm::Set => format!(
             "parse_set<{t}>({raw}, {sep}.set, {f})",
-            t=cpp_base_type(p[0]), raw=raw_var, sep=sep, f=cpp_base_parse_fn(p[0])
+            t=cpp_param_type(&p[0]), raw=raw_var, sep=sep, f=cpp_param_parse_fn(&p[0])
         ),
         Paradigm::Map => format!(
             "parse_map<{tk}, {tv}>({raw}, {sep}.map_kv, {sep}.map_entry, {fk}, {fv})",
-            tk=cpp_base_type(p[0]), tv=cpp_base_type(p[1]),
+            tk=cpp_param_type(&p[0]), tv=cpp_param_type(&p[1]),
             raw=raw_var, sep=sep,
-            fk=cpp_base_parse_fn(p[0]), fv=cpp_base_parse_fn(p[1])
+            fk=cpp_param_parse_fn(&p[0]), fv=cpp_param_parse_fn(&p[1])
         ),
 
         Paradigm::ListTuple2 => format!(
             "parse_list<Tuple2<{ta}, {tb}>>({raw}, {sep}.list_tuple2_list, std::function<Tuple2<{ta}, {tb}>(const std::string&)>([&](const std::string& s) {{ return parse_tuple2<{ta}, {tb}>(s, {sep}.list_tuple2_tuple, {fa}, {fb}); }}))",
-            ta=cpp_base_type(p[0]), tb=cpp_base_type(p[1]),
+            ta=cpp_param_type(&p[0]), tb=cpp_param_type(&p[1]),
             raw=raw_var, sep=sep,
-            fa=cpp_base_parse_fn(p[0]), fb=cpp_base_parse_fn(p[1])
+            fa=cpp_param_parse_fn(&p[0]), fb=cpp_param_parse_fn(&p[1])
         ),
         Paradigm::ListTuple3 => format!(
             "parse_list<Tuple3<{ta}, {tb}, {tc}>>({raw}, {sep}.list_tuple3_list, std::function<Tuple3<{ta}, {tb}, {tc}>(const std::string&)>([&](const std::string& s) {{ return parse_tuple3<{ta}, {tb}, {tc}>(s, {sep}.list_tuple3_tuple, {fa}, {fb}, {fc}); }}))",
-            ta=cpp_base_type(p[0]), tb=cpp_base_type(p[1]), tc=cpp_base_type(p[2]),
+            ta=cpp_param_type(&p[0]), tb=cpp_param_type(&p[1]), tc=cpp_param_type(&p[2]),
             raw=raw_var, sep=sep,
-            fa=cpp_base_parse_fn(p[0]), fb=cpp_base_parse_fn(p[1]), fc=cpp_base_parse_fn(p[2])
+            fa=cpp_param_parse_fn(&p[0]), fb=cpp_param_parse_fn(&p[1]), fc=cpp_param_parse_fn(&p[2])
         ),
         Paradigm::ListTuple4 => format!(
             "parse_list<Tuple4<{ta}, {tb}, {tc}, {td}>>({raw}, {sep}.list_tuple4_list, std::function<Tuple4<{ta}, {tb}, {tc}, {td}>(const std::string&)>([&](const std::string& s) {{ return parse_tuple4<{ta}, {tb}, {tc}, {td}>(s, {sep}.list_tuple4_tuple, {fa}, {fb}, {fc}, {fd}); }}))",
-            ta=cpp_base_type(p[0]), tb=cpp_base_type(p[1]), tc=cpp_base_type(p[2]), td=cpp_base_type(p[3]),
+            ta=cpp_param_type(&p[0]), tb=cpp_param_type(&p[1]), tc=cpp_param_type(&p[2]), td=cpp_param_type(&p[3]),
             raw=raw_var, sep=sep,
-            fa=cpp_base_parse_fn(p[0]), fb=cpp_base_parse_fn(p[1]), fc=cpp_base_parse_fn(p[2]), fd=cpp_base_parse_fn(p[3])
+            fa=cpp_param_parse_fn(&p[0]), fb=cpp_param_parse_fn(&p[1]), fc=cpp_param_parse_fn(&p[2]), fd=cpp_param_parse_fn(&p[3])
         ),
 
         Paradigm::MapTuple2 => format!(
             "parse_map<{tk}, Tuple2<{ta}, {tb}>>({raw}, {sep}.map_tuple2_kv, {sep}.map_tuple2_entry, {fk}, std::function<Tuple2<{ta}, {tb}>(const std::string&)>([&](const std::string& s) {{ return parse_tuple2<{ta}, {tb}>(s, {sep}.map_tuple2_tuple, {fa}, {fb}); }}))",
-            tk=cpp_base_type(p[0]), ta=cpp_base_type(p[1]), tb=cpp_base_type(p[2]),
+            tk=cpp_param_type(&p[0]), ta=cpp_param_type(&p[1]), tb=cpp_param_type(&p[2]),
             raw=raw_var, sep=sep,
-            fk=cpp_base_parse_fn(p[0]), fa=cpp_base_parse_fn(p[1]), fb=cpp_base_parse_fn(p[2])
+            fk=cpp_param_parse_fn(&p[0]), fa=cpp_param_parse_fn(&p[1]), fb=cpp_param_parse_fn(&p[2])
         ),
         Paradigm::MapTuple3 => format!(
             "parse_map<{tk}, Tuple3<{ta}, {tb}, {tc}>>({raw}, {sep}.map_tuple3_kv, {sep}.map_tuple3_entry, {fk}, std::function<Tuple3<{ta}, {tb}, {tc}>(const std::string&)>([&](const std::string& s) {{ return parse_tuple3<{ta}, {tb}, {tc}>(s, {sep}.map_tuple3_tuple, {fa}, {fb}, {fc}); }}))",
-            tk=cpp_base_type(p[0]), ta=cpp_base_type(p[1]), tb=cpp_base_type(p[2]), tc=cpp_base_type(p[3]),
+            tk=cpp_param_type(&p[0]), ta=cpp_param_type(&p[1]), tb=cpp_param_type(&p[2]), tc=cpp_param_type(&p[3]),
             raw=raw_var, sep=sep,
-            fk=cpp_base_parse_fn(p[0]), fa=cpp_base_parse_fn(p[1]), fb=cpp_base_parse_fn(p[2]), fc=cpp_base_parse_fn(p[3])
+            fk=cpp_param_parse_fn(&p[0]), fa=cpp_param_parse_fn(&p[1]), fb=cpp_param_parse_fn(&p[2]), fc=cpp_param_parse_fn(&p[3])
         ),
         Paradigm::MapTuple4 => format!(
             "parse_map<{tk}, Tuple4<{ta}, {tb}, {tc}, {td}>>({raw}, {sep}.map_tuple4_kv, {sep}.map_tuple4_entry, {fk}, std::function<Tuple4<{ta}, {tb}, {tc}, {td}>(const std::string&)>([&](const std::string& s) {{ return parse_tuple4<{ta}, {tb}, {tc}, {td}>(s, {sep}.map_tuple4_tuple, {fa}, {fb}, {fc}, {fd}); }}))",
-            tk=cpp_base_type(p[0]), ta=cpp_base_type(p[1]), tb=cpp_base_type(p[2]), tc=cpp_base_type(p[3]), td=cpp_base_type(p[4]),
+            tk=cpp_param_type(&p[0]), ta=cpp_param_type(&p[1]), tb=cpp_param_type(&p[2]), tc=cpp_param_type(&p[3]), td=cpp_param_type(&p[4]),
             raw=raw_var, sep=sep,
-            fk=cpp_base_parse_fn(p[0]), fa=cpp_base_parse_fn(p[1]), fb=cpp_base_parse_fn(p[2]), fc=cpp_base_parse_fn(p[3]), fd=cpp_base_parse_fn(p[4])
+            fk=cpp_param_parse_fn(&p[0]), fa=cpp_param_parse_fn(&p[1]), fb=cpp_param_parse_fn(&p[2]), fc=cpp_param_parse_fn(&p[3]), fd=cpp_param_parse_fn(&p[4])
         ),
 
         Paradigm::MapList => format!(
             "parse_map<{tk}, std::vector<{tv}>>({raw}, {sep}.map_list_kv, {sep}.map_list_entry, {fk}, std::function<std::vector<{tv}>(const std::string&)>([&](const std::string& s) {{ return parse_list<{tv}>(s, {sep}.map_list_item, {fv}); }}))",
-            tk=cpp_base_type(p[0]), tv=cpp_base_type(p[1]),
+            tk=cpp_param_type(&p[0]), tv=cpp_param_type(&p[1]),
             raw=raw_var, sep=sep,
-            fk=cpp_base_parse_fn(p[0]), fv=cpp_base_parse_fn(p[1])
+            fk=cpp_param_parse_fn(&p[0]), fv=cpp_param_parse_fn(&p[1])
         ),
 
         Paradigm::Ref => {
@@ -211,7 +227,10 @@ fn gen_table_header(table: &Table, ns: &str, enum_names: &HashSet<String>) -> St
         let name = to_camel_case(&f.name);
         // 给 base 类型加默认值，复合类型用 {} 兜底
         let default = match TblType::parse(&f.tbl_type) {
-            Some(t) if t.paradigm == Paradigm::Base => cpp_base_default(t.params[0]).to_string(),
+            Some(t) if t.paradigm == Paradigm::Base => match &t.params[0] {
+                TypeParam::Base(bt) => cpp_base_default(*bt).to_string(),
+                TypeParam::Ref(_) => "0".to_string(),
+            },
             Some(t) if t.paradigm == Paradigm::Ref => {
                 if let Some(rn) = &t.ref_name {
                     if enum_names.contains(rn) { "{}".to_string() } else { "0".to_string() }
@@ -300,7 +319,10 @@ fn gen_constant_header(constant: &Constant, ns: &str, enum_names: &HashSet<Strin
         let typ = cpp_field_type(&e.tbl_type, enum_names);
         let name = to_camel_case(&e.name);
         let default = match TblType::parse(&e.tbl_type) {
-            Some(t) if t.paradigm == Paradigm::Base => cpp_base_default(t.params[0]).to_string(),
+            Some(t) if t.paradigm == Paradigm::Base => match &t.params[0] {
+                TypeParam::Base(bt) => cpp_base_default(*bt).to_string(),
+                TypeParam::Ref(_) => "0".to_string(),
+            },
             Some(t) if t.paradigm == Paradigm::Ref => {
                 if let Some(rn) = &t.ref_name {
                     if enum_names.contains(rn) { "{}".to_string() } else { "0".to_string() }
@@ -517,6 +539,16 @@ mod tests {
         let mut e = HashSet::new();
         e.insert("HeroType".to_string());
         assert_eq!(cpp_field_type("@HeroType", &e), "HeroTypeEnum");
+    }
+
+    #[test]
+    fn nested_ref_maps_to_int_vector() {
+        // S24：复杂类型内 ref 元素退化为 int32_t
+        assert_eq!(cpp_field_type("List<@Hero>", &no_enums()), "std::vector<int32_t>");
+        assert_eq!(cpp_field_type("Map<int,@Hero>", &no_enums()), "std::unordered_map<int32_t, int32_t>");
+        let t = TblType::parse("List<@Hero>").unwrap();
+        let expr = cpp_parse_expr("raw", &t, "sep", &no_enums());
+        assert!(expr.contains("parse_list<int32_t>"), "got {}", expr);
     }
 
     #[test]

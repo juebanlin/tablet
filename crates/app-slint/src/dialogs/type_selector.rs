@@ -4,7 +4,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use slint::ComponentHandle;
-use tablet_core::types::{BaseType, Paradigm};
+use tablet_core::types::{BaseType, ParamSlot, Paradigm, TypeParam};
 
 use crate::state::{
     AppState, SelectedNode, TsRefFilter, TsTab, TypeEditTarget,
@@ -61,6 +61,34 @@ fn collect_ref_targets(state: &AppState) -> Vec<(String, bool /* is_table */)> {
     out
 }
 
+/// 构建某槽位的选项列表：基础类型在前，`@引用目标` 追加在后。
+/// Base 范式槽位不加引用（顶层 ref 走 Reference tab）。
+fn slot_options(paradigm: &Paradigm, slot: &ParamSlot, refs: &[(String, bool)]) -> Vec<String> {
+    let base_names: Vec<&str> = if slot.is_map_key {
+        BaseType::map_key_types().iter().map(|b| b.name()).collect()
+    } else if *paradigm == Paradigm::Base {
+        BaseType::all().iter().map(|b| b.name()).collect()
+    } else {
+        BaseType::all_nestable().iter().map(|b| b.name()).collect()
+    };
+    let mut out: Vec<String> = base_names.iter().map(|s| s.to_string()).collect();
+    if *paradigm != Paradigm::Base {
+        for (name, _) in refs {
+            out.push(format!("@{}", name));
+        }
+    }
+    out
+}
+
+/// 选项字符串 → 元素类型：`@Xxx` → Ref，否则按基础类型名解析。
+fn param_from_option(opt: &str) -> TypeParam {
+    if let Some(name) = opt.strip_prefix('@') {
+        TypeParam::Ref(name.to_string())
+    } else {
+        TypeParam::Base(BaseType::from_str(opt).unwrap_or(BaseType::Int))
+    }
+}
+
 /// 把 TypeSelectorState 派生成 slint 端属性并 push。每次状态变化都重新调用。
 pub fn push(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
     let st = state.borrow();
@@ -79,16 +107,16 @@ pub fn push(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
     ui_h.set_ts_paradigm_index(paradigm_index);
 
     let slots = ts.paradigm.param_slots();
-    let is_base = ts.paradigm == Paradigm::Base;
-    let bt_all: Vec<slint::SharedString> = BaseType::all().iter().map(|b| slint::SharedString::from(b.name())).collect();
-    let bt_nestable: Vec<slint::SharedString> = BaseType::all_nestable().iter().map(|b| slint::SharedString::from(b.name())).collect();
-    let bt_keys: Vec<slint::SharedString> = BaseType::map_key_types().iter().map(|b| slint::SharedString::from(b.name())).collect();
+    let refs = collect_ref_targets(&st);
     let mut ts_slots: Vec<TsParamSlot> = Vec::with_capacity(slots.len());
     for (i, slot) in slots.iter().enumerate() {
-        let options = if slot.is_map_key { bt_keys.clone() } else if is_base { bt_all.clone() } else { bt_nestable.clone() };
-        let cur = ts.params.get(i).copied().unwrap_or(BaseType::Int);
-        let avail = if slot.is_map_key { BaseType::map_key_types() } else if is_base { BaseType::all() } else { BaseType::all_nestable() };
-        let cur_idx = avail.iter().position(|b| *b == cur).unwrap_or(0) as i32;
+        let full = slot_options(&ts.paradigm, slot, &refs);
+        let options: Vec<slint::SharedString> = full.iter().map(|s| slint::SharedString::from(s.as_str())).collect();
+        let cur = ts.params.get(i).cloned().unwrap_or(TypeParam::Base(BaseType::Int));
+        let cur_idx = match &cur {
+            TypeParam::Base(bt) => full.iter().position(|s| s == bt.name()).unwrap_or(0) as i32,
+            TypeParam::Ref(name) => full.iter().position(|s| s == &format!("@{}", name)).unwrap_or(0) as i32,
+        };
         ts_slots.push(TsParamSlot {
             label: slint::SharedString::from(slot.label),
             type_options: slint::ModelRc::new(slint::VecModel::from(options)),
@@ -182,16 +210,11 @@ pub fn wire(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
             let mut st = s.borrow_mut();
             let slots = st.type_selector.paradigm.param_slots();
             if let Some(slot_def) = slots.get(slot as usize) {
-                let avail = if slot_def.is_map_key {
-                    BaseType::map_key_types()
-                } else if st.type_selector.paradigm == Paradigm::Base {
-                    BaseType::all()
-                } else {
-                    BaseType::all_nestable()
-                };
-                if let Some(bt) = avail.get(idx as usize).copied() {
+                let refs = collect_ref_targets(&st);
+                let full = slot_options(&st.type_selector.paradigm, slot_def, &refs);
+                if let Some(opt) = full.get(idx as usize) {
                     if (slot as usize) < st.type_selector.params.len() {
-                        st.type_selector.params[slot as usize] = bt;
+                        st.type_selector.params[slot as usize] = param_from_option(opt);
                     }
                 }
             }

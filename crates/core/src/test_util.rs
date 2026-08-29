@@ -2,6 +2,7 @@ use std::fmt::Write;
 use std::path::Path;
 use crate::template::{BuiltinTemplates, TemplateSource};
 use crate::tblschema::*;
+use crate::types::{Paradigm, TblType, TypeParam};
 
 /// 测试数据生成选项
 #[derive(Debug, Clone)]
@@ -304,6 +305,30 @@ fn java_format_spec(tbl_type: &str) -> &'static str {
     }
 }
 
+/// 生成 Java 运行时断言：含 ref 元素的复合字段必须加载为 Integer（否则抛异常）。
+/// 这能抓到 `List<@X>` 误加载成 `List<String>`（printf %s 区分不了，instanceof 能）。
+fn java_ref_element_assert(field: &str, tbl_type: &str) -> Option<String> {
+    let t = TblType::parse(tbl_type)?;
+    let getter = format!("h.get{}()", to_pascal(field));
+    let var = format!("_v{}", to_camel(field));
+    let check = match &t.paradigm {
+        Paradigm::List | Paradigm::Set if matches!(t.params.first(), Some(TypeParam::Ref(_))) => {
+            format!("{var} instanceof java.util.List && !((java.util.List<?>) {var}).isEmpty() && !(((java.util.List<?>) {var}).get(0) instanceof Integer)")
+        }
+        Paradigm::Map => {
+            let is_ref_key = matches!(t.params.first(), Some(TypeParam::Ref(_)));
+            let is_ref_val = matches!(t.params.get(1), Some(TypeParam::Ref(_)));
+            if !is_ref_key && !is_ref_val { return None; }
+            let probe = if is_ref_key { "keySet().iterator().next()" } else { "values().iterator().next()" };
+            format!("{var} instanceof java.util.Map && !((java.util.Map<?, ?>) {var}).isEmpty() && !(((java.util.Map<?, ?>) {var}).{probe} instanceof Integer)")
+        }
+        _ => return None,
+    };
+    Some(format!(
+        "{{ Object {var} = {getter}; if ({check}) throw new RuntimeException(\"{field} ref 元素不是 Integer\"); }}"
+    ))
+}
+
 fn build_test_main(schema: &TblSchema, pkg: &str, format: &str) -> String {
     let mut s = String::new();
     writeln!(s, "import {}.*;", pkg).unwrap();
@@ -346,6 +371,12 @@ fn build_test_main(schema: &TblSchema, pkg: &str, format: &str) -> String {
 
                 writeln!(s, "            System.out.printf(\"{}%n\",", fmt_parts.join(" ")).unwrap();
                 writeln!(s, "                {});", arg_parts.join(", ")).unwrap();
+                // ref 元素运行时断言：List<@X> 等必须加载为 Integer，否则抛异常（@S24）
+                for f in &server_fields {
+                    if let Some(block) = java_ref_element_assert(&f.name, &f.tbl_type) {
+                        writeln!(s, "            {}", block).unwrap();
+                    }
+                }
                 writeln!(s, "        }}").unwrap();
             }
             SchemaMode::Constant => {

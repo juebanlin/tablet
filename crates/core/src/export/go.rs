@@ -58,21 +58,22 @@ fn go_type_for(tbl_type_str: &str, enum_names: &HashSet<String>) -> String {
 // 自定义 go 类型表达：Tuple 用泛型结构体，避免裸数组无法承载混合类型
 fn t_go_decl(t: &TblType) -> String {
     let p = &t.params;
+    let g = |param: &TypeParam| go_param_type(param);
     match &t.paradigm {
-        Paradigm::Base => p[0].go_type().to_string(),
-        Paradigm::Tuple2 => format!("Tuple2[{},{}]", p[0].go_type(), p[1].go_type()),
-        Paradigm::Tuple3 => format!("Tuple3[{},{},{}]", p[0].go_type(), p[1].go_type(), p[2].go_type()),
-        Paradigm::Tuple4 => format!("Tuple4[{},{},{},{}]", p[0].go_type(), p[1].go_type(), p[2].go_type(), p[3].go_type()),
-        Paradigm::List => format!("[]{}", p[0].go_type()),
-        Paradigm::Set => format!("map[{}]struct{{}}", p[0].go_type()),
-        Paradigm::Map => format!("map[{}]{}", p[0].go_type(), p[1].go_type()),
-        Paradigm::ListTuple2 => format!("[]Tuple2[{},{}]", p[0].go_type(), p[1].go_type()),
-        Paradigm::ListTuple3 => format!("[]Tuple3[{},{},{}]", p[0].go_type(), p[1].go_type(), p[2].go_type()),
-        Paradigm::ListTuple4 => format!("[]Tuple4[{},{},{},{}]", p[0].go_type(), p[1].go_type(), p[2].go_type(), p[3].go_type()),
-        Paradigm::MapTuple2 => format!("map[{}]Tuple2[{},{}]", p[0].go_type(), p[1].go_type(), p[2].go_type()),
-        Paradigm::MapTuple3 => format!("map[{}]Tuple3[{},{},{}]", p[0].go_type(), p[1].go_type(), p[2].go_type(), p[3].go_type()),
-        Paradigm::MapTuple4 => format!("map[{}]Tuple4[{},{},{},{}]", p[0].go_type(), p[1].go_type(), p[2].go_type(), p[3].go_type(), p[4].go_type()),
-        Paradigm::MapList => format!("map[{}][]{}", p[0].go_type(), p[1].go_type()),
+        Paradigm::Base => g(&p[0]),
+        Paradigm::Tuple2 => format!("Tuple2[{},{}]", g(&p[0]), g(&p[1])),
+        Paradigm::Tuple3 => format!("Tuple3[{},{},{}]", g(&p[0]), g(&p[1]), g(&p[2])),
+        Paradigm::Tuple4 => format!("Tuple4[{},{},{},{}]", g(&p[0]), g(&p[1]), g(&p[2]), g(&p[3])),
+        Paradigm::List => format!("[]{}", g(&p[0])),
+        Paradigm::Set => format!("map[{}]struct{{}}", g(&p[0])),
+        Paradigm::Map => format!("map[{}]{}", g(&p[0]), g(&p[1])),
+        Paradigm::ListTuple2 => format!("[]Tuple2[{},{}]", g(&p[0]), g(&p[1])),
+        Paradigm::ListTuple3 => format!("[]Tuple3[{},{},{}]", g(&p[0]), g(&p[1]), g(&p[2])),
+        Paradigm::ListTuple4 => format!("[]Tuple4[{},{},{},{}]", g(&p[0]), g(&p[1]), g(&p[2]), g(&p[3])),
+        Paradigm::MapTuple2 => format!("map[{}]Tuple2[{},{}]", g(&p[0]), g(&p[1]), g(&p[2])),
+        Paradigm::MapTuple3 => format!("map[{}]Tuple3[{},{},{}]", g(&p[0]), g(&p[1]), g(&p[2]), g(&p[3])),
+        Paradigm::MapTuple4 => format!("map[{}]Tuple4[{},{},{},{}]", g(&p[0]), g(&p[1]), g(&p[2]), g(&p[3]), g(&p[4])),
+        Paradigm::MapList => format!("map[{}][]{}", g(&p[0]), g(&p[1])),
         // 引用类型默认按 table ref 处理，存储 id；enum ref 由调用方根据被引用项 mode 改写
         Paradigm::Ref => "int32".to_string(),
     }
@@ -91,115 +92,134 @@ fn base_parse_fn(bt: BaseType) -> &'static str {
     }
 }
 
+// 参数位的 Go 类型：ref 元素退化为 int32（id）
+fn go_param_type(param: &TypeParam) -> String {
+    match param {
+        TypeParam::Base(bt) => bt.go_type().to_string(),
+        TypeParam::Ref(_) => BaseType::Int.go_type().to_string(),
+    }
+}
+
+// 参数位的 string→Go 解析函数名：ref 元素按 int 解析
+fn param_parse_fn(param: &TypeParam) -> &'static str {
+    match param {
+        TypeParam::Base(bt) => base_parse_fn(*bt),
+        TypeParam::Ref(_) => base_parse_fn(BaseType::Int),
+    }
+}
+
 // 生成「raw 字符串 → Go 类型」的表达式
 // raw_var 是字符串变量名；sep_var 是 SepConfig 变量名
 fn parse_expr(raw_var: &str, t: &TblType, sep_var: &str) -> String {
     let p = &t.params;
+    let g = |param: &TypeParam| go_param_type(param);
+    let f = |param: &TypeParam| param_parse_fn(param);
     match &t.paradigm {
-        Paradigm::Base => format!("{}({})", base_parse_fn(p[0]), raw_var),
+        Paradigm::Base => format!("{}({})", f(&p[0]), raw_var),
 
         Paradigm::Tuple2 => format!(
             "ParseTuple2({}, {}.Tuple2, {}, {})",
-            raw_var, sep_var, base_parse_fn(p[0]), base_parse_fn(p[1])
+            raw_var, sep_var, f(&p[0]), f(&p[1])
         ),
         Paradigm::Tuple3 => format!(
             "ParseTuple3({}, {}.Tuple3, {}, {}, {})",
-            raw_var, sep_var, base_parse_fn(p[0]), base_parse_fn(p[1]), base_parse_fn(p[2])
+            raw_var, sep_var, f(&p[0]), f(&p[1]), f(&p[2])
         ),
         Paradigm::Tuple4 => format!(
             "ParseTuple4({}, {}.Tuple4, {}, {}, {}, {})",
-            raw_var, sep_var, base_parse_fn(p[0]), base_parse_fn(p[1]), base_parse_fn(p[2]), base_parse_fn(p[3])
+            raw_var, sep_var, f(&p[0]), f(&p[1]), f(&p[2]), f(&p[3])
         ),
 
-        Paradigm::List => match p[0] {
-            BaseType::Int => format!("parseListInt32({}, {}.List)", raw_var, sep_var),
-            BaseType::Long => format!("parseListInt64({}, {}.List)", raw_var, sep_var),
-            BaseType::Float => format!("parseListFloat32({}, {}.List)", raw_var, sep_var),
-            BaseType::Double => format!("parseListFloat64({}, {}.List)", raw_var, sep_var),
-            BaseType::Str => format!("parseListString({}, {}.List)", raw_var, sep_var),
-            BaseType::Bool => format!("parseListBool({}, {}.List)", raw_var, sep_var),
-            BaseType::Txt => unreachable!("txt not allowed in List"),
+        // ref 元素退化为 int → parseListInt32
+        Paradigm::List => match &p[0] {
+            TypeParam::Base(BaseType::Int) | TypeParam::Ref(_) => format!("parseListInt32({}, {}.List)", raw_var, sep_var),
+            TypeParam::Base(BaseType::Long) => format!("parseListInt64({}, {}.List)", raw_var, sep_var),
+            TypeParam::Base(BaseType::Float) => format!("parseListFloat32({}, {}.List)", raw_var, sep_var),
+            TypeParam::Base(BaseType::Double) => format!("parseListFloat64({}, {}.List)", raw_var, sep_var),
+            TypeParam::Base(BaseType::Str) => format!("parseListString({}, {}.List)", raw_var, sep_var),
+            TypeParam::Base(BaseType::Bool) => format!("parseListBool({}, {}.List)", raw_var, sep_var),
+            TypeParam::Base(BaseType::Txt) => unreachable!("txt not allowed in List"),
         },
-        Paradigm::Set => match p[0] {
-            BaseType::Int => format!("parseSetInt32({}, {}.Set)", raw_var, sep_var),
-            BaseType::Long => format!("parseSetInt64({}, {}.Set)", raw_var, sep_var),
-            BaseType::Float => format!("parseSetFloat32({}, {}.Set)", raw_var, sep_var),
-            BaseType::Double => format!("parseSetFloat64({}, {}.Set)", raw_var, sep_var),
-            BaseType::Str => format!("parseSetString({}, {}.Set)", raw_var, sep_var),
+        Paradigm::Set => match &p[0] {
+            TypeParam::Base(BaseType::Int) | TypeParam::Ref(_) => format!("parseSetInt32({}, {}.Set)", raw_var, sep_var),
+            TypeParam::Base(BaseType::Long) => format!("parseSetInt64({}, {}.Set)", raw_var, sep_var),
+            TypeParam::Base(BaseType::Float) => format!("parseSetFloat32({}, {}.Set)", raw_var, sep_var),
+            TypeParam::Base(BaseType::Double) => format!("parseSetFloat64({}, {}.Set)", raw_var, sep_var),
+            TypeParam::Base(BaseType::Str) => format!("parseSetString({}, {}.Set)", raw_var, sep_var),
             // bool 集合在实际项目里几乎不会出现，但兜底
-            BaseType::Bool => format!("parseSetString({}, {}.Set)", raw_var, sep_var),
-            BaseType::Txt => unreachable!("txt not allowed in Set"),
+            TypeParam::Base(BaseType::Bool) => format!("parseSetString({}, {}.Set)", raw_var, sep_var),
+            TypeParam::Base(BaseType::Txt) => unreachable!("txt not allowed in Set"),
         },
 
         Paradigm::Map => format!(
             "ParseMap({}, {}.MapKv, {}.MapEntry, {}, {})",
-            raw_var, sep_var, sep_var, base_parse_fn(p[0]), base_parse_fn(p[1])
+            raw_var, sep_var, sep_var, f(&p[0]), f(&p[1])
         ),
 
         Paradigm::ListTuple2 => format!(
             "ParseListItems({raw}, {sep}.ListTuple2List, func(s string) Tuple2[{ta},{tb}] {{ return ParseTuple2(s, {sep}.ListTuple2Tuple, {fa}, {fb}) }})",
             raw=raw_var, sep=sep_var,
-            ta=p[0].go_type(), tb=p[1].go_type(),
-            fa=base_parse_fn(p[0]), fb=base_parse_fn(p[1])
+            ta=g(&p[0]), tb=g(&p[1]),
+            fa=f(&p[0]), fb=f(&p[1])
         ),
         Paradigm::ListTuple3 => format!(
             "ParseListItems({raw}, {sep}.ListTuple3List, func(s string) Tuple3[{ta},{tb},{tc}] {{ return ParseTuple3(s, {sep}.ListTuple3Tuple, {fa}, {fb}, {fc}) }})",
             raw=raw_var, sep=sep_var,
-            ta=p[0].go_type(), tb=p[1].go_type(), tc=p[2].go_type(),
-            fa=base_parse_fn(p[0]), fb=base_parse_fn(p[1]), fc=base_parse_fn(p[2])
+            ta=g(&p[0]), tb=g(&p[1]), tc=g(&p[2]),
+            fa=f(&p[0]), fb=f(&p[1]), fc=f(&p[2])
         ),
         Paradigm::ListTuple4 => format!(
             "ParseListItems({raw}, {sep}.ListTuple4List, func(s string) Tuple4[{ta},{tb},{tc},{td}] {{ return ParseTuple4(s, {sep}.ListTuple4Tuple, {fa}, {fb}, {fc}, {fd}) }})",
             raw=raw_var, sep=sep_var,
-            ta=p[0].go_type(), tb=p[1].go_type(), tc=p[2].go_type(), td=p[3].go_type(),
-            fa=base_parse_fn(p[0]), fb=base_parse_fn(p[1]), fc=base_parse_fn(p[2]), fd=base_parse_fn(p[3])
+            ta=g(&p[0]), tb=g(&p[1]), tc=g(&p[2]), td=g(&p[3]),
+            fa=f(&p[0]), fb=f(&p[1]), fc=f(&p[2]), fd=f(&p[3])
         ),
 
         Paradigm::MapTuple2 => format!(
             "ParseMap({raw}, {sep}.MapTuple2Kv, {sep}.MapTuple2Entry, {fk}, func(s string) Tuple2[{tb},{tc}] {{ return ParseTuple2(s, {sep}.MapTuple2Tuple, {fb}, {fc}) }})",
             raw=raw_var, sep=sep_var,
-            tb=p[1].go_type(), tc=p[2].go_type(),
-            fk=base_parse_fn(p[0]), fb=base_parse_fn(p[1]), fc=base_parse_fn(p[2])
+            tb=g(&p[1]), tc=g(&p[2]),
+            fk=f(&p[0]), fb=f(&p[1]), fc=f(&p[2])
         ),
         Paradigm::MapTuple3 => format!(
             "ParseMap({raw}, {sep}.MapTuple3Kv, {sep}.MapTuple3Entry, {fk}, func(s string) Tuple3[{tb},{tc},{td}] {{ return ParseTuple3(s, {sep}.MapTuple3Tuple, {fb}, {fc}, {fd}) }})",
             raw=raw_var, sep=sep_var,
-            tb=p[1].go_type(), tc=p[2].go_type(), td=p[3].go_type(),
-            fk=base_parse_fn(p[0]), fb=base_parse_fn(p[1]), fc=base_parse_fn(p[2]), fd=base_parse_fn(p[3])
+            tb=g(&p[1]), tc=g(&p[2]), td=g(&p[3]),
+            fk=f(&p[0]), fb=f(&p[1]), fc=f(&p[2]), fd=f(&p[3])
         ),
         Paradigm::MapTuple4 => format!(
             "ParseMap({raw}, {sep}.MapTuple4Kv, {sep}.MapTuple4Entry, {fk}, func(s string) Tuple4[{tb},{tc},{td},{te}] {{ return ParseTuple4(s, {sep}.MapTuple4Tuple, {fb}, {fc}, {fd}, {fe}) }})",
             raw=raw_var, sep=sep_var,
-            tb=p[1].go_type(), tc=p[2].go_type(), td=p[3].go_type(), te=p[4].go_type(),
-            fk=base_parse_fn(p[0]), fb=base_parse_fn(p[1]), fc=base_parse_fn(p[2]), fd=base_parse_fn(p[3]), fe=base_parse_fn(p[4])
+            tb=g(&p[1]), tc=g(&p[2]), td=g(&p[3]), te=g(&p[4]),
+            fk=f(&p[0]), fb=f(&p[1]), fc=f(&p[2]), fd=f(&p[3]), fe=f(&p[4])
         ),
 
-        Paradigm::MapList => match p[1] {
-            BaseType::Int => format!(
+        Paradigm::MapList => match &p[1] {
+            TypeParam::Base(BaseType::Int) | TypeParam::Ref(_) => format!(
                 "ParseMap({raw}, {sep}.MapListKv, {sep}.MapListEntry, {fk}, func(s string) []int32 {{ return parseListInt32(s, {sep}.MapListItem) }})",
-                raw=raw_var, sep=sep_var, fk=base_parse_fn(p[0])
+                raw=raw_var, sep=sep_var, fk=f(&p[0])
             ),
-            BaseType::Long => format!(
+            TypeParam::Base(BaseType::Long) => format!(
                 "ParseMap({raw}, {sep}.MapListKv, {sep}.MapListEntry, {fk}, func(s string) []int64 {{ return parseListInt64(s, {sep}.MapListItem) }})",
-                raw=raw_var, sep=sep_var, fk=base_parse_fn(p[0])
+                raw=raw_var, sep=sep_var, fk=f(&p[0])
             ),
-            BaseType::Float => format!(
+            TypeParam::Base(BaseType::Float) => format!(
                 "ParseMap({raw}, {sep}.MapListKv, {sep}.MapListEntry, {fk}, func(s string) []float32 {{ return parseListFloat32(s, {sep}.MapListItem) }})",
-                raw=raw_var, sep=sep_var, fk=base_parse_fn(p[0])
+                raw=raw_var, sep=sep_var, fk=f(&p[0])
             ),
-            BaseType::Double => format!(
+            TypeParam::Base(BaseType::Double) => format!(
                 "ParseMap({raw}, {sep}.MapListKv, {sep}.MapListEntry, {fk}, func(s string) []float64 {{ return parseListFloat64(s, {sep}.MapListItem) }})",
-                raw=raw_var, sep=sep_var, fk=base_parse_fn(p[0])
+                raw=raw_var, sep=sep_var, fk=f(&p[0])
             ),
-            BaseType::Str => format!(
+            TypeParam::Base(BaseType::Str) => format!(
                 "ParseMap({raw}, {sep}.MapListKv, {sep}.MapListEntry, {fk}, func(s string) []string {{ return parseListString(s, {sep}.MapListItem) }})",
-                raw=raw_var, sep=sep_var, fk=base_parse_fn(p[0])
+                raw=raw_var, sep=sep_var, fk=f(&p[0])
             ),
-            BaseType::Bool => format!(
+            TypeParam::Base(BaseType::Bool) => format!(
                 "ParseMap({raw}, {sep}.MapListKv, {sep}.MapListEntry, {fk}, func(s string) []bool {{ return parseListBool(s, {sep}.MapListItem) }})",
-                raw=raw_var, sep=sep_var, fk=base_parse_fn(p[0])
+                raw=raw_var, sep=sep_var, fk=f(&p[0])
             ),
-            BaseType::Txt => unreachable!("txt not allowed in MapList"),
+            TypeParam::Base(BaseType::Txt) => unreachable!("txt not allowed in MapList"),
         },
 
         // 引用类型默认按 table ref 处理 → int32(id)；enum ref 由调用方在生成时改写
@@ -496,4 +516,28 @@ fn lowercase_first(s: &str) -> String {
 
 fn escape_go_str(s: &str) -> String {
     s.replace('\\', "\\\\").replace('"', "\\\"")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn nested_ref_maps_to_int_in_go() {
+        // S24：复杂类型内 ref 元素退化为 int32
+        let no_enum = HashSet::new();
+        assert_eq!(go_type_for("List<@Hero>", &no_enum), "[]int32");
+        assert_eq!(go_type_for("Set<@Hero>", &no_enum), "map[int32]struct{}");
+        assert_eq!(go_type_for("Map<int,@Hero>", &no_enum), "map[int32]int32");
+
+        // List<@Hero> → parseListInt32
+        let t = TblType::parse("List<@Hero>").unwrap();
+        assert_eq!(parse_expr("raw", &t, "sep"), "parseListInt32(raw, sep.List)");
+
+        // Map<int,List<@Hero>> → value 是 []int32
+        let t = TblType::parse("Map<int,List<@Hero>>").unwrap();
+        let expr = parse_expr("raw", &t, "sep");
+        assert!(expr.contains("[]int32"), "got {}", expr);
+        assert!(expr.contains("parseListInt32"), "got {}", expr);
+    }
 }

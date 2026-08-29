@@ -83,6 +83,22 @@ fn gd_map_key(raw: &str, bt: BaseType) -> GdKey {
     }
 }
 
+/// 参数位值 → GDScript 字面量。ref 元素退化为 int id（脚本语言不做枚举类型转换）。
+fn gd_param(raw: &str, param: &TypeParam) -> String {
+    match param {
+        TypeParam::Base(bt) => base_to_gd(raw, *bt),
+        TypeParam::Ref(_) => base_to_gd(raw, BaseType::Int),
+    }
+}
+
+/// 参数位 key → GDScript key。ref key 退化为 int id。
+fn gd_param_key(raw: &str, param: &TypeParam) -> GdKey {
+    match param {
+        TypeParam::Base(bt) => gd_map_key(raw, *bt),
+        TypeParam::Ref(_) => GdKey::Standard(base_to_gd(raw, BaseType::Int)),
+    }
+}
+
 fn fmt_kv(k: GdKey, v: &str) -> String {
     match k {
         GdKey::LuaStyle(s) => format!("{} = {}", s, v),
@@ -100,41 +116,41 @@ fn value_to_gd(raw: &str, tbl_type_str: &str, sep: &SeparatorsSection) -> String
 
     let p = &tt.params;
     match &tt.paradigm {
-        Paradigm::Base => base_to_gd(raw, p[0]),
+        Paradigm::Base => gd_param(raw, &p[0]),
 
         Paradigm::Tuple2 => {
             let parts: Vec<&str> = raw.splitn(2, &*sep.tuple2).collect();
             if parts.len() == 2 {
-                format!("[{}, {}]", base_to_gd(parts[0], p[0]), base_to_gd(parts[1], p[1]))
+                format!("[{}, {}]", gd_param(parts[0], &p[0]), gd_param(parts[1], &p[1]))
             } else { format!("\"{}\"", gd_escape(raw)) }
         }
         Paradigm::Tuple3 => {
             let parts: Vec<&str> = raw.splitn(3, &*sep.tuple3).collect();
             if parts.len() == 3 {
-                format!("[{}, {}, {}]", base_to_gd(parts[0], p[0]), base_to_gd(parts[1], p[1]), base_to_gd(parts[2], p[2]))
+                format!("[{}, {}, {}]", gd_param(parts[0], &p[0]), gd_param(parts[1], &p[1]), gd_param(parts[2], &p[2]))
             } else { format!("\"{}\"", gd_escape(raw)) }
         }
         Paradigm::Tuple4 => {
             let parts: Vec<&str> = raw.splitn(4, &*sep.tuple4).collect();
             if parts.len() == 4 {
-                format!("[{}, {}, {}, {}]", base_to_gd(parts[0], p[0]), base_to_gd(parts[1], p[1]), base_to_gd(parts[2], p[2]), base_to_gd(parts[3], p[3]))
+                format!("[{}, {}, {}, {}]", gd_param(parts[0], &p[0]), gd_param(parts[1], &p[1]), gd_param(parts[2], &p[2]), gd_param(parts[3], &p[3]))
             } else { format!("\"{}\"", gd_escape(raw)) }
         }
 
         Paradigm::List => {
-            let items: Vec<String> = raw.split(&*sep.list).map(|v| base_to_gd(v, p[0])).collect();
+            let items: Vec<String> = raw.split(&*sep.list).map(|v| gd_param(v, &p[0])).collect();
             format!("[{}]", items.join(", "))
         }
         // GDScript 无 Set，回退 Array（值唯一性由数据保证）
         Paradigm::Set => {
-            let items: Vec<String> = raw.split(&*sep.set).map(|v| base_to_gd(v, p[0])).collect();
+            let items: Vec<String> = raw.split(&*sep.set).map(|v| gd_param(v, &p[0])).collect();
             format!("[{}]", items.join(", "))
         }
         Paradigm::Map => {
             let entries: Vec<String> = raw.split(&*sep.map.entry).map(|entry| {
                 let kv: Vec<&str> = entry.splitn(2, &*sep.map.kv).collect();
                 if kv.len() == 2 {
-                    fmt_kv(gd_map_key(kv[0], p[0]), &base_to_gd(kv[1], p[1]))
+                    fmt_kv(gd_param_key(kv[0], &p[0]), &gd_param(kv[1], &p[1]))
                 } else { format!("\"{}\"", gd_escape(entry)) }
             }).collect();
             format!("{{{}}}", entries.join(", "))
@@ -144,7 +160,7 @@ fn value_to_gd(raw: &str, tbl_type_str: &str, sep: &SeparatorsSection) -> String
             let items: Vec<String> = raw.split(&*sep.list_tuple2.list).map(|item| {
                 let parts: Vec<&str> = item.splitn(2, &*sep.list_tuple2.tuple).collect();
                 if parts.len() == 2 {
-                    format!("[{}, {}]", base_to_gd(parts[0], p[0]), base_to_gd(parts[1], p[1]))
+                    format!("[{}, {}]", gd_param(parts[0], &p[0]), gd_param(parts[1], &p[1]))
                 } else { format!("\"{}\"", gd_escape(item)) }
             }).collect();
             format!("[{}]", items.join(", "))
@@ -153,7 +169,7 @@ fn value_to_gd(raw: &str, tbl_type_str: &str, sep: &SeparatorsSection) -> String
             let items: Vec<String> = raw.split(&*sep.list_tuple3.list).map(|item| {
                 let parts: Vec<&str> = item.splitn(3, &*sep.list_tuple3.tuple).collect();
                 if parts.len() == 3 {
-                    format!("[{}, {}, {}]", base_to_gd(parts[0], p[0]), base_to_gd(parts[1], p[1]), base_to_gd(parts[2], p[2]))
+                    format!("[{}, {}, {}]", gd_param(parts[0], &p[0]), gd_param(parts[1], &p[1]), gd_param(parts[2], &p[2]))
                 } else { format!("\"{}\"", gd_escape(item)) }
             }).collect();
             format!("[{}]", items.join(", "))
@@ -162,7 +178,7 @@ fn value_to_gd(raw: &str, tbl_type_str: &str, sep: &SeparatorsSection) -> String
             let items: Vec<String> = raw.split(&*sep.list_tuple4.list).map(|item| {
                 let parts: Vec<&str> = item.splitn(4, &*sep.list_tuple4.tuple).collect();
                 if parts.len() == 4 {
-                    format!("[{}, {}, {}, {}]", base_to_gd(parts[0], p[0]), base_to_gd(parts[1], p[1]), base_to_gd(parts[2], p[2]), base_to_gd(parts[3], p[3]))
+                    format!("[{}, {}, {}, {}]", gd_param(parts[0], &p[0]), gd_param(parts[1], &p[1]), gd_param(parts[2], &p[2]), gd_param(parts[3], &p[3]))
                 } else { format!("\"{}\"", gd_escape(item)) }
             }).collect();
             format!("[{}]", items.join(", "))
@@ -174,9 +190,9 @@ fn value_to_gd(raw: &str, tbl_type_str: &str, sep: &SeparatorsSection) -> String
                 if kv.len() == 2 {
                     let parts: Vec<&str> = kv[1].splitn(2, &*sep.map_tuple2.tuple).collect();
                     let v = if parts.len() == 2 {
-                        format!("[{}, {}]", base_to_gd(parts[0], p[1]), base_to_gd(parts[1], p[2]))
+                        format!("[{}, {}]", gd_param(parts[0], &p[1]), gd_param(parts[1], &p[2]))
                     } else { format!("\"{}\"", gd_escape(kv[1])) };
-                    fmt_kv(gd_map_key(kv[0], p[0]), &v)
+                    fmt_kv(gd_param_key(kv[0], &p[0]), &v)
                 } else { format!("\"{}\"", gd_escape(entry)) }
             }).collect();
             format!("{{{}}}", entries.join(", "))
@@ -187,9 +203,9 @@ fn value_to_gd(raw: &str, tbl_type_str: &str, sep: &SeparatorsSection) -> String
                 if kv.len() == 2 {
                     let parts: Vec<&str> = kv[1].splitn(3, &*sep.map_tuple3.tuple).collect();
                     let v = if parts.len() == 3 {
-                        format!("[{}, {}, {}]", base_to_gd(parts[0], p[1]), base_to_gd(parts[1], p[2]), base_to_gd(parts[2], p[3]))
+                        format!("[{}, {}, {}]", gd_param(parts[0], &p[1]), gd_param(parts[1], &p[2]), gd_param(parts[2], &p[3]))
                     } else { format!("\"{}\"", gd_escape(kv[1])) };
-                    fmt_kv(gd_map_key(kv[0], p[0]), &v)
+                    fmt_kv(gd_param_key(kv[0], &p[0]), &v)
                 } else { format!("\"{}\"", gd_escape(entry)) }
             }).collect();
             format!("{{{}}}", entries.join(", "))
@@ -200,9 +216,9 @@ fn value_to_gd(raw: &str, tbl_type_str: &str, sep: &SeparatorsSection) -> String
                 if kv.len() == 2 {
                     let parts: Vec<&str> = kv[1].splitn(4, &*sep.map_tuple4.tuple).collect();
                     let v = if parts.len() == 4 {
-                        format!("[{}, {}, {}, {}]", base_to_gd(parts[0], p[1]), base_to_gd(parts[1], p[2]), base_to_gd(parts[2], p[3]), base_to_gd(parts[3], p[4]))
+                        format!("[{}, {}, {}, {}]", gd_param(parts[0], &p[1]), gd_param(parts[1], &p[2]), gd_param(parts[2], &p[3]), gd_param(parts[3], &p[4]))
                     } else { format!("\"{}\"", gd_escape(kv[1])) };
-                    fmt_kv(gd_map_key(kv[0], p[0]), &v)
+                    fmt_kv(gd_param_key(kv[0], &p[0]), &v)
                 } else { format!("\"{}\"", gd_escape(entry)) }
             }).collect();
             format!("{{{}}}", entries.join(", "))
@@ -211,8 +227,8 @@ fn value_to_gd(raw: &str, tbl_type_str: &str, sep: &SeparatorsSection) -> String
             let entries: Vec<String> = raw.split(&*sep.map_list.entry).map(|entry| {
                 let kv: Vec<&str> = entry.splitn(2, &*sep.map_list.kv).collect();
                 if kv.len() == 2 {
-                    let items: Vec<String> = kv[1].split(&*sep.map_list.item).map(|v| base_to_gd(v, p[1])).collect();
-                    fmt_kv(gd_map_key(kv[0], p[0]), &format!("[{}]", items.join(", ")))
+                    let items: Vec<String> = kv[1].split(&*sep.map_list.item).map(|v| gd_param(v, &p[1])).collect();
+                    fmt_kv(gd_param_key(kv[0], &p[0]), &format!("[{}]", items.join(", ")))
                 } else { format!("\"{}\"", gd_escape(entry)) }
             }).collect();
             format!("{{{}}}", entries.join(", "))
@@ -418,6 +434,14 @@ mod tests {
         let s = sep();
         // Ref 类型：原始值是 id 字符串，输出为整数
         assert_eq!(value_to_gd("42", "@HeroBase", &s), "42");
+    }
+
+    #[test]
+    fn nested_ref_outputs_int_array() {
+        // S24：复杂类型内 ref 元素退化为 int
+        let s = sep();
+        assert_eq!(value_to_gd("1;2", "List<@Hero>", &s), "[1, 2]");
+        assert_eq!(value_to_gd("1:1001;2:1002", "Map<int,@Hero>", &s), "{1: 1001, 2: 1002}");
     }
 
     #[test]

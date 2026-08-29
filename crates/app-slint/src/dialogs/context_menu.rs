@@ -277,7 +277,11 @@ pub fn wire(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
                     let kind = ui::grid_actions::effective_column_kind_at(&s.borrow(), row, col);
                     match kind {
                         Some(crate::state::ColumnKind::Ref { ref target }) => {
-                            dialogs::ref_picker::open_for_cell(&s, row, col, target);
+                            dialogs::ref_picker::open_for_cell(&s, row, col, target, false);
+                            if let Some(ui_h) = weak.upgrade() { dialogs::ref_picker::push(&ui_h, &s); }
+                        }
+                        Some(crate::state::ColumnKind::RefList { ref target }) => {
+                            dialogs::ref_picker::open_for_cell(&s, row, col, target, true);
                             if let Some(ui_h) = weak.upgrade() { dialogs::ref_picker::push(&ui_h, &s); }
                         }
                         Some(crate::state::ColumnKind::TypeEnumCol) => {

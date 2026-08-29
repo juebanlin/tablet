@@ -280,3 +280,30 @@ pub fn export_all_java(project: &Project) -> Result<super::ExportResult> {
 
     super::sync_export_dir(&output_dir, "java", collected)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn no_enums() -> HashSet<String> {
+        HashSet::new()
+    }
+
+    #[test]
+    fn nested_ref_maps_to_integer_list() {
+        // S24：复杂类型内 ref 元素退化为 int（List<Integer> 等）
+        assert_eq!(java_field_type("List<@Hero>", &no_enums()), "List<Integer>");
+        assert_eq!(java_field_type("Set<@Hero>", &no_enums()), "Set<Integer>");
+        assert_eq!(java_field_type("Map<int,@Hero>", &no_enums()), "Map<Integer,Integer>");
+        assert_eq!(java_field_type("Tuple2<@Hero,int>", &no_enums()), "Tuple2<Integer,Integer>");
+    }
+
+    #[test]
+    fn top_level_ref_unchanged() {
+        // 顶层 table ref → int；enum ref → XxxEnum（不受嵌套 ref 改动影响）
+        assert_eq!(java_field_type("@Hero", &no_enums()), "int");
+        let mut e = HashSet::new();
+        e.insert("HeroType".to_string());
+        assert_eq!(java_field_type("@HeroType", &e), "HeroTypeEnum");
+    }
+}

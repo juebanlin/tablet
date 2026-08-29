@@ -108,6 +108,30 @@ fn ts_obj_key(raw: &str, bt: BaseType) -> String {
     }
 }
 
+/// 参数位类型注解。ref 元素 → number（脚本语言无强类型 ref helper）。
+fn ts_param_type(param: &TypeParam) -> &'static str {
+    match param {
+        TypeParam::Base(bt) => base_to_ts_type(*bt),
+        TypeParam::Ref(_) => "number",
+    }
+}
+
+/// 参数位值 → TS 字面量。ref 元素退化为 int id。
+fn ts_param(raw: &str, param: &TypeParam) -> String {
+    match param {
+        TypeParam::Base(bt) => base_to_ts(raw, *bt),
+        TypeParam::Ref(_) => base_to_ts(raw, BaseType::Int),
+    }
+}
+
+/// 参数位 key → TS 对象 key。ref key 退化为 int id。
+fn ts_param_key(raw: &str, param: &TypeParam) -> String {
+    match param {
+        TypeParam::Base(bt) => ts_obj_key(raw, *bt),
+        TypeParam::Ref(_) => ts_obj_key(raw, BaseType::Int),
+    }
+}
+
 /// 类型注解（TS interface 字段类型）。Ref 字段在脚本语言全部回退 number。
 fn ts_field_type(tbl_type_str: &str) -> String {
     let tt = match TblType::parse(tbl_type_str) {
@@ -117,19 +141,19 @@ fn ts_field_type(tbl_type_str: &str) -> String {
 
     let p = &tt.params;
     match &tt.paradigm {
-        Paradigm::Base => base_to_ts_type(p[0]).to_string(),
-        Paradigm::Tuple2 => format!("[{}, {}]", base_to_ts_type(p[0]), base_to_ts_type(p[1])),
-        Paradigm::Tuple3 => format!("[{}, {}, {}]", base_to_ts_type(p[0]), base_to_ts_type(p[1]), base_to_ts_type(p[2])),
-        Paradigm::Tuple4 => format!("[{}, {}, {}, {}]", base_to_ts_type(p[0]), base_to_ts_type(p[1]), base_to_ts_type(p[2]), base_to_ts_type(p[3])),
-        Paradigm::List | Paradigm::Set => format!("{}[]", base_to_ts_type(p[0])),
-        Paradigm::Map => format!("Record<{}, {}>", base_to_ts_type(p[0]), base_to_ts_type(p[1])),
-        Paradigm::ListTuple2 => format!("[{}, {}][]", base_to_ts_type(p[0]), base_to_ts_type(p[1])),
-        Paradigm::ListTuple3 => format!("[{}, {}, {}][]", base_to_ts_type(p[0]), base_to_ts_type(p[1]), base_to_ts_type(p[2])),
-        Paradigm::ListTuple4 => format!("[{}, {}, {}, {}][]", base_to_ts_type(p[0]), base_to_ts_type(p[1]), base_to_ts_type(p[2]), base_to_ts_type(p[3])),
-        Paradigm::MapTuple2 => format!("Record<{}, [{}, {}]>", base_to_ts_type(p[0]), base_to_ts_type(p[1]), base_to_ts_type(p[2])),
-        Paradigm::MapTuple3 => format!("Record<{}, [{}, {}, {}]>", base_to_ts_type(p[0]), base_to_ts_type(p[1]), base_to_ts_type(p[2]), base_to_ts_type(p[3])),
-        Paradigm::MapTuple4 => format!("Record<{}, [{}, {}, {}, {}]>", base_to_ts_type(p[0]), base_to_ts_type(p[1]), base_to_ts_type(p[2]), base_to_ts_type(p[3]), base_to_ts_type(p[4])),
-        Paradigm::MapList => format!("Record<{}, {}[]>", base_to_ts_type(p[0]), base_to_ts_type(p[1])),
+        Paradigm::Base => ts_param_type(&p[0]).to_string(),
+        Paradigm::Tuple2 => format!("[{}, {}]", ts_param_type(&p[0]), ts_param_type(&p[1])),
+        Paradigm::Tuple3 => format!("[{}, {}, {}]", ts_param_type(&p[0]), ts_param_type(&p[1]), ts_param_type(&p[2])),
+        Paradigm::Tuple4 => format!("[{}, {}, {}, {}]", ts_param_type(&p[0]), ts_param_type(&p[1]), ts_param_type(&p[2]), ts_param_type(&p[3])),
+        Paradigm::List | Paradigm::Set => format!("{}[]", ts_param_type(&p[0])),
+        Paradigm::Map => format!("Record<{}, {}>", ts_param_type(&p[0]), ts_param_type(&p[1])),
+        Paradigm::ListTuple2 => format!("[{}, {}][]", ts_param_type(&p[0]), ts_param_type(&p[1])),
+        Paradigm::ListTuple3 => format!("[{}, {}, {}][]", ts_param_type(&p[0]), ts_param_type(&p[1]), ts_param_type(&p[2])),
+        Paradigm::ListTuple4 => format!("[{}, {}, {}, {}][]", ts_param_type(&p[0]), ts_param_type(&p[1]), ts_param_type(&p[2]), ts_param_type(&p[3])),
+        Paradigm::MapTuple2 => format!("Record<{}, [{}, {}]>", ts_param_type(&p[0]), ts_param_type(&p[1]), ts_param_type(&p[2])),
+        Paradigm::MapTuple3 => format!("Record<{}, [{}, {}, {}]>", ts_param_type(&p[0]), ts_param_type(&p[1]), ts_param_type(&p[2]), ts_param_type(&p[3])),
+        Paradigm::MapTuple4 => format!("Record<{}, [{}, {}, {}, {}]>", ts_param_type(&p[0]), ts_param_type(&p[1]), ts_param_type(&p[2]), ts_param_type(&p[3]), ts_param_type(&p[4])),
+        Paradigm::MapList => format!("Record<{}, {}[]>", ts_param_type(&p[0]), ts_param_type(&p[1])),
         Paradigm::Ref => "number".to_string(),
     }
 }
@@ -144,40 +168,40 @@ fn value_to_ts(raw: &str, tbl_type_str: &str, sep: &SeparatorsSection) -> String
 
     let p = &tt.params;
     match &tt.paradigm {
-        Paradigm::Base => base_to_ts(raw, p[0]),
+        Paradigm::Base => ts_param(raw, &p[0]),
 
         Paradigm::Tuple2 => {
             let parts: Vec<&str> = raw.splitn(2, &*sep.tuple2).collect();
             if parts.len() == 2 {
-                format!("[{}, {}]", base_to_ts(parts[0], p[0]), base_to_ts(parts[1], p[1]))
+                format!("[{}, {}]", ts_param(parts[0], &p[0]), ts_param(parts[1], &p[1]))
             } else { format!("\"{}\"", ts_escape(raw)) }
         }
         Paradigm::Tuple3 => {
             let parts: Vec<&str> = raw.splitn(3, &*sep.tuple3).collect();
             if parts.len() == 3 {
-                format!("[{}, {}, {}]", base_to_ts(parts[0], p[0]), base_to_ts(parts[1], p[1]), base_to_ts(parts[2], p[2]))
+                format!("[{}, {}, {}]", ts_param(parts[0], &p[0]), ts_param(parts[1], &p[1]), ts_param(parts[2], &p[2]))
             } else { format!("\"{}\"", ts_escape(raw)) }
         }
         Paradigm::Tuple4 => {
             let parts: Vec<&str> = raw.splitn(4, &*sep.tuple4).collect();
             if parts.len() == 4 {
-                format!("[{}, {}, {}, {}]", base_to_ts(parts[0], p[0]), base_to_ts(parts[1], p[1]), base_to_ts(parts[2], p[2]), base_to_ts(parts[3], p[3]))
+                format!("[{}, {}, {}, {}]", ts_param(parts[0], &p[0]), ts_param(parts[1], &p[1]), ts_param(parts[2], &p[2]), ts_param(parts[3], &p[3]))
             } else { format!("\"{}\"", ts_escape(raw)) }
         }
 
         Paradigm::List => {
-            let items: Vec<String> = raw.split(&*sep.list).map(|v| base_to_ts(v, p[0])).collect();
+            let items: Vec<String> = raw.split(&*sep.list).map(|v| ts_param(v, &p[0])).collect();
             format!("[{}]", items.join(", "))
         }
         Paradigm::Set => {
-            let items: Vec<String> = raw.split(&*sep.set).map(|v| base_to_ts(v, p[0])).collect();
+            let items: Vec<String> = raw.split(&*sep.set).map(|v| ts_param(v, &p[0])).collect();
             format!("[{}]", items.join(", "))
         }
         Paradigm::Map => {
             let entries: Vec<String> = raw.split(&*sep.map.entry).map(|entry| {
                 let kv: Vec<&str> = entry.splitn(2, &*sep.map.kv).collect();
                 if kv.len() == 2 {
-                    format!("{}: {}", ts_obj_key(kv[0], p[0]), base_to_ts(kv[1], p[1]))
+                    format!("{}: {}", ts_param_key(kv[0], &p[0]), ts_param(kv[1], &p[1]))
                 } else { format!("\"{}\"", ts_escape(entry)) }
             }).collect();
             format!("{{ {} }}", entries.join(", "))
@@ -187,7 +211,7 @@ fn value_to_ts(raw: &str, tbl_type_str: &str, sep: &SeparatorsSection) -> String
             let items: Vec<String> = raw.split(&*sep.list_tuple2.list).map(|item| {
                 let parts: Vec<&str> = item.splitn(2, &*sep.list_tuple2.tuple).collect();
                 if parts.len() == 2 {
-                    format!("[{}, {}]", base_to_ts(parts[0], p[0]), base_to_ts(parts[1], p[1]))
+                    format!("[{}, {}]", ts_param(parts[0], &p[0]), ts_param(parts[1], &p[1]))
                 } else { format!("\"{}\"", ts_escape(item)) }
             }).collect();
             format!("[{}]", items.join(", "))
@@ -196,7 +220,7 @@ fn value_to_ts(raw: &str, tbl_type_str: &str, sep: &SeparatorsSection) -> String
             let items: Vec<String> = raw.split(&*sep.list_tuple3.list).map(|item| {
                 let parts: Vec<&str> = item.splitn(3, &*sep.list_tuple3.tuple).collect();
                 if parts.len() == 3 {
-                    format!("[{}, {}, {}]", base_to_ts(parts[0], p[0]), base_to_ts(parts[1], p[1]), base_to_ts(parts[2], p[2]))
+                    format!("[{}, {}, {}]", ts_param(parts[0], &p[0]), ts_param(parts[1], &p[1]), ts_param(parts[2], &p[2]))
                 } else { format!("\"{}\"", ts_escape(item)) }
             }).collect();
             format!("[{}]", items.join(", "))
@@ -205,7 +229,7 @@ fn value_to_ts(raw: &str, tbl_type_str: &str, sep: &SeparatorsSection) -> String
             let items: Vec<String> = raw.split(&*sep.list_tuple4.list).map(|item| {
                 let parts: Vec<&str> = item.splitn(4, &*sep.list_tuple4.tuple).collect();
                 if parts.len() == 4 {
-                    format!("[{}, {}, {}, {}]", base_to_ts(parts[0], p[0]), base_to_ts(parts[1], p[1]), base_to_ts(parts[2], p[2]), base_to_ts(parts[3], p[3]))
+                    format!("[{}, {}, {}, {}]", ts_param(parts[0], &p[0]), ts_param(parts[1], &p[1]), ts_param(parts[2], &p[2]), ts_param(parts[3], &p[3]))
                 } else { format!("\"{}\"", ts_escape(item)) }
             }).collect();
             format!("[{}]", items.join(", "))
@@ -217,9 +241,9 @@ fn value_to_ts(raw: &str, tbl_type_str: &str, sep: &SeparatorsSection) -> String
                 if kv.len() == 2 {
                     let parts: Vec<&str> = kv[1].splitn(2, &*sep.map_tuple2.tuple).collect();
                     let v = if parts.len() == 2 {
-                        format!("[{}, {}]", base_to_ts(parts[0], p[1]), base_to_ts(parts[1], p[2]))
+                        format!("[{}, {}]", ts_param(parts[0], &p[1]), ts_param(parts[1], &p[2]))
                     } else { format!("\"{}\"", ts_escape(kv[1])) };
-                    format!("{}: {}", ts_obj_key(kv[0], p[0]), v)
+                    format!("{}: {}", ts_param_key(kv[0], &p[0]), v)
                 } else { format!("\"{}\"", ts_escape(entry)) }
             }).collect();
             format!("{{ {} }}", entries.join(", "))
@@ -230,9 +254,9 @@ fn value_to_ts(raw: &str, tbl_type_str: &str, sep: &SeparatorsSection) -> String
                 if kv.len() == 2 {
                     let parts: Vec<&str> = kv[1].splitn(3, &*sep.map_tuple3.tuple).collect();
                     let v = if parts.len() == 3 {
-                        format!("[{}, {}, {}]", base_to_ts(parts[0], p[1]), base_to_ts(parts[1], p[2]), base_to_ts(parts[2], p[3]))
+                        format!("[{}, {}, {}]", ts_param(parts[0], &p[1]), ts_param(parts[1], &p[2]), ts_param(parts[2], &p[3]))
                     } else { format!("\"{}\"", ts_escape(kv[1])) };
-                    format!("{}: {}", ts_obj_key(kv[0], p[0]), v)
+                    format!("{}: {}", ts_param_key(kv[0], &p[0]), v)
                 } else { format!("\"{}\"", ts_escape(entry)) }
             }).collect();
             format!("{{ {} }}", entries.join(", "))
@@ -243,9 +267,9 @@ fn value_to_ts(raw: &str, tbl_type_str: &str, sep: &SeparatorsSection) -> String
                 if kv.len() == 2 {
                     let parts: Vec<&str> = kv[1].splitn(4, &*sep.map_tuple4.tuple).collect();
                     let v = if parts.len() == 4 {
-                        format!("[{}, {}, {}, {}]", base_to_ts(parts[0], p[1]), base_to_ts(parts[1], p[2]), base_to_ts(parts[2], p[3]), base_to_ts(parts[3], p[4]))
+                        format!("[{}, {}, {}, {}]", ts_param(parts[0], &p[1]), ts_param(parts[1], &p[2]), ts_param(parts[2], &p[3]), ts_param(parts[3], &p[4]))
                     } else { format!("\"{}\"", ts_escape(kv[1])) };
-                    format!("{}: {}", ts_obj_key(kv[0], p[0]), v)
+                    format!("{}: {}", ts_param_key(kv[0], &p[0]), v)
                 } else { format!("\"{}\"", ts_escape(entry)) }
             }).collect();
             format!("{{ {} }}", entries.join(", "))
@@ -254,8 +278,8 @@ fn value_to_ts(raw: &str, tbl_type_str: &str, sep: &SeparatorsSection) -> String
             let entries: Vec<String> = raw.split(&*sep.map_list.entry).map(|entry| {
                 let kv: Vec<&str> = entry.splitn(2, &*sep.map_list.kv).collect();
                 if kv.len() == 2 {
-                    let items: Vec<String> = kv[1].split(&*sep.map_list.item).map(|v| base_to_ts(v, p[1])).collect();
-                    format!("{}: [{}]", ts_obj_key(kv[0], p[0]), items.join(", "))
+                    let items: Vec<String> = kv[1].split(&*sep.map_list.item).map(|v| ts_param(v, &p[1])).collect();
+                    format!("{}: [{}]", ts_param_key(kv[0], &p[0]), items.join(", "))
                 } else { format!("\"{}\"", ts_escape(entry)) }
             }).collect();
             format!("{{ {} }}", entries.join(", "))
@@ -338,11 +362,14 @@ fn default_for_field(tbl_type_str: &str) -> String {
         None => return "\"\"".to_string(),
     };
     match &tt.paradigm {
-        Paradigm::Base => match tt.params[0] {
-            BaseType::Int | BaseType::Long | BaseType::Float | BaseType::Double => "0".to_string(),
-            BaseType::Str => "\"\"".to_string(),
-            BaseType::Bool => "false".to_string(),
-            BaseType::Txt => "\"\"".to_string(),
+        Paradigm::Base => match &tt.params[0] {
+            TypeParam::Base(bt) => match bt {
+                BaseType::Int | BaseType::Long | BaseType::Float | BaseType::Double => "0".to_string(),
+                BaseType::Str => "\"\"".to_string(),
+                BaseType::Bool => "false".to_string(),
+                BaseType::Txt => "\"\"".to_string(),
+            },
+            TypeParam::Ref(_) => "0".to_string(),
         },
         Paradigm::Ref => "0".to_string(),
         Paradigm::Tuple2 | Paradigm::Tuple3 | Paradigm::Tuple4
@@ -570,6 +597,18 @@ mod tests {
     fn ref_value_outputs_int() {
         let s = sep();
         assert_eq!(value_to_ts("42", "@HeroBase", &s), "42");
+    }
+
+    #[test]
+    fn nested_ref_type_is_number_and_value_int() {
+        // S24：复杂类型内 ref 元素退化为 number（int id）
+        assert_eq!(ts_field_type("List<@Hero>"), "number[]");
+        assert_eq!(ts_field_type("Set<@Hero>"), "number[]");
+        assert_eq!(ts_field_type("Map<int,@Hero>"), "Record<number, number>");
+        let s = sep();
+        assert_eq!(value_to_ts("1;2", "List<@Hero>", &s), "[1, 2]");
+        assert_eq!(value_to_ts("1:1001;2:1002", "Map<int,@Hero>", &s), "{ 1: 1001, 2: 1002 }");
+        assert_eq!(value_to_ts("1001,3", "Tuple2<@Hero,int>", &s), "[1001, 3]");
     }
 
     #[test]

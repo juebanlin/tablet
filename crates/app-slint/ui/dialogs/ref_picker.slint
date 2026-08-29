@@ -24,6 +24,7 @@ export struct RefHeader {
 export component RefPicker inherits Rectangle {
     in property <bool> open: false;
     in property <string> ref-name;                  // 例：HeroBase / HeroType
+    in property <bool> multi: false;                // true = List<@X> 多选模式（勾选多项拼列表）
     in property <string> kind-label: "📊 表引用";    // 或 "🔢 枚举引用"
     in property <bool> target-missing: false;       // 引用项不存在 → 显示警告并禁用确定
     in property <bool> is-table: true;              // Table 才显示列展示切换
@@ -59,7 +60,7 @@ export component RefPicker inherits Rectangle {
     height: 100%;
 
     DialogChrome {
-        title: "选择引用：@" + root.ref-name;
+        title: root.multi ? "选择多个引用：@" + root.ref-name : "选择引用：@" + root.ref-name;
         dialog-w: 640px;
         dialog-h: 520px;
         primary-text: "确定";

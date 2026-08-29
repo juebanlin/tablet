@@ -102,24 +102,40 @@ fn cs_base_parse_fn(bt: BaseType) -> &'static str {
     }
 }
 
+// 参数位的 C# 类型：ref 元素退化为 int（id）
+fn cs_param_type(param: &TypeParam) -> String {
+    match param {
+        TypeParam::Base(bt) => cs_base_type(*bt).to_string(),
+        TypeParam::Ref(_) => "int".to_string(),
+    }
+}
+
+// 参数位的 string→C# 解析函数名：ref 元素按 int 解析
+fn cs_param_parse_fn(param: &TypeParam) -> &'static str {
+    match param {
+        TypeParam::Base(bt) => cs_base_parse_fn(*bt),
+        TypeParam::Ref(_) => cs_base_parse_fn(BaseType::Int),
+    }
+}
+
 fn cs_field_type(tbl_type_str: &str, enum_names: &HashSet<String>) -> String {
     let Some(t) = TblType::parse(tbl_type_str) else { return "string".to_string() };
     let p = &t.params;
     match &t.paradigm {
-        Paradigm::Base => cs_base_type(p[0]).to_string(),
-        Paradigm::Tuple2 => format!("Tuple2<{}, {}>", cs_base_type(p[0]), cs_base_type(p[1])),
-        Paradigm::Tuple3 => format!("Tuple3<{}, {}, {}>", cs_base_type(p[0]), cs_base_type(p[1]), cs_base_type(p[2])),
-        Paradigm::Tuple4 => format!("Tuple4<{}, {}, {}, {}>", cs_base_type(p[0]), cs_base_type(p[1]), cs_base_type(p[2]), cs_base_type(p[3])),
-        Paradigm::List => format!("List<{}>", cs_base_type(p[0])),
-        Paradigm::Set => format!("HashSet<{}>", cs_base_type(p[0])),
-        Paradigm::Map => format!("Dictionary<{}, {}>", cs_base_type(p[0]), cs_base_type(p[1])),
-        Paradigm::ListTuple2 => format!("List<Tuple2<{}, {}>>", cs_base_type(p[0]), cs_base_type(p[1])),
-        Paradigm::ListTuple3 => format!("List<Tuple3<{}, {}, {}>>", cs_base_type(p[0]), cs_base_type(p[1]), cs_base_type(p[2])),
-        Paradigm::ListTuple4 => format!("List<Tuple4<{}, {}, {}, {}>>", cs_base_type(p[0]), cs_base_type(p[1]), cs_base_type(p[2]), cs_base_type(p[3])),
-        Paradigm::MapTuple2 => format!("Dictionary<{}, Tuple2<{}, {}>>", cs_base_type(p[0]), cs_base_type(p[1]), cs_base_type(p[2])),
-        Paradigm::MapTuple3 => format!("Dictionary<{}, Tuple3<{}, {}, {}>>", cs_base_type(p[0]), cs_base_type(p[1]), cs_base_type(p[2]), cs_base_type(p[3])),
-        Paradigm::MapTuple4 => format!("Dictionary<{}, Tuple4<{}, {}, {}, {}>>", cs_base_type(p[0]), cs_base_type(p[1]), cs_base_type(p[2]), cs_base_type(p[3]), cs_base_type(p[4])),
-        Paradigm::MapList => format!("Dictionary<{}, List<{}>>", cs_base_type(p[0]), cs_base_type(p[1])),
+        Paradigm::Base => cs_param_type(&p[0]).to_string(),
+        Paradigm::Tuple2 => format!("Tuple2<{}, {}>", cs_param_type(&p[0]), cs_param_type(&p[1])),
+        Paradigm::Tuple3 => format!("Tuple3<{}, {}, {}>", cs_param_type(&p[0]), cs_param_type(&p[1]), cs_param_type(&p[2])),
+        Paradigm::Tuple4 => format!("Tuple4<{}, {}, {}, {}>", cs_param_type(&p[0]), cs_param_type(&p[1]), cs_param_type(&p[2]), cs_param_type(&p[3])),
+        Paradigm::List => format!("List<{}>", cs_param_type(&p[0])),
+        Paradigm::Set => format!("HashSet<{}>", cs_param_type(&p[0])),
+        Paradigm::Map => format!("Dictionary<{}, {}>", cs_param_type(&p[0]), cs_param_type(&p[1])),
+        Paradigm::ListTuple2 => format!("List<Tuple2<{}, {}>>", cs_param_type(&p[0]), cs_param_type(&p[1])),
+        Paradigm::ListTuple3 => format!("List<Tuple3<{}, {}, {}>>", cs_param_type(&p[0]), cs_param_type(&p[1]), cs_param_type(&p[2])),
+        Paradigm::ListTuple4 => format!("List<Tuple4<{}, {}, {}, {}>>", cs_param_type(&p[0]), cs_param_type(&p[1]), cs_param_type(&p[2]), cs_param_type(&p[3])),
+        Paradigm::MapTuple2 => format!("Dictionary<{}, Tuple2<{}, {}>>", cs_param_type(&p[0]), cs_param_type(&p[1]), cs_param_type(&p[2])),
+        Paradigm::MapTuple3 => format!("Dictionary<{}, Tuple3<{}, {}, {}>>", cs_param_type(&p[0]), cs_param_type(&p[1]), cs_param_type(&p[2]), cs_param_type(&p[3])),
+        Paradigm::MapTuple4 => format!("Dictionary<{}, Tuple4<{}, {}, {}, {}>>", cs_param_type(&p[0]), cs_param_type(&p[1]), cs_param_type(&p[2]), cs_param_type(&p[3]), cs_param_type(&p[4])),
+        Paradigm::MapList => format!("Dictionary<{}, List<{}>>", cs_param_type(&p[0]), cs_param_type(&p[1])),
         Paradigm::Ref => {
             if let Some(name) = &t.ref_name {
                 if enum_names.contains(name) {
@@ -133,7 +149,10 @@ fn cs_field_type(tbl_type_str: &str, enum_names: &HashSet<String>) -> String {
 
 fn cs_field_default(tbl_type_str: &str, enum_names: &HashSet<String>) -> String {
     match TblType::parse(tbl_type_str) {
-        Some(t) if t.paradigm == Paradigm::Base => cs_base_default(t.params[0]).to_string(),
+        Some(t) if t.paradigm == Paradigm::Base => match &t.params[0] {
+            TypeParam::Base(bt) => cs_base_default(*bt).to_string(),
+            TypeParam::Ref(_) => "0".to_string(),
+        },
         Some(t) if t.paradigm == Paradigm::Ref => {
             if let Some(rn) = &t.ref_name {
                 if enum_names.contains(rn) {
@@ -151,84 +170,84 @@ fn cs_field_default(tbl_type_str: &str, enum_names: &HashSet<String>) -> String 
 fn cs_parse_expr(raw_var: &str, t: &TblType, sep: &str, enum_names: &HashSet<String>) -> String {
     let p = &t.params;
     match &t.paradigm {
-        Paradigm::Base => format!("{}({})", cs_base_parse_fn(p[0]), raw_var),
+        Paradigm::Base => format!("{}({})", cs_param_parse_fn(&p[0]), raw_var),
 
         Paradigm::Tuple2 => format!(
             "TblParse.ParseTuple2<{ta}, {tb}>({raw}, {sep}.Tuple2, {fa}, {fb})",
-            ta=cs_base_type(p[0]), tb=cs_base_type(p[1]), raw=raw_var, sep=sep,
-            fa=cs_base_parse_fn(p[0]), fb=cs_base_parse_fn(p[1])
+            ta=cs_param_type(&p[0]), tb=cs_param_type(&p[1]), raw=raw_var, sep=sep,
+            fa=cs_param_parse_fn(&p[0]), fb=cs_param_parse_fn(&p[1])
         ),
         Paradigm::Tuple3 => format!(
             "TblParse.ParseTuple3<{ta}, {tb}, {tc}>({raw}, {sep}.Tuple3, {fa}, {fb}, {fc})",
-            ta=cs_base_type(p[0]), tb=cs_base_type(p[1]), tc=cs_base_type(p[2]),
+            ta=cs_param_type(&p[0]), tb=cs_param_type(&p[1]), tc=cs_param_type(&p[2]),
             raw=raw_var, sep=sep,
-            fa=cs_base_parse_fn(p[0]), fb=cs_base_parse_fn(p[1]), fc=cs_base_parse_fn(p[2])
+            fa=cs_param_parse_fn(&p[0]), fb=cs_param_parse_fn(&p[1]), fc=cs_param_parse_fn(&p[2])
         ),
         Paradigm::Tuple4 => format!(
             "TblParse.ParseTuple4<{ta}, {tb}, {tc}, {td}>({raw}, {sep}.Tuple4, {fa}, {fb}, {fc}, {fd})",
-            ta=cs_base_type(p[0]), tb=cs_base_type(p[1]), tc=cs_base_type(p[2]), td=cs_base_type(p[3]),
+            ta=cs_param_type(&p[0]), tb=cs_param_type(&p[1]), tc=cs_param_type(&p[2]), td=cs_param_type(&p[3]),
             raw=raw_var, sep=sep,
-            fa=cs_base_parse_fn(p[0]), fb=cs_base_parse_fn(p[1]), fc=cs_base_parse_fn(p[2]), fd=cs_base_parse_fn(p[3])
+            fa=cs_param_parse_fn(&p[0]), fb=cs_param_parse_fn(&p[1]), fc=cs_param_parse_fn(&p[2]), fd=cs_param_parse_fn(&p[3])
         ),
 
         Paradigm::List => format!(
             "TblParse.ParseList<{t}>({raw}, {sep}.List, {f})",
-            t=cs_base_type(p[0]), raw=raw_var, sep=sep, f=cs_base_parse_fn(p[0])
+            t=cs_param_type(&p[0]), raw=raw_var, sep=sep, f=cs_param_parse_fn(&p[0])
         ),
         Paradigm::Set => format!(
             "TblParse.ParseSet<{t}>({raw}, {sep}.Set, {f})",
-            t=cs_base_type(p[0]), raw=raw_var, sep=sep, f=cs_base_parse_fn(p[0])
+            t=cs_param_type(&p[0]), raw=raw_var, sep=sep, f=cs_param_parse_fn(&p[0])
         ),
         Paradigm::Map => format!(
             "TblParse.ParseMap<{tk}, {tv}>({raw}, {sep}.MapKv, {sep}.MapEntry, {fk}, {fv})",
-            tk=cs_base_type(p[0]), tv=cs_base_type(p[1]),
+            tk=cs_param_type(&p[0]), tv=cs_param_type(&p[1]),
             raw=raw_var, sep=sep,
-            fk=cs_base_parse_fn(p[0]), fv=cs_base_parse_fn(p[1])
+            fk=cs_param_parse_fn(&p[0]), fv=cs_param_parse_fn(&p[1])
         ),
 
         Paradigm::ListTuple2 => format!(
             "TblParse.ParseList<Tuple2<{ta}, {tb}>>({raw}, {sep}.ListTuple2List, s => TblParse.ParseTuple2<{ta}, {tb}>(s, {sep}.ListTuple2Tuple, {fa}, {fb}))",
-            ta=cs_base_type(p[0]), tb=cs_base_type(p[1]),
+            ta=cs_param_type(&p[0]), tb=cs_param_type(&p[1]),
             raw=raw_var, sep=sep,
-            fa=cs_base_parse_fn(p[0]), fb=cs_base_parse_fn(p[1])
+            fa=cs_param_parse_fn(&p[0]), fb=cs_param_parse_fn(&p[1])
         ),
         Paradigm::ListTuple3 => format!(
             "TblParse.ParseList<Tuple3<{ta}, {tb}, {tc}>>({raw}, {sep}.ListTuple3List, s => TblParse.ParseTuple3<{ta}, {tb}, {tc}>(s, {sep}.ListTuple3Tuple, {fa}, {fb}, {fc}))",
-            ta=cs_base_type(p[0]), tb=cs_base_type(p[1]), tc=cs_base_type(p[2]),
+            ta=cs_param_type(&p[0]), tb=cs_param_type(&p[1]), tc=cs_param_type(&p[2]),
             raw=raw_var, sep=sep,
-            fa=cs_base_parse_fn(p[0]), fb=cs_base_parse_fn(p[1]), fc=cs_base_parse_fn(p[2])
+            fa=cs_param_parse_fn(&p[0]), fb=cs_param_parse_fn(&p[1]), fc=cs_param_parse_fn(&p[2])
         ),
         Paradigm::ListTuple4 => format!(
             "TblParse.ParseList<Tuple4<{ta}, {tb}, {tc}, {td}>>({raw}, {sep}.ListTuple4List, s => TblParse.ParseTuple4<{ta}, {tb}, {tc}, {td}>(s, {sep}.ListTuple4Tuple, {fa}, {fb}, {fc}, {fd}))",
-            ta=cs_base_type(p[0]), tb=cs_base_type(p[1]), tc=cs_base_type(p[2]), td=cs_base_type(p[3]),
+            ta=cs_param_type(&p[0]), tb=cs_param_type(&p[1]), tc=cs_param_type(&p[2]), td=cs_param_type(&p[3]),
             raw=raw_var, sep=sep,
-            fa=cs_base_parse_fn(p[0]), fb=cs_base_parse_fn(p[1]), fc=cs_base_parse_fn(p[2]), fd=cs_base_parse_fn(p[3])
+            fa=cs_param_parse_fn(&p[0]), fb=cs_param_parse_fn(&p[1]), fc=cs_param_parse_fn(&p[2]), fd=cs_param_parse_fn(&p[3])
         ),
 
         Paradigm::MapTuple2 => format!(
             "TblParse.ParseMap<{tk}, Tuple2<{ta}, {tb}>>({raw}, {sep}.MapTuple2Kv, {sep}.MapTuple2Entry, {fk}, s => TblParse.ParseTuple2<{ta}, {tb}>(s, {sep}.MapTuple2Tuple, {fa}, {fb}))",
-            tk=cs_base_type(p[0]), ta=cs_base_type(p[1]), tb=cs_base_type(p[2]),
+            tk=cs_param_type(&p[0]), ta=cs_param_type(&p[1]), tb=cs_param_type(&p[2]),
             raw=raw_var, sep=sep,
-            fk=cs_base_parse_fn(p[0]), fa=cs_base_parse_fn(p[1]), fb=cs_base_parse_fn(p[2])
+            fk=cs_param_parse_fn(&p[0]), fa=cs_param_parse_fn(&p[1]), fb=cs_param_parse_fn(&p[2])
         ),
         Paradigm::MapTuple3 => format!(
             "TblParse.ParseMap<{tk}, Tuple3<{ta}, {tb}, {tc}>>({raw}, {sep}.MapTuple3Kv, {sep}.MapTuple3Entry, {fk}, s => TblParse.ParseTuple3<{ta}, {tb}, {tc}>(s, {sep}.MapTuple3Tuple, {fa}, {fb}, {fc}))",
-            tk=cs_base_type(p[0]), ta=cs_base_type(p[1]), tb=cs_base_type(p[2]), tc=cs_base_type(p[3]),
+            tk=cs_param_type(&p[0]), ta=cs_param_type(&p[1]), tb=cs_param_type(&p[2]), tc=cs_param_type(&p[3]),
             raw=raw_var, sep=sep,
-            fk=cs_base_parse_fn(p[0]), fa=cs_base_parse_fn(p[1]), fb=cs_base_parse_fn(p[2]), fc=cs_base_parse_fn(p[3])
+            fk=cs_param_parse_fn(&p[0]), fa=cs_param_parse_fn(&p[1]), fb=cs_param_parse_fn(&p[2]), fc=cs_param_parse_fn(&p[3])
         ),
         Paradigm::MapTuple4 => format!(
             "TblParse.ParseMap<{tk}, Tuple4<{ta}, {tb}, {tc}, {td}>>({raw}, {sep}.MapTuple4Kv, {sep}.MapTuple4Entry, {fk}, s => TblParse.ParseTuple4<{ta}, {tb}, {tc}, {td}>(s, {sep}.MapTuple4Tuple, {fa}, {fb}, {fc}, {fd}))",
-            tk=cs_base_type(p[0]), ta=cs_base_type(p[1]), tb=cs_base_type(p[2]), tc=cs_base_type(p[3]), td=cs_base_type(p[4]),
+            tk=cs_param_type(&p[0]), ta=cs_param_type(&p[1]), tb=cs_param_type(&p[2]), tc=cs_param_type(&p[3]), td=cs_param_type(&p[4]),
             raw=raw_var, sep=sep,
-            fk=cs_base_parse_fn(p[0]), fa=cs_base_parse_fn(p[1]), fb=cs_base_parse_fn(p[2]), fc=cs_base_parse_fn(p[3]), fd=cs_base_parse_fn(p[4])
+            fk=cs_param_parse_fn(&p[0]), fa=cs_param_parse_fn(&p[1]), fb=cs_param_parse_fn(&p[2]), fc=cs_param_parse_fn(&p[3]), fd=cs_param_parse_fn(&p[4])
         ),
 
         Paradigm::MapList => format!(
             "TblParse.ParseMap<{tk}, List<{tv}>>({raw}, {sep}.MapListKv, {sep}.MapListEntry, {fk}, s => TblParse.ParseList<{tv}>(s, {sep}.MapListItem, {fv}))",
-            tk=cs_base_type(p[0]), tv=cs_base_type(p[1]),
+            tk=cs_param_type(&p[0]), tv=cs_param_type(&p[1]),
             raw=raw_var, sep=sep,
-            fk=cs_base_parse_fn(p[0]), fv=cs_base_parse_fn(p[1])
+            fk=cs_param_parse_fn(&p[0]), fv=cs_param_parse_fn(&p[1])
         ),
 
         Paradigm::Ref => {
@@ -533,6 +552,16 @@ mod tests {
         let t = TblType::parse("@HeroType").unwrap();
         let expr = cs_parse_expr("raw", &t, "sep", &e);
         assert_eq!(expr, "(HeroTypeEnum)TblParse.ParseInt32(raw)");
+    }
+
+    #[test]
+    fn nested_ref_maps_to_int_list() {
+        // S24：复杂类型内 ref 元素退化为 int
+        assert_eq!(cs_field_type("List<@Hero>", &no_enums()), "List<int>");
+        assert_eq!(cs_field_type("Map<int,@Hero>", &no_enums()), "Dictionary<int, int>");
+        let t = TblType::parse("List<@Hero>").unwrap();
+        let expr = cs_parse_expr("raw", &t, "sep", &no_enums());
+        assert!(expr.contains("TblParse.ParseList<int>"), "got {}", expr);
     }
 
     #[test]

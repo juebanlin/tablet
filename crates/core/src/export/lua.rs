@@ -66,6 +66,22 @@ fn lua_map_key(raw: &str, bt: BaseType) -> String {
     }
 }
 
+/// 参数位值 → Lua 字面量。ref 元素退化为 int id（Lua 不做枚举类型转换）。
+fn lua_param(raw: &str, param: &TypeParam) -> String {
+    match param {
+        TypeParam::Base(bt) => base_to_lua(raw, *bt),
+        TypeParam::Ref(_) => base_to_lua(raw, BaseType::Int),
+    }
+}
+
+/// 参数位 key → Lua key。ref key 退化为 int id。
+fn lua_param_key(raw: &str, param: &TypeParam) -> String {
+    match param {
+        TypeParam::Base(bt) => lua_map_key(raw, *bt),
+        TypeParam::Ref(_) => format!("[{}]", base_to_lua(raw, BaseType::Int)),
+    }
+}
+
 fn value_to_lua(raw: &str, tbl_type_str: &str, sep: &SeparatorsSection) -> String {
     if raw.is_empty() { return "nil".to_string(); }
 
@@ -76,41 +92,41 @@ fn value_to_lua(raw: &str, tbl_type_str: &str, sep: &SeparatorsSection) -> Strin
 
     let p = &tt.params;
     match &tt.paradigm {
-        Paradigm::Base => base_to_lua(raw, p[0]),
+        Paradigm::Base => lua_param(raw, &p[0]),
 
         Paradigm::Tuple2 => {
             let parts: Vec<&str> = raw.splitn(2, &*sep.tuple2).collect();
             if parts.len() == 2 {
-                format!("{{{}, {}}}", base_to_lua(parts[0], p[0]), base_to_lua(parts[1], p[1]))
+                format!("{{{}, {}}}", lua_param(parts[0], &p[0]), lua_param(parts[1], &p[1]))
             } else { format!("\"{}\"", lua_escape(raw)) }
         }
         Paradigm::Tuple3 => {
             let parts: Vec<&str> = raw.splitn(3, &*sep.tuple3).collect();
             if parts.len() == 3 {
-                format!("{{{}, {}, {}}}", base_to_lua(parts[0], p[0]), base_to_lua(parts[1], p[1]), base_to_lua(parts[2], p[2]))
+                format!("{{{}, {}, {}}}", lua_param(parts[0], &p[0]), lua_param(parts[1], &p[1]), lua_param(parts[2], &p[2]))
             } else { format!("\"{}\"", lua_escape(raw)) }
         }
         Paradigm::Tuple4 => {
             let parts: Vec<&str> = raw.splitn(4, &*sep.tuple4).collect();
             if parts.len() == 4 {
-                format!("{{{}, {}, {}, {}}}", base_to_lua(parts[0], p[0]), base_to_lua(parts[1], p[1]), base_to_lua(parts[2], p[2]), base_to_lua(parts[3], p[3]))
+                format!("{{{}, {}, {}, {}}}", lua_param(parts[0], &p[0]), lua_param(parts[1], &p[1]), lua_param(parts[2], &p[2]), lua_param(parts[3], &p[3]))
             } else { format!("\"{}\"", lua_escape(raw)) }
         }
 
         Paradigm::List => {
-            let items: Vec<String> = raw.split(&*sep.list).map(|v| base_to_lua(v, p[0])).collect();
+            let items: Vec<String> = raw.split(&*sep.list).map(|v| lua_param(v, &p[0])).collect();
             format!("{{{}}}", items.join(", "))
         }
         Paradigm::Set => {
-            let items: Vec<String> = raw.split(&*sep.set).map(|v| format!("[{}]=true", base_to_lua(v, p[0]))).collect();
+            let items: Vec<String> = raw.split(&*sep.set).map(|v| format!("[{}]=true", lua_param(v, &p[0]))).collect();
             format!("{{{}}}", items.join(", "))
         }
         Paradigm::Map => {
             let entries: Vec<String> = raw.split(&*sep.map.entry).map(|entry| {
                 let kv: Vec<&str> = entry.splitn(2, &*sep.map.kv).collect();
                 if kv.len() == 2 {
-                    let k = lua_map_key(kv[0], p[0]);
-                    let v = base_to_lua(kv[1], p[1]);
+                    let k = lua_param_key(kv[0], &p[0]);
+                    let v = lua_param(kv[1], &p[1]);
                     if k.starts_with('[') { format!("{}={}", k, v) } else { format!("{}={}", k, v) }
                 } else { format!("\"{}\"", lua_escape(entry)) }
             }).collect();
@@ -121,7 +137,7 @@ fn value_to_lua(raw: &str, tbl_type_str: &str, sep: &SeparatorsSection) -> Strin
             let items: Vec<String> = raw.split(&*sep.list_tuple2.list).map(|item| {
                 let parts: Vec<&str> = item.splitn(2, &*sep.list_tuple2.tuple).collect();
                 if parts.len() == 2 {
-                    format!("{{{}, {}}}", base_to_lua(parts[0], p[0]), base_to_lua(parts[1], p[1]))
+                    format!("{{{}, {}}}", lua_param(parts[0], &p[0]), lua_param(parts[1], &p[1]))
                 } else { format!("\"{}\"", lua_escape(item)) }
             }).collect();
             format!("{{{}}}", items.join(", "))
@@ -130,7 +146,7 @@ fn value_to_lua(raw: &str, tbl_type_str: &str, sep: &SeparatorsSection) -> Strin
             let items: Vec<String> = raw.split(&*sep.list_tuple3.list).map(|item| {
                 let parts: Vec<&str> = item.splitn(3, &*sep.list_tuple3.tuple).collect();
                 if parts.len() == 3 {
-                    format!("{{{}, {}, {}}}", base_to_lua(parts[0], p[0]), base_to_lua(parts[1], p[1]), base_to_lua(parts[2], p[2]))
+                    format!("{{{}, {}, {}}}", lua_param(parts[0], &p[0]), lua_param(parts[1], &p[1]), lua_param(parts[2], &p[2]))
                 } else { format!("\"{}\"", lua_escape(item)) }
             }).collect();
             format!("{{{}}}", items.join(", "))
@@ -139,7 +155,7 @@ fn value_to_lua(raw: &str, tbl_type_str: &str, sep: &SeparatorsSection) -> Strin
             let items: Vec<String> = raw.split(&*sep.list_tuple4.list).map(|item| {
                 let parts: Vec<&str> = item.splitn(4, &*sep.list_tuple4.tuple).collect();
                 if parts.len() == 4 {
-                    format!("{{{}, {}, {}, {}}}", base_to_lua(parts[0], p[0]), base_to_lua(parts[1], p[1]), base_to_lua(parts[2], p[2]), base_to_lua(parts[3], p[3]))
+                    format!("{{{}, {}, {}, {}}}", lua_param(parts[0], &p[0]), lua_param(parts[1], &p[1]), lua_param(parts[2], &p[2]), lua_param(parts[3], &p[3]))
                 } else { format!("\"{}\"", lua_escape(item)) }
             }).collect();
             format!("{{{}}}", items.join(", "))
@@ -149,10 +165,10 @@ fn value_to_lua(raw: &str, tbl_type_str: &str, sep: &SeparatorsSection) -> Strin
             let entries: Vec<String> = raw.split(&*sep.map_tuple2.entry).map(|entry| {
                 let kv: Vec<&str> = entry.splitn(2, &*sep.map_tuple2.kv).collect();
                 if kv.len() == 2 {
-                    let k = lua_map_key(kv[0], p[0]);
+                    let k = lua_param_key(kv[0], &p[0]);
                     let parts: Vec<&str> = kv[1].splitn(2, &*sep.map_tuple2.tuple).collect();
                     let v = if parts.len() == 2 {
-                        format!("{{{}, {}}}", base_to_lua(parts[0], p[1]), base_to_lua(parts[1], p[2]))
+                        format!("{{{}, {}}}", lua_param(parts[0], &p[1]), lua_param(parts[1], &p[2]))
                     } else { format!("\"{}\"", lua_escape(kv[1])) };
                     format!("{}={}", k, v)
                 } else { format!("\"{}\"", lua_escape(entry)) }
@@ -163,10 +179,10 @@ fn value_to_lua(raw: &str, tbl_type_str: &str, sep: &SeparatorsSection) -> Strin
             let entries: Vec<String> = raw.split(&*sep.map_tuple3.entry).map(|entry| {
                 let kv: Vec<&str> = entry.splitn(2, &*sep.map_tuple3.kv).collect();
                 if kv.len() == 2 {
-                    let k = lua_map_key(kv[0], p[0]);
+                    let k = lua_param_key(kv[0], &p[0]);
                     let parts: Vec<&str> = kv[1].splitn(3, &*sep.map_tuple3.tuple).collect();
                     let v = if parts.len() == 3 {
-                        format!("{{{}, {}, {}}}", base_to_lua(parts[0], p[1]), base_to_lua(parts[1], p[2]), base_to_lua(parts[2], p[3]))
+                        format!("{{{}, {}, {}}}", lua_param(parts[0], &p[1]), lua_param(parts[1], &p[2]), lua_param(parts[2], &p[3]))
                     } else { format!("\"{}\"", lua_escape(kv[1])) };
                     format!("{}={}", k, v)
                 } else { format!("\"{}\"", lua_escape(entry)) }
@@ -177,10 +193,10 @@ fn value_to_lua(raw: &str, tbl_type_str: &str, sep: &SeparatorsSection) -> Strin
             let entries: Vec<String> = raw.split(&*sep.map_tuple4.entry).map(|entry| {
                 let kv: Vec<&str> = entry.splitn(2, &*sep.map_tuple4.kv).collect();
                 if kv.len() == 2 {
-                    let k = lua_map_key(kv[0], p[0]);
+                    let k = lua_param_key(kv[0], &p[0]);
                     let parts: Vec<&str> = kv[1].splitn(4, &*sep.map_tuple4.tuple).collect();
                     let v = if parts.len() == 4 {
-                        format!("{{{}, {}, {}, {}}}", base_to_lua(parts[0], p[1]), base_to_lua(parts[1], p[2]), base_to_lua(parts[2], p[3]), base_to_lua(parts[3], p[4]))
+                        format!("{{{}, {}, {}, {}}}", lua_param(parts[0], &p[1]), lua_param(parts[1], &p[2]), lua_param(parts[2], &p[3]), lua_param(parts[3], &p[4]))
                     } else { format!("\"{}\"", lua_escape(kv[1])) };
                     format!("{}={}", k, v)
                 } else { format!("\"{}\"", lua_escape(entry)) }
@@ -191,8 +207,8 @@ fn value_to_lua(raw: &str, tbl_type_str: &str, sep: &SeparatorsSection) -> Strin
             let entries: Vec<String> = raw.split(&*sep.map_list.entry).map(|entry| {
                 let kv: Vec<&str> = entry.splitn(2, &*sep.map_list.kv).collect();
                 if kv.len() == 2 {
-                    let k = lua_map_key(kv[0], p[0]);
-                    let items: Vec<String> = kv[1].split(&*sep.map_list.item).map(|v| base_to_lua(v, p[1])).collect();
+                    let k = lua_param_key(kv[0], &p[0]);
+                    let items: Vec<String> = kv[1].split(&*sep.map_list.item).map(|v| lua_param(v, &p[1])).collect();
                     format!("{}={{{}}}", k, items.join(", "))
                 } else { format!("\"{}\"", lua_escape(entry)) }
             }).collect();

@@ -4,7 +4,7 @@
 use std::collections::HashSet;
 use tablet_core::ops::{NodeKind, ProjectEngine};
 use tablet_core::project::load_workspace;
-use tablet_core::types::{BaseType, Paradigm, TblType};
+use tablet_core::types::{BaseType, Paradigm, TblType, TypeParam};
 use std::path::Path;
 
 #[derive(Clone, Debug, PartialEq)]
@@ -67,8 +67,10 @@ pub enum ColumnKind {
     ReadOnly,
     /// 普通字符串列，公式栏可写、双击进入 LineEdit 编辑
     Text,
-    /// @TableName / @EnumName 引用列，单击弹 RefPicker
+    /// @TableName / @EnumName 引用列，单击弹 RefPicker（单选）
     Ref { target: String },
+    /// List<@X> / Set<@X> 引用列表列，单击弹 RefPicker（多选，勾选多项拼 id 列表）
+    RefList { target: String },
     /// type 列（Constant 整列 / Table 表头 type 行单元格），单击弹 TypeSelector
     TypeEnumCol,
     /// export 列（Constant 整列 / Table 表头 export 行单元格），单击弹 Popup
@@ -81,6 +83,7 @@ impl ColumnKind {
         matches!(self,
             Self::Text
             | Self::Ref { .. }
+            | Self::RefList { .. }
             | Self::TypeEnumCol
             | Self::ExportEnumCol)
     }
@@ -88,6 +91,7 @@ impl ColumnKind {
     pub fn picker_action_label(&self) -> Option<&'static str> {
         match self {
             Self::Ref { .. } => Some("选择引用..."),
+            Self::RefList { .. } => Some("选择多个引用..."),
             Self::TypeEnumCol => Some("选择类型..."),
             Self::ExportEnumCol => Some("选择导出标记..."),
             _ => None,
@@ -147,8 +151,8 @@ pub struct TypeSelectorState {
     pub ref_disabled: bool,
     /// Data tab：当前范式
     pub paradigm: Paradigm,
-    /// Data tab：每个槽的当前 BaseType
-    pub params: Vec<BaseType>,
+    /// Data tab：每个槽的当前元素类型（Base | Ref(引用目标)）
+    pub params: Vec<TypeParam>,
     /// Reference tab：选中的 @Name（空字符串 = 未选）
     pub ref_name: String,
     pub ref_filter: TsRefFilter,
@@ -168,7 +172,7 @@ impl TypeSelectorState {
             tab: TsTab::Data,
             ref_disabled: false,
             paradigm: Paradigm::Base,
-            params: vec![BaseType::Int],
+            params: vec![TypeParam::Base(BaseType::Int)],
             ref_name: String::new(),
             ref_filter: TsRefFilter::All,
             ref_search: String::new(),
@@ -223,7 +227,7 @@ impl TypeSelectorState {
         } else {
             self.tab = TsTab::Data;
             self.paradigm = Paradigm::Base;
-            self.params = vec![BaseType::Int];
+            self.params = vec![TypeParam::Base(BaseType::Int)];
             self.ref_name.clear();
         }
     }
@@ -231,7 +235,7 @@ impl TypeSelectorState {
     /// 把 params 长度对齐到当前 paradigm 的 slot 数。
     pub fn sync_params(&mut self) {
         let count = self.paradigm.param_slots().len();
-        self.params.resize(count, BaseType::Int);
+        self.params.resize(count, TypeParam::Base(BaseType::Int));
     }
 
     /// 当前 Data tab 选择产生的 TblType（用于 to_type_string / *_decl / example）
@@ -269,6 +273,12 @@ pub struct RefPickerState {
     pub selected_id: String,
     /// 手动输入框的当前值（与 selected_id 双向同步；确认时优先以此为准）
     pub manual_value: String,
+    /// true = 多选模式（List<@Hero> / Set<@Hero> 列）：多选 id 拼列表写入；false = 单选（@Hero）
+    pub multi: bool,
+    /// 多选模式下的已选 id 集合（保持点击顺序）；单选模式为空
+    pub selected_ids: Vec<String>,
+    /// 多选拼值用的 List 分隔符（来自项目 separators）
+    pub list_sep: String,
     /// 列展示策略：每次打开重置回项目配置默认；本次会话内可临时切换
     pub strategy: RefDisplayStrategy,
     /// 编辑上下文：cell 位置（仅数据格使用 Ref；表头不会是 Ref）
@@ -317,6 +327,9 @@ impl RefPickerState {
             search: String::new(),
             selected_id: String::new(),
             manual_value: String::new(),
+            multi: false,
+            selected_ids: Vec::new(),
+            list_sep: String::from(";"),
             strategy: RefDisplayStrategy::Auto,
             editing_row: None,
             editing_col: None,
@@ -336,11 +349,23 @@ impl RefPickerState {
         name: &str,
         is_table: bool,
         default_strategy: RefDisplayStrategy,
+        multi: bool,
+        list_sep: &str,
     ) {
         self.open = true;
         self.ref_name = ref_name.to_string();
+        self.multi = multi;
+        self.list_sep = list_sep.to_string();
         self.selected_id = current_value.to_string();
         self.manual_value = current_value.to_string();
+        self.selected_ids = if multi {
+            current_value.split(list_sep)
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect()
+        } else {
+            Vec::new()
+        };
         self.strategy = default_strategy;
         self.search.clear();
         self.editing_row = Some(row);
@@ -360,6 +385,9 @@ impl RefPickerState {
         self.ref_name.clear();
         self.selected_id.clear();
         self.manual_value.clear();
+        self.multi = false;
+        self.selected_ids.clear();
+        self.list_sep.clear();
     }
 }
 

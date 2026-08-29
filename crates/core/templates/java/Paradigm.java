@@ -200,7 +200,10 @@ public enum Paradigm {
 
     private static Object parsePrimitive(String raw, String type) {
         if (raw == null || raw.isEmpty()) return 0;
-        switch (type.trim()) {
+        String t = type.trim();
+        // 引用类型 @Xxx：元素始终是 int id（@S24 嵌套 ref 退化为 int）
+        if (t.startsWith("@")) return Integer.parseInt(raw);
+        switch (t) {
             case "int": return Integer.parseInt(raw);
             case "long": return Long.parseLong(raw);
             case "float": return Float.parseFloat(raw);

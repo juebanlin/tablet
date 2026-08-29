@@ -219,6 +219,7 @@ export component AppWindow inherits Window {
     // ── Dialog: RefPicker ───────────────────────────────────
     in-out property <bool> dlg-ref-open: false;
     in property <string> rp-ref-name;
+    in property <bool> rp-multi: false;
     in property <string> rp-kind-label: "📊 表引用";
     in property <bool> rp-target-missing: false;
     in property <bool> rp-is-table: true;
@@ -780,6 +781,7 @@ export component AppWindow inherits Window {
     RefPicker {
         open: root.dlg-ref-open;
         ref-name: root.rp-ref-name;
+        multi: root.rp-multi;
         kind-label: root.rp-kind-label;
         target-missing: root.rp-target-missing;
         is-table: root.rp-is-table;

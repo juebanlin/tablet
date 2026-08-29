@@ -47,7 +47,7 @@ pub(crate) fn column_kind_to_slint(k: &state::ColumnKind) -> CellKind {
     match k {
         state::ColumnKind::ReadOnly => CellKind::ReadOnly,
         state::ColumnKind::Text => CellKind::Text,
-        state::ColumnKind::Ref { .. } => CellKind::Ref,
+        state::ColumnKind::Ref { .. } | state::ColumnKind::RefList { .. } => CellKind::Ref,
         state::ColumnKind::TypeEnumCol => CellKind::TypeEnumCol,
         state::ColumnKind::ExportEnumCol => CellKind::ExportEnumCol,
     }
@@ -68,9 +68,20 @@ pub(crate) fn effective_column_kind_at(state: &AppState, r: usize, c: usize) -> 
     let constant = state.engine.find_constant(&group, &name)?;
     let entry = constant.entries.get(r)?;
     let t = tablet_core::types::TblType::parse(&entry.tbl_type)?;
-    if t.paradigm != tablet_core::types::Paradigm::Ref { return Some(base); }
-    let target = t.ref_name?;
-    Some(state::ColumnKind::Ref { target })
+    match t.paradigm {
+        tablet_core::types::Paradigm::Ref => {
+            let target = t.ref_name?;
+            Some(state::ColumnKind::Ref { target })
+        }
+        tablet_core::types::Paradigm::List | tablet_core::types::Paradigm::Set => {
+            if let Some(tablet_core::types::TypeParam::Ref(name)) = t.params.first() {
+                Some(state::ColumnKind::RefList { target: name.clone() })
+            } else {
+                Some(base)
+            }
+        }
+        _ => Some(base),
+    }
 }
 
 /// 计算 export popup 的 current-index：从当前 cell / header 读出 export code，映射到 0..3。

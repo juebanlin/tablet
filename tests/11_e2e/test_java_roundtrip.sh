@@ -76,5 +76,17 @@ else
     _fail "output missing HeroBase data"
 fi
 
+# 嵌套 ref（@S24）：List<@Item> 加载为 List<Integer>，值往返正确；顶层 table ref leader=@HeroBase → int
+if echo "$JAVA_OUT" | grep -q "items=\[2001, 2002\]"; then
+    _pass "output contains items=[2001, 2002] (List<@Item>)"
+else
+    _fail "output missing items=[2001, 2002] (List<@Item>)"
+fi
+if echo "$JAVA_OUT" | grep -q "leader=1002"; then
+    _pass "output contains leader=1002 (@HeroBase)"
+else
+    _fail "output missing leader=1002 (@HeroBase)"
+fi
+
 cleanup
 end_tests

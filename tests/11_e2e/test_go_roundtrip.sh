@@ -61,5 +61,12 @@ else
     _fail "output missing HeroBase data"
 fi
 
+# 嵌套 ref（@S24）：List<@Item> 加载为 []int32，值往返正确
+if echo "$GO_OUT" | grep -q "\[2001 2002\]"; then
+    _pass "output contains items=[2001 2002] (List<@Item>)"
+else
+    _fail "output missing items=[2001 2002] (List<@Item>)"
+fi
+
 cleanup
 end_tests

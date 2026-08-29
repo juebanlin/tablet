@@ -192,7 +192,15 @@ pub fn wire(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
                     return;
                 }
                 if let Some(state::ColumnKind::Ref { ref target }) = kind {
-                    dialogs::ref_picker::open_for_cell(&s, r as usize, c as usize, target);
+                    dialogs::ref_picker::open_for_cell(&s, r as usize, c as usize, target, false);
+                    if let Some(ui_h) = weak.upgrade() {
+                        push_selection_only(&ui_h, &s);
+                        dialogs::ref_picker::push(&ui_h, &s);
+                    }
+                    return;
+                }
+                if let Some(state::ColumnKind::RefList { ref target }) = kind {
+                    dialogs::ref_picker::open_for_cell(&s, r as usize, c as usize, target, true);
                     if let Some(ui_h) = weak.upgrade() {
                         push_selection_only(&ui_h, &s);
                         dialogs::ref_picker::push(&ui_h, &s);
@@ -421,9 +429,9 @@ pub fn wire(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
                 }
                 return;
             }
-            // picker 类（Ref / TypeEnumCol）：仅在 picker_trigger_data = "double" 时双击弹
+            // picker 类（Ref / RefList / TypeEnumCol）：仅在 picker_trigger_data = "double" 时双击弹
             let open_type_dlg = matches!(kind, Some(state::ColumnKind::TypeEnumCol));
-            let open_ref_dlg = matches!(kind, Some(state::ColumnKind::Ref { .. }));
+            let open_ref_dlg = matches!(kind, Some(state::ColumnKind::Ref { .. }) | Some(state::ColumnKind::RefList { .. }));
             if open_type_dlg && !data_single {
                 dialogs::type_selector::open_for_cell(&s, r as usize, c as usize);
                 if let Some(ui_h) = weak.upgrade() {
@@ -432,8 +440,13 @@ pub fn wire(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
                 return;
             }
             if open_ref_dlg && !data_single {
-                if let Some(state::ColumnKind::Ref { ref target }) = kind {
-                    dialogs::ref_picker::open_for_cell(&s, r as usize, c as usize, target);
+                let (target, multi) = match &kind {
+                    Some(state::ColumnKind::Ref { target }) => (target.clone(), false),
+                    Some(state::ColumnKind::RefList { target }) => (target.clone(), true),
+                    _ => (String::new(), false),
+                };
+                if !target.is_empty() {
+                    dialogs::ref_picker::open_for_cell(&s, r as usize, c as usize, &target, multi);
                 }
                 if let Some(ui_h) = weak.upgrade() {
                     dialogs::ref_picker::push(&ui_h, &s);

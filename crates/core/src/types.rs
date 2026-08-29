@@ -171,6 +171,25 @@ impl BaseType {
     }
 }
 
+/// 复合类型参数槽位的元素类型：基础类型 或 引用目标。
+/// 引用作为「特殊 int」参与复合类型：声明带目标表名（`List<@Hero>`），
+/// 数据层值仍是 int id，导出退化为 int（enum 引用按被引用项映射为 XxxEnum）。
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum TypeParam {
+    Base(BaseType),
+    Ref(String),
+}
+
+impl TypeParam {
+    /// 参数位的规范文本表示（`int` / `@Hero`）。
+    pub fn type_string(&self) -> String {
+        match self {
+            TypeParam::Base(bt) => bt.name().to_string(),
+            TypeParam::Ref(name) => format!("@{}", name),
+        }
+    }
+}
+
 // --- Paradigm ---
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -189,7 +208,7 @@ pub enum Paradigm {
     MapTuple3,
     MapTuple4,
     MapList,
-    /// 引用类型 @TableName / @EnumName，独立一档不进嵌套，存储为 int(id)
+    /// 引用类型 @TableName / @EnumName，可独立一档，也可作为「特殊 int」进入复合类型参数位（@S24），存储为 int(id)
     Ref,
 }
 
@@ -267,7 +286,8 @@ impl ParamSlot {
 #[derive(Clone, Debug, PartialEq)]
 pub struct TblType {
     pub paradigm: Paradigm,
-    pub params: Vec<BaseType>,
+    /// 复合类型的参数位元素类型。顶层 ref 用 `ref_name`，嵌套 ref 以 `TypeParam::Ref` 出现在此。
+    pub params: Vec<TypeParam>,
     /// 仅 Paradigm::Ref 使用，存储被引用的配置项名称（@HeroBase / @HeroType 中的 HeroBase / HeroType）
     pub ref_name: Option<String>,
 }
@@ -282,7 +302,7 @@ impl TblType {
         let tt = Self::parse_inner(s)?;
         // txt 仅允许独立列（Paradigm::Base），禁止嵌套在复合类型中。
         if tt.paradigm != Paradigm::Base && tt.paradigm != Paradigm::Ref {
-            if tt.params.contains(&BaseType::Txt) {
+            if tt.params.iter().any(|p| matches!(p, TypeParam::Base(BaseType::Txt))) {
                 return None;
             }
         }
@@ -291,77 +311,70 @@ impl TblType {
     fn parse_inner(s: &str) -> Option<Self> {
         let s = s.trim();
         // 引用类型：@Xxx
-        if let Some(name) = s.strip_prefix('@') {
-            let name = name.trim();
-            if name.is_empty() { return None; }
-            // 限定为 Java 类名风格（大写字母开头 + 字母数字下划线）
-            let mut chars = name.chars();
-            let first = chars.next().unwrap();
-            if !first.is_ascii_uppercase() { return None; }
-            if !chars.all(|c| c.is_ascii_alphanumeric() || c == '_') { return None; }
+        if let Some(name) = parse_ref_name(s) {
             return Some(TblType::new_ref(name));
         }
         if let Some(bt) = BaseType::from_str(s) {
-            return Some(TblType { paradigm: Paradigm::Base, params: vec![bt], ref_name: None });
+            return Some(TblType { paradigm: Paradigm::Base, params: vec![TypeParam::Base(bt)], ref_name: None });
         }
         if let Some(inner) = strip_wrapper(s, "Tuple2<", ">") {
-            let params = parse_base_params(inner)?;
+            let params = parse_type_params(inner)?;
             if params.len() == 2 { return Some(TblType { paradigm: Paradigm::Tuple2, params, ref_name: None }); }
         }
         if let Some(inner) = strip_wrapper(s, "Tuple3<", ">") {
-            let params = parse_base_params(inner)?;
+            let params = parse_type_params(inner)?;
             if params.len() == 3 { return Some(TblType { paradigm: Paradigm::Tuple3, params, ref_name: None }); }
         }
         if let Some(inner) = strip_wrapper(s, "Tuple4<", ">") {
-            let params = parse_base_params(inner)?;
+            let params = parse_type_params(inner)?;
             if params.len() == 4 { return Some(TblType { paradigm: Paradigm::Tuple4, params, ref_name: None }); }
         }
         if let Some(inner) = strip_wrapper(s, "Set<", ">") {
-            let bt = BaseType::from_str(inner)?;
-            return Some(TblType { paradigm: Paradigm::Set, params: vec![bt], ref_name: None });
+            let param = parse_type_param(inner)?;
+            return Some(TblType { paradigm: Paradigm::Set, params: vec![param], ref_name: None });
         }
         if let Some(inner) = strip_wrapper(s, "List<Tuple2<", ">>") {
-            let params = parse_base_params(inner)?;
+            let params = parse_type_params(inner)?;
             if params.len() == 2 { return Some(TblType { paradigm: Paradigm::ListTuple2, params, ref_name: None }); }
         }
         if let Some(inner) = strip_wrapper(s, "List<Tuple3<", ">>") {
-            let params = parse_base_params(inner)?;
+            let params = parse_type_params(inner)?;
             if params.len() == 3 { return Some(TblType { paradigm: Paradigm::ListTuple3, params, ref_name: None }); }
         }
         if let Some(inner) = strip_wrapper(s, "List<Tuple4<", ">>") {
-            let params = parse_base_params(inner)?;
+            let params = parse_type_params(inner)?;
             if params.len() == 4 { return Some(TblType { paradigm: Paradigm::ListTuple4, params, ref_name: None }); }
         }
         if let Some(inner) = strip_wrapper(s, "List<", ">") {
-            let bt = BaseType::from_str(inner)?;
-            return Some(TblType { paradigm: Paradigm::List, params: vec![bt], ref_name: None });
+            let param = parse_type_param(inner)?;
+            return Some(TblType { paradigm: Paradigm::List, params: vec![param], ref_name: None });
         }
         if let Some(inner) = strip_wrapper(s, "Map<", ">") {
             let raw_parts = split_params(inner);
             if raw_parts.len() >= 2 {
-                let key = BaseType::from_str(&raw_parts[0])?;
+                let key = parse_type_param(&raw_parts[0])?;
                 let val_str = raw_parts[1..].join(",");
                 if let Some(t_inner) = strip_wrapper(&val_str, "Tuple2<", ">") {
-                    let mut params = vec![key];
-                    params.extend(parse_base_params(t_inner)?);
+                    let mut params = vec![key.clone()];
+                    params.extend(parse_type_params(t_inner)?);
                     if params.len() == 3 { return Some(TblType { paradigm: Paradigm::MapTuple2, params, ref_name: None }); }
                 }
                 if let Some(t_inner) = strip_wrapper(&val_str, "Tuple3<", ">") {
-                    let mut params = vec![key];
-                    params.extend(parse_base_params(t_inner)?);
+                    let mut params = vec![key.clone()];
+                    params.extend(parse_type_params(t_inner)?);
                     if params.len() == 4 { return Some(TblType { paradigm: Paradigm::MapTuple3, params, ref_name: None }); }
                 }
                 if let Some(t_inner) = strip_wrapper(&val_str, "Tuple4<", ">") {
-                    let mut params = vec![key];
-                    params.extend(parse_base_params(t_inner)?);
+                    let mut params = vec![key.clone()];
+                    params.extend(parse_type_params(t_inner)?);
                     if params.len() == 5 { return Some(TblType { paradigm: Paradigm::MapTuple4, params, ref_name: None }); }
                 }
                 if let Some(l_inner) = strip_wrapper(&val_str, "List<", ">") {
-                    let elem = BaseType::from_str(l_inner)?;
-                    return Some(TblType { paradigm: Paradigm::MapList, params: vec![key, elem], ref_name: None });
+                    let elem = parse_type_param(l_inner)?;
+                    return Some(TblType { paradigm: Paradigm::MapList, params: vec![key.clone(), elem], ref_name: None });
                 }
                 if raw_parts.len() == 2 {
-                    let val = BaseType::from_str(&raw_parts[1])?;
+                    let val = parse_type_param(&raw_parts[1])?;
                     return Some(TblType { paradigm: Paradigm::Map, params: vec![key, val], ref_name: None });
                 }
             }
@@ -370,7 +383,7 @@ impl TblType {
     }
 
     pub fn to_type_string(&self) -> String {
-        let p: Vec<&str> = self.params.iter().map(|b| b.name()).collect();
+        let p: Vec<String> = self.params.iter().map(|b| b.type_string()).collect();
         match &self.paradigm {
             Paradigm::Base => p[0].to_string(),
             Paradigm::Tuple2 => format!("Tuple2<{},{}>", p[0], p[1]),
@@ -392,21 +405,30 @@ impl TblType {
 
     pub fn java_decl(&self) -> String {
         let p = &self.params;
+        let j = |param: &TypeParam| -> String {
+            match param {
+                TypeParam::Base(bt) => bt.java_boxed().to_string(),
+                TypeParam::Ref(_) => BaseType::Int.java_boxed().to_string(), // Integer
+            }
+        };
         match &self.paradigm {
-            Paradigm::Base => p[0].java_type().to_string(),
-            Paradigm::Tuple2 => format!("Tuple2<{},{}>", p[0].java_boxed(), p[1].java_boxed()),
-            Paradigm::Tuple3 => format!("Tuple3<{},{},{}>", p[0].java_boxed(), p[1].java_boxed(), p[2].java_boxed()),
-            Paradigm::Tuple4 => format!("Tuple4<{},{},{},{}>", p[0].java_boxed(), p[1].java_boxed(), p[2].java_boxed(), p[3].java_boxed()),
-            Paradigm::List => format!("List<{}>", p[0].java_boxed()),
-            Paradigm::Set => format!("Set<{}>", p[0].java_boxed()),
-            Paradigm::Map => format!("Map<{},{}>", p[0].java_boxed(), p[1].java_boxed()),
-            Paradigm::ListTuple2 => format!("List<Tuple2<{},{}>>", p[0].java_boxed(), p[1].java_boxed()),
-            Paradigm::ListTuple3 => format!("List<Tuple3<{},{},{}>>", p[0].java_boxed(), p[1].java_boxed(), p[2].java_boxed()),
-            Paradigm::ListTuple4 => format!("List<Tuple4<{},{},{},{}>>", p[0].java_boxed(), p[1].java_boxed(), p[2].java_boxed(), p[3].java_boxed()),
-            Paradigm::MapTuple2 => format!("Map<{},Tuple2<{},{}>>", p[0].java_boxed(), p[1].java_boxed(), p[2].java_boxed()),
-            Paradigm::MapTuple3 => format!("Map<{},Tuple3<{},{},{}>>", p[0].java_boxed(), p[1].java_boxed(), p[2].java_boxed(), p[3].java_boxed()),
-            Paradigm::MapTuple4 => format!("Map<{},Tuple4<{},{},{},{}>>", p[0].java_boxed(), p[1].java_boxed(), p[2].java_boxed(), p[3].java_boxed(), p[4].java_boxed()),
-            Paradigm::MapList => format!("Map<{},List<{}>>", p[0].java_boxed(), p[1].java_boxed()),
+            Paradigm::Base => match &p[0] {
+                TypeParam::Base(bt) => bt.java_type().to_string(),
+                TypeParam::Ref(_) => "int".to_string(), // 不应发生：Base 范式不进 ref
+            },
+            Paradigm::Tuple2 => format!("Tuple2<{},{}>", j(&p[0]), j(&p[1])),
+            Paradigm::Tuple3 => format!("Tuple3<{},{},{}>", j(&p[0]), j(&p[1]), j(&p[2])),
+            Paradigm::Tuple4 => format!("Tuple4<{},{},{},{}>", j(&p[0]), j(&p[1]), j(&p[2]), j(&p[3])),
+            Paradigm::List => format!("List<{}>", j(&p[0])),
+            Paradigm::Set => format!("Set<{}>", j(&p[0])),
+            Paradigm::Map => format!("Map<{},{}>", j(&p[0]), j(&p[1])),
+            Paradigm::ListTuple2 => format!("List<Tuple2<{},{}>>", j(&p[0]), j(&p[1])),
+            Paradigm::ListTuple3 => format!("List<Tuple3<{},{},{}>>", j(&p[0]), j(&p[1]), j(&p[2])),
+            Paradigm::ListTuple4 => format!("List<Tuple4<{},{},{},{}>>", j(&p[0]), j(&p[1]), j(&p[2]), j(&p[3])),
+            Paradigm::MapTuple2 => format!("Map<{},Tuple2<{},{}>>", j(&p[0]), j(&p[1]), j(&p[2])),
+            Paradigm::MapTuple3 => format!("Map<{},Tuple3<{},{},{}>>", j(&p[0]), j(&p[1]), j(&p[2]), j(&p[3])),
+            Paradigm::MapTuple4 => format!("Map<{},Tuple4<{},{},{},{}>>", j(&p[0]), j(&p[1]), j(&p[2]), j(&p[3]), j(&p[4])),
+            Paradigm::MapList => format!("Map<{},List<{}>>", j(&p[0]), j(&p[1])),
             // 默认按 table ref 处理 → int；enum ref 由导出层根据被引用项 mode 改为 XxxEnum
             Paradigm::Ref => "int".to_string(),
         }
@@ -414,36 +436,48 @@ impl TblType {
 
     pub fn go_decl(&self) -> String {
         let p = &self.params;
+        let g = |param: &TypeParam| -> String {
+            match param {
+                TypeParam::Base(bt) => bt.go_type().to_string(),
+                TypeParam::Ref(_) => BaseType::Int.go_type().to_string(), // int32
+            }
+        };
         match &self.paradigm {
-            Paradigm::Base => p[0].go_type().to_string(),
-            Paradigm::Tuple2 => format!("[2]{}", p[0].go_type()),
-            Paradigm::Tuple3 => format!("[3]{}", p[0].go_type()),
-            Paradigm::Tuple4 => format!("[4]{}", p[0].go_type()),
-            Paradigm::List => format!("[]{}", p[0].go_type()),
-            Paradigm::Set => format!("map[{}]struct{{}}", p[0].go_type()),
-            Paradigm::Map => format!("map[{}]{}", p[0].go_type(), p[1].go_type()),
-            Paradigm::ListTuple2 => format!("[][2]{}", p[0].go_type()),
-            Paradigm::ListTuple3 => format!("[][3]{}", p[0].go_type()),
-            Paradigm::ListTuple4 => format!("[][4]{}", p[0].go_type()),
-            Paradigm::MapTuple2 => format!("map[{}][2]{}", p[0].go_type(), p[1].go_type()),
-            Paradigm::MapTuple3 => format!("map[{}][3]{}", p[0].go_type(), p[1].go_type()),
-            Paradigm::MapTuple4 => format!("map[{}][4]{}", p[0].go_type(), p[1].go_type()),
-            Paradigm::MapList => format!("map[{}][]{}", p[0].go_type(), p[1].go_type()),
+            Paradigm::Base => g(&p[0]),
+            Paradigm::Tuple2 => format!("[2]{}", g(&p[0])),
+            Paradigm::Tuple3 => format!("[3]{}", g(&p[0])),
+            Paradigm::Tuple4 => format!("[4]{}", g(&p[0])),
+            Paradigm::List => format!("[]{}", g(&p[0])),
+            Paradigm::Set => format!("map[{}]struct{{}}", g(&p[0])),
+            Paradigm::Map => format!("map[{}]{}", g(&p[0]), g(&p[1])),
+            Paradigm::ListTuple2 => format!("[][2]{}", g(&p[0])),
+            Paradigm::ListTuple3 => format!("[][3]{}", g(&p[0])),
+            Paradigm::ListTuple4 => format!("[][4]{}", g(&p[0])),
+            Paradigm::MapTuple2 => format!("map[{}][2]{}", g(&p[0]), g(&p[1])),
+            Paradigm::MapTuple3 => format!("map[{}][3]{}", g(&p[0]), g(&p[1])),
+            Paradigm::MapTuple4 => format!("map[{}][4]{}", g(&p[0]), g(&p[1])),
+            Paradigm::MapList => format!("map[{}][]{}", g(&p[0]), g(&p[1])),
             Paradigm::Ref => "int32".to_string(),
         }
     }
 
     pub fn lua_decl(&self) -> String {
+        let lua = |param: &TypeParam| -> String {
+            match param {
+                TypeParam::Base(bt) => bt.lua_type().to_string(),
+                TypeParam::Ref(_) => BaseType::Int.lua_type().to_string(), // number
+            }
+        };
         let p = &self.params;
         match &self.paradigm {
-            Paradigm::Base => p[0].lua_type().to_string(),
+            Paradigm::Base => lua(&p[0]),
             Paradigm::Tuple2 | Paradigm::Tuple3 | Paradigm::Tuple4 => "{p1, p2, ...}".to_string(),
-            Paradigm::List => format!("{{{}, ...}}", p[0].lua_type()),
+            Paradigm::List => format!("{{{}, ...}}", lua(&p[0])),
             Paradigm::Set => "{[v]=true, ...}".to_string(),
-            Paradigm::Map => format!("{{k={}, ...}}", p[1].lua_type()),
+            Paradigm::Map => format!("{{k={}, ...}}", lua(&p[1])),
             Paradigm::ListTuple2 | Paradigm::ListTuple3 | Paradigm::ListTuple4 => "{{...}, {...}}".to_string(),
             Paradigm::MapTuple2 | Paradigm::MapTuple3 | Paradigm::MapTuple4 => "{k={...}, ...}".to_string(),
-            Paradigm::MapList => format!("{{k={{{}, ...}}}}", p[1].lua_type()),
+            Paradigm::MapList => format!("{{k={{{}, ...}}}}", lua(&p[1])),
             Paradigm::Ref => "number".to_string(),
         }
     }
@@ -463,39 +497,50 @@ impl TblType {
 
     fn build_demo(&self, sep: &SeparatorsSection, random: bool) -> String {
         let p = &self.params;
-        let v = |bt: BaseType, idx: usize| -> String { if random { bt.rand_value() } else { bt.example_n(idx).to_string() } };
-        let k = |bt: BaseType, idx: usize| -> String { if random { bt.rand_key() } else { bt.example_key_n(idx).to_string() } };
+        // ref 元素示例值用 int id 占位（数据层 ref 值即 int id）
+        let v = |param: &TypeParam, idx: usize| -> String {
+            match param {
+                TypeParam::Base(bt) => if random { bt.rand_value() } else { bt.example_n(idx).to_string() },
+                TypeParam::Ref(_) => if random { BaseType::Int.rand_value() } else { BaseType::Int.example_n(idx).to_string() },
+            }
+        };
+        let k = |param: &TypeParam, idx: usize| -> String {
+            match param {
+                TypeParam::Base(bt) => if random { bt.rand_key() } else { bt.example_key_n(idx).to_string() },
+                TypeParam::Ref(_) => if random { BaseType::Int.rand_key() } else { BaseType::Int.example_key_n(idx).to_string() },
+            }
+        };
         match &self.paradigm {
-            Paradigm::Base => v(p[0], 0),
-            Paradigm::Tuple2 => format!("{}{}{}", v(p[0], 0), sep.tuple2, v(p[1], 0)),
-            Paradigm::Tuple3 => format!("{}{}{}{}{}", v(p[0], 0), sep.tuple3, v(p[1], 0), sep.tuple3, v(p[2], 0)),
-            Paradigm::Tuple4 => format!("{}{}{}{}{}{}{}", v(p[0], 0), sep.tuple4, v(p[1], 0), sep.tuple4, v(p[2], 0), sep.tuple4, v(p[3], 0)),
-            Paradigm::List => format!("{}{}{}{}{}", v(p[0], 0), sep.list, v(p[0], 1), sep.list, v(p[0], 2)),
-            Paradigm::Set => format!("{}{}{}{}{}", v(p[0], 0), sep.set, v(p[0], 1), sep.set, v(p[0], 2)),
+            Paradigm::Base => v(&p[0], 0),
+            Paradigm::Tuple2 => format!("{}{}{}", v(&p[0], 0), sep.tuple2, v(&p[1], 0)),
+            Paradigm::Tuple3 => format!("{}{}{}{}{}", v(&p[0], 0), sep.tuple3, v(&p[1], 0), sep.tuple3, v(&p[2], 0)),
+            Paradigm::Tuple4 => format!("{}{}{}{}{}{}{}", v(&p[0], 0), sep.tuple4, v(&p[1], 0), sep.tuple4, v(&p[2], 0), sep.tuple4, v(&p[3], 0)),
+            Paradigm::List => format!("{}{}{}{}{}", v(&p[0], 0), sep.list, v(&p[0], 1), sep.list, v(&p[0], 2)),
+            Paradigm::Set => format!("{}{}{}{}{}", v(&p[0], 0), sep.set, v(&p[0], 1), sep.set, v(&p[0], 2)),
             Paradigm::Map => format!("{}{}{}{}{}{}{}",
-                k(p[0], 0), sep.map.kv, v(p[1], 0), sep.map.entry,
-                k(p[0], 1), sep.map.kv, v(p[1], 1)),
+                k(&p[0], 0), sep.map.kv, v(&p[1], 0), sep.map.entry,
+                k(&p[0], 1), sep.map.kv, v(&p[1], 1)),
             Paradigm::ListTuple2 => format!("{}{}{}{}{}{}{}",
-                v(p[0], 0), sep.list_tuple2.tuple, v(p[1], 0), sep.list_tuple2.list,
-                v(p[0], 1), sep.list_tuple2.tuple, v(p[1], 1)),
+                v(&p[0], 0), sep.list_tuple2.tuple, v(&p[1], 0), sep.list_tuple2.list,
+                v(&p[0], 1), sep.list_tuple2.tuple, v(&p[1], 1)),
             Paradigm::ListTuple3 => format!("{}{}{}{}{}{}{}{}{}{}{}",
-                v(p[0], 0), sep.list_tuple3.tuple, v(p[1], 0), sep.list_tuple3.tuple, v(p[2], 0), sep.list_tuple3.list,
-                v(p[0], 1), sep.list_tuple3.tuple, v(p[1], 1), sep.list_tuple3.tuple, v(p[2], 1)),
+                v(&p[0], 0), sep.list_tuple3.tuple, v(&p[1], 0), sep.list_tuple3.tuple, v(&p[2], 0), sep.list_tuple3.list,
+                v(&p[0], 1), sep.list_tuple3.tuple, v(&p[1], 1), sep.list_tuple3.tuple, v(&p[2], 1)),
             Paradigm::ListTuple4 => format!("{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}",
-                v(p[0], 0), sep.list_tuple4.tuple, v(p[1], 0), sep.list_tuple4.tuple, v(p[2], 0), sep.list_tuple4.tuple, v(p[3], 0), sep.list_tuple4.list,
-                v(p[0], 1), sep.list_tuple4.tuple, v(p[1], 1), sep.list_tuple4.tuple, v(p[2], 1), sep.list_tuple4.tuple, v(p[3], 1)),
+                v(&p[0], 0), sep.list_tuple4.tuple, v(&p[1], 0), sep.list_tuple4.tuple, v(&p[2], 0), sep.list_tuple4.tuple, v(&p[3], 0), sep.list_tuple4.list,
+                v(&p[0], 1), sep.list_tuple4.tuple, v(&p[1], 1), sep.list_tuple4.tuple, v(&p[2], 1), sep.list_tuple4.tuple, v(&p[3], 1)),
             Paradigm::MapTuple2 => format!("{}{}{}{}{}{}{}{}{}{}{}",
-                k(p[0], 0), sep.map_tuple2.kv, v(p[1], 0), sep.map_tuple2.tuple, v(p[2], 0), sep.map_tuple2.entry,
-                k(p[0], 1), sep.map_tuple2.kv, v(p[1], 1), sep.map_tuple2.tuple, v(p[2], 1)),
+                k(&p[0], 0), sep.map_tuple2.kv, v(&p[1], 0), sep.map_tuple2.tuple, v(&p[2], 0), sep.map_tuple2.entry,
+                k(&p[0], 1), sep.map_tuple2.kv, v(&p[1], 1), sep.map_tuple2.tuple, v(&p[2], 1)),
             Paradigm::MapTuple3 => format!("{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}",
-                k(p[0], 0), sep.map_tuple3.kv, v(p[1], 0), sep.map_tuple3.tuple, v(p[2], 0), sep.map_tuple3.tuple, v(p[3], 0), sep.map_tuple3.entry,
-                k(p[0], 1), sep.map_tuple3.kv, v(p[1], 1), sep.map_tuple3.tuple, v(p[2], 1), sep.map_tuple3.tuple, v(p[3], 1)),
+                k(&p[0], 0), sep.map_tuple3.kv, v(&p[1], 0), sep.map_tuple3.tuple, v(&p[2], 0), sep.map_tuple3.tuple, v(&p[3], 0), sep.map_tuple3.entry,
+                k(&p[0], 1), sep.map_tuple3.kv, v(&p[1], 1), sep.map_tuple3.tuple, v(&p[2], 1), sep.map_tuple3.tuple, v(&p[3], 1)),
             Paradigm::MapTuple4 => format!("{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}",
-                k(p[0], 0), sep.map_tuple4.kv, v(p[1], 0), sep.map_tuple4.tuple, v(p[2], 0), sep.map_tuple4.tuple, v(p[3], 0), sep.map_tuple4.tuple, v(p[3], 1), sep.map_tuple4.entry,
-                k(p[0], 1), sep.map_tuple4.kv, v(p[1], 1), sep.map_tuple4.tuple, v(p[2], 1), sep.map_tuple4.tuple, v(p[3], 1), sep.map_tuple4.tuple, v(p[3], 2)),
+                k(&p[0], 0), sep.map_tuple4.kv, v(&p[1], 0), sep.map_tuple4.tuple, v(&p[2], 0), sep.map_tuple4.tuple, v(&p[3], 0), sep.map_tuple4.tuple, v(&p[4], 0), sep.map_tuple4.entry,
+                k(&p[0], 1), sep.map_tuple4.kv, v(&p[1], 1), sep.map_tuple4.tuple, v(&p[2], 1), sep.map_tuple4.tuple, v(&p[3], 1), sep.map_tuple4.tuple, v(&p[4], 1)),
             Paradigm::MapList => format!("{}{}{}{}{}{}{}{}{}{}{}",
-                k(p[0], 0), sep.map_list.kv, v(p[1], 0), sep.map_list.item, v(p[1], 1), sep.map_list.item, v(p[1], 2), sep.map_list.entry,
-                k(p[0], 1), sep.map_list.kv, v(p[1], 0)),
+                k(&p[0], 0), sep.map_list.kv, v(&p[1], 0), sep.map_list.item, v(&p[1], 1), sep.map_list.item, v(&p[1], 2), sep.map_list.entry,
+                k(&p[0], 1), sep.map_list.kv, v(&p[1], 0)),
             // 引用类型示例值用 id 占位
             Paradigm::Ref => "1001".to_string(),
         }
@@ -507,30 +552,97 @@ impl TblType {
         // 中文标点检查：txt / str 放开（自由文本），其余类型拦。
         // 复合类型（List / Tuple / Map）含中文标点大概率是分隔符错位，也拦。
         let bypass_punct = matches!(self.paradigm, Paradigm::Base)
-            && matches!(self.params.first(), Some(BaseType::Txt | BaseType::Str));
+            && matches!(self.params.first(), Some(TypeParam::Base(BaseType::Txt | BaseType::Str)));
         if !bypass_punct {
             if let Some(msg) = check_chinese_punctuation(value) { return Some(msg.to_string()); }
         }
         let p = &self.params;
         let err = match &self.paradigm {
-            Paradigm::Base => validate_base(value, p[0]),
+            Paradigm::Base => validate_base_param(value, &p[0]),
             Paradigm::Tuple2 => validate_tuple(value, &p[0..2], &sep.tuple2),
             Paradigm::Tuple3 => validate_tuple(value, &p[0..3], &sep.tuple3),
             Paradigm::Tuple4 => validate_tuple(value, &p[0..4], &sep.tuple4),
-            Paradigm::List => validate_list(value, p[0], &sep.list),
-            Paradigm::Set => validate_list(value, p[0], &sep.set),
-            Paradigm::Map => validate_map(value, p[0], p[1], &sep.map.entry, &sep.map.kv),
+            Paradigm::List => validate_list(value, &p[0], &sep.list),
+            Paradigm::Set => validate_list(value, &p[0], &sep.set),
+            Paradigm::Map => validate_map(value, &p[0], &p[1], &sep.map.entry, &sep.map.kv),
             Paradigm::ListTuple2 => validate_list_tuple(value, &p[0..2], &sep.list_tuple2.list, &sep.list_tuple2.tuple),
             Paradigm::ListTuple3 => validate_list_tuple(value, &p[0..3], &sep.list_tuple3.list, &sep.list_tuple3.tuple),
             Paradigm::ListTuple4 => validate_list_tuple(value, &p[0..4], &sep.list_tuple4.list, &sep.list_tuple4.tuple),
-            Paradigm::MapTuple2 => validate_map_tuple(value, p[0], &p[1..3], &sep.map_tuple2.entry, &sep.map_tuple2.kv, &sep.map_tuple2.tuple),
-            Paradigm::MapTuple3 => validate_map_tuple(value, p[0], &p[1..4], &sep.map_tuple3.entry, &sep.map_tuple3.kv, &sep.map_tuple3.tuple),
-            Paradigm::MapTuple4 => validate_map_tuple(value, p[0], &p[1..5], &sep.map_tuple4.entry, &sep.map_tuple4.kv, &sep.map_tuple4.tuple),
-            Paradigm::MapList => validate_map_list(value, p[0], p[1], &sep.map_list.entry, &sep.map_list.kv, &sep.map_list.item),
+            Paradigm::MapTuple2 => validate_map_tuple(value, &p[0], &p[1..3], &sep.map_tuple2.entry, &sep.map_tuple2.kv, &sep.map_tuple2.tuple),
+            Paradigm::MapTuple3 => validate_map_tuple(value, &p[0], &p[1..4], &sep.map_tuple3.entry, &sep.map_tuple3.kv, &sep.map_tuple3.tuple),
+            Paradigm::MapTuple4 => validate_map_tuple(value, &p[0], &p[1..5], &sep.map_tuple4.entry, &sep.map_tuple4.kv, &sep.map_tuple4.tuple),
+            Paradigm::MapList => validate_map_list(value, &p[0], &p[1], &sep.map_list.entry, &sep.map_list.kv, &sep.map_list.item),
             // 引用值在数据层面永远是 int(id)；被引用对象是否存在/id 是否合法由 validate.rs 项目级别检查
             Paradigm::Ref => validate_base(value, BaseType::Int),
         };
         err.map(|msg| format!("{}, 示例: {}", msg, self.example_with_sep(sep)))
+    }
+
+    /// 类型中所有引用目标名（顶层 ref_name + 各参数位 TypeParam::Ref）。
+    /// schema 层做目标存在性 / 非 constant 校验用。
+    pub fn ref_targets(&self) -> Vec<&str> {
+        let mut out: Vec<&str> = Vec::new();
+        if self.paradigm == Paradigm::Ref {
+            if let Some(name) = self.ref_name.as_deref() { out.push(name); }
+        }
+        for p in &self.params {
+            if let TypeParam::Ref(name) = p { out.push(name); }
+        }
+        out
+    }
+
+    /// 按结构切分 `value`，提取所有「引用位置」的 (目标名, 原始 id 字符串)。
+    /// 供 validate.rs 做项目级存在性校验（RefIndex）。空元素跳过。
+    pub fn ref_elements<'a>(&self, value: &'a str, sep: &SeparatorsSection) -> Vec<(String, &'a str)> {
+        let p = &self.params;
+        let mut out: Vec<(String, &'a str)> = Vec::new();
+        match &self.paradigm {
+            Paradigm::Ref => {
+                if let Some(name) = &self.ref_name {
+                    let t = value.trim();
+                    if !t.is_empty() { out.push((name.clone(), t)); }
+                }
+            }
+            Paradigm::List => for part in value.split(&sep.list) { push_ref(&mut out, &p[0], part); },
+            Paradigm::Set => for part in value.split(&sep.set) { push_ref(&mut out, &p[0], part); },
+            Paradigm::Tuple2 | Paradigm::Tuple3 | Paradigm::Tuple4 => {
+                let tuple_sep = match &self.paradigm {
+                    Paradigm::Tuple2 => &sep.tuple2,
+                    Paradigm::Tuple3 => &sep.tuple3,
+                    _ => &sep.tuple4,
+                };
+                let parts: Vec<&str> = value.split(tuple_sep).collect();
+                for (i, param) in p.iter().enumerate() {
+                    if let Some(raw) = parts.get(i) { push_ref(&mut out, param, raw); }
+                }
+            }
+            Paradigm::Map => {
+                for entry in value.split(&sep.map.entry) {
+                    let kv: Vec<&str> = entry.splitn(2, &sep.map.kv).collect();
+                    if kv.len() == 2 {
+                        push_ref(&mut out, &p[0], kv[0]);
+                        push_ref(&mut out, &p[1], kv[1]);
+                    }
+                }
+            }
+            Paradigm::ListTuple2 => ref_elements_tuple_list(value, &p[0..2], &sep.list_tuple2.list, &sep.list_tuple2.tuple, &mut out),
+            Paradigm::ListTuple3 => ref_elements_tuple_list(value, &p[0..3], &sep.list_tuple3.list, &sep.list_tuple3.tuple, &mut out),
+            Paradigm::ListTuple4 => ref_elements_tuple_list(value, &p[0..4], &sep.list_tuple4.list, &sep.list_tuple4.tuple, &mut out),
+            Paradigm::MapTuple2 => ref_elements_map_tuple(value, &p[0], &p[1..3], &sep.map_tuple2.entry, &sep.map_tuple2.kv, &sep.map_tuple2.tuple, &mut out),
+            Paradigm::MapTuple3 => ref_elements_map_tuple(value, &p[0], &p[1..4], &sep.map_tuple3.entry, &sep.map_tuple3.kv, &sep.map_tuple3.tuple, &mut out),
+            Paradigm::MapTuple4 => ref_elements_map_tuple(value, &p[0], &p[1..5], &sep.map_tuple4.entry, &sep.map_tuple4.kv, &sep.map_tuple4.tuple, &mut out),
+            Paradigm::MapList => {
+                for entry in value.split(&sep.map_list.entry) {
+                    let kv: Vec<&str> = entry.splitn(2, &sep.map_list.kv).collect();
+                    if kv.len() == 2 {
+                        push_ref(&mut out, &p[0], kv[0]);
+                        for item in kv[1].split(&sep.map_list.item) { push_ref(&mut out, &p[1], item); }
+                    }
+                }
+            }
+            _ => {}
+        }
+        out
     }
 }
 
@@ -574,30 +686,38 @@ pub fn validate_str(value: &str) -> Option<&'static str> {
     None
 }
 
-/// 验证复合类型中单个子元素：trim + 空值 + base 类型验证。
-fn validate_elem(value: &str, bt: BaseType) -> Option<&'static str> {
-    let trimmed = value.trim();
-    if trimmed.is_empty() { return Some("含有空元素"); }
-    validate_base(trimmed, bt)
+/// 基础类型校验（ref 元素退化为 int id 校验）。
+fn validate_base_param(value: &str, param: &TypeParam) -> Option<&'static str> {
+    match param {
+        TypeParam::Base(bt) => validate_base(value, *bt),
+        TypeParam::Ref(_) => validate_base(value, BaseType::Int),
+    }
 }
 
-fn validate_tuple(value: &str, types: &[BaseType], sep: &str) -> Option<&'static str> {
+/// 验证复合类型中单个子元素：trim + 空值 + 类型验证（ref 元素按 int id 验证）。
+fn validate_elem(value: &str, param: &TypeParam) -> Option<&'static str> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() { return Some("含有空元素"); }
+    validate_base_param(trimmed, param)
+}
+
+fn validate_tuple(value: &str, types: &[TypeParam], sep: &str) -> Option<&'static str> {
     let parts: Vec<&str> = value.split(sep).collect();
     if parts.len() != types.len() { return Some("元素数量不匹配"); }
-    for (part, &bt) in parts.iter().zip(types.iter()) {
-        if let Some(err) = validate_elem(part, bt) { return Some(err); }
+    for (part, param) in parts.iter().zip(types.iter()) {
+        if let Some(err) = validate_elem(part, param) { return Some(err); }
     }
     None
 }
 
-fn validate_list(value: &str, elem: BaseType, sep: &str) -> Option<&'static str> {
+fn validate_list(value: &str, elem: &TypeParam, sep: &str) -> Option<&'static str> {
     for part in value.split(sep) {
         if let Some(err) = validate_elem(part, elem) { return Some(err); }
     }
     None
 }
 
-fn validate_map(value: &str, key: BaseType, val: BaseType, entry_sep: &str, kv_sep: &str) -> Option<&'static str> {
+fn validate_map(value: &str, key: &TypeParam, val: &TypeParam, entry_sep: &str, kv_sep: &str) -> Option<&'static str> {
     for entry in value.split(entry_sep) {
         let entry = entry.trim();
         if entry.is_empty() { return Some("含有空条目"); }
@@ -613,7 +733,7 @@ fn validate_map(value: &str, key: BaseType, val: BaseType, entry_sep: &str, kv_s
     None
 }
 
-fn validate_list_tuple(value: &str, types: &[BaseType], list_sep: &str, tuple_sep: &str) -> Option<&'static str> {
+fn validate_list_tuple(value: &str, types: &[TypeParam], list_sep: &str, tuple_sep: &str) -> Option<&'static str> {
     for item in value.split(list_sep) {
         let item = item.trim();
         if item.is_empty() { return Some("含有空元素"); }
@@ -622,7 +742,7 @@ fn validate_list_tuple(value: &str, types: &[BaseType], list_sep: &str, tuple_se
     None
 }
 
-fn validate_map_tuple(value: &str, key: BaseType, val_types: &[BaseType], entry_sep: &str, kv_sep: &str, tuple_sep: &str) -> Option<&'static str> {
+fn validate_map_tuple(value: &str, key: &TypeParam, val_types: &[TypeParam], entry_sep: &str, kv_sep: &str, tuple_sep: &str) -> Option<&'static str> {
     for entry in value.split(entry_sep) {
         let entry = entry.trim();
         if entry.is_empty() { return Some("含有空条目"); }
@@ -636,7 +756,7 @@ fn validate_map_tuple(value: &str, key: BaseType, val_types: &[BaseType], entry_
     None
 }
 
-fn validate_map_list(value: &str, key: BaseType, elem: BaseType, entry_sep: &str, kv_sep: &str, item_sep: &str) -> Option<&'static str> {
+fn validate_map_list(value: &str, key: &TypeParam, elem: &TypeParam, entry_sep: &str, kv_sep: &str, item_sep: &str) -> Option<&'static str> {
     for entry in value.split(entry_sep) {
         let entry = entry.trim();
         if entry.is_empty() { return Some("含有空条目"); }
@@ -644,14 +764,47 @@ fn validate_map_list(value: &str, key: BaseType, elem: BaseType, entry_sep: &str
         if kv.len() != 2 { return Some("缺少kv分隔符"); }
         let k = kv[0].trim();
         if k.is_empty() { return Some("key为空"); }
-        if validate_base(k, key).is_some() { return Some("key类型不匹配"); }
+        if validate_base_param(k, key).is_some() { return Some("key类型不匹配"); }
         for item in kv[1].split(item_sep) {
             let item = item.trim();
             if item.is_empty() { return Some("含有空元素"); }
-            if validate_base(item, elem).is_some() { return Some("value列表元素类型不匹配"); }
+            if validate_base_param(item, elem).is_some() { return Some("value列表元素类型不匹配"); }
         }
     }
     None
+}
+
+// ===== ref 元素切分（ref_elements 的支撑） =====
+
+fn push_ref<'a>(out: &mut Vec<(String, &'a str)>, param: &TypeParam, raw: &'a str) {
+    if let TypeParam::Ref(name) = param {
+        let t = raw.trim();
+        if !t.is_empty() { out.push((name.clone(), t)); }
+    }
+}
+
+/// 遍历 `List<TupleN<...>>` 的每个元组，按位置提取 ref 元素。
+fn ref_elements_tuple_list<'a>(value: &'a str, types: &[TypeParam], list_sep: &str, tuple_sep: &str, out: &mut Vec<(String, &'a str)>) {
+    for item in value.split(list_sep) {
+        let parts: Vec<&str> = item.split(tuple_sep).collect();
+        for (i, param) in types.iter().enumerate() {
+            if let Some(raw) = parts.get(i) { push_ref(out, param, raw); }
+        }
+    }
+}
+
+/// 遍历 `Map<K,TupleN<...>>` 的每个条目，key + 元组内按位置提取 ref 元素。
+fn ref_elements_map_tuple<'a>(value: &'a str, key: &TypeParam, val_types: &[TypeParam], entry_sep: &str, kv_sep: &str, tuple_sep: &str, out: &mut Vec<(String, &'a str)>) {
+    for entry in value.split(entry_sep) {
+        let kv: Vec<&str> = entry.splitn(2, kv_sep).collect();
+        if kv.len() == 2 {
+            push_ref(out, key, kv[0]);
+            let parts: Vec<&str> = kv[1].split(tuple_sep).collect();
+            for (i, param) in val_types.iter().enumerate() {
+                if let Some(raw) = parts.get(i) { push_ref(out, param, raw); }
+            }
+        }
+    }
 }
 
 // --- Separator Config ---
@@ -961,8 +1114,29 @@ fn split_params(s: &str) -> Vec<String> {
     parts
 }
 
-fn parse_base_params(s: &str) -> Option<Vec<BaseType>> {
-    split_params(s).iter().map(|p| BaseType::from_str(p.trim())).collect()
+/// 解析 `@Xxx` 引用名：限定为 Java 类名风格（大写字母开头 + 字母数字下划线）。
+fn parse_ref_name(s: &str) -> Option<String> {
+    let name = s.trim().strip_prefix('@')?;
+    let name = name.trim();
+    if name.is_empty() { return None; }
+    let mut chars = name.chars();
+    let first = chars.next().unwrap();
+    if !first.is_ascii_uppercase() { return None; }
+    if !chars.all(|c| c.is_ascii_alphanumeric() || c == '_') { return None; }
+    Some(name.to_string())
+}
+
+/// 解析单个参数位：`@Xxx` → Ref，基础类型名 → Base。
+fn parse_type_param(s: &str) -> Option<TypeParam> {
+    if s.trim().starts_with('@') {
+        parse_ref_name(s).map(TypeParam::Ref)
+    } else {
+        BaseType::from_str(s.trim()).map(TypeParam::Base)
+    }
+}
+
+fn parse_type_params(s: &str) -> Option<Vec<TypeParam>> {
+    split_params(s).iter().map(|p| parse_type_param(p.trim())).collect()
 }
 
 #[cfg(test)]
@@ -991,11 +1165,73 @@ mod tests {
     }
 
     #[test]
-    fn ref_does_not_nest_in_collections() {
-        // 引用类型只能独立出现，不能进入泛型参数
-        assert!(TblType::parse("List<@HeroType>").is_none());
-        assert!(TblType::parse("Map<int,@Skill>").is_none());
-        assert!(TblType::parse("Tuple2<@Skill,int>").is_none());
+    fn ref_nests_in_collections() {
+        // S24：引用作为特殊 int 可进入复合类型参数位
+        let cases = [
+            "List<@Hero>",
+            "Set<@Hero>",
+            "Map<int,@Hero>",
+            "Map<@A,@B>",
+            "Tuple2<@Hero,int>",
+            "Tuple3<int,@Hero,bool>",
+            "Tuple4<@A,@B,@C,@D>",
+            "List<Tuple2<int,@Hero>>",
+            "List<Tuple3<@A,int,@B>>",
+            "Map<int,List<@Hero>>",
+            "Map<int,Tuple2<@A,@B>>",
+            "Map<@A,List<int>>",
+        ];
+        for c in cases {
+            let t = TblType::parse(c).expect(c);
+            assert_eq!(t.to_type_string(), *c, "round-trip {c}");
+        }
+        // ref 元素出现在 params 中
+        let t = TblType::parse("List<@Hero>").unwrap();
+        assert_eq!(t.params, vec![TypeParam::Ref("Hero".into())]);
+        let t = TblType::parse("Map<int,@Skill>").unwrap();
+        assert_eq!(t.params, vec![TypeParam::Base(BaseType::Int), TypeParam::Ref("Skill".into())]);
+        // 引用名仍需 PascalCase
+        assert!(TblType::parse("List<@hero>").is_none());
+        assert!(TblType::parse("Map<int,@Hero-Base>").is_none());
+        // 纯 base 复合类型不受影响
+        assert_eq!(TblType::parse("Map<str,int>").unwrap().to_type_string(), "Map<str,int>");
+    }
+
+    #[test]
+    fn ref_collection_value_validates_as_int_list() {
+        // List<@Hero> 值 = int id 序列
+        let sep = SeparatorsSection::default();
+        let t = TblType::parse("List<@Hero>").unwrap();
+        assert!(t.validate_value("1001;1002", &sep).is_none());
+        assert!(t.validate_value("abc;1002", &sep).is_some());
+        assert!(t.validate_value("", &sep).is_none());
+        // Map<int,@Hero>：value 位置是 ref id
+        let t = TblType::parse("Map<int,@Hero>").unwrap();
+        assert!(t.validate_value("1:1001;2:1002", &sep).is_none());
+        assert!(t.validate_value("1:abc", &sep).is_some());
+        // Tuple2<@Hero,int>：第一元素是 ref id
+        let t = TblType::parse("Tuple2<@Hero,int>").unwrap();
+        assert!(t.validate_value("1001,3", &sep).is_none());
+        assert!(t.validate_value("abc,3", &sep).is_some());
+    }
+
+    #[test]
+    fn ref_collection_ref_targets_and_elements() {
+        let sep = SeparatorsSection::default();
+        let t = TblType::parse("Map<int,@Hero>").unwrap();
+        assert_eq!(t.ref_targets(), vec!["Hero"]);
+        let elems = t.ref_elements("1:1001;2:1002", &sep);
+        assert_eq!(elems, vec![("Hero".to_string(), "1001"), ("Hero".to_string(), "1002")]);
+        // 顶层 ref
+        let t = TblType::parse("@Hero").unwrap();
+        assert_eq!(t.ref_targets(), vec!["Hero"]);
+        let elems = t.ref_elements("1001", &sep);
+        assert_eq!(elems, vec![("Hero".to_string(), "1001")]);
+        // List<Tuple2<int,@Hero>> 位置提取
+        let t = TblType::parse("List<Tuple2<int,@Hero>>").unwrap();
+        assert_eq!(t.ref_targets(), vec!["Hero"]);
+        let elems = t.ref_elements("1,1001;2,1002", &sep);
+        assert_eq!(elems, vec![("Hero".to_string(), "1001"), ("Hero".to_string(), "1002")]);
     }
 
     #[test]
