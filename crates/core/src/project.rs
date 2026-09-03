@@ -887,99 +887,135 @@ pub fn persist_global_config_sections(
 }
 
 /// 将 [ui], [export], [separators] 三个段 upsert 到 toml 文本中。
-/// 保留 [project] 段和其它段、注释、空行。
+///
+/// 策略：保留 `original` 中第一个 `[export]` 之前的全部文本（banner + `[project]`
+/// 及其注释、空行），之后的三段用内置注释模板（`EXPORT/UI/SEPARATORS_SECTION_BLOCK`，
+/// 即 `DEFAULT_CONFIG` 的尾部）整体重建、仅替换叶子值。因此：
+/// - 输出永远只有一份、规范点分表头、三段注释齐全；
+/// - `[project]` 与 banner 逐字保留；
+/// - 旧版保存留下的重复/裸子段在下次保存时被整体清掉（自愈）。
 pub fn upsert_global_sections(
     original: &str,
     global_config: &crate::model::GlobalConfig,
 ) -> Result<String> {
-    // 序列化三个段为 TOML 字符串
-    let ui_toml = if let Some(ref ui) = global_config.ui {
-        toml::to_string_pretty(ui)?
-    } else {
-        String::new()
-    };
-    let export_toml = if let Some(ref export) = global_config.export {
-        toml::to_string_pretty(export)?
-    } else {
-        String::new()
-    };
-    let sep_toml = toml::to_string_pretty(&global_config.separators)?;
+    // 1) banner + [project]（第一个 [export] 之前）逐字保留
+    let prefix = split_prefix_before_export(original);
 
-    // 解析现有内容，按段重建
-    let mut out_lines: Vec<String> = Vec::new();
-    let mut in_target_section = false;
-    let mut found_sections = std::collections::HashSet::new();
+    // 2) 三段尾部 = 注释模板骨架 + 运行时叶子值
+    let tail = render_global_sections(global_config)?;
 
-    for line in original.lines() {
-        let trimmed = line.trim();
-
-        // 检测段标题
-        if trimmed.starts_with('[') && trimmed.ends_with(']') {
-            // 解析段名
-            let section_name = trimmed.trim_start_matches('[').trim_end_matches(']').trim();
-
-            // 检查是否是目标段
-            if section_name == "ui" {
-                found_sections.insert("ui");
-                if !ui_toml.is_empty() {
-                    out_lines.push("[ui]".to_string());
-                    out_lines.extend(ui_toml.lines().map(|s| s.to_string()));
-                }
-                in_target_section = true;
-                continue;
-            } else if section_name == "export" {
-                found_sections.insert("export");
-                if !export_toml.is_empty() {
-                    out_lines.push("[export]".to_string());
-                    out_lines.extend(export_toml.lines().map(|s| s.to_string()));
-                }
-                in_target_section = true;
-                continue;
-            } else if section_name == "separators" {
-                found_sections.insert("separators");
-                out_lines.push("[separators]".to_string());
-                out_lines.extend(sep_toml.lines().map(|s| s.to_string()));
-                in_target_section = true;
-                continue;
-            } else {
-                // 其它段保留
-                in_target_section = false;
-                out_lines.push(line.to_string());
-                continue;
-            }
-        }
-
-        // 跳过目标段内的旧内容
-        if in_target_section {
-            continue;
-        }
-
-        // 保留非目标段的内容
-        out_lines.push(line.to_string());
-    }
-
-    // 追加未找到的段
-    if !found_sections.contains("ui") && !ui_toml.is_empty() {
-        out_lines.push(String::new());
-        out_lines.push("[ui]".to_string());
-        out_lines.extend(ui_toml.lines().map(|s| s.to_string()));
-    }
-    if !found_sections.contains("export") && !export_toml.is_empty() {
-        out_lines.push(String::new());
-        out_lines.push("[export]".to_string());
-        out_lines.extend(export_toml.lines().map(|s| s.to_string()));
-    }
-    if !found_sections.contains("separators") {
-        out_lines.push(String::new());
-        out_lines.push("[separators]".to_string());
-        out_lines.extend(sep_toml.lines().map(|s| s.to_string()));
-    }
-
-    let mut result = out_lines.join("\n");
-    if !result.ends_with('\n') {
+    let mut result = prefix;
+    if !result.is_empty() && !result.ends_with('\n') {
         result.push('\n');
     }
+    result.push_str(&tail);
     Ok(result)
+}
+
+/// 返回 `original` 中第一个整行 `[export]` 之前的文本（不含该行）。
+/// 找不到 `[export]`（如旧版本只有 [project]）则整份保留，三段会追加到末尾。
+fn split_prefix_before_export(original: &str) -> String {
+    let mut prefix = String::new();
+    for line in original.lines() {
+        if line.trim() == "[export]" {
+            break;
+        }
+        prefix.push_str(line);
+        prefix.push('\n');
+    }
+    prefix
+}
+
+/// 用三段注释模板（`EXPORT`/`UI`/`SEPARATORS`_SECTION_BLOCK）重建 `[export]→文件尾`，
+/// 把每个 `key = <默认值>` 叶子替换成 `global_config` 里的运行时值。
+/// cfg 中为 None 的组 / 缺省字段不替换 → 保留模板默认（与加载时缺省语义一致）。
+fn render_global_sections(global_config: &crate::model::GlobalConfig) -> Result<String> {
+    const SECTIONS_SKELETON: &str = const_concat!(
+        EXPORT_SECTION_BLOCK,
+        UI_SECTION_BLOCK,
+        SEPARATORS_BLOCK,
+    );
+
+    // 各组序列化为 toml::Value；表路径段与模板表头逐字对应
+    let export_v = global_config
+        .export
+        .as_ref()
+        .map(|e| toml::Value::try_from(e))
+        .transpose()?;
+    let ui_v = global_config
+        .ui
+        .as_ref()
+        .map(|u| toml::Value::try_from(u))
+        .transpose()?;
+    let sep_v = toml::Value::try_from(&global_config.separators)?;
+
+    let mut out: Vec<String> = Vec::new();
+    let mut header: Vec<String> = Vec::new(); // 当前表路径，如 ["export","server","java"]
+
+    for line in SECTIONS_SKELETON.lines() {
+        let trimmed = line.trim();
+        // 表头行：更新当前表路径
+        if trimmed.starts_with('[') && trimmed.ends_with(']') {
+            header = trimmed[1..trimmed.len() - 1]
+                .split('.')
+                .map(|s| s.trim().to_string())
+                .collect();
+            out.push(line.to_string());
+            continue;
+        }
+        // 赋值行：`key = <默认值>`；注释/空行原样保留
+        if !trimmed.starts_with('#') {
+            if let Some(eq) = line.find('=') {
+                let key = line[..eq].trim();
+                if is_plain_toml_key(key) {
+                    let group = match header.first().map(String::as_str) {
+                        Some("export") => export_v.as_ref(),
+                        Some("ui") => ui_v.as_ref(),
+                        Some("separators") => Some(&sep_v),
+                        _ => None,
+                    };
+                    if let Some(gv) = group {
+                        if let Some(leaf) = lookup(gv, &header[1..], key) {
+                            out.push(format!("{} = {}", key, inline_toml(leaf)?));
+                            continue;
+                        }
+                    }
+                }
+            }
+        }
+        out.push(line.to_string());
+    }
+
+    let mut text = out.join("\n");
+    if !text.ends_with('\n') {
+        text.push('\n');
+    }
+    Ok(text)
+}
+
+/// 判断是否为普通 bare key（模板与 struct 字段名均为裸键）。
+fn is_plain_toml_key(s: &str) -> bool {
+    !s.is_empty() && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+}
+
+/// 在 group 的 toml::Value 里沿相对路径 `rel` 逐级下钻取表，再取 `key` 的叶子值。
+/// 路径段与 TOML 表头逐字一致（含 PascalCase 的 [separators.Map] → rel ["Map"]）。
+fn lookup<'a>(v: &'a toml::Value, rel: &[String], key: &str) -> Option<&'a toml::Value> {
+    let mut cur = v;
+    for seg in rel {
+        cur = cur.as_table()?.get(seg)?;
+    }
+    cur.as_table()?.get(key)
+}
+
+/// 把叶子 toml::Value 渲染成与 serde 一致的 TOML 内联文本（字符串带引号、
+/// 反斜杠会转义）。用「单键表」序列化再裁掉 `v = ` 前缀，保证格式与
+/// `toml::to_string_pretty(&struct)` 完全一致。
+fn inline_toml(v: &toml::Value) -> Result<String> {
+    let mut m = toml::map::Map::new();
+    m.insert("v".to_string(), v.clone());
+    let s = toml::to_string_pretty(&toml::Value::Table(m))?;
+    Ok(s.strip_prefix("v = ").unwrap_or(&s).trim_end().to_string())
 }
 
 fn load_groups_in(data_dir: &Path) -> Result<Vec<Group>> {
@@ -1158,6 +1194,130 @@ mod tests {
             "[ui] 段默认值不匹配");
         assert_eq!(from_struct.separators, from_toml.separators,
             "[separators] 段默认值不匹配");
+    }
+
+    /// 在默认配置基础上改三处值，模拟用户在「全局设置」改过设置。
+    fn modified_global_config() -> GlobalConfig {
+        let mut cfg: GlobalConfig = toml::from_str(DEFAULT_CONFIG).expect("默认模板解析");
+        cfg.ui.as_mut().unwrap().show_meta_id = true;
+        cfg.export
+            .as_mut()
+            .unwrap()
+            .server
+            .as_mut()
+            .unwrap()
+            .java
+            .as_mut()
+            .unwrap()
+            .package = Some("com.x".to_string());
+        cfg.separators.tuple2 = "|".to_string();
+        cfg
+    }
+
+    #[test]
+    fn upsert_global_sections_keeps_comments_and_roundtrips() {
+        // 回归：旧实现把三段序列化成「文档根」，子段丢前缀、旧块删不掉导致重复，
+        // 每次保存翻倍。新实现应从注释模板重建并只替换叶子值。
+        let cfg = modified_global_config();
+        let out = upsert_global_sections(DEFAULT_CONFIG, &cfg).expect("upsert");
+
+        // 三段注释完整保留
+        assert!(out.contains("# 导出 JSON 时空值表达方式:"), "export 注释丢失");
+        assert!(out.contains("# 点击空白区域时自动保存当前编辑"), "ui 注释丢失");
+        assert!(out.contains("# 引用选择弹窗对 Table 的列展示策略："), "ui.ref_picker 注释丢失");
+        // banner 与 [project]（含注释）逐字保留
+        assert!(out.contains("tablet 工作区配置"), "banner 丢失");
+        assert!(out.contains("last_project"), "[project] 段丢失");
+
+        // 值已更新
+        assert!(out.contains("show_meta_id = true"), "show_meta_id 未写入");
+        assert!(out.contains("Tuple2 = \"|\""), "Tuple2 分隔符未写入");
+        assert!(out.contains("package = \"com.x\""), "java.package 未写入");
+        assert!(!out.contains("package = \"com.game.config\""), "java.package 旧值残留");
+
+        // 每个规范表头恰好出现一次（按“行首表头”锚定，banner 注释里的 [xxx] 字样不计入）
+        let body = format!("\n{}", out);
+        for h in [
+            "[export]",
+            "[export.json]",
+            "[export.server.java]",
+            "[export.client.lua]",
+            "[ui]",
+            "[ui.ref_picker]",
+            "[separators]",
+            "[separators.Map]",
+            "[separators.Map_List]",
+        ] {
+            let needle = format!("\n{}", h);
+            assert_eq!(body.matches(&needle).count(), 1, "表头 {} 出现次数 != 1", h);
+        }
+        // 不出现旧 bug 产生的裸（无分组前缀）子段
+        assert!(!out.contains("\n[json]"), "出现裸 [json]");
+        assert!(!out.contains("\n[server]"), "出现裸 [server]");
+        assert!(!out.contains("\n[Map]"), "出现裸 [Map]");
+        assert!(!out.contains("\n[ref_picker]"), "出现裸 [ref_picker]");
+
+        // 反序列化往返：值与 cfg 完全一致
+        let reparsed: GlobalConfig = toml::from_str(&out).expect("输出应可解析");
+        assert_eq!(reparsed.project_management, cfg.project_management);
+        assert_eq!(reparsed.export, cfg.export);
+        assert_eq!(reparsed.ui, cfg.ui);
+        assert_eq!(reparsed.separators, cfg.separators);
+    }
+
+    #[test]
+    fn upsert_global_sections_idempotent() {
+        // 对同一配置连续保存不应再翻倍 / 再变化。
+        let cfg = modified_global_config();
+        let once = upsert_global_sections(DEFAULT_CONFIG, &cfg).expect("upsert#1");
+        let twice = upsert_global_sections(&once, &cfg).expect("upsert#2");
+        assert_eq!(once, twice);
+    }
+
+    #[test]
+    fn upsert_global_sections_cleans_old_duplicated_file() {
+        // 复刻旧 bug 留下的「可解析但脏」形态：在 [export] 后混入一份裸子段，
+        // 与规范 [export.*] 并存 → 整体重建后应清干净并回到默认模板原文。
+        let mut polluted = String::new();
+        for line in DEFAULT_CONFIG.lines() {
+            polluted.push_str(line);
+            polluted.push('\n');
+            if line.trim() == "[export]" {
+                polluted.push_str("\n[json]\nempty_as = \"null\"\n\n[xml]\nempty_as = \"empty\"\n\n");
+            }
+        }
+        let cfg: GlobalConfig = toml::from_str(DEFAULT_CONFIG).unwrap();
+        let cleaned = upsert_global_sections(&polluted, &cfg).expect("upsert");
+
+        assert!(!cleaned.contains("\n[json]"), "裸 [json] 未清掉");
+        assert_eq!(cleaned.matches("[export.json]").count(), 1);
+        let reparsed: GlobalConfig = toml::from_str(&cleaned).expect("清理后应可解析");
+        assert_eq!(reparsed.export, cfg.export);
+        assert_eq!(reparsed.ui, cfg.ui);
+        assert_eq!(reparsed.separators, cfg.separators);
+        assert_eq!(reparsed.project_management, cfg.project_management);
+    }
+
+    #[test]
+    fn persist_global_config_sections_round_trip() {
+        // 端到端：落盘、重读、值一致；二次保存文本不变。
+        let dir = unique_tmp("gs-persist");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("tablet.toml"), DEFAULT_CONFIG).unwrap();
+        let cfg = modified_global_config();
+        persist_global_config_sections(&dir, &cfg).expect("persist");
+
+        let text = std::fs::read_to_string(dir.join("tablet.toml")).unwrap();
+        let reparsed: GlobalConfig = toml::from_str(&text).expect("文件应可解析");
+        assert_eq!(reparsed.project_management, cfg.project_management);
+        assert_eq!(reparsed.export, cfg.export);
+        assert_eq!(reparsed.ui, cfg.ui);
+        assert_eq!(reparsed.separators, cfg.separators);
+
+        let again = upsert_global_sections(&text, &cfg).expect("再次保存");
+        assert_eq!(again, text, "二次保存文本发生变化/翻倍");
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
