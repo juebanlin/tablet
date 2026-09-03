@@ -30,6 +30,8 @@ pub fn build_tree_nodes(state: &mut AppState) -> Vec<TreeNode> {
     let filter = state.tree_filter.clone();
     let full_group_open = state.tree_full_group;
     let search = state.tree_search.clone();
+    // 全局设置「显示元数据 ID」：开 → Project 行显示 id 而非 name（仅显示文本，目录仍用 id）
+    let show_id = state.engine.global_config.ui.as_ref().map_or(false, |u| u.show_meta_id);
 
     // 已打开 project 的 (id, name, groups) snapshot；用于三层渲染（避免 borrow 冲突）
     let opened_set: HashSet<String> = state.engine.opened_ids().into_iter().collect();
@@ -57,7 +59,7 @@ pub fn build_tree_nodes(state: &mut AppState) -> Vec<TreeNode> {
                 indent: 0,
                 expanded: false,
                 icon: SharedString::from(ICON_PROJECT),
-                name: SharedString::from(ap.name.clone()),
+                name: SharedString::from(if show_id { ap.id.clone() } else { ap.name.clone() }),
                 mark: SharedString::from(""),
                 mark_color: color_default(),
                 is_group: false, // closed 项目不显示三角，靠双击 / 单击 / 右键打开
@@ -145,12 +147,14 @@ pub fn build_tree_nodes(state: &mut AppState) -> Vec<TreeNode> {
 
         let active = state.engine.active_project_id() == Some(pid.as_str());
         let p_selected = matches!(&state.selected, Some(SelectedNode::Project { project_id }) if project_id == pid);
+        // 显示元数据 ID 打开时行文本用 id，否则用 name；活动项目仍带 ★
+        let project_display = if show_id { pid.clone() } else { pname.clone() };
         nodes.push(TreeNode {
             id: state.tree_targets.len() as i32,
             indent: 0,
             expanded: p_expanded,
             icon: SharedString::from(ICON_PROJECT),
-            name: SharedString::from(if active { format!("{} {}", pname, ACTIVE_STAR) } else { pname.clone() }),
+            name: SharedString::from(if active { format!("{} {}", project_display, ACTIVE_STAR) } else { project_display }),
             mark: SharedString::from(p_mark),
             mark_color: p_mark_color,
             is_group: true, // 共享组节点的展开三角 UI
