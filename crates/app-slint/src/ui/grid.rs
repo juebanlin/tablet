@@ -13,7 +13,31 @@ use crate::convert;
 use crate::state::{self, AppState, CtxMenuKind, GridSelection, SelectedNode};
 use crate::{dialogs, AppWindow, CellKind};
 
+/// 当前 grid 显示的节点 key：切到不同节点时用于判断是否需要重置滚动条。
+fn shown_node_key(state: &AppState) -> String {
+    use crate::state::SelectedNode;
+    match &state.selected {
+        None => String::new(),
+        Some(SelectedNode::Project { project_id }) => format!("P:{}", project_id),
+        Some(SelectedNode::Group { project_id, group }) => format!("G:{}:{}", project_id, group),
+        Some(SelectedNode::Table { project_id, group, name }) => format!("T:{}:{}:{}", project_id, group, name),
+        Some(SelectedNode::Constant { project_id, group, name }) => format!("C:{}:{}:{}", project_id, group, name),
+        Some(SelectedNode::Enum { project_id, group, name }) => format!("E:{}:{}:{}", project_id, group, name),
+    }
+}
+
 pub fn push(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
+    // 切表/切到不同节点时，把表格区滚动条重置到顶部/左上；
+    // 同一节点内的编辑类 push（改格/增删行列）key 不变，不误重置。
+    {
+        let key = shown_node_key(&state.borrow());
+        let mut st = state.borrow_mut();
+        if st.grid_shown_key != key {
+            ui_h.set_grid_scroll_x(0.0);
+            ui_h.set_grid_scroll_y(0.0);
+            st.grid_shown_key = key;
+        }
+    }
     let snap = convert::build_grid(&state.borrow());
     let (editing_r, editing_c, editing_buffer, editing_in_formula, editing_header_row, editing_header_col) = {
         let st = state.borrow();

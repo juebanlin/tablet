@@ -42,6 +42,9 @@ export component GridSection inherits Rectangle {
     in property <[DataRow]> data-rows;
     in property <[CellKind]> column-kinds;
     in property <int> col-count;
+    // 滚动位置透传：GridArea 内部 ScrollView 的偏移量双向绑定到这里（切表时 Rust 置 0 重置）
+    in-out property <length> scroll-x: 0px;
+    in-out property <length> scroll-y: 0px;
     in property <int> selected-col: -1;
     in property <int> selected-row: -1;
     in property <int> selected-cell-row: -1;
@@ -128,6 +131,8 @@ export component GridSection inherits Rectangle {
             picker-trigger-header-single: root.picker-trigger-header-single;
             picker-trigger-data-single: root.picker-trigger-data-single;
             editing-buffer <=> root.editing-buffer;
+            scroll-x <=> root.scroll-x;
+            scroll-y <=> root.scroll-y;
             header-clicked(hi, ci) => { root.header-clicked(hi, ci); }
             header-double-clicked(hi, ci) => { root.header-double-clicked(hi, ci); }
             cell-clicked(r, c) => { root.cell-clicked(r, c); }

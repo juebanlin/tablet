@@ -908,6 +908,9 @@ pub struct AppState {
     pub view_show_enum_name: bool,
     /// 当前 grid 选区（用于公式栏 / 状态栏）。切换节点时清空。
     pub grid_selection: GridSelection,
+    /// 当前 grid 正在显示的节点 key（"P:/G:/T:/C:/E:..."）。grid::push 用它判断是否发生了
+    /// 切表/切节点——变了就重置滚动条，同一节点内编辑不重置。
+    pub grid_shown_key: String,
     /// 当前节点每列的可编辑性，由 build_grid 同步刷新。供 callback 判断点击行为。
     pub grid_column_kinds: Vec<ColumnKind>,
     /// 当前节点表头每个 cell 的可编辑性（按 [hrow][col] 索引）。callback 收到 (hi,ci)
@@ -1010,6 +1013,7 @@ impl AppState {
             tree_targets: Vec::new(),
             view_show_enum_name: false,
             grid_selection: GridSelection::None,
+            grid_shown_key: String::new(),
             grid_column_kinds: Vec::new(),
             grid_header_kinds: Vec::new(),
             grid_data_count: 0,

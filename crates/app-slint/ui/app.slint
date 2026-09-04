@@ -148,6 +148,9 @@ export component AppWindow inherits Window {
     in property <[DataRow]> grid-data-rows;
     in property <[CellKind]> grid-column-kinds;
     in property <int> grid-col-count;
+    // 表格区滚动偏移透传：Rust 在切表时置 0 以重置滚动条
+    in-out property <length> grid-scroll-x: 0px;
+    in-out property <length> grid-scroll-y: 0px;
     in property <int> grid-selected-col: -1;
     in property <int> grid-selected-row: -1;
     in property <int> grid-selected-cell-row: -1;
@@ -680,6 +683,8 @@ export component AppWindow inherits Window {
                 header-rows: root.grid-header-rows;
                 data-rows: root.grid-data-rows;
                 col-count: root.grid-col-count;
+                scroll-x <=> root.grid-scroll-x;
+                scroll-y <=> root.grid-scroll-y;
                 selected-col: root.grid-selected-col;
                 selected-row: root.grid-selected-row;
                 selected-cell-row: root.grid-selected-cell-row;
