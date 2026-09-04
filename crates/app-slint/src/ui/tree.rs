@@ -79,9 +79,8 @@ fn index_to_sort(i: i32) -> tablet_core::enums::ProjectSort {
 /// 把当前 workspace 状态落盘到 `<workdir>/tablet.toml`；失败仅 log。
 pub(crate) fn persist_workspace(state: &mut AppState) {
     let sort_enum = tablet_core::enums::ProjectSort::from_str(&state.project_sort).unwrap_or_default();
-    if let Err(e) = tablet_core::project::persist_workspace_state(
-        &state.engine, sort_enum, &state.project_order,
-    ) {
+    let order = state.project_order.clone();
+    if let Err(e) = state.engine.persist_global_config(sort_enum, &order) {
         state.engine.error_log(format!("[workspace] 持久化失败: {}", e));
     }
 }

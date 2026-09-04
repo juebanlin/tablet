@@ -34,289 +34,37 @@ pub const PROJECTS_DIR: &str = "projects";
 pub const PROJECT_TOML_FILE: &str = "project.toml";
 pub const PROJECT_SCHEMA_FILE: &str = "project.tblschema";
 
-/// 极简 const-time string concat：`concat!` 仅吃字面量，无法直接拼 `&'static str` 常量。
-/// 这里手工实现一份避免新增 crate 依赖。所有参数必须是 `&'static str`。
-macro_rules! const_concat {
-    ($($s:expr),+ $(,)?) => {{
-        const PARTS: &[&str] = &[$($s),+];
-        const TOTAL: usize = {
-            let mut n = 0usize;
-            let mut i = 0;
-            while i < PARTS.len() { n += PARTS[i].len(); i += 1; }
-            n
-        };
-        const BUF: [u8; TOTAL] = {
-            let mut buf = [0u8; TOTAL];
-            let mut pos = 0usize;
-            let mut i = 0;
-            while i < PARTS.len() {
-                let bytes = PARTS[i].as_bytes();
-                let mut j = 0;
-                while j < bytes.len() {
-                    buf[pos] = bytes[j];
-                    pos += 1;
-                    j += 1;
-                }
-                i += 1;
-            }
-            buf
-        };
-        // SAFETY: PARTS 全是合法 UTF-8 &str，按字节顺序拼接后仍为合法 UTF-8。
-        unsafe { std::str::from_utf8_unchecked(&BUF) }
-    }};
+/// tablet.toml 由内存 `GlobalConfig` 用 serde 整文件序列化而成（无 `#` 注释）。
+/// 这也是**唯一的**整写入口——结构、表头、顺序都由 serde 保证规范且幂等。
+///
+/// 序列化整个工作区配置（[project]/[export]/[ui]/[separators]）为 TOML 文本。
+pub fn serialize_global_config(cfg: &GlobalConfig) -> Result<String> {
+    Ok(toml::to_string(cfg)?)
 }
 
-/// 工作区根 `tablet.toml` banner：说明四类段的作用域差异，避免用户混淆。
-/// `[project]`（仓库级）/ `[export]`（项目默认值，可被项目级覆盖）/
-/// `[ui]`（仅工作区级，多 Project 共享）/ `[separators]`（仅新建空项目时拷贝）。
-const BANNER_GLOBAL: &str = r#"# ============================================================
-# tablet 工作区配置（仓库共享）
-# ============================================================
-#
-# 本文件分四类段，作用域不同：
-#
-#   [project]      ← 工作区状态（last_project / opened_projects 等）
-#                     仓库级；不属于任何具体 Project
-#
-#   [export]       ← 新建 Project 时的导出配置初始模板
-#                     新建 Project 时拷贝一次到 projects/<id>/project.toml
-#                     之后各 Project 独立维护，互不影响
-#                     已有 Project 导出设置走 GUI「项目右键 → 项目设置 → 导出」
-#
-#   [ui]           ← 工作区级 UI 偏好（仅本文件生效）
-#                     不支持项目级覆盖：多 Project 同时打开时若按项目切换
-#                     UI 策略，"全局保存 / 实时校验"等行为会反复变动，
-#                     反而像 bug。项目级 project.toml 写 [ui] 会被忽略。
-#
-#   [separators]   ← 新建空 Project 时的分隔符初始模板
-#                     新建时拷贝一次到 project.tblschema 后即与本段无关；
-#                     已有 Project 改分隔符走 GUI「项目右键 → 项目设置 → 分隔符」
-# ============================================================
+/// 整文件写回 `<workdir>/tablet.toml`。
+pub fn write_global_config(workdir: &Path, cfg: &GlobalConfig) -> Result<()> {
+    let path = workdir.join(crate::CONFIG_FILE);
+    std::fs::write(&path, serialize_global_config(cfg)?)?;
+    Ok(())
+}
 
-"#;
+/// 首跑/配置缺失时用默认配置落一份 tablet.toml。
+pub fn write_default_global_config(workdir: &Path) -> Result<()> {
+    write_global_config(workdir, &GlobalConfig::default())
+}
 
-/// 项目级 `project.toml` banner：说明独立配置语义、并明确禁止的三段（[project]/[ui]/[separators]）。
-const BANNER_PROJECT: &str = r#"# ============================================================
-# 项目级配置（projects/<id>/project.toml）
-# ============================================================
-#
-# 本文件包含此项目的独立配置，与全局 tablet.toml 无运行时继承关系。
-# 新建项目时从全局配置拷贝初始值，之后各项目独立维护。
-#
-# 注意：以下三段写在这里会被加载流程剥掉，不会生效——
-#   - [project]    工作区状态（last_project / opened_projects 等），不属于单项目
-#   - [ui]         UI 偏好仅工作区级。多 Project 同时打开时按项目切 UI 策略
-#                   会让"全局保存 / 实时校验"反复变动，反而像 bug。
-#                   要改 UI 偏好请改 <workdir>/tablet.toml [ui]。
-#   - [separators] 分隔符以 project.tblschema 的 # @sep 行为准
-#                   （项目右键 → 项目设置 → 分隔符即编辑那里）
-# ============================================================
-
-"#;
-
-/// 仓库级 `[project]` 段：last_project / opened_projects / 排序状态。
-/// 仅出现在工作区根 toml；项目 toml 不写。
-const PROJECT_SECTION_BLOCK: &str = r#"[project]
-# 启动时进入的 Project id；为空 = 扫到的第一个
-last_project = ""
-# 启动时自动打开的 Project id 列表；为空 = 仅打开 last_project
-opened_projects = []
-# 项目排序方式: "id" (默认) / "name" / "open" / "created" / "manual"
-project_sort = "id"
-# project_sort = "manual" 时使用：用户拖拽得到的 id 序列
-project_order = []
-
-"#;
-
-/// `[export]` 全段共享模板：覆盖 12 种导出 target（json/xml + 5 server + 5 client）。
-/// DEFAULT_CONFIG 与 [`default_project_toml_template`] 共用，避免双份漂移。
-/// 模板里的值与各 export 模块代码里 `unwrap_or(...)` 的 fallback 严格一致——
-/// 改值前请同步 `crates/core/src/export/<lang>.rs`，否则会出现"模板说 X 实际是 Y"的混淆。
-const EXPORT_SECTION_BLOCK: &str = r#"[export]
-# 生成文件编码: utf-8 (默认)
-encoding = "utf-8"
-# 生成文件换行符: lf (默认), crlf
-line_ending = "lf"
-
-[export.json]
-# 导出 JSON 时空值表达方式:
-#   "null" - tbl 空值输出为 JSON null（默认）
-#   "omit" - tbl 空值不写入 JSON，省略该字段
-empty_as = "null"
-
-[export.xml]
-# 导出 XML 时空值表达方式:
-#   "empty" - 输出空标签 <field></field>（默认）
-#   "omit"  - 不写入空字段
-empty_as = "empty"
-
-[export.server]
-# 后端数据文件（json / xml）输出目录；具体格式落到 <data_output>/json / <data_output>/xml
-data_output = "gen/server/data"
-
-[export.server.java]
-# Java 包名
-package = "com.game.config"
-# Java 模板类输出根目录（包路径会自动拼到末尾，如 gen/server/java/com/game/config/...）
-code_output = "gen/server/java"
-
-[export.server.go]
-# Go 包名
-package = "config"
-# Go 输出根目录（实际落 <code_output>/<package>/）
-code_output = "gen/server/go"
-
-[export.server.cpp]
-# C++ 命名空间（支持嵌套，如 game::config::tpl）
-namespace = "game::config"
-# C++ 头文件输出目录（每张表 / 常量 / 枚举一个 .h）
-code_output = "gen/server/cpp"
-# JSON 库选择: "nlohmann"（默认）| "rapidjson"
-json_lib = "nlohmann"
-
-[export.server.csharp_dotnet]
-# .NET 服务端命名空间
-namespace = "Game.Config.Server"
-# .NET 服务端代码输出目录
-code_output = "gen/server/csharp"
-
-[export.server.typescript]
-# TypeScript Node.js 服务端代码输出目录
-output = "gen/server/typescript"
-# 模块类型: "esm" (默认) | "cjs"
-module_kind = "esm"
-
-[export.client.lua]
-# Lua 文件输出目录（每张表 / 常量 / 枚举一个 .lua）
-output = "gen/client"
-
-[export.client.gdscript]
-# GDScript 文件输出目录（每张表 / 常量 / 枚举一个 .gd）
-output = "gen/client/gdscript"
-
-[export.client.typescript]
-# TypeScript 前端代码输出目录
-output = "gen/client/typescript"
-# 模块类型: "esm" (默认) | "cjs"
-module_kind = "esm"
-
-[export.client.csharp_unity]
-# Unity 客户端命名空间
-namespace = "Game.Config.Client"
-# Unity 客户端代码输出目录
-code_output = "gen/client/csharp_unity"
-
-[export.client.csharp_godot]
-# Godot 客户端命名空间
-namespace = "Game.Config.Client"
-# Godot 客户端代码输出目录
-code_output = "gen/client/csharp_godot"
-
-"#;
-
-/// `[ui]` 全段共享模板：UiConfig + RefPickerConfig 全部字段。
-/// DEFAULT_CONFIG 与 [`default_project_toml_template`] 共用。
-const UI_SECTION_BLOCK: &str = r#"[ui]
-# 点击空白区域时自动保存当前编辑 (false 则只有回车才保存)
-auto_commit_on_blur = true
-# 编辑单元格时实时验证 (true 则每次修改立即检查)
-realtime_validate = false
-# 日志文件级别: debug, info, warn, error
-log_level = "debug"
-# 表头 picker 单元格（Table type/export 行）的呼出方式：
-#   "single" - 单击直接弹选择器（默认；表头每列一格，几乎不批量改）
-#   "double" - 单击仅选中、双击才弹
-picker_trigger_header = "single"
-# 数据区 picker 单元格（Ref 列 / Constant type / export 列）的呼出方式：
-#   "double" - 单击仅选中、双击才弹（默认；保留单击作为"瞄准选中"，
-#              是 Ctrl+C/V 批量复制 ref id / enum 值的前提）
-#   "single" - 单击直接弹选择器
-picker_trigger_data = "double"
-# 模板 / Project 列表展示 id 还是 name
-#   false - 显示 name（默认）
-#   true  - 显示 id（路径标识）
-show_meta_id = false
-# 是否允许 Constant 表使用 @Xxx 引用类型
-#   true  - 允许（默认；常量值经常指向 table/enum 某项，如 default_hero = @HeroType:1）
-#   false - 禁用（恢复早期行为，constant 段里的 @Xxx 会校验失败）
-constant_ref_allowed = true
-
-[ui.ref_picker]
-# 引用选择弹窗对 Table 的列展示策略：
-#   "auto" - id + 最多 2 个 export=cs 且类型为字符串的辅助列（默认）
-#   "full" - schema 全部字段（除了 export=- 不导出列）
-default_strategy = "auto"
-
-"#;
-
-/// `[separators]` 段：仅工作区根 toml 写。项目级在 .tblschema 的 `# @sep` 行。
-const SEPARATORS_BLOCK: &str = r#"[separators]
-# 程序级默认分隔符：仅在「新建空项目」时拷贝到 schema.separators 作为初值。
-# 已加载项目走各自 .tblschema 的 # @sep 行（GUI「项目右键 → 项目设置 → 分隔符」编辑），
-# 与本段无关。从模板/文件新建则继承 source schema 的 separators。
-Tuple2 = ","
-Tuple3 = ","
-Tuple4 = ","
-List = ";"
-Set = ";"
-
-[separators.Map]
-kv = ":"
-entry = ";"
-
-[separators.List_Tuple2]
-tuple = ","
-list = ";"
-
-[separators.List_Tuple3]
-tuple = ","
-list = ";"
-
-[separators.List_Tuple4]
-tuple = ","
-list = ";"
-
-[separators.Map_Tuple2]
-kv = ":"
-tuple = ","
-entry = ";"
-
-[separators.Map_Tuple3]
-kv = ":"
-tuple = ","
-entry = ";"
-
-[separators.Map_Tuple4]
-kv = ":"
-tuple = ","
-entry = ";"
-
-[separators.Map_List]
-kv = ":"
-item = ","
-entry = ";"
-"#;
-
-/// 工作区根 `tablet.toml` 默认模板：首次启动自动落盘到 `<workdir>/tablet.toml`。
-/// banner + [project] + [export] + [ui] + [separators]。
-const DEFAULT_CONFIG: &str = const_concat!(
-    BANNER_GLOBAL,
-    PROJECT_SECTION_BLOCK,
-    EXPORT_SECTION_BLOCK,
-    UI_SECTION_BLOCK,
-    SEPARATORS_BLOCK,
-);
-
-/// 项目级 `project.toml` 默认模板：首次保存时写到 `<project_root>/project.toml`。
-/// 已存在则不覆盖。仅含 `[export]` 段全字段——`[ui]` 是工作区级，写在项目里会被 strip；
-/// `[project]` / `[separators]` 同样只在工作区根 toml 出现。
-const PROJECT_TOML_TEMPLATE: &str = const_concat!(
-    BANNER_PROJECT,
-    EXPORT_SECTION_BLOCK,
-);
-
-pub fn default_project_toml_template() -> &'static str {
-    PROJECT_TOML_TEMPLATE
+/// 项目级 `project.toml` 首次落盘内容：全量 `[export]` 默认、无注释。
+/// 用单字段包装让 serde 把 `export` 输出为顶层 `[export]` 表（子段带规范前缀），
+/// 可被项目配置解析器（`parse_project_config`）读取。已存在则不覆盖。
+pub fn default_project_toml_text() -> Result<String> {
+    #[derive(serde::Serialize)]
+    struct ExportRoot {
+        export: ExportConfig,
+    }
+    Ok(toml::to_string(&ExportRoot {
+        export: ExportConfig::default(),
+    })?)
 }
 
 /// 加载 Project（默认走 last_project 或扫描第一个）。
@@ -330,7 +78,7 @@ pub fn load_project(workdir: &Path) -> Result<Project> {
     let config_path = workdir.join(crate::CONFIG_FILE);
 
     if !config_path.exists() {
-        std::fs::write(&config_path, DEFAULT_CONFIG)?;
+        write_default_global_config(workdir)?;
         println!("已生成默认配置文件: {}", config_path.display());
     }
 
@@ -498,7 +246,7 @@ pub fn load_all_projects(workdir: &Path) -> Result<Vec<Project>> {
 
     let config_path = workdir.join(crate::CONFIG_FILE);
     if !config_path.exists() {
-        std::fs::write(&config_path, DEFAULT_CONFIG)?;
+        write_default_global_config(workdir)?;
     }
 
     let mut out = Vec::with_capacity(candidates.len());
@@ -536,7 +284,7 @@ pub fn load_workspace(workdir: &Path) -> Result<(crate::ops::ProjectEngine, bool
             std::fs::rename(&legacy, &config_path)?;
             println!("已迁移配置文件: {} → {}", legacy.display(), config_path.display());
         } else {
-            std::fs::write(&config_path, DEFAULT_CONFIG)?;
+            write_default_global_config(workdir)?;
             println!("已生成默认配置文件: {}", config_path.display());
         }
     }
@@ -619,27 +367,8 @@ pub fn load_workspace(workdir: &Path) -> Result<(crate::ops::ProjectEngine, bool
     Ok((engine, config_fixed))
 }
 
-/// 把当前 engine 的 opened/active/sort/order 落盘到 `<workdir>/tablet.toml`。
-/// UI 在 open/close/sort 改变时调一次；失败由调用方决定如何处理（best-effort）。
-pub fn persist_workspace_state(
-    engine: &crate::ops::ProjectEngine,
-    project_sort: crate::enums::ProjectSort,
-    project_order: &[String],
-) -> Result<()> {
-    let path = engine.workdir.join(crate::CONFIG_FILE);
-    let original = std::fs::read_to_string(&path).unwrap_or_default();
-
-    let project_cfg = crate::model::ProjectManagementConfig {
-        last_project: engine.active_project_id().unwrap_or("").to_string(),
-        opened_projects: engine.opened_ids(),
-        project_sort,
-        project_order: project_order.to_vec(),
-    };
-    let updated = upsert_project_config_section(&original, &project_cfg);
-    std::fs::write(&path, updated)?;
-    Ok(())
-}
-
+/// 项目布局变化后的落盘由 `ProjectEngine::persist_global_config` 承担（见 ops.rs），
+/// 统一走 `write_global_config` 整写，不再有分片文本写入器。
 #[derive(Debug, Clone)]
 pub struct ProjectListEntry {
     pub id: String,
@@ -748,275 +477,6 @@ fn read_project_created_at(project_root: &Path) -> String {
     read_project_schema_with_fallback(project_root, "").meta.created_at
 }
 
-/// 把仓库根的老 `<workdir>/<config_dir>/` 迁移到 `<workdir>/projects/default/config/`。
-///
-/// - 仅当 `<workdir>/projects/` 不存在 **且** 老 config_dir 为非空目录时执行。
-/// - 创建 `project.tblschema`（id=default / name="默认项目"）。
-/// - 修改 `tablet.toml` 的 `[project] last_project = "default"`。
-///
-/// 不会复制额外的 schema/缓存（不在迁移范围）。
-/// 重写 tablet.toml（保留所有段，仅刷新 [project]）。
-/// 这里走简单方案：读原文件，按行 upsert [project] 段字段。既保住注释又改对字段。
-#[allow(dead_code)]
-fn write_tool_config(path: &Path, config: &GlobalConfig) -> Result<()> {
-    let original = std::fs::read_to_string(path)?;
-    let updated = upsert_project_config_section(&original, &config.project_management);
-    std::fs::write(path, updated)?;
-    Ok(())
-}
-
-/// 把 toml 文本里的 `[project]` 段 upsert：
-/// `last_project / opened_projects / project_sort / project_order` 字段写新值，其它保持原状。
-/// 不再兼容历史 `[app]` 段——上层应当先 migrate。
-pub fn upsert_project_config_section(original: &str, project: &crate::model::ProjectManagementConfig) -> String {
-    let app_lines = build_project_field_lines(project);
-    let field_keys = ["last_project", "opened_projects", "project_sort", "project_order"];
-    let mut written: std::collections::HashSet<&str> = std::collections::HashSet::new();
-
-    let mut out_lines: Vec<String> = Vec::new();
-    let mut in_app_section = false;
-    let mut found_app = false;
-    let flush_missing = |written: &std::collections::HashSet<&str>, out: &mut Vec<String>| {
-        for key in field_keys.iter() {
-            if !written.contains(key) {
-                if let Some(line) = app_lines.get(*key) {
-                    out.push(line.clone());
-                }
-            }
-        }
-    };
-
-    for line in original.lines() {
-        let trimmed = line.trim();
-        if trimmed.starts_with('[') {
-            // 离开上一段：若是 [project] 段，把没写过的字段补上
-            if in_app_section {
-                flush_missing(&written, &mut out_lines);
-                written.clear();
-            }
-            // 进入新段
-            if trimmed == "[project]" {
-                in_app_section = true;
-                found_app = true;
-                out_lines.push("[project]".to_string());
-                continue;
-            }
-            in_app_section = false;
-        }
-
-        if in_app_section {
-            let mut handled = false;
-            for key in field_keys.iter() {
-                if trimmed.starts_with(key) {
-                    let after = trimmed[key.len()..].trim_start();
-                    if after.starts_with('=') {
-                        if let Some(line) = app_lines.get(*key) {
-                            out_lines.push(line.clone());
-                        }
-                        written.insert(*key);
-                        handled = true;
-                        break;
-                    }
-                }
-            }
-            if handled { continue; }
-        }
-
-        out_lines.push(line.to_string());
-    }
-
-    // EOF 时仍在 [project] 段
-    if in_app_section {
-        flush_missing(&written, &mut out_lines);
-    }
-
-    if !found_app {
-        // 完全没有 [project] 段：在头部插一段
-        let mut head = vec![
-            "[project]".to_string(),
-        ];
-        for key in field_keys.iter() {
-            if let Some(line) = app_lines.get(*key) {
-                head.push(line.clone());
-            }
-        }
-        head.push(String::new());
-        head.extend(out_lines);
-        return head.join("\n") + "\n";
-    }
-
-    let mut joined = out_lines.join("\n");
-    if !joined.ends_with('\n') {
-        joined.push('\n');
-    }
-    joined
-}
-
-/// 给 [project] 段每个字段拼出一行 toml 文本（用于 upsert）。
-fn build_project_field_lines(project: &crate::model::ProjectManagementConfig) -> std::collections::HashMap<&'static str, String> {
-    let mut m = std::collections::HashMap::new();
-    m.insert("last_project", format!("last_project = \"{}\"", escape_toml_string(&project.last_project)));
-    let opened = project.opened_projects.iter()
-        .map(|s| format!("\"{}\"", escape_toml_string(s)))
-        .collect::<Vec<_>>().join(", ");
-    m.insert("opened_projects", format!("opened_projects = [{}]", opened));
-    m.insert("project_sort", format!("project_sort = \"{}\"", escape_toml_string(project.project_sort.as_str())));
-    let order = project.project_order.iter()
-        .map(|s| format!("\"{}\"", escape_toml_string(s)))
-        .collect::<Vec<_>>().join(", ");
-    m.insert("project_order", format!("project_order = [{}]", order));
-    m
-}
-
-fn escape_toml_string(s: &str) -> String {
-    s.replace('\\', "\\\\").replace('"', "\\\"")
-}
-
-/// 将 GlobalConfig 的 [ui], [export], [separators] 三个段写回 tablet.toml。
-/// 保留 [project] 段和文件中的注释、空行、其它段。
-pub fn persist_global_config_sections(
-    workdir: &Path,
-    global_config: &crate::model::GlobalConfig,
-) -> Result<()> {
-    let path = workdir.join(crate::CONFIG_FILE);
-    let original = std::fs::read_to_string(&path).unwrap_or_default();
-
-    let updated = upsert_global_sections(&original, global_config)?;
-    std::fs::write(&path, updated)?;
-    Ok(())
-}
-
-/// 将 [ui], [export], [separators] 三个段 upsert 到 toml 文本中。
-///
-/// 策略：保留 `original` 中第一个 `[export]` 之前的全部文本（banner + `[project]`
-/// 及其注释、空行），之后的三段用内置注释模板（`EXPORT/UI/SEPARATORS_SECTION_BLOCK`，
-/// 即 `DEFAULT_CONFIG` 的尾部）整体重建、仅替换叶子值。因此：
-/// - 输出永远只有一份、规范点分表头、三段注释齐全；
-/// - `[project]` 与 banner 逐字保留；
-/// - 旧版保存留下的重复/裸子段在下次保存时被整体清掉（自愈）。
-pub fn upsert_global_sections(
-    original: &str,
-    global_config: &crate::model::GlobalConfig,
-) -> Result<String> {
-    // 1) banner + [project]（第一个 [export] 之前）逐字保留
-    let prefix = split_prefix_before_export(original);
-
-    // 2) 三段尾部 = 注释模板骨架 + 运行时叶子值
-    let tail = render_global_sections(global_config)?;
-
-    let mut result = prefix;
-    if !result.is_empty() && !result.ends_with('\n') {
-        result.push('\n');
-    }
-    result.push_str(&tail);
-    Ok(result)
-}
-
-/// 返回 `original` 中第一个整行 `[export]` 之前的文本（不含该行）。
-/// 找不到 `[export]`（如旧版本只有 [project]）则整份保留，三段会追加到末尾。
-fn split_prefix_before_export(original: &str) -> String {
-    let mut prefix = String::new();
-    for line in original.lines() {
-        if line.trim() == "[export]" {
-            break;
-        }
-        prefix.push_str(line);
-        prefix.push('\n');
-    }
-    prefix
-}
-
-/// 用三段注释模板（`EXPORT`/`UI`/`SEPARATORS`_SECTION_BLOCK）重建 `[export]→文件尾`，
-/// 把每个 `key = <默认值>` 叶子替换成 `global_config` 里的运行时值。
-/// cfg 中为 None 的组 / 缺省字段不替换 → 保留模板默认（与加载时缺省语义一致）。
-fn render_global_sections(global_config: &crate::model::GlobalConfig) -> Result<String> {
-    const SECTIONS_SKELETON: &str = const_concat!(
-        EXPORT_SECTION_BLOCK,
-        UI_SECTION_BLOCK,
-        SEPARATORS_BLOCK,
-    );
-
-    // 各组序列化为 toml::Value；表路径段与模板表头逐字对应
-    let export_v = global_config
-        .export
-        .as_ref()
-        .map(|e| toml::Value::try_from(e))
-        .transpose()?;
-    let ui_v = global_config
-        .ui
-        .as_ref()
-        .map(|u| toml::Value::try_from(u))
-        .transpose()?;
-    let sep_v = toml::Value::try_from(&global_config.separators)?;
-
-    let mut out: Vec<String> = Vec::new();
-    let mut header: Vec<String> = Vec::new(); // 当前表路径，如 ["export","server","java"]
-
-    for line in SECTIONS_SKELETON.lines() {
-        let trimmed = line.trim();
-        // 表头行：更新当前表路径
-        if trimmed.starts_with('[') && trimmed.ends_with(']') {
-            header = trimmed[1..trimmed.len() - 1]
-                .split('.')
-                .map(|s| s.trim().to_string())
-                .collect();
-            out.push(line.to_string());
-            continue;
-        }
-        // 赋值行：`key = <默认值>`；注释/空行原样保留
-        if !trimmed.starts_with('#') {
-            if let Some(eq) = line.find('=') {
-                let key = line[..eq].trim();
-                if is_plain_toml_key(key) {
-                    let group = match header.first().map(String::as_str) {
-                        Some("export") => export_v.as_ref(),
-                        Some("ui") => ui_v.as_ref(),
-                        Some("separators") => Some(&sep_v),
-                        _ => None,
-                    };
-                    if let Some(gv) = group {
-                        if let Some(leaf) = lookup(gv, &header[1..], key) {
-                            out.push(format!("{} = {}", key, inline_toml(leaf)?));
-                            continue;
-                        }
-                    }
-                }
-            }
-        }
-        out.push(line.to_string());
-    }
-
-    let mut text = out.join("\n");
-    if !text.ends_with('\n') {
-        text.push('\n');
-    }
-    Ok(text)
-}
-
-/// 判断是否为普通 bare key（模板与 struct 字段名均为裸键）。
-fn is_plain_toml_key(s: &str) -> bool {
-    !s.is_empty() && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
-}
-
-/// 在 group 的 toml::Value 里沿相对路径 `rel` 逐级下钻取表，再取 `key` 的叶子值。
-/// 路径段与 TOML 表头逐字一致（含 PascalCase 的 [separators.Map] → rel ["Map"]）。
-fn lookup<'a>(v: &'a toml::Value, rel: &[String], key: &str) -> Option<&'a toml::Value> {
-    let mut cur = v;
-    for seg in rel {
-        cur = cur.as_table()?.get(seg)?;
-    }
-    cur.as_table()?.get(key)
-}
-
-/// 把叶子 toml::Value 渲染成与 serde 一致的 TOML 内联文本（字符串带引号、
-/// 反斜杠会转义）。用「单键表」序列化再裁掉 `v = ` 前缀，保证格式与
-/// `toml::to_string_pretty(&struct)` 完全一致。
-fn inline_toml(v: &toml::Value) -> Result<String> {
-    let mut m = toml::map::Map::new();
-    m.insert("v".to_string(), v.clone());
-    let s = toml::to_string_pretty(&toml::Value::Table(m))?;
-    Ok(s.strip_prefix("v = ").unwrap_or(&s).trim_end().to_string())
-}
 
 fn load_groups_in(data_dir: &Path) -> Result<Vec<Group>> {
     let mut groups = Vec::new();
@@ -1120,85 +580,21 @@ mod tests {
     }
 
     #[test]
-    fn upsert_project_config_keeps_section_header() {
-        let original = "[project]\nname = \"x\"\n\n[ui]\nlog_level = \"debug\"\n";
-        let project = ProjectManagementConfig {
-            last_project: "p1".to_string(),
-            opened_projects: Vec::new(),
-            project_sort: crate::enums::ProjectSort::default(),
-            project_order: Vec::new(),
-        };
-        let result = upsert_project_config_section(original, &project);
-        assert!(result.contains("[project]"));
-        assert!(result.contains("last_project = \"p1\""));
-        assert!(result.contains("[ui]"));
-        assert!(result.contains("log_level"));
+    fn default_global_config_serde_roundtrip() {
+        // 默认配置 serde 整写后应能原样解析回默认值（取代旧“注释模板 vs struct 一致”校验）。
+        let def = GlobalConfig::default();
+        let txt = serialize_global_config(&def).expect("serialize");
+        let from_toml: GlobalConfig = toml::from_str(&txt).expect("parse");
+
+        assert_eq!(from_toml.project_management, def.project_management, "[project] 段不一致");
+        assert_eq!(from_toml.export, def.export, "[export] 段不一致");
+        assert_eq!(from_toml.ui, def.ui, "[ui] 段不一致");
+        assert_eq!(from_toml.separators, def.separators, "[separators] 段不一致");
     }
 
-    #[test]
-    fn upsert_project_config_replaces_existing_last_project() {
-        let original = "[project]\nname = \"x\"\nlast_project = \"old\"\n";
-        let project = ProjectManagementConfig {
-            last_project: "new".to_string(),
-            opened_projects: Vec::new(),
-            project_sort: crate::enums::ProjectSort::default(),
-            project_order: Vec::new(),
-        };
-        let result = upsert_project_config_section(original, &project);
-        assert!(result.contains("last_project = \"new\""));
-        assert!(!result.contains("last_project = \"old\""));
-    }
-
-    #[test]
-    fn upsert_project_config_inserts_when_missing() {
-        let original = "[ui]\nlog_level = \"debug\"\n";
-        let project = ProjectManagementConfig {
-            last_project: "p1".to_string(),
-            opened_projects: Vec::new(),
-            project_sort: crate::enums::ProjectSort::default(),
-            project_order: Vec::new(),
-        };
-        let result = upsert_project_config_section(original, &project);
-        assert!(result.starts_with("[project]"));
-        assert!(result.contains("last_project = \"p1\""));
-        assert!(result.contains("[ui]"));
-    }
-
-    #[test]
-    fn upsert_project_config_persists_opened_and_order() {
-        let original = "[project]\nname = \"x\"\nlast_project = \"\"\n";
-        let project = ProjectManagementConfig {
-            last_project: "p1".to_string(),
-            opened_projects: vec!["p1".to_string(), "p2".to_string()],
-            project_sort: crate::enums::ProjectSort::Manual,
-            project_order: vec!["p2".to_string(), "p1".to_string()],
-        };
-        let result = upsert_project_config_section(original, &project);
-        assert!(result.contains("opened_projects = [\"p1\", \"p2\"]"));
-        assert!(result.contains("project_sort = \"manual\""));
-        assert!(result.contains("project_order = [\"p2\", \"p1\"]"));
-    }
-
-    #[test]
-    fn default_config_template_matches_default_struct() {
-        // GlobalConfig::default() 应与 DEFAULT_CONFIG 反序列化结果一致
-        let from_struct = GlobalConfig::default();
-        let from_toml: GlobalConfig = toml::from_str(DEFAULT_CONFIG)
-            .expect("DEFAULT_CONFIG 应该能成功反序列化为 GlobalConfig");
-
-        assert_eq!(from_struct.project_management, from_toml.project_management,
-            "[project] 段默认值不匹配");
-        assert_eq!(from_struct.export, from_toml.export,
-            "[export] 段默认值不匹配");
-        assert_eq!(from_struct.ui, from_toml.ui,
-            "[ui] 段默认值不匹配");
-        assert_eq!(from_struct.separators, from_toml.separators,
-            "[separators] 段默认值不匹配");
-    }
-
-    /// 在默认配置基础上改三处值，模拟用户在「全局设置」改过设置。
+    /// 在默认配置基础上改多处值，模拟用户在「全局设置 / 项目布局」改过的状态。
     fn modified_global_config() -> GlobalConfig {
-        let mut cfg: GlobalConfig = toml::from_str(DEFAULT_CONFIG).expect("默认模板解析");
+        let mut cfg = GlobalConfig::default();
         cfg.ui.as_mut().unwrap().show_meta_id = true;
         cfg.export
             .as_mut()
@@ -1211,112 +607,69 @@ mod tests {
             .unwrap()
             .package = Some("com.x".to_string());
         cfg.separators.tuple2 = "|".to_string();
+        // project 布局也放非空值，验证数组单行渲染与整写覆盖
+        cfg.project_management.last_project = "p1".to_string();
+        cfg.project_management.opened_projects = vec!["p1".to_string(), "p2".to_string()];
+        cfg.project_management.project_sort = crate::enums::ProjectSort::Manual;
+        cfg.project_management.project_order = vec!["p2".to_string(), "p1".to_string()];
         cfg
     }
 
     #[test]
-    fn upsert_global_sections_keeps_comments_and_roundtrips() {
-        // 回归：旧实现把三段序列化成「文档根」，子段丢前缀、旧块删不掉导致重复，
-        // 每次保存翻倍。新实现应从注释模板重建并只替换叶子值。
+    fn write_global_config_round_trip_and_idempotent() {
+        // 整文件写入 = serde(GlobalConfig)：规范点分表头、单份、无注释、幂等。
         let cfg = modified_global_config();
-        let out = upsert_global_sections(DEFAULT_CONFIG, &cfg).expect("upsert");
+        let txt = serialize_global_config(&cfg).expect("serialize");
 
-        // 三段注释完整保留
-        assert!(out.contains("# 导出 JSON 时空值表达方式:"), "export 注释丢失");
-        assert!(out.contains("# 点击空白区域时自动保存当前编辑"), "ui 注释丢失");
-        assert!(out.contains("# 引用选择弹窗对 Table 的列展示策略："), "ui.ref_picker 注释丢失");
-        // banner 与 [project]（含注释）逐字保留
-        assert!(out.contains("tablet 工作区配置"), "banner 丢失");
-        assert!(out.contains("last_project"), "[project] 段丢失");
-
-        // 值已更新
-        assert!(out.contains("show_meta_id = true"), "show_meta_id 未写入");
-        assert!(out.contains("Tuple2 = \"|\""), "Tuple2 分隔符未写入");
-        assert!(out.contains("package = \"com.x\""), "java.package 未写入");
-        assert!(!out.contains("package = \"com.game.config\""), "java.package 旧值残留");
-
-        // 每个规范表头恰好出现一次（按“行首表头”锚定，banner 注释里的 [xxx] 字样不计入）
-        let body = format!("\n{}", out);
-        for h in [
-            "[export]",
-            "[export.json]",
-            "[export.server.java]",
-            "[export.client.lua]",
-            "[ui]",
-            "[ui.ref_picker]",
-            "[separators]",
-            "[separators.Map]",
-            "[separators.Map_List]",
-        ] {
-            let needle = format!("\n{}", h);
-            assert_eq!(body.matches(&needle).count(), 1, "表头 {} 出现次数 != 1", h);
+        // 无任何 # 注释
+        assert!(!txt.lines().any(|l| l.trim_start().starts_with('#')), "整写不应再输出注释");
+        // 各规范表头恰好出现一次
+        let body = format!("\n{}", txt);
+        for h in ["[project]", "[export]", "[export.json]", "[export.server.java]",
+                  "[ui]", "[ui.ref_picker]", "[separators]", "[separators.Map]"] {
+            assert_eq!(body.matches(&format!("\n{}", h)).count(), 1, "表头 {} 出现次数 != 1", h);
         }
-        // 不出现旧 bug 产生的裸（无分组前缀）子段
-        assert!(!out.contains("\n[json]"), "出现裸 [json]");
-        assert!(!out.contains("\n[server]"), "出现裸 [server]");
-        assert!(!out.contains("\n[Map]"), "出现裸 [Map]");
-        assert!(!out.contains("\n[ref_picker]"), "出现裸 [ref_picker]");
+        // 不出现裸（无分组前缀）子段
+        assert!(!txt.contains("\n[json]"), "出现裸 [json]");
+        assert!(!txt.contains("\n[Map]"), "出现裸 [Map]");
+        // 数组单行渲染
+        assert!(txt.contains("opened_projects = [\"p1\", \"p2\"]"), "opened_projects 应单行: {}", txt);
+        assert!(txt.contains("project_order = [\"p2\", \"p1\"]"), "project_order 应单行");
+        assert!(txt.contains("project_sort = \"manual\""));
 
-        // 反序列化往返：值与 cfg 完全一致
-        let reparsed: GlobalConfig = toml::from_str(&out).expect("输出应可解析");
+        // 往返解析一致
+        let reparsed: GlobalConfig = toml::from_str(&txt).expect("整写文本应可解析");
         assert_eq!(reparsed.project_management, cfg.project_management);
         assert_eq!(reparsed.export, cfg.export);
         assert_eq!(reparsed.ui, cfg.ui);
         assert_eq!(reparsed.separators, cfg.separators);
+
+        // 幂等：同 cfg 再次序列化文本不变
+        assert_eq!(txt, serialize_global_config(&cfg).unwrap(), "整写应幂等");
     }
 
     #[test]
-    fn upsert_global_sections_idempotent() {
-        // 对同一配置连续保存不应再翻倍 / 再变化。
-        let cfg = modified_global_config();
-        let once = upsert_global_sections(DEFAULT_CONFIG, &cfg).expect("upsert#1");
-        let twice = upsert_global_sections(&once, &cfg).expect("upsert#2");
-        assert_eq!(once, twice);
-    }
-
-    #[test]
-    fn upsert_global_sections_cleans_old_duplicated_file() {
-        // 复刻旧 bug 留下的「可解析但脏」形态：在 [export] 后混入一份裸子段，
-        // 与规范 [export.*] 并存 → 整体重建后应清干净并回到默认模板原文。
-        let mut polluted = String::new();
-        for line in DEFAULT_CONFIG.lines() {
-            polluted.push_str(line);
-            polluted.push('\n');
-            if line.trim() == "[export]" {
-                polluted.push_str("\n[json]\nempty_as = \"null\"\n\n[xml]\nempty_as = \"empty\"\n\n");
-            }
-        }
-        let cfg: GlobalConfig = toml::from_str(DEFAULT_CONFIG).unwrap();
-        let cleaned = upsert_global_sections(&polluted, &cfg).expect("upsert");
-
-        assert!(!cleaned.contains("\n[json]"), "裸 [json] 未清掉");
-        assert_eq!(cleaned.matches("[export.json]").count(), 1);
-        let reparsed: GlobalConfig = toml::from_str(&cleaned).expect("清理后应可解析");
-        assert_eq!(reparsed.export, cfg.export);
-        assert_eq!(reparsed.ui, cfg.ui);
-        assert_eq!(reparsed.separators, cfg.separators);
-        assert_eq!(reparsed.project_management, cfg.project_management);
-    }
-
-    #[test]
-    fn persist_global_config_sections_round_trip() {
-        // 端到端：落盘、重读、值一致；二次保存文本不变。
-        let dir = unique_tmp("gs-persist");
+    fn write_global_config_overwrites_and_heals_old_file() {
+        // 整写不依赖旧文本：把一份旧注释/脏文件直接覆盖成 canonical 无注释文件。
+        let dir = unique_tmp("gs-heal");
         std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(dir.join("tablet.toml"), DEFAULT_CONFIG).unwrap();
-        let cfg = modified_global_config();
-        persist_global_config_sections(&dir, &cfg).expect("persist");
+        std::fs::write(
+            dir.join("tablet.toml"),
+            "# 旧 banner\n[project]\nlast_project = \"old\"\n\n[json]\nempty_as = \"null\"\n\n[json]\nempty_as = \"null\"\n",
+        ).unwrap();
 
-        let text = std::fs::read_to_string(dir.join("tablet.toml")).unwrap();
-        let reparsed: GlobalConfig = toml::from_str(&text).expect("文件应可解析");
-        assert_eq!(reparsed.project_management, cfg.project_management);
+        let mut cfg = GlobalConfig::default();
+        cfg.project_management.last_project = "p9".to_string();
+        write_global_config(&dir, &cfg).expect("write");
+
+        let txt = std::fs::read_to_string(dir.join("tablet.toml")).unwrap();
+        let reparsed: GlobalConfig = toml::from_str(&txt).expect("清理后应可解析");
+        assert_eq!(reparsed.project_management.last_project, "p9");
+        assert!(!txt.contains("# 旧 banner"), "注释应被清除");
+        assert!(!txt.contains("\n[json]"), "裸/重复子段应被清除");
         assert_eq!(reparsed.export, cfg.export);
         assert_eq!(reparsed.ui, cfg.ui);
         assert_eq!(reparsed.separators, cfg.separators);
-
-        let again = upsert_global_sections(&text, &cfg).expect("再次保存");
-        assert_eq!(again, text, "二次保存文本发生变化/翻倍");
-
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -1527,41 +880,72 @@ mod tests {
     }
 
     #[test]
-    fn persist_workspace_state_round_trip() {
+    fn engine_persist_global_config_syncs_project() {
         let dir = unique_tmp("ws_persist");
         write_project(&dir, "p1", "1");
         write_project(&dir, "p2", "2");
         std::fs::write(
             dir.join("tablet.toml"),
-            "[project]\nname = \"my-game\"\nlast_project = \"p1\"\n",
+            "[project]\nname = \"my-game\"\nlast_project = \"p1\"\n\n[ui]\nshow_meta_id = false\n",
         ).unwrap();
 
         let (mut engine, _) = load_workspace(&dir).expect("load");
         engine.open_project("p2").unwrap();
         engine.set_active_by_id("p2");
-        persist_workspace_state(&engine, crate::enums::ProjectSort::Name, &["p2".to_string(), "p1".to_string()])
+        // 模拟全局设置也改过一处 ui
+        engine.global_config.ui.as_mut().unwrap().show_meta_id = true;
+        engine
+            .persist_global_config(crate::enums::ProjectSort::Name, &["p2".to_string(), "p1".to_string()])
             .expect("persist");
 
-        // re-load
+        // 内存 project_management 已回写（内存=盘）
+        assert_eq!(engine.global_config.project_management.last_project, "p2");
+        assert_eq!(engine.global_config.project_management.project_sort, crate::enums::ProjectSort::Name);
+
+        // re-load：四段都在、值一致
         let (engine2, _) = load_workspace(&dir).expect("reload");
         let opened = engine2.opened_ids();
         assert!(opened.contains(&"p1".to_string()));
         assert!(opened.contains(&"p2".to_string()));
         assert_eq!(engine2.active_project_id(), Some("p2"));
+        assert!(engine2.global_config.ui.as_ref().unwrap().show_meta_id, "ui 改动应被整写保留");
 
-        // toml 里 sort/order 已写入
+        // 文本层：无注释、sort/order/opened 单行
         let txt = std::fs::read_to_string(dir.join("tablet.toml")).unwrap();
+        assert!(!txt.lines().any(|l| l.trim_start().starts_with('#')), "文件不应带注释");
         assert!(txt.contains("project_sort = \"name\""));
         assert!(txt.contains("project_order = [\"p2\", \"p1\"]"));
-        // opened_projects 顺序按打开顺序：先 p1（last_project），再 open p2
         assert!(txt.contains("opened_projects = [\"p1\", \"p2\"]"));
         let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
+    fn reload_adopts_global_config() {
+        // reload() 应采纳磁盘上新解析的全局配置（含默认分隔符），避免 stale 副本。
+        let dir = unique_tmp("reload_cfg");
+        write_project(&dir, "a", "A");
+        std::fs::write(
+            dir.join("tablet.toml"),
+            "[project]\nlast_project = \"a\"\n\n[ui]\nshow_meta_id = true\n",
+        ).unwrap();
+
+        let (mut engine, _) = load_workspace(&dir).expect("load");
+        // 把内存改成与磁盘不同，模拟 stale
+        engine.global_config.ui.as_mut().unwrap().show_meta_id = false;
+        engine.reload();
+        assert!(
+            engine.global_config.ui.as_ref().unwrap().show_meta_id,
+            "reload 后应采纳磁盘 ui 配置（show_meta_id=true）"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn default_config_parses_as_global_config() {
-        let cfg: GlobalConfig = toml::from_str(DEFAULT_CONFIG)
-            .expect("DEFAULT_CONFIG must parse as GlobalConfig");
+        // 默认 GlobalConfig 整写出的文本应能解析出全部默认 [export] 子段
+        let txt = serialize_global_config(&GlobalConfig::default()).expect("serialize default");
+        let cfg: GlobalConfig = toml::from_str(&txt)
+            .expect("serialized default must parse as GlobalConfig");
         let export = cfg.export.expect("[export] present");
         let server = export.server.expect("[export.server] present");
         // 服务端全部 5 项可解析
@@ -1596,25 +980,22 @@ mod tests {
     }
 
     #[test]
-    fn default_project_toml_template_parses_as_workspace_config() {
-        // 项目级模板仅含 [export] 段——[ui] 是工作区级，[project] / [separators] 同。
-        let txt = default_project_toml_template();
-        let _: GlobalConfig = toml::from_str(txt)
-            .expect("project.toml template must parse as GlobalConfig");
-        // 不应出现 [project] / [ui] / [separators] 段（顶部 banner 注释里允许字面量出现，这里只看真段头）
+    fn default_project_toml_text_is_comment_free_export_only() {
+        // 项目级默认 toml 仅含 [export] 段、无注释——[ui]/[project]/[separators] 都是工作区级。
+        let txt = default_project_toml_text().expect("text");
+        let _: GlobalConfig = toml::from_str(&txt)
+            .expect("project.toml default must parse as GlobalConfig");
+        assert!(!txt.lines().any(|l| l.trim_start().starts_with('#')), "project.toml 不应带注释");
         assert!(!txt.lines().any(|l| l.trim() == "[project]"), "项目级 toml 不应有 [project] 段");
         assert!(!txt.lines().any(|l| l.trim() == "[ui]"), "项目级 toml 不应有 [ui] 段（工作区级）");
         assert!(!txt.lines().any(|l| l.trim() == "[separators]"), "项目级 toml 不应有 [separators] 段");
         // [export] 全量段都在
-        assert!(txt.contains("[export.server.java]"));
-        assert!(txt.contains("[export.server.go]"));
-        assert!(txt.contains("[export.server.cpp]"));
-        assert!(txt.contains("[export.server.csharp_dotnet]"));
-        assert!(txt.contains("[export.server.typescript]"));
-        assert!(txt.contains("[export.client.lua]"));
-        assert!(txt.contains("[export.client.gdscript]"));
-        assert!(txt.contains("[export.client.typescript]"));
-        assert!(txt.contains("[export.client.csharp_unity]"));
-        assert!(txt.contains("[export.client.csharp_godot]"));
+        for h in ["[export.json]", "[export.xml]", "[export.server]",
+                  "[export.server.java]", "[export.server.go]", "[export.server.cpp]",
+                  "[export.server.csharp_dotnet]", "[export.server.typescript]",
+                  "[export.client.lua]", "[export.client.gdscript]", "[export.client.typescript]",
+                  "[export.client.csharp_unity]", "[export.client.csharp_godot]"] {
+            assert!(txt.contains(h), "缺少 {}", h);
+        }
     }
 }

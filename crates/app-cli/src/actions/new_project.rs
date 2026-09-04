@@ -51,18 +51,13 @@ pub fn run_new_project(
     if switch_after {
         let config_path = workdir.join(tablet_core::CONFIG_FILE);
         if !config_path.exists() {
-            // 用 load_project 顺手把 toml 默认值落盘
-            let _ = tablet_core::project::load_project(workdir);
+            // 用默认配置把 toml 落盘
+            tablet_core::project::write_default_global_config(workdir)?;
         }
-        let original = std::fs::read_to_string(&config_path)?;
-        let project_cfg = tablet_core::model::ProjectManagementConfig {
-            last_project: project_id.to_string(),
-            opened_projects: Vec::new(),
-            project_sort: tablet_core::enums::ProjectSort::default(),
-            project_order: Vec::new(),
-        };
-        let updated = tablet_core::project::upsert_project_config_section(&original, &project_cfg);
-        std::fs::write(&config_path, updated)?;
+        // 读现有配置，只更新 last_project —— 保留 open 集 / 排序 / 其它段（整写）
+        let (mut cfg, _fixed) = tablet_core::config_fix::load_and_fix_global_config(&config_path)?;
+        cfg.project_management.last_project = project_id.to_string();
+        tablet_core::project::write_global_config(workdir, &cfg)?;
     }
 
     Ok(NewProjectOutcome { project_root })

@@ -290,8 +290,10 @@ fn run(state: &Rc<RefCell<AppState>>) {
         st.engine.global_config.export = Some(export.clone());
         separators_changed = old_sep != sep;
 
-        // 立即写盘
-        if let Err(e) = tablet_core::project::persist_global_config_sections(&st.engine.workdir, &st.engine.global_config) {
+        // 立即整写盘：project 布局由引擎运行时重建，ui/export/separators 用刚改的内存值
+        let sort_enum = tablet_core::enums::ProjectSort::from_str(&st.project_sort).unwrap_or_default();
+        let order = st.project_order.clone();
+        if let Err(e) = st.engine.persist_global_config(sort_enum, &order) {
             st.engine.error_log(format!("[全局设置] 写入失败: {}", e));
             return;
         }

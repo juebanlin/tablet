@@ -97,14 +97,21 @@ fn save_project_files(project: &mut Project) -> (usize, usize) {
             }
         }
     }
-    // 项目首次落盘时写一份「全量带注释」的 project.toml 模板，让用户能直接看到
-    // 全部可改键。已存在则不覆盖（用户改过 / 手写过都保留）。
+    // 项目首次落盘时写一份全量 [export] 默认的 project.toml（无注释，serde 生成）。
+    // 已存在则不覆盖（用户改过 / 手写过都保留）。
     let project_toml_path = project.project_root.join(crate::project::PROJECT_TOML_FILE);
     if !project_toml_path.exists() {
-        match std::fs::write(&project_toml_path, crate::project::default_project_toml_template()) {
-            Ok(()) => count += 1,
+        match crate::project::default_project_toml_text() {
+            Ok(t) => match std::fs::write(&project_toml_path, t) {
+                Ok(()) => count += 1,
+                Err(e) => eprintln!(
+                    "warn: write project.toml failed: {} ({})",
+                    project_toml_path.display(),
+                    e
+                ),
+            },
             Err(e) => eprintln!(
-                "warn: write project.toml failed: {} ({})",
+                "warn: 生成 project.toml 内容失败: {} ({})",
                 project_toml_path.display(),
                 e
             ),
@@ -1385,6 +1392,24 @@ impl ProjectEngine {
         }
     }
 
+    /// 把「当前运行时布局」作为 `[project]` 与 engine 持有的 ui/export/separators 一起
+    /// **整写**回 `<workdir>/tablet.toml`（唯一整写入口，见 `project::write_global_config`）。
+    /// 会先用运行时重建 `project_management` 并回写内存（内存=盘）。
+    /// GUI 在 open/close/sort/delete 与全局设置保存时都走这里。
+    pub fn persist_global_config(
+        &mut self,
+        project_sort: crate::enums::ProjectSort,
+        project_order: &[String],
+    ) -> anyhow::Result<()> {
+        self.global_config.project_management = crate::model::ProjectManagementConfig {
+            last_project: self.active_project_id().unwrap_or("").to_string(),
+            opened_projects: self.opened_ids(),
+            project_sort,
+            project_order: project_order.to_vec(),
+        };
+        crate::project::write_global_config(&self.workdir, &self.global_config)
+    }
+
     pub fn reload(&mut self) {
         let workdir = self.workdir.clone();
         let last_id = self.active_project_id().map(str::to_string);
@@ -1400,6 +1425,9 @@ impl ProjectEngine {
                 self.available_projects = new_engine.available_projects;
                 self.projects = new_engine.projects;
                 self.active_idx = new_engine.active_idx;
+                // reload 后采纳新解析的全局配置与默认分隔符，避免整写/后续读用 stale 副本
+                self.global_config = new_engine.global_config;
+                self.default_separators = new_engine.default_separators;
                 self.validation_errors.clear();
                 self.ui_log(format!("重新加载完成，共 {} 个 Project / {} 个 Group", pcount, group_total));
             }
