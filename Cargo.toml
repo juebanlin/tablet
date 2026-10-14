@@ -19,4 +19,7 @@ codegen-units = 256
 opt-level = 3
 lto = "fat"
 codegen-units = 1
-strip = true
+# 保留符号表、只剥 debuginfo。崩溃日志(tablet-crash.log)里的调用栈靠符号表才能把地址
+# 翻成函数名：Linux/macOS 符号在二进制自身，windows-gnu 同样编进 exe。
+# 别改回 strip = true —— 那会连符号表一起剥掉，堆栈只剩 "stack backtrace:" 一行空壳。
+strip = "debuginfo"

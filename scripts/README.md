@@ -6,7 +6,7 @@
 
 | target | 宿主要求 | 产物 |
 |--------|--------|------|
-| `windows` | Windows | `dist/windows/{tablet,tablet-cli}.exe`（静态链 VC++ runtime） |
+| `windows` | Windows | `dist/windows/{tablet,tablet-cli}.exe`（`x86_64-pc-windows-gnu` + `crt-static`；符号表内嵌，无外挂 pdb） |
 | `windows-win7` | Windows + nightly toolchain | `dist/windows-win7/...`（Tier 3，自动装 nightly + rust-src + build-std） |
 | `linux` | Linux | `dist/linux/{tablet,tablet-cli}` |
 | `linux-cli-musl` | Linux + `musl-tools` | `dist/linux-cli-musl/tablet-cli`（仅 CLI，全静态，老 glibc / Alpine / 容器 scratch 直接跑） |

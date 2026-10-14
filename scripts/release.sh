@@ -5,7 +5,7 @@
 #   scripts/release.sh <target>
 #
 # target:
-#   windows          x86_64-pc-windows-msvc          (Tier 1, 需 Windows 宿主)
+#   windows          x86_64-pc-windows-gnu          (Tier 1, 需 Windows 宿主)
 #   windows-win7     x86_64-win7-windows-msvc        (Tier 3, 需 Windows 宿主 + nightly)
 #   linux            x86_64-unknown-linux-gnu        (Tier 1, 需 Linux 宿主)
 #   linux-cli-musl   x86_64-unknown-linux-musl       (Tier 2, 仅 tablet-cli, 静态链, 任意 Linux 可跑)
@@ -47,12 +47,27 @@ mkdir -p "$DIST_DIR"
 # ------------------------------------------------------------------
 
 build_windows() {
-    local triple="x86_64-pc-windows-msvc"
+    local triple="x86_64-pc-windows-gnu"
     local out="$DIST_DIR/windows"
     mkdir -p "$out"
 
+    # windows-gnu 的 rust-std 默认不装(宿主通常是 msvc). 该 target 自带 MinGW 运行库
+    # (rust-mingw 组件含 self-contained 的 crt/libgcc).
+    #
+    # ⚠️ 但 rustup 自带的那份 MinGW **不含 windres**, 而 build.rs 嵌 exe 图标要调它.
+    #    本机之所以能过, 是因为系统另装了 MinGW(/d/workerspace/sdk/mingw64).
+    #    CI 的 windows-latest 上有没有 windres **尚未验证**; 没有的话 build.rs 的
+    #    expect("winresource failed") 会直接中断构建(不是丢图标那么简单).
+    #    二选一待定: CI 装 MinGW, 或把 build.rs 改成缺 windres 只警告不中断.
+    rustup target add "$triple" >/dev/null
+
     echo ">>> [windows] cargo build --release --target=$triple"
-    # +crt-static: 静态链 VC++ runtime, 用户机器无需装 "VC++ 可再发行包"
+    # 为什么是 gnu 而不是 msvc:
+    #   1. 符号表直接编进 exe → 崩溃日志的调用栈自带函数名。msvc 做不到: 符号只在
+    #      外挂 pdb 里, 且无法内嵌(实测 /Z7 与 strip=none 均仍依赖 pdb).
+    #   2. 整包小 ~17MB(msvc 的 +crt-static 会把整个静态 UCRT 链进去).
+    # +crt-static: 静态链 CRT, 用户机器无需装 "VC++ 可再发行包"
+    #              (实测已消掉 VCRUNTIME140 依赖, 只剩系统 DLL).
     RUSTFLAGS="-C target-feature=+crt-static" \
         cargo build --release --target "$triple" \
             -p tablet-slint -p tablet-cli
@@ -78,10 +93,17 @@ build_windows_win7() {
     fi
 
     echo ">>> [windows-win7] cargo +nightly build --release --target=$triple"
-    # 新版 nightly 把 panic_immediate_abort 从 -Z build-std-features 提升为正式 panic 策略,
-    # 旧的 -Z build-std-features=panic_immediate_abort 已被拒绝, 现在通过 -Cpanic=immediate-abort 启用
-    # (仍然需要 -Z build-std 重编 core/std).
-    RUSTFLAGS="-C target-feature=+crt-static -Z unstable-options -C panic=immediate-abort" \
+    # 为什么 win7 保持 msvc 而不跟主 windows 包一起切 gnu:
+    #   gnu 的 +crt-static 并不会静态链掉 UCRT —— 实测 exe 仍导入 8 个 api-ms-win-crt-*,
+    #   而 UCRT 不是 Win7 自带组件(需装 KB2999226)。msvc 的 +crt-static 则是真全静态
+    #   (实测 0 个 CRT 外部依赖)。这个包存在的唯一理由就是在老 Win7 上一定能跑, 不值得
+    #   为"崩溃堆栈带函数名"去赌目标机器装没装那个更新。要调用链就随包发 pdb(见 @04).
+    # 这里曾经用 -C panic=immediate-abort 省体积, 已弃用: 该策略按设计**既不调用
+    # panic hook、也不格式化 panic 消息**(rust-lang/rust#147286), 会让 win7 崩溃时
+    # 完全无声、tablet-crash.log 也拿不到记录。改回 panic=abort(实测 abort 仍走 hook、
+    # 仍打印消息), 代价是二进制变大。仍然 -Z build-std 重编 core/std (Tier 3 无预编译 std),
+    # panic_abort 版 std 比 unwinding 版小, 配合 abort 仍是对的.
+    RUSTFLAGS="-C target-feature=+crt-static -C panic=abort" \
         cargo +nightly build --release \
             -Z build-std=std,panic_abort \
             --target "$triple" \

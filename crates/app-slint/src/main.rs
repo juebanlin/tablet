@@ -30,7 +30,7 @@ mod dialogs;
 mod excel_bridge;
 
 use std::cell::RefCell;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use log::info;
 use simplelog::*;
@@ -63,6 +63,47 @@ fn classify(args: &[String]) -> Route {
         args.get(pos + 1).map(PathBuf::from)
     });
     Route::Gui { workdir }
+}
+
+/// 安装 panic hook：把 panic（消息 + 位置 + 调用栈）追加到 workdir 下的崩溃日志。
+///
+/// 为什么必须落到文件：
+///   - GUI 分支启动时已 `FreeConsole()`，双击启动时 stderr 无人接收 —— panic 会变成
+///     完全无声的"闪退"；只有 stderr 是管道/文件（cargo run / IDE / 重定向）时才看得到。
+///   - 单独一个文件而不是 tablet.log：那份日志每次启动 `File::create` 截断，崩溃记录
+///     会被下次启动清掉。
+/// 为什么不顺手 `log::error!`：hook 可能正是在持日志锁时触发，重入会死锁。
+///
+/// 调用栈要想有函数名，release 包必须保留符号表（见 `[profile.release] strip`）；
+/// 注意 MSVC 目标的符号只能来自外挂 pdb（无法内嵌），Windows 包因此走 windows-gnu。
+fn install_crash_hook(workdir: &Path, time_offset: time::UtcOffset) {
+    let path = workdir.join(tablet_core::CRASH_LOG_FILE);
+    let file = match std::fs::OpenOptions::new().create(true).append(true).open(&path) {
+        Ok(f) => f,
+        Err(e) => {
+            log::warn!("崩溃日志无法创建 {}: {}", path.display(), e);
+            return;
+        }
+    };
+    let default_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        use std::io::Write;
+        let stamp = time::OffsetDateTime::now_utc()
+            .to_offset(time_offset)
+            .format(time::macros::format_description!(
+                "[year]-[month]-[day] [hour]:[minute]:[second]"))
+            .unwrap_or_default();
+        let thread = std::thread::current();
+        let mut out = &file;
+        let _ = writeln!(out, "===== [{stamp}] panic in thread '{}' =====",
+            thread.name().unwrap_or("<unnamed>"));
+        let _ = writeln!(out, "{info}");
+        let _ = writeln!(out, "{}", std::backtrace::Backtrace::force_capture());
+        let _ = out.flush();
+        // 照旧走默认 hook：开发期在终端 / IDE 里仍能看到
+        default_hook(info);
+    }));
+    log::info!("崩溃日志: {}", path.display());
 }
 
 #[cfg(windows)]
@@ -177,6 +218,9 @@ fn run_gui(workdir_arg: Option<PathBuf>) -> anyhow::Result<()> {
         log_file,
     )])?;
 
+    // 日志系统就绪后、加载项目之前挂上：这样加载期 panic 也能留下记录
+    install_crash_hook(&workdir, time_offset);
+
     let (app_state_inner, config_fixed) = AppState::load(&workdir)?;
     let app_state = Rc::new(RefCell::new(app_state_inner));
 
@@ -281,5 +325,33 @@ fn is_process_alive(pid: u32) -> bool {
             .status()
             .map(|s| s.success())
             .unwrap_or(false)
+    }
+}
+
+#[cfg(test)]
+mod crash_hook_tests {
+    use super::*;
+
+    /// 崩溃日志必须真的落盘，且是 append（不截断上一次的崩溃）。
+    #[test]
+    fn panic_hook_appends_to_crash_log() {
+        let dir = std::env::temp_dir().join(format!("tablet-crash-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        install_crash_hook(&dir, time::UtcOffset::UTC);
+
+        // 第一次崩溃
+        let _ = std::panic::catch_unwind(|| panic!("smoke-boom-{}", 1));
+        // 第二次崩溃：必须追加，不能覆盖
+        let _ = std::panic::catch_unwind(|| panic!("smoke-boom-{}", 2));
+
+        let text = std::fs::read_to_string(dir.join(tablet_core::CRASH_LOG_FILE)).unwrap();
+        assert!(text.contains("smoke-boom-1"), "第一次崩溃没写进日志:\n{text}");
+        assert!(text.contains("smoke-boom-2"), "第二次崩溃没写进日志(append 失效?):\n{text}");
+        assert!(text.contains("panic in thread"), "缺时间戳/线程头:\n{text}");
+        assert!(text.contains("main.rs"), "缺 panic 位置(file:line):\n{text}");
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
