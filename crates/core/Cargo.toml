@@ -13,6 +13,12 @@ log = "0.4"
 chrono = "0.4"
 encoding_rs = "0.8"
 pinyin = "0.10"
+
+# ── Excel（xlsx）：三个库各司其职，均为各自领域成熟选择，勿轻易合并/替换 ──
+# 只写：新建带样式表头 / 冻结窗格 / 工作表保护的 xlsx。
+# 用于 excel.rs（导出一张/一组表）与 excel_sync.rs::write_fresh_xlsx（无既有文件时新建）。
 rust_xlsxwriter = "0.95"
+# 只读：把策划改完的 xlsx 回读成强类型 Data，做严格表头/列数校验（excel.rs::import_xlsx_into_group）。
 calamine = "0.35"
+# 读 + 写 + 保格式：原地编辑既有 xlsx 不丢其已有样式（excel_sync.rs 同步引擎，S22 同步面板）。
 umya-spreadsheet = "3"
