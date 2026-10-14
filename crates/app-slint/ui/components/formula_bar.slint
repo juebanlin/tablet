@@ -1,5 +1,9 @@
-// 公式栏：左侧坐标 + 右侧编辑区。归属于右侧表格面板上方，与 GridArea 等宽。
-// 对应 docs/02-UI设计.md §5.3。
+// 公式栏：左侧坐标 + 右侧编辑区 + 最右展开/收起箭头。归属于右侧表格面板上方，与 GridArea 等宽。
+// 对应 docs/04-UI设计.md §5.3。
+//
+// 展开态（@04.5.3）：默认单行（Theme.row-h）；点箭头后高度变大，内容换成多行 TextEdit
+// （自动换行 + 内置滚动条），解决 Text 单元格内容过长被截断、单行编辑不便的问题。
+// `expanded` 只是 UI 局部状态（session 内记忆，不落盘）。
 //
 // 闪退坑笔记：
 //   早期写法把 TouchArea 嵌套在 `if !root.editing` 里 → clicked 触发 request-edit
@@ -9,25 +13,43 @@
 //   修法：TouchArea 提到顶层永久存在，靠 enabled 切换响应；LineEdit 用 if 切换
 //   （和 GridArea 单元格写法一致 —— cell 的 LineEdit if 切换不闪退是因为发起者
 //    是 cell TouchArea 而非编辑区里嵌套的元素）。
+//
+//   展开态的「点击进编辑」TouchArea 同理：它挂在 `if root.expanded` 下（展开后常驻），
+//   **不**挂在 `if root.editing` 下 —— request-edit 只改 editing，不销毁 expanded 分支，
+//   所以点它创建编辑用 TextEdit 是安全的。
 
 import { Theme } from "../theme.slint";
-import { LineEdit } from "std-widgets.slint";
+import { LineEdit, TextEdit } from "std-widgets.slint";
 
 export component FormulaBar inherits Rectangle {
     in property <string> coord: "";
+    /// 折叠态单行展示值：Rust 侧已单行化（只取首行 + `…`）
     in property <string> display-text: "";
+    /// 展开态多行展示值：存储真值原样（含真实换行）
+    in property <string> raw-text: "";
     in-out property <string> editing-buffer: "";
     in property <bool> editing: false;
     in property <bool> editable: false;
+
+    /// 展开态：仅 UI 局部状态（session 内记忆，不落盘）。
+    in-out property <bool> expanded: false;
+    /// 实际生效的展开态。没有选中单元格（coord 空）时强制折叠——
+    /// 否则会出现「箭头已隐藏、栏却还撑着高度、没法收回去」的死角。
+    property <bool> is-expanded: root.expanded && root.coord != "";
 
     callback request-edit();
     callback commit();
     callback cancel();
 
-    height: Theme.row-h;
+    height: root.is-expanded ? Theme.formula-expanded-h : Theme.row-h;
     background: Theme.bg-toolbar;
     border-color: Theme.border-light;
     border-width: 1px;
+    // 关键兜底：栏内内容再长也只能画在公式栏里。
+    // 这是「多行值糊掉整块表格」那个 bug 的第二道防线 —— slint 的 Text 即使 wrap: no-wrap
+    // 也会在 \n 处强制断行，而栏里没有任何纵向钳制手段（1.17 没有 maximum-line-count）。
+    // 第一道防线是 Rust 侧 one_line 把展示串压成单行（@convert::util::one_line）。
+    clip: true;
 
     HorizontalLayout {
         padding: 0;
@@ -39,55 +61,158 @@ export component FormulaBar inherits Rectangle {
             width: 48px + Theme.sp-3;
             Text {
                 x: Theme.sp-3;
+                y: root.is-expanded ? Theme.sp-2 : 0;
                 text: root.coord;
                 font-size: Theme.fs-tiny;
                 color: Theme.text-secondary;
-                vertical-alignment: center;
+                vertical-alignment: root.is-expanded ? top : center;
             }
         }
         // 分隔符
         Rectangle { width: 1px; background: Theme.border-light; }
 
-        // 编辑区：紧贴分隔符到右边框，无外部 padding/spacing
+        // ── 内容区 ──
         Rectangle {
-            // 编辑态 LineEdit：if 切换（cell 同款写法），自动获焦
-            if root.editing: LineEdit {
-                x: 0;
-                y: 0;
+            horizontal-stretch: 1;
+
+            // ── 折叠态 ──
+            // 用透明 Rectangle 包一层做分支容器（slint 的 `if` 必须挂在具体元素上，不能直接 `if x: { }`）
+            if !root.is-expanded: Rectangle {
                 width: parent.width;
                 height: parent.height;
-                text <=> root.editing-buffer;
-                init => {
-                    self.focus();
-                    self.select-all();
+
+                // 编辑态 LineEdit：if 切换（cell 同款写法），自动获焦
+                if root.editing: LineEdit {
+                    x: 0;
+                    y: 0;
+                    width: parent.width;
+                    height: parent.height;
+                    text <=> root.editing-buffer;
+                    init => {
+                        self.focus();
+                        self.select-all();
+                    }
+                    accepted(s) => { root.commit(); }
                 }
-                accepted(s) => { root.commit(); }
+                // idle 态：纯 Text 显示。picker / ReadOnly 列只读 + 显示底层 raw（@04.5.3）
+                // display-text 已由 Rust 单行化（只取首行 + …），这里再用 elide 兜住「单行但太长」
+                if !root.editing: Text {
+                    x: Theme.sp-2;
+                    width: parent.width - Theme.sp-2 - (root.editable ? Theme.sp-2 : 20px);
+                    text: root.display-text;
+                    font-size: Theme.fs-tiny;
+                    color: root.editable ? Theme.text-secondary : Theme.text-disabled;
+                    vertical-alignment: center;
+                    overflow: elide;
+                }
+                // 只读列（picker / ReadOnly）右侧挂 🔒 暗示"不可改"
+                if !root.editing && !root.editable && root.coord != "": Text {
+                    x: parent.width - Theme.sp-3 - self.width;
+                    text: "🔒";
+                    font-size: Theme.fs-tiny;
+                    color: Theme.text-disabled;
+                    vertical-alignment: center;
+                }
+                // 顶层永久 TouchArea：enabled 决定是否响应
+                // 关键：不嵌套在任何 `if` 里，clicked 触发 push_grid 也不会被销毁
+                TouchArea {
+                    x: 0;
+                    y: 0;
+                    width: parent.width;
+                    height: parent.height;
+                    enabled: root.editable && !root.editing;
+                    clicked => { root.request-edit(); }
+                }
             }
-            // idle 态：纯 Text 显示。picker / ReadOnly 列只读 + 显示底层 raw（@04.5.3），
-            // 文字弱化 + 右侧追个 🔒 暗示"不可编辑"
-            if !root.editing: Text {
-                x: Theme.sp-2;
-                text: root.display-text;
-                font-size: Theme.fs-tiny;
-                color: root.editable ? Theme.text-secondary : Theme.text-disabled;
-                vertical-alignment: center;
+
+            // ── 展开态 ──
+            if root.is-expanded: Rectangle {
+                width: parent.width;
+                height: parent.height;
+
+                // 编辑态：多行 TextEdit（回车换行 + 内置滚动条）。
+                // Enter 不再拦成提交 —— 展开态的语义就是「多行编辑」，Enter 就是换行；
+                // 保存走「点收起箭头」或「点区域外失焦」（@04.3 auto_commit_on_blur）。
+                if root.editing: TextEdit {
+                    x: 0;
+                    y: 0;
+                    width: parent.width;
+                    height: parent.height;
+                    wrap: word-wrap;
+                    font-size: Theme.fs-tiny;
+                    text <=> root.editing-buffer;
+                    init => {
+                        self.focus();
+                        self.select-all();
+                    }
+                }
+                // idle 态：只读多行预览（picker / ReadOnly 列；或 Text 列提交后仍停留在展开态）。
+                // 用 raw-text 而不是 display-text —— 展开态要看的是真实换行。
+                if !root.editing: TextEdit {
+                    x: 0;
+                    y: 0;
+                    width: parent.width;
+                    height: parent.height;
+                    read-only: true;
+                    wrap: word-wrap;
+                    font-size: Theme.fs-tiny;
+                    text: root.raw-text;
+                }
+                // 只读列 🔒：贴在展开区右上角
+                if !root.editing && !root.editable && root.coord != "": Text {
+                    x: parent.width - Theme.sp-3 - self.width;
+                    y: Theme.sp-4;
+                    text: "🔒";
+                    font-size: Theme.fs-tiny;
+                    color: Theme.text-disabled;
+                }
+                // 展开后才存在的「点击进编辑」TouchArea：常驻 expanded 分支，
+                // 不随 editing 反复创建/销毁，点它安全。
+                // picker / ReadOnly 列（editable=false）保持禁用 → 让只读 TextEdit 能正常滚动。
+                TouchArea {
+                    x: 0;
+                    y: 0;
+                    width: parent.width;
+                    height: parent.height;
+                    enabled: root.editable && !root.editing;
+                    clicked => { root.request-edit(); }
+                }
             }
-            if !root.editing && !root.editable && root.coord != "": Text {
-                x: parent.width - Theme.sp-3 - self.width;
-                text: "🔒";
-                font-size: Theme.fs-tiny;
-                color: Theme.text-disabled;
-                vertical-alignment: center;
+        }
+
+        // ── 展开 / 收起箭头 ──
+        // 字形沿用 TreeSection 展开三角那对 "▼"/"▶"（9px）——"▾"/"▸" 在本机字体里渲染成豆腐块。
+        Rectangle {
+            width: 20px;
+            visible: root.coord != "";
+            Text {
+                x: 0;
+                y: root.is-expanded ? Theme.sp-2 : 0;
+                width: parent.width;
+                text: root.expanded ? "▼" : "▶";
+                font-size: 9px;
+                color: Theme.text-secondary;
+                horizontal-alignment: center;
+                vertical-alignment: root.is-expanded ? top : center;
             }
-            // 顶层永久 TouchArea：enabled 决定是否响应
-            // 关键：不嵌套在任何 `if` 里，clicked 触发 push_grid 也不会被销毁
+            // 顶层常驻 TouchArea：只切 expanded，不动 editing → 不销毁自身
             TouchArea {
                 x: 0;
                 y: 0;
                 width: parent.width;
                 height: parent.height;
-                enabled: root.editable && !root.editing;
-                clicked => { root.request-edit(); }
+                mouse-cursor: pointer;
+                clicked => {
+                    if (root.expanded) {
+                        // 收起 = 保存：把多行编辑缓冲提交回单元格，再折回去
+                        if (root.editing) { root.commit(); }
+                        root.expanded = false;
+                    } else {
+                        root.expanded = true;
+                        // 展开即进多行编辑（picker / ReadOnly 列 request-edit 是空操作，保持只读预览）
+                        if (root.editable && !root.editing) { root.request-edit(); }
+                    }
+                }
             }
         }
     }
@@ -96,13 +221,24 @@ export component FormulaBar inherits Rectangle {
 export component FormulaBarPreview inherits Window {
     title: "FormulaBar Preview";
     width: 720px;
-    height: 60px;
+    height: 200px;
 
-    FormulaBar {
-        coord: "B3";
-        display-text: "战士";
-        editable: true;
+    VerticalLayout {
+        FormulaBar {
+            coord: "B3";
+            display-text: "战士";
+            editable: true;
+        }
+        FormulaBar {
+            coord: "C3";
+            display-text: "这是一段很长很长的描述文本，用来演示展开后自动换行 + 滚动条的效果，单元格里根本显示不下。";
+            editable: true;
+            expanded: true;
+        }
+        FormulaBar {
+            coord: "D3";
+            display-text: "1001";
+            editable: false;
+        }
     }
 }
-
-

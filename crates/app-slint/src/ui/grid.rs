@@ -181,6 +181,7 @@ pub fn push(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
     ui_h.set_formula_editing(editing_r >= 0 && editing_in_formula);
     ui_h.set_coord(snap.coord.into());
     ui_h.set_formula_display(snap.formula_display.into());
+    ui_h.set_formula_raw(snap.formula_raw.into());
     ui_h.set_formula_editable(snap.formula_editable);
     ui_h.set_selection_info(snap.selection_info.into());
     ui_h.set_hover_info(snap.hover_info.into());
@@ -203,6 +204,7 @@ fn push_selection_only(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
     ui_h.set_grid_editing_export_index(super::grid_actions::compute_editing_export_index(state, -1, -1, -1));
     ui_h.set_coord(snap.coord.into());
     ui_h.set_formula_display(snap.formula_display.into());
+    ui_h.set_formula_raw(snap.formula_raw.into());
     ui_h.set_formula_editable(snap.formula_editable);
     ui_h.set_selection_info(snap.selection_info.into());
     ui_h.set_hover_info(snap.hover_info.into());

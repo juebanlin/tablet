@@ -8,7 +8,7 @@ use slint::SharedString;
 
 use tablet_core::types::{Paradigm, TblType, TypeParam};
 
-use super::util::{cell_validation_message, col_letter, raw_cell_for, EXTRA_ROWS};
+use super::util::{cell_validation_message, col_letter, one_line, raw_cell_for, EXTRA_ROWS};
 use crate::state::{AppState, ColumnKind, GridSelection, SelectedNode};
 use crate::theme::*;
 use crate::{CellKind, DataCell, DataRow, HeaderCell};
@@ -26,8 +26,10 @@ pub struct GridSnapshot {
     pub header_kinds: Vec<Vec<ColumnKind>>,
     pub data_count: usize,
     pub coord: String,
-    /// 非编辑态公式栏显示的展示值
+    /// 非编辑态公式栏显示的展示值（已单行化：只取首行 + `…`）
     pub formula_display: String,
+    /// 当前选中 cell 的存储真值原样（含换行）。展开态公式栏用它渲染多行内容。
+    pub formula_raw: String,
     /// 当前选中 cell 是否允许编辑（Text 列且非占位行外限制）
     pub formula_editable: bool,
     pub selected_cell_row: i32,
@@ -56,6 +58,7 @@ impl GridSnapshot {
             data_count: 0,
             coord: String::new(),
             formula_display: String::new(),
+            formula_raw: String::new(),
             formula_editable: false,
             selected_cell_row: -1,
             selected_cell_col: -1,
@@ -92,13 +95,16 @@ fn enrich_selection(snap: &mut GridSnapshot, state: &AppState) {
             let kind = snap.column_kinds.get(c);
             // 公式栏只允许 Text 列编辑；picker / ReadOnly 列只读 + 显示原始存储值（@04.5.3）
             snap.formula_editable = matches!(kind, Some(ColumnKind::Text));
-            snap.formula_display = if matches!(kind, Some(ColumnKind::Text)) {
-                let raw = raw_cell_for(state, r, c);
-                if !raw.is_empty() { cell_display(state, snap, r, c, &raw) } else { String::new() }
+            // 存储真值原样：展开态公式栏渲染真实换行用
+            let raw = raw_cell_for(state, r, c);
+            // 折叠态公式栏是单行盒子 → 一律单行化（只取首行 + …），否则多行值会溢出栏外
+            snap.formula_display = one_line(&if matches!(kind, Some(ColumnKind::Text)) {
+                if raw.is_empty() { String::new() } else { cell_display(state, snap, r, c, &raw) }
             } else {
                 // picker / ReadOnly：显示底层 raw（"1001" / "cs"），不走 cell_display 翻译
-                raw_cell_for(state, r, c)
-            };
+                raw.clone()
+            });
+            snap.formula_raw = raw;
             // 单格选中时，若该格有验证错误，状态栏在坐标后追加错误信息（实时验证 UX）。
             snap.selection_info = match cell_validation_message(state, r, c) {
                 Some(msg) => format!("{} {} {}", snap.coord, WARN, msg),
@@ -196,8 +202,9 @@ fn build_table_grid(state: &AppState, group: &str, name: &str) -> GridSnapshot {
     }
     let h_err = |hi: usize, ci: usize| header_errors.contains(&(hi, ci));
 
+    // 表头 / 数据格都是固定 22px 单行盒子，展示串统一单行化（@convert::util::one_line）
     let desc_row: Vec<HeaderCell> = fields.iter().enumerate().map(|(ci, f)| HeaderCell {
-        text: SharedString::from(f.desc.clone()),
+        text: SharedString::from(one_line(&f.desc)),
         kind: CellKind::Text,
         color: color_text_primary(),
         has_error: h_err(0, ci),
@@ -219,7 +226,7 @@ fn build_table_grid(state: &AppState, group: &str, name: &str) -> GridSnapshot {
         let kind = if f.name == "id" { CellKind::ReadOnly } else { CellKind::TypeEnum };
         let color = if f.name == "id" { color_text_readonly() } else { color_text_info() };
         HeaderCell {
-            text: SharedString::from(f.tbl_type.clone()),
+            text: SharedString::from(one_line(&f.tbl_type)),
             kind,
             color,
             has_error: h_err(2, ci),
@@ -229,7 +236,7 @@ fn build_table_grid(state: &AppState, group: &str, name: &str) -> GridSnapshot {
         let kind = if f.name == "id" { CellKind::ReadOnly } else { CellKind::Text };
         let color = if f.name == "id" { color_text_readonly() } else { color_text_primary() };
         HeaderCell {
-            text: SharedString::from(f.name.clone()),
+            text: SharedString::from(one_line(&f.name)),
             kind,
             color,
             has_error: h_err(3, ci),
@@ -294,7 +301,7 @@ fn build_table_grid(state: &AppState, group: &str, name: &str) -> GridSnapshot {
             let is_empty_ref = ref_targets[c].is_some() && raw.is_empty();
             let display = display_for_table_cell(state, &ref_maps, &ref_targets[c], &raw);
             DataCell {
-                text: SharedString::from(display),
+                text: SharedString::from(one_line(&display)),
                 has_error,
                 is_empty_ref,
             }
@@ -360,7 +367,7 @@ fn build_constant_grid(state: &AppState, group: &str, name: &str) -> GridSnapsho
                     plain_cell(state, group, name, r, 0, &e.name),
                     plain_cell(state, group, name, r, 1, &e.tbl_type),
                     DataCell {
-                        text: SharedString::from(value_disp),
+                        text: SharedString::from(one_line(&value_disp)),
                         has_error: value_has_error,
                         is_empty_ref: value_is_empty_ref,
                     },
@@ -458,7 +465,7 @@ fn empty_cell(state: &AppState, group: &str, name: &str, r: usize, c: usize) -> 
 fn plain_cell(state: &AppState, group: &str, name: &str, r: usize, c: usize, text: &str) -> DataCell {
     let has_error = state.engine.has_active_cell_error(group, name, r, c);
     DataCell {
-        text: SharedString::from(text),
+        text: SharedString::from(one_line(text)),
         has_error,
         is_empty_ref: false,
     }
@@ -559,4 +566,97 @@ fn display_for_table_cell(
         return raw.split(sep).map(|s| lookup(s)).collect::<Vec<_>>().join(sep);
     }
     lookup(raw)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::build_grid;
+    use crate::state::{AppState, GridSelection, SelectedNode};
+
+    /// 建一个临时仓库，里面有一张表，desc（txt 列）带真实换行 / 制表符。
+    /// 返回 (临时目录, AppState)。目录保留到调用方 drop 后手动清理。
+    fn workspace_with_multiline_cell() -> (std::path::PathBuf, AppState) {
+        let dir = std::env::temp_dir().join(format!("tablet-oneline-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let proj = dir.join("projects").join("demo");
+        std::fs::create_dir_all(proj.join("config").join("enums")).unwrap();
+        std::fs::create_dir_all(proj.join("config").join("hero")).unwrap();
+
+        std::fs::write(proj.join("project.tblschema"), "\
+#!tblschema v1
+# @meta id: demo
+
+[enums/HeroType] enum
+
+[hero/HeroBase] table
+id | int | cs | 英雄 ID
+name | str | cs | 名称
+desc | txt | cs | 描述
+").unwrap();
+        std::fs::write(proj.join("config").join("enums").join("HeroType.tbl"), "\
+#!tbl v2
+#mode enum
+---
+1|WARRIOR|战士
+").unwrap();
+        // desc 写成转义形式：\n = 换行，\t = 制表符（@tbl_str）
+        std::fs::write(proj.join("config").join("hero").join("HeroBase.tbl"), "\
+#!tbl v3
+#mode table
+---
+
+@field id
+  desc:英雄 ID
+  export:cs
+  type:int
+
+@field name
+  desc:名称
+  export:cs
+  type:str
+
+@field desc
+  desc:描述
+  export:cs
+  type:txt
+
+[1001]
+  name:阿尔托利亚
+  desc:第一行\\n第二行\\t尾段
+").unwrap();
+
+        let (mut state, _) = AppState::load(&dir).unwrap();
+        state.selected = Some(SelectedNode::Table {
+            project_id: "demo".into(),
+            group: "hero".into(),
+            name: "HeroBase".into(),
+        });
+        (dir, state)
+    }
+
+    #[test]
+    fn multiline_cell_is_flattened_for_display_but_kept_raw() {
+        let (dir, mut state) = workspace_with_multiline_cell();
+
+        // 选中 desc 列那一格（id/name/desc → 第 2 列）
+        state.grid_selection = GridSelection::Cell(0, 2);
+        let snap = build_grid(&state);
+
+        let cell = slint::Model::row_data(&snap.data_rows[0].cells, 2).unwrap().text.to_string();
+        assert!(!cell.contains('\n') && !cell.contains('\r'), "数据格展示串残留换行: {cell:?}");
+        assert_eq!(cell, "第一行…", "数据格应只取首行 + …");
+
+        // 折叠公式栏：同样只取首行
+        assert!(!snap.formula_display.contains('\n'), "公式栏展示串残留换行");
+        assert_eq!(snap.formula_display, "第一行…");
+
+        // 展开公式栏 / 编辑缓冲读的 raw：换行必须原样保留（不能丢精度）
+        assert_eq!(snap.formula_raw, "第一行\n第二行\t尾段", "raw 值被改动了");
+
+        // 表头 desc 行也走同一条路
+        let header = snap.header_rows[0][2].text.to_string();
+        assert!(!header.contains('\n'));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

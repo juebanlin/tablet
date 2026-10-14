@@ -19,13 +19,42 @@ pub fn col_letter(idx: usize) -> String {
     s
 }
 
+/// 单行化：多行值只取**第一行**、末尾补 `…`，供「固定单行行高」的展示位置使用。
+///
+/// 单元格值**允许**含换行（txt 列合法、Excel 导入也会带 Alt+Enter，见 @04.3.2 / @01），
+/// 但网格行高固定 22px、折叠公式栏也是单行盒子。原样喂给 slint 会让多行文本溢出盒外：
+/// slint 的 `Text` 即使 `wrap: no-wrap` 也会在 `\n` 处强制断行，而盒子里没有任何
+/// 纵向钳制手段（1.17 没有 `maximum-line-count`，`overflow: elide` 只在盒子有确定高度时
+/// 才按行数截断）——结果是多行值盖住上下邻行，整块表格糊掉。
+///
+/// 之所以「取第一行 + …」而不是插一个 `⏎` 之类的换行标记：符号字形不一定在字体回退链里
+/// （实测 `⏎` U+23CE、`▾` U+25BE 在本机渲染成豆腐块），而 `…` 是 slint `overflow: elide`
+/// 自己就在用的字符，一定画得出来。
+///
+/// 所以凡是「单行展示位」一律先过这里。**只影响展示**：复制 / 保存 / 校验仍从
+/// `AppState.engine` 读存储真值，换行不会被这个函数改掉；展开态公式栏显示真实换行。
+pub fn one_line(s: &str) -> String {
+    match s.find(['\n', '\r']) {
+        // 绝大多数值没有换行 → 原样返回，省一次分配
+        None => s.to_string(),
+        Some(i) => {
+            let mut out = s[..i].trim_end().to_string();
+            out.push('…');
+            out
+        }
+    }
+}
+
 // ── TSV 剪贴板 ──────────────────────────────────────────────
 // RFC 4180 风格：单元格含 \t / \n / " → 用 "..." 包裹，内部 " → "" 转义。
 // 与 Excel、WPS、Google Sheets 的纯文本剪贴板格式兼容。
 
 /// 单格值 → TSV 安全表示。
+///
+/// `\r` 也必须进引号：`tsv_parse` 把「不跟在 `\n` 后面的 `\r`」当行分隔符（@见下），
+/// 不引号的话含裸 `\r` 的单元格复制出去再粘回来会变成两行——精度丢失。
 pub fn tsv_escape_cell(cell: &str) -> String {
-    if cell.contains('\t') || cell.contains('\n') || cell.contains('"') {
+    if cell.contains('\t') || cell.contains('\n') || cell.contains('\r') || cell.contains('"') {
         let escaped = cell.replace('"', "\"\"");
         format!("\"{}\"", escaped)
     } else {
@@ -144,4 +173,61 @@ pub(super) fn cell_validation_message(state: &AppState, r: usize, c: usize) -> O
     errors.into_iter()
         .find(|e| !e.is_schema() && e.row == r && e.col == c)
         .map(|e| e.message)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::one_line;
+
+    #[test]
+    fn one_line_keeps_first_line_and_marks_truncation() {
+        assert_eq!(one_line("战士"), "战士");
+        assert_eq!(one_line("a\nb"), "a…");
+        assert_eq!(one_line("a\r\nb"), "a…");
+        // 裸 CR（老 Mac / 部分 Excel 粘贴）同样只取第一行
+        assert_eq!(one_line("a\rb"), "a…");
+        // 首行末尾的空白不带进展示串
+        assert_eq!(one_line("a  \nb"), "a…");
+        // 以换行开头 → 首行是空的，只留截断标记
+        assert_eq!(one_line("\na"), "…");
+        // 制表符不是换行，保持原样（str 列的合法性交给校验层管）
+        assert_eq!(one_line("a\tb"), "a\tb");
+    }
+
+    #[test]
+    fn one_line_output_never_contains_a_newline() {
+        // 这是关键不变式：喂给固定单行行高盒子的串必须无 \n / \r，
+        // 否则 slint 的 Text 会在 \n 处强制断行、溢出盒外。
+        for s in ["", "x", "a\nb", "a\rb", "a\r\nb", "\n\r\n\r", "多\n行\r\n文本\n"] {
+            let out = one_line(s);
+            assert!(!out.contains('\n') && !out.contains('\r'), "leaked newline: {out:?}");
+        }
+    }
+}
+
+#[cfg(test)]
+mod tsv_tests {
+    use super::{tsv_escape_cell, tsv_parse};
+
+    /// 单元格值 → 复制出 → 粘回来，必须逐字节相同（@04.3.2 剪贴板 round-trip 约定）。
+    fn round_trip(value: &str) {
+        let tsv = tsv_escape_cell(value);
+        let parsed = tsv_parse(&tsv);
+        assert_eq!(parsed.len(), 1, "value {value:?} produced {} rows", parsed.len());
+        assert_eq!(parsed[0].len(), 1, "value {value:?} produced {} cols", parsed[0].len());
+        assert_eq!(parsed[0][0], value, "round-trip changed value");
+    }
+
+    #[test]
+    fn cell_values_survive_clipboard_round_trip() {
+        round_trip("战士");
+        round_trip("a\tb");           // tab（csv/excel 常见）
+        round_trip("line1\nline2");   // 换行
+        round_trip("line1\r\nline2"); // CRLF
+        round_trip("a\rb");           // 裸 CR —— 曾经不引号，粘回来会裂成两行
+        round_trip("he said \"hi\""); // 引号
+        round_trip("{\"k\":\n\t\"v\"}"); // JSON 文本，tab + 换行 + 引号齐活
+        // 空值不在 round-trip 断言里：空剪贴板解析出 0 行（是 no-op，不是丢数据）
+        assert!(tsv_parse(&tsv_escape_cell("")).is_empty());
+    }
 }

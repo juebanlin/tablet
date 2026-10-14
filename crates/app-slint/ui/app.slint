@@ -144,6 +144,7 @@ export component AppWindow inherits Window {
 
     in property <string> coord;
     in property <string> formula-display: "";
+    in property <string> formula-raw: "";
     in property <bool> formula-editable: false;
     in-out property <string> editing-buffer: "";
     in property <bool> formula-editing: false;
@@ -685,6 +686,7 @@ export component AppWindow inherits Window {
                 excel-edit-clicked => { root.excel-edit-clicked(); }
                 coord: root.coord;
                 formula-display: root.formula-display;
+                formula-raw: root.formula-raw;
                 formula-editable: root.formula-editable;
                 formula-editing: root.formula-editing;
                 editing-buffer <=> root.editing-buffer;

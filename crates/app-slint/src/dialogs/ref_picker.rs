@@ -6,6 +6,7 @@ use std::rc::Rc;
 
 use slint::ComponentHandle;
 
+use crate::convert::one_line;
 use crate::state::{AppState, RefDisplayStrategy, SelectedNode};
 use crate::theme::{REF_LABEL_ENUM, REF_LABEL_TABLE, WARN_EMOJI};
 use crate::{refresh, AppWindow, RefHeader, RefRow};
@@ -181,13 +182,14 @@ pub fn push(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
 
     let has_desc = !id_header.1.is_empty() || headers.iter().any(|(_, d)| !d.is_empty());
     ui_h.set_rp_has_desc(has_desc);
+    // 选择器里的 id / 辅助列都是固定行高的单行盒子，展示串统一单行化（@convert::util::one_line）
     ui_h.set_rp_id_header(RefHeader {
-        field: id_header.0.into(),
-        desc: id_header.1.into(),
+        field: one_line(&id_header.0).into(),
+        desc: one_line(&id_header.1).into(),
     });
     let header_items: Vec<RefHeader> = headers.iter().map(|(f, d)| RefHeader {
-        field: f.clone().into(),
-        desc: d.clone().into(),
+        field: one_line(f).into(),
+        desc: one_line(d).into(),
     }).collect();
     ui_h.set_rp_headers(slint::ModelRc::new(slint::VecModel::from(header_items)));
 
@@ -197,14 +199,14 @@ pub fn push(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
         if id.to_lowercase().contains(&search) { return true; }
         extras.iter().any(|e| e.to_lowercase().contains(&search))
     }).map(|(id, extras)| {
-        let extras_shared: Vec<slint::SharedString> = extras.iter().map(|e| e.clone().into()).collect();
+        let extras_shared: Vec<slint::SharedString> = extras.iter().map(|e| one_line(e).into()).collect();
         let selected = if rp.multi {
             rp.selected_ids.iter().any(|s| s == id)
         } else {
             rp.selected_id == *id
         };
         RefRow {
-            id: id.clone().into(),
+            id: one_line(id).into(),
             extras: slint::ModelRc::new(slint::VecModel::from(extras_shared)),
             selected,
         }

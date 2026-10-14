@@ -232,6 +232,8 @@ export component GridArea inherits Rectangle {
                                     property <bool> is-export: cell.kind == CellKind.export-enum || cell.kind == CellKind.export-enum-col;
                                     width: Theme.col-w;
                                     height: Theme.row-h;
+                                    // 编辑框里可能是含换行的存储真值（txt 列合法），clip 兜住不让它画到邻格
+                                    clip: true;
                                     background: cell.kind == CellKind.read-only
                                         ? Theme.bg-header-readonly
                                         : (ci == root.selected-col ? Theme.bg-cell-selected : Theme.bg-header);
@@ -376,6 +378,8 @@ export component GridArea inherits Rectangle {
                                     && ci >= root.range-col-min && ci <= root.range-col-max;
                                 width: Theme.col-w;
                                 height: Theme.row-h;
+                                // 编辑框里可能是含换行的存储真值（txt 列合法），clip 兜住不让它画到邻格
+                                clip: true;
                                 background:
                                     (ri == root.selected-cell-row && ci == root.selected-cell-col) ? Theme.bg-cell-selected
                                     : in-range ? Theme.bg-row-selected
