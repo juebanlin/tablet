@@ -1,42 +1,13 @@
-// 全 crate 共享的视觉常量：图标 / marker 字符 / 颜色。
+// 全 crate 共享的**颜色**常量。
 //
-// 任何 emoji 字符 / 颜色都应来自这里，而不是字面量散落在 convert / dialogs 里。
-// `.slint` 文件里同样的字符是 preview mock 数据，运行时被这里 push 的字符串覆盖。
+// 字形（emoji / 符号）不在这里 —— 那些归 `src/icons.rs`（@docs/04-UI设计.md §10）。
+// 本文件只管颜色，`theme.slint` 管尺寸 / 间距 / 字号。
+//
+// 早期版本把图标也放在这里，并在 `.slint` 里写重复的字面量当 preview mock；
+// 那导致"同一个图标散在 rust + 多个 .slint"里，跨平台排查（哪个字形会渲染成方块）
+// 得全局 grep。现已收拢到 icons.rs + ui/icons.slint 的 global Icons。
 
 use slint::Color;
-
-// ──────── 节点图标（树面板 + grid title） ────────
-pub const ICON_PROJECT: &str = "📦";
-pub const ICON_GROUP: &str = "📁";
-pub const ICON_TABLE: &str = "📊";
-pub const ICON_CONST: &str = "📋";
-pub const ICON_ENUM: &str = "🔢";
-
-// ──────── 装饰图标 ────────
-/// active project 名字尾部的星号
-pub const ACTIVE_STAR: &str = "⭐";
-/// 状态栏 / 提示中的告警三角（无 variation selector）
-pub const WARN: &str = "⚠";
-/// 对话框标题里的告警（带 emoji variation selector，UI 字号下颜色更明显）
-pub const WARN_EMOJI: &str = "⚠️";
-/// 公式栏 / readonly 单元格右侧的锁标记。
-/// 现仅在 `ui/components/formula_bar.slint` 内字面量使用；
-/// 此常量供未来 Rust 端推送 readonly 提示时复用，避免再次散落字面量。
-#[allow(dead_code)]
-pub const ICON_READONLY_LOCK: &str = "🔒";
-
-// ──────── 引用类型标签（type_selector / ref_picker 共享） ────────
-pub const REF_LABEL_TABLE: &str = "📊 表引用";
-pub const REF_LABEL_ENUM: &str = "🔢 枚举引用";
-
-// ──────── 节点 marker（树面板 deleted/new/modified/error 角标） ────────
-//
-// 使用动作语义 emoji，颜色由字形自带；mark-color 文字色仍保留供未来纯文本 fallback。
-pub const MARK_NEW: &str = "🆕";
-pub const MARK_MOD: &str = "📝";
-pub const MARK_DEL: &str = "🗑️";
-pub const MARK_ERR: &str = "🚨";
-pub const MARK_NONE: &str = "";
 
 // ──────── 节点 marker 色 ────────
 pub fn color_new() -> Color { Color::from_rgb_u8(40, 180, 40) }

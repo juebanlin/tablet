@@ -6,6 +6,7 @@
 //
 // 对应 docs/02-UI设计.md §2。
 
+import { Icons } from "../icons.slint";
 import { Theme } from "../theme.slint";
 import { Button, ComboBox, CheckBox, LineEdit, ScrollView } from "std-widgets.slint";
 
@@ -190,7 +191,7 @@ export component TreeSection inherits Rectangle {
                                     TouchArea {
                                         clicked => { root.node-toggle-expand(node.id); }
                                         Text {
-                                            text: node.expanded ? "▼" : "▶";
+                                            text: node.expanded ? Icons.tri-expanded : Icons.tri-collapsed;
                                             font-size: 9px;
                                             color: Theme.text-secondary;
                                             vertical-alignment: center;

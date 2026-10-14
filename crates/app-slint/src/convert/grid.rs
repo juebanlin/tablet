@@ -10,6 +10,7 @@ use tablet_core::types::{Paradigm, TblType, TypeParam};
 
 use super::util::{cell_validation_message, col_letter, one_line, raw_cell_for, EXTRA_ROWS};
 use crate::state::{AppState, ColumnKind, GridSelection, SelectedNode};
+use crate::icons::*;
 use crate::theme::*;
 use crate::{CellKind, DataCell, DataRow, HeaderCell};
 

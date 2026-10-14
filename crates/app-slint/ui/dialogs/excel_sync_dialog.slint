@@ -1,3 +1,4 @@
+import { Icons } from "../icons.slint";
 import { Theme } from "../theme.slint";
 import { DialogChrome } from "dialog_chrome.slint";
 import { ScrollView } from "std-widgets.slint";
@@ -86,34 +87,34 @@ export component ExcelSyncDialog inherits Rectangle {
                                         if row.has_diff && (row.hdr_match || row.tbl_more_cols) : Rectangle {
                                             border-width: 1px; border-radius: 2px; width: 42px; height: 18px;
                                             background: transparent; border-color: Theme.border-light;
-                                            Text { text: "数据→"; font-size: Theme.fs-tiny; color: Theme.text-primary; vertical-alignment: center; horizontal-alignment: center; }
+                                            Text { text: "数据" + Icons.arrow-right; font-size: Theme.fs-tiny; color: Theme.text-primary; vertical-alignment: center; horizontal-alignment: center; }
                                             TouchArea { clicked => { root.action(i, 1); } }
                                         }
                                         if row.has_diff && (row.hdr_match || row.tbl_more_cols) : Rectangle {
                                             border-width: 1px; border-radius: 2px; width: 42px; height: 18px;
                                             background: transparent; border-color: Theme.border-light;
-                                            Text { text: "←数据"; font-size: Theme.fs-tiny; color: Theme.text-primary; vertical-alignment: center; horizontal-alignment: center; }
+                                            Text { text: Icons.arrow-left + "数据"; font-size: Theme.fs-tiny; color: Theme.text-primary; vertical-alignment: center; horizontal-alignment: center; }
                                             TouchArea { clicked => { root.action(i, 2); } }
                                         }
                                         // 补列→ tablet has more columns
                                         if row.tbl_more_cols : Rectangle {
                                             border-width: 1px; border-radius: 2px; width: 42px; height: 18px;
                                             background: transparent; border-color: Theme.border-light;
-                                            Text { text: "补列→"; font-size: Theme.fs-tiny; color: Theme.text-primary; vertical-alignment: center; horizontal-alignment: center; }
+                                            Text { text: "补列" + Icons.arrow-right; font-size: Theme.fs-tiny; color: Theme.text-primary; vertical-alignment: center; horizontal-alignment: center; }
                                             TouchArea { clicked => { root.action(i, 3); } }
                                         }
                                         // 强制→: 不匹配 or xlsx 多列（删列残留）
                                         if row.hdr_mismatch || row.xlsx_more_cols : Rectangle {
                                             border-width: 1px; border-radius: 2px; width: 46px; height: 18px;
                                             background: transparent; border-color: Theme.border-light;
-                                            Text { text: "强制→"; font-size: Theme.fs-tiny; color: Theme.text-primary; vertical-alignment: center; horizontal-alignment: center; }
+                                            Text { text: "强制" + Icons.arrow-right; font-size: Theme.fs-tiny; color: Theme.text-primary; vertical-alignment: center; horizontal-alignment: center; }
                                             TouchArea { clicked => { root.action(i, 5); } }
                                         }
                                         // 强制→/← mismatch
                                         if row.hdr_mismatch : Rectangle {
                                             border-width: 1px; border-radius: 2px; width: 46px; height: 18px;
                                             background: transparent; border-color: Theme.border-light;
-                                            Text { text: "强制→"; font-size: Theme.fs-tiny; color: Theme.text-primary; vertical-alignment: center; horizontal-alignment: center; }
+                                            Text { text: "强制" + Icons.arrow-right; font-size: Theme.fs-tiny; color: Theme.text-primary; vertical-alignment: center; horizontal-alignment: center; }
                                             TouchArea { clicked => { root.action(i, 5); } }
                                         }
                                         // `←强制` removed — mismatch is tablet→xlsx only. xlsx→tablet handle via import or manual.
@@ -121,18 +122,18 @@ export component ExcelSyncDialog inherits Rectangle {
                                         if row.left_only : Rectangle {
                                             border-width: 1px; border-radius: 2px; width: 46px; height: 18px;
                                             background: transparent; border-color: Theme.border-light;
-                                            Text { text: "创建→"; font-size: Theme.fs-tiny; color: Theme.text-primary; vertical-alignment: center; horizontal-alignment: center; }
+                                            Text { text: "创建" + Icons.arrow-right; font-size: Theme.fs-tiny; color: Theme.text-primary; vertical-alignment: center; horizontal-alignment: center; }
                                             TouchArea { clicked => { root.action(i, 7); } }
                                         }
                                         // ←导入 right only, valid
                                         if row.right_only && !row.blocked : Rectangle {
                                             border-width: 1px; border-radius: 2px; width: 46px; height: 18px;
                                             background: transparent; border-color: Theme.border-light;
-                                            Text { text: "←导入"; font-size: Theme.fs-tiny; color: Theme.text-primary; vertical-alignment: center; horizontal-alignment: center; }
+                                            Text { text: Icons.arrow-left + "导入"; font-size: Theme.fs-tiny; color: Theme.text-primary; vertical-alignment: center; horizontal-alignment: center; }
                                             TouchArea { clicked => { root.action(i, 8); } }
                                         }
                                         if row.blocked : Rectangle { width: 28px; height: 18px;
-                                            Text { text: "⛔"; font-size: Theme.fs-tiny; color: Theme.text-error; vertical-alignment: center; horizontal-alignment: center; }
+                                            Text { text: Icons.block; font-size: Theme.fs-tiny; color: Theme.text-error; vertical-alignment: center; horizontal-alignment: center; }
                                         }
                                     }
                                 }

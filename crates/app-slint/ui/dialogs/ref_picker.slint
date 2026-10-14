@@ -6,6 +6,7 @@
 // 每行的 extras 与 headers 等长（不含 id 列），双方由 Rust 端协调。
 // 表头分两行：上 desc（中文说明），下 field（英文字段）；任一 desc 全空时只展示 field 行。
 
+import { Icons } from "../icons.slint";
 import { Theme } from "../theme.slint";
 import { DialogChrome } from "dialog_chrome.slint";
 import { LineEdit, ScrollView } from "std-widgets.slint";
@@ -25,7 +26,7 @@ export component RefPicker inherits Rectangle {
     in property <bool> open: false;
     in property <string> ref-name;                  // 例：HeroBase / HeroType
     in property <bool> multi: false;                // true = List<@X> 多选模式（勾选多项拼列表）
-    in property <string> kind-label: "📊 表引用";    // 或 "🔢 枚举引用"
+    in property <string> kind-label: Icons.ref-label-table;    // 或 Icons.ref-label-enum
     in property <bool> target-missing: false;       // 引用项不存在 → 显示警告并禁用确定
     in property <bool> is-table: true;              // Table 才显示列展示切换
     in property <int> strategy-index: 0;            // 0=智能 1=全部
@@ -144,7 +145,7 @@ export component RefPicker inherits Rectangle {
                 border-color: Theme.border-error;
                 border-width: 1px;
                 Text {
-                    text: "⚠️ 引用的配置项 \"" + root.ref-name + "\" 不存在";
+                    text: Icons.warn + " 引用的配置项 \"" + root.ref-name + "\" 不存在";
                     font-size: Theme.fs-small;
                     color: Theme.text-error;
                     horizontal-alignment: center;

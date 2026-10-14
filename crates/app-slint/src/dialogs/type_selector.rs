@@ -9,7 +9,7 @@ use tablet_core::types::{BaseType, ParamSlot, Paradigm, TypeParam};
 use crate::state::{
     AppState, SelectedNode, TsRefFilter, TsTab, TypeEditTarget,
 };
-use crate::theme::{ICON_ENUM, ICON_TABLE};
+use crate::icons::{ICON_ENUM, ICON_TABLE};
 use crate::{refresh, AppWindow, RefItem, TsParamSlot};
 
 /// Constant data cell type 列单击 → 打开 TypeSelector（编辑该数据格的 type）

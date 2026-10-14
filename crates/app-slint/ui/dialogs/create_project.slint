@@ -8,6 +8,7 @@
 // 替代旧 TemplateLibraryDialog 与顶部「导入 Schema」按钮。
 // 克隆走另一个对话框（NewProjectDialog 仅留 Clone 模式）。
 
+import { Icons } from "../icons.slint";
 import { Theme } from "../theme.slint";
 import { DialogChrome } from "dialog_chrome.slint";
 import { SchemaItem, SchemaItemList } from "schema_dialog.slint";
@@ -230,7 +231,7 @@ export component CreateProjectDialog inherits Rectangle {
                         HorizontalLayout {
                             spacing: Theme.sp-2;
                             Text {
-                                text: "🔍";
+                                text: Icons.search;
                                 font-size: Theme.fs-small;
                                 width: 20px;
                                 vertical-alignment: center;

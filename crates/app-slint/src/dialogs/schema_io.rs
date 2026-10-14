@@ -6,7 +6,7 @@ use std::rc::Rc;
 use slint::ComponentHandle;
 
 use crate::state::{self, AppState};
-use crate::theme::{ICON_CONST, ICON_ENUM, ICON_GROUP, ICON_TABLE};
+use crate::icons::{ICON_CONST, ICON_ENUM, ICON_GROUP, ICON_TABLE};
 use crate::{refresh, ui, AppWindow, SchemaItem};
 
 /// 把当前 project 的 groups/tables/constants/enums 扁平化为 SchemaExportItem 列表，

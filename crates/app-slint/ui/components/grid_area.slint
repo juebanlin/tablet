@@ -3,6 +3,7 @@
 //
 // 注意：本组件只做布局/渲染骨架，真实编辑逻辑由 Rust 端通过回调接管。
 
+import { Icons } from "../icons.slint";
 import { Theme } from "../theme.slint";
 import { ScrollView, LineEdit } from "std-widgets.slint";
 
@@ -253,7 +254,7 @@ export component GridArea inherits Rectangle {
                                       || cell.kind == CellKind.type-enum-col
                                       || cell.kind == CellKind.export-enum-col): Text {
                                         x: parent.width - 12px;
-                                        text: "▼";
+                                        text: Icons.dropdown;
                                         font-size: 8px;
                                         color: Theme.text-secondary;
                                         vertical-alignment: center;
@@ -405,7 +406,7 @@ export component GridArea inherits Rectangle {
                                 // 下拉箭头（ExportEnumCol / TypeEnumCol / Ref 列）
                                 if !is-editing && has-arrow: Text {
                                     x: parent.width - 12px;
-                                    text: "▼";
+                                    text: Icons.dropdown;
                                     font-size: 8px;
                                     color: Theme.text-secondary;
                                     vertical-alignment: center;

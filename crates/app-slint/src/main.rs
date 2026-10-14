@@ -23,6 +23,7 @@
 
 mod state;
 mod theme;
+mod icons;
 mod convert;
 mod refresh;
 mod ui;
@@ -275,6 +276,9 @@ fn run_gui(workdir_arg: Option<PathBuf>) -> anyhow::Result<()> {
 
     // 初次 push（首屏数据 + 各对话框默认关闭态）
     refresh::initial(&app_window, &app_state);
+
+    // 字形常量（src/icons.rs）推给 slint 的 global Icons，.slint 侧只引用 Icons.xxx
+    icons::wire(&app_window);
 
     // 注册全部 callback（顺序无关，只要在 ui.run() 之前）
     ui::tree::wire(&app_window, &app_state);

@@ -1,3 +1,4 @@
+import { Icons } from "../icons.slint";
 import { Theme } from "../theme.slint";
 import { ScrollView } from "std-widgets.slint";
 
@@ -78,7 +79,7 @@ export component ExcelBrowser inherits Rectangle {
                     VerticalLayout {
                         spacing: 2px; padding: Theme.sp-2;
                         Text {
-                            text: "📄"; font-size: Theme.fs-heading;
+                            text: Icons.file; font-size: Theme.fs-heading;
                             horizontal-alignment: center; vertical-alignment: center;
                         }
                         Text {

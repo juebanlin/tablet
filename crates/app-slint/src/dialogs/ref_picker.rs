@@ -8,7 +8,7 @@ use slint::ComponentHandle;
 
 use crate::convert::one_line;
 use crate::state::{AppState, RefDisplayStrategy, SelectedNode};
-use crate::theme::{REF_LABEL_ENUM, REF_LABEL_TABLE, WARN_EMOJI};
+use crate::icons::{ref_label_enum, ref_label_table, WARN_EMOJI};
 use crate::{refresh, AppWindow, RefHeader, RefRow};
 
 /// 被引用项（Table 或 Enum）的可选条目集合，含表头与每行 (id, extras)。
@@ -165,16 +165,16 @@ pub fn push(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
 
     let target = collect_ref_rows(&st, &rp.ref_name, rp.strategy);
     let target_missing_label = format!("{} 引用不存在", WARN_EMOJI);
-    let (kind_label, target_missing, is_table, id_header, headers, rows): (&str, bool, bool, (String, String), Vec<(String, String)>, Vec<(String, Vec<String>)>) = match target {
+    let (kind_label, target_missing, is_table, id_header, headers, rows): (String, bool, bool, (String, String), Vec<(String, String)>, Vec<(String, Vec<String>)>) = match target {
         Some(t) => (
-            if t.is_table { REF_LABEL_TABLE } else { REF_LABEL_ENUM },
+            if t.is_table { ref_label_table() } else { ref_label_enum() },
             false,
             t.is_table,
             t.id_header,
             t.headers,
             t.rows,
         ),
-        None => (target_missing_label.as_str(), true, true, ("id".to_string(), String::new()), Vec::new(), Vec::new()),
+        None => (target_missing_label, true, true, ("id".to_string(), String::new()), Vec::new(), Vec::new()),
     };
     ui_h.set_rp_kind_label(kind_label.into());
     ui_h.set_rp_target_missing(target_missing);

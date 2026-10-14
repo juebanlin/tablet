@@ -14,6 +14,10 @@
 //   - 弹窗状态以 dlg-<name>-open 暴露给上层 Rust
 
 import { Theme } from "theme.slint";
+// 字形常量类（字面量在 src/icons.rs，这里只声明接口）。
+// 必须从入口文件 re-export，否则 Rust 侧拿不到 `crate::Icons` 类型。
+import { Icons } from "icons.slint";
+export { Icons }
 import { Button } from "std-widgets.slint";
 import { Toolbar } from "components/toolbar.slint";
 import { TreeSection, TreeNode } from "components/tree_section.slint";
@@ -231,7 +235,7 @@ export component AppWindow inherits Window {
     in-out property <bool> dlg-ref-open: false;
     in property <string> rp-ref-name;
     in property <bool> rp-multi: false;
-    in property <string> rp-kind-label: "📊 表引用";
+    in property <string> rp-kind-label: Icons.ref-label-table;
     in property <bool> rp-target-missing: false;
     in property <bool> rp-is-table: true;
     in-out property <int> rp-strategy-index: 0;

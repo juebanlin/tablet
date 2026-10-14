@@ -7,6 +7,7 @@ use std::collections::{HashMap, HashSet};
 use slint::{Color, SharedString};
 
 use crate::state::{AppState, SelectedNode, TreeFilter, TreeTarget};
+use crate::icons::*;
 use crate::theme::*;
 use crate::TreeNode;
 use tablet_core::name_matches;

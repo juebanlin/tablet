@@ -8,6 +8,7 @@
 // 数据流约定：上层 Rust 把分组扁平化成 [SchemaItem]，每条带 group-name + indent。
 // indent=0 表示组节点（用于头部聚合勾选行），indent=1 表示组下的 Table/Constant/Enum。
 
+import { Icons } from "../icons.slint";
 import { Theme } from "../theme.slint";
 import { DialogChrome } from "dialog_chrome.slint";
 import { LineEdit, ScrollView, CheckBox, Button } from "std-widgets.slint";
@@ -48,7 +49,7 @@ export component SchemaItemList inherits Rectangle {
                     Rectangle {
                         width: 16px; height: 16px;
                         Text {
-                            text: it.tristate ? "▣" : (it.checked ? "☑" : "☐");
+                            text: it.tristate ? Icons.check-partial : (it.checked ? Icons.check-on : Icons.check-off);
                             font-size: Theme.fs-small;
                             color: Theme.text-primary;
                             horizontal-alignment: center;
@@ -67,7 +68,7 @@ export component SchemaItemList inherits Rectangle {
                         vertical-alignment: center;
                     }
                     if root.show-conflict-col && it.indent == 1: Text {
-                        text: it.is-conflict ? "⚠️ 已存在(将覆盖)" : "✅ 新增";
+                        text: it.is-conflict ? Icons.warn + " 已存在(将覆盖)" : Icons.ok + " 新增";
                         font-size: Theme.fs-tiny;
                         color: it.is-conflict ? Theme.mark-modified : Theme.mark-new;
                         vertical-alignment: center;
@@ -244,7 +245,7 @@ export component SchemaExportDialog inherits Rectangle {
                     vertical-alignment: center;
                 }
                 if root.is-template() && root.meta-id == "": Text {
-                    text: "  ← 模板 ID 必填";
+                    text: "  " + Icons.arrow-left + " 模板 ID 必填";
                     font-size: Theme.fs-tiny;
                     color: Theme.mark-modified;
                     vertical-alignment: center;

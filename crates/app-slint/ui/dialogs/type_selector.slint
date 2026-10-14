@@ -1,6 +1,7 @@
 // 类型选择器：[数据类型] / [引用类型] 双 tab。
 // 对应 docs/02-UI设计.md §6.2。
 
+import { Icons } from "../icons.slint";
 import { Theme } from "../theme.slint";
 import { DialogChrome } from "dialog_chrome.slint";
 import { ComboBox, LineEdit, ScrollView } from "std-widgets.slint";
@@ -205,14 +206,14 @@ export component TypeSelector inherits Rectangle {
                             width: 60px; height: 24px;
                             background: root.ref-filter == 1 ? Theme.bg-row-selected : Theme.bg-toolbar;
                             border-color: Theme.border-light; border-width: 1px;
-                            Text { text: "📊 表"; font-size: Theme.fs-tiny; horizontal-alignment: center; vertical-alignment: center; }
+                            Text { text: Icons.pick-table; font-size: Theme.fs-tiny; horizontal-alignment: center; vertical-alignment: center; }
                             TouchArea { clicked => { root.set-ref-filter(1); } }
                         }
                         Rectangle {
                             width: 70px; height: 24px;
                             background: root.ref-filter == 2 ? Theme.bg-row-selected : Theme.bg-toolbar;
                             border-color: Theme.border-light; border-width: 1px;
-                            Text { text: "🔢 枚举"; font-size: Theme.fs-tiny; horizontal-alignment: center; vertical-alignment: center; }
+                            Text { text: Icons.pick-enum; font-size: Theme.fs-tiny; horizontal-alignment: center; vertical-alignment: center; }
                             TouchArea { clicked => { root.set-ref-filter(2); } }
                         }
                     }

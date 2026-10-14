@@ -18,6 +18,7 @@
 //   **不**挂在 `if root.editing` 下 —— request-edit 只改 editing，不销毁 expanded 分支，
 //   所以点它创建编辑用 TextEdit 是安全的。
 
+import { Icons } from "../icons.slint";
 import { Theme } from "../theme.slint";
 import { LineEdit, TextEdit } from "std-widgets.slint";
 
@@ -108,7 +109,7 @@ export component FormulaBar inherits Rectangle {
                 // 只读列（picker / ReadOnly）右侧挂 🔒 暗示"不可改"
                 if !root.editing && !root.editable && root.coord != "": Text {
                     x: parent.width - Theme.sp-3 - self.width;
-                    text: "🔒";
+                    text: Icons.lock;
                     font-size: Theme.fs-tiny;
                     color: Theme.text-disabled;
                     vertical-alignment: center;
@@ -162,7 +163,7 @@ export component FormulaBar inherits Rectangle {
                 if !root.editing && !root.editable && root.coord != "": Text {
                     x: parent.width - Theme.sp-3 - self.width;
                     y: Theme.sp-4;
-                    text: "🔒";
+                    text: Icons.lock;
                     font-size: Theme.fs-tiny;
                     color: Theme.text-disabled;
                 }
@@ -189,7 +190,7 @@ export component FormulaBar inherits Rectangle {
                 x: 0;
                 y: root.is-expanded ? Theme.sp-2 : 0;
                 width: parent.width;
-                text: root.expanded ? "▼" : "▶";
+                text: root.expanded ? Icons.tri-expanded : Icons.tri-collapsed;
                 font-size: 9px;
                 color: Theme.text-secondary;
                 horizontal-alignment: center;

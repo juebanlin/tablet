@@ -19,7 +19,7 @@ use tablet_core::template::{
 };
 
 use crate::state::{AppState, CreatePickerItem};
-use crate::theme::{ICON_CONST, ICON_ENUM, ICON_GROUP, ICON_TABLE};
+use crate::icons::{ICON_CONST, ICON_ENUM, ICON_GROUP, ICON_TABLE};
 use crate::{refresh, AppWindow, SchemaItem, TemplateItem};
 
 /// 把 schema 的 sections 扁平化为 picker_items（带组节点）。

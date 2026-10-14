@@ -1,0 +1,42 @@
+// UI 字形的 slint 侧声明处。
+//
+// **字面量不写在这里** —— 唯一真理源是 `src/icons.rs`，启动时由 `icons::wire()`
+// 推下来。要换图标、要查跨平台方块，只改 `src/icons.rs`（@docs/04-UI设计.md §10）。
+//
+// 新增字形三步：src/icons.rs 加常量 → 这里加同名 kebab-case 属性 → wire() 里推一次。
+// 漏掉后两步编译不过；漏掉第三步则 .slint 侧拿到空串，图标不显示。
+
+export global Icons {
+    // 展开三角（TreeSection / 公式栏）
+    in-out property <string> tri-expanded;
+    in-out property <string> tri-collapsed;
+    /// 单元格下拉箭头 —— 与 tri-expanded 是同一个字形，语义不同故分开命名
+    in-out property <string> dropdown;
+
+    // 只读锁标记
+    in-out property <string> lock;
+
+    // 复选框三态（schema 导入勾选）
+    in-out property <string> check-on;
+    in-out property <string> check-off;
+    in-out property <string> check-partial;
+
+    // 状态
+    in-out property <string> ok;
+    in-out property <string> warn;
+    in-out property <string> block;
+
+    // 引用类型标签
+    in-out property <string> ref-label-table;
+    in-out property <string> ref-label-enum;
+    in-out property <string> pick-table;
+    in-out property <string> pick-enum;
+
+    // 方向箭头（Excel 同步面板）
+    in-out property <string> arrow-left;
+    in-out property <string> arrow-right;
+
+    // 其它
+    in-out property <string> file;
+    in-out property <string> search;
+}
