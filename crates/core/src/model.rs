@@ -464,6 +464,10 @@ pub struct Table {
     /// 文件格式版本。load 时检测，save 时按原版本序列化。
     /// 新建表默认 V3。
     pub fmt_ver: crate::tbl::TblVersion,
+    /// 被引用展示列（@10）：被 `@本表` 引用时展示哪一列。`None` = 显示原始 id；
+    /// `Some(列名)` = 展示该列（须为 str/int/txt 叶子类型）。
+    /// 持久化在 project.tblschema 段内的 `# @display` 行；本字段是运行时真相源。
+    pub display_field: Option<String>,
 }
 
 impl Table {
@@ -519,6 +523,10 @@ pub struct ConstEntry {
     pub desc: String,
 }
 
+/// 枚举未显式设 `display_field` 时，被引用时默认展示的列（@10）。
+/// 枚举固定 id|name|desc，`name` 是天然标签；表无此默认（默认显原始 id）。
+pub const ENUM_DEFAULT_DISPLAY_FIELD: &str = "name";
+
 /// 枚举定义：mode=enum 的 .tbl 文件
 ///
 /// 表头固定 id|name|desc 三列，无 #desc/#type/#export/#field 头。
@@ -532,6 +540,9 @@ pub struct EnumDef {
     /// 上次落盘时的 entries 快照。
     pub original_entries: Vec<EnumEntry>,
     pub saved: bool,
+    /// 被引用展示列（@10）：被 `@本枚举` 引用时展示 `name` 还是 `desc`。`None` = 显示原始 id。
+    /// 持久化在 project.tblschema 段内的 `# @display` 行；本字段是运行时真相源。
+    pub display_field: Option<String>,
 }
 
 impl EnumDef {

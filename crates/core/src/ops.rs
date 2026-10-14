@@ -1742,6 +1742,7 @@ impl ProjectEngine {
                             }],
                             saved: false,
                             fmt_ver: DEFAULT_TBL_VERSION,
+                            display_field: None,
                         });
                         ok = true;
                     }
@@ -1784,6 +1785,7 @@ impl ProjectEngine {
                             dirty: true,
                             deleted: false,
                             original_entries: Vec::new(), saved: false,
+                            display_field: None,
                         });
                         ok = true;
                     }
@@ -2254,6 +2256,55 @@ mod project_toml_template_tests {
 
         let after = std::fs::read_to_string(&toml_path).unwrap();
         assert_eq!(after, custom, "已有 project.toml 不应被覆盖");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn save_persists_display_field_and_reload_restores_it() {
+        // 改节点 display_field → 保存 → project.tblschema 带 `# @display` → 重载回填（@10）。
+        let dir = unique_tmp("display");
+        std::fs::create_dir_all(&dir).unwrap();
+        let project_root = dir.join("projects").join("p1");
+        let mut project = make_project(dir.clone(), project_root.clone(), "p1");
+        let gdir = project_root.join("config").join("g");
+
+        project.groups.push(Group {
+            name: "g".to_string(),
+            dir: gdir.clone(),
+            tables: vec![Table {
+                name: "T".to_string(),
+                path: gdir.join("T.tbl"),
+                schema: TableSchema { fields: vec![
+                    FieldDef { name: "id".into(), desc: "ID".into(), tbl_type: "int".into(), export: Export::ClientServer },
+                    FieldDef { name: "name".into(), desc: "名".into(), tbl_type: "str".into(), export: Export::ClientServer },
+                ]},
+                records: vec![vec!["1".into(), "Alice".into()]],
+                dirty: true, deleted: false,
+                original_records: Vec::new(), original_fields: Vec::new(),
+                saved: false, fmt_ver: crate::tbl::DEFAULT_TBL_VERSION,
+                display_field: Some("name".to_string()),
+            }],
+            constants: Vec::new(),
+            enums: vec![EnumDef {
+                name: "E".to_string(),
+                path: gdir.join("E.tbl"),
+                entries: vec![EnumEntry { id: "1".into(), name: "WAR".into(), desc: "战士".into() }],
+                dirty: true, deleted: false,
+                original_entries: Vec::new(), saved: false,
+                display_field: Some("desc".to_string()),
+            }],
+            is_new: true,
+        });
+        save_project_files(&mut project);
+
+        let schema_txt = std::fs::read_to_string(project_root.join(crate::project::PROJECT_SCHEMA_FILE)).unwrap();
+        assert!(schema_txt.contains("[g/T] table\n# @display: name"), "schema = {}", schema_txt);
+        assert!(schema_txt.contains("[g/E] enum\n# @display: desc"), "schema = {}", schema_txt);
+
+        // 重载：.tbl 里不含 display 信息，应从 schema 段回填到节点
+        let (engine, _) = crate::project::load_workspace(&dir).expect("reload");
+        assert_eq!(engine.find_table("g", "T").expect("table").display_field.as_deref(), Some("name"));
+        assert_eq!(engine.find_enum("g", "E").expect("enum").display_field.as_deref(), Some("desc"));
         let _ = std::fs::remove_dir_all(&dir);
     }
 

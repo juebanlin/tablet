@@ -139,6 +139,7 @@ mod tests {
                             original_fields: snap_fields,
                             saved: true,
                             fmt_ver: crate::tbl::DEFAULT_TBL_VERSION,
+                            display_field: sec.display.clone(),
                         });
                     }
                     SchemaMode::Constant => {
@@ -175,6 +176,7 @@ mod tests {
                             dirty: false,
                             deleted: false,
                             original_entries: snap, saved: true,
+                            display_field: sec.display.clone(),
                         });
                     }
                 }

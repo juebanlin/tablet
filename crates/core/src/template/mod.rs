@@ -262,6 +262,7 @@ mod tests {
                         },
                     ],
                     preset: Vec::new(),
+                    display: None,
                 },
                 SchemaSection {
                     group: "hero".to_string(),
@@ -273,6 +274,7 @@ mod tests {
                         vec!["1".to_string(), "WARRIOR".to_string(), "战士".to_string()],
                         vec!["2".to_string(), "MAGE".to_string(),    "法师".to_string()],
                     ],
+                    display: None,
                 },
                 SchemaSection {
                     group: "global".to_string(),
@@ -287,6 +289,7 @@ mod tests {
                         "cs".to_string(),
                         "最大等级".to_string(),
                     ]],
+                    display: None,
                 },
             ],
         }
@@ -382,6 +385,7 @@ mod tests {
                 vec!["1".into(), "Alice".into()],
                 vec!["2".into(), "Bob".into()],
             ],
+            display: None,
         });
         instantiate_template(&schema, &target).expect("instantiate");
         let txt = std::fs::read_to_string(target.join("config/hero/HeroBase.tbl")).expect("read tbl");
@@ -407,6 +411,7 @@ mod tests {
                 vec!["1".into(), "WAR".into(), "战士".into()],
                 vec!["2".into(), "MAGE".into(), "法师".into()],
             ],
+            display: None,
         });
         instantiate_template(&schema, &target).expect("instantiate");
         let txt = std::fs::read_to_string(target.join("config/hero/HeroType.tbl")).expect("read");
@@ -427,6 +432,7 @@ mod tests {
             mode: SchemaMode::Constant,
             fields: Vec::new(),
             preset: Vec::new(),
+            display: None,
         });
         instantiate_template(&schema, &target).expect("instantiate");
         let txt = std::fs::read_to_string(target.join("config/g/C.tbl")).expect("read");

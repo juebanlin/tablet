@@ -119,10 +119,15 @@ export component AppWindow inherits Window {
     // ── GridSection ─────────────────────────────────────────
     in property <string> grid-title: "未选中";
     in property <string> grid-subtitle: "";
-    in-out property <bool> show-enum-name: false;
-    in property <bool> show-enum-name-enabled: false;
+    in-out property <bool> show-ref-name: false;
+    in property <bool> show-ref-name-enabled: false;
+    // 被引用展示列下拉（@10）
+    in property <[string]> display-field-options: ["ID"];
+    in-out property <int> display-field-index: 0;
+    in property <bool> display-field-enabled: false;
     in property <bool> excel-edit-enabled: false;
-    callback show-enum-name-toggled(bool);
+    callback show-ref-name-toggled(bool);
+    callback display-field-selected(string);
     callback excel-edit-clicked();
 
     // ── Excel 编辑会话状态（@docs/06-Excel桥接.md §1 / §2）─────
@@ -669,10 +674,14 @@ export component AppWindow inherits Window {
                 horizontal-stretch: 1;
                 title: root.grid-title;
                 subtitle: root.grid-subtitle;
-                show-enum-name <=> root.show-enum-name;
-                show-enum-name-enabled: root.show-enum-name-enabled;
+                show-ref-name <=> root.show-ref-name;
+                show-ref-name-enabled: root.show-ref-name-enabled;
+                display-field-options: root.display-field-options;
+                display-field-index <=> root.display-field-index;
+                display-field-enabled: root.display-field-enabled;
                 excel-edit-enabled: root.excel-edit-enabled;
-                show-enum-name-toggled(c) => { root.show-enum-name-toggled(c); }
+                show-ref-name-toggled(c) => { root.show-ref-name-toggled(c); }
+                display-field-selected(s) => { root.display-field-selected(s); }
                 excel-edit-clicked => { root.excel-edit-clicked(); }
                 coord: root.coord;
                 formula-display: root.formula-display;
@@ -1220,7 +1229,10 @@ export component AppWindowPreview inherits AppWindow {
     coord: "B3";
     formula-display: "战士";
     formula-editable: true;
-    show-enum-name: true;
+    show-ref-name: true;
+    display-field-options: ["ID", "name", "desc"];
+    display-field-index: 1;
+    display-field-enabled: true;
 
     grid-title: "📊 hero / HeroBase";
     grid-subtitle: "Table · 3 行 · 5 列";

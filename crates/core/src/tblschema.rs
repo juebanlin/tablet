@@ -45,6 +45,9 @@ pub struct SchemaSection {
     /// - Enum：每行 = `id | name | desc`
     /// 仅在「带预设」的 schema 文件 / 导出选项下出现；apply_schema_to_project 按 with_preset 决定是否灌入项目。
     pub preset: Vec<Vec<String>>,
+    /// 被引用展示列（@10）：段内 `# @display: <列名>`。`None` = 显示原始 id。
+    /// 段内可选行，仅 Table / Enum 段有意义；apply_schema_to_project 会回填到节点。
+    pub display: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -110,6 +113,17 @@ pub fn parse_tblschema(content: &str) -> Result<TblSchema> {
                         bail!("line {}: `# @preset` 必须出现在某个 [section] 之后", line_num + 1);
                     }
                     in_preset = true;
+                    continue;
+                }
+            }
+            // 段内 `# @display: <列名>`（被引用展示列，@10）：挂到当前 section 上。
+            // 只在 `[section]` 之后有意义；段前的 @display 忽略。
+            if let Some(rest) = trimmed.trim_start_matches('#').trim_start().strip_prefix("@display") {
+                if let Some(v) = rest.trim_start().strip_prefix(':') {
+                    if let Some(ref mut sec) = current {
+                        let v = v.trim();
+                        sec.display = if v.is_empty() { None } else { Some(v.to_string()) };
+                    }
                     continue;
                 }
             }
@@ -244,6 +258,7 @@ fn parse_section_header(line: &str, line_num: usize) -> Result<SchemaSection> {
         mode,
         fields: Vec::new(),
         preset: Vec::new(),
+        display: None,
     })
 }
 
@@ -349,6 +364,11 @@ pub fn serialize_tblschema(schema: &TblSchema) -> String {
         };
         writeln!(s, "[{}/{}] {}", sec.group, sec.name, mode).unwrap();
 
+        // 被引用展示列（@10）：非默认时输出。
+        if let Some(d) = &sec.display {
+            writeln!(s, "# @display: {}", d).unwrap();
+        }
+
         // 仅 Table 段输出列声明；Constant / Enum 段是「结构在项目 .tbl 里」，schema 只留段头。
         if matches!(sec.mode, SchemaMode::Table) {
             for f in &sec.fields {
@@ -412,6 +432,7 @@ pub fn schema_from_project(groups: &[Group], with_preset: bool) -> TblSchema {
                 mode: SchemaMode::Table,
                 fields,
                 preset,
+                display: table.display_field.clone(),
             });
         }
         for constant in &group.constants {
@@ -437,6 +458,7 @@ pub fn schema_from_project(groups: &[Group], with_preset: bool) -> TblSchema {
                 mode: SchemaMode::Constant,
                 fields: Vec::new(),
                 preset,
+                display: None,
             });
         }
         for enum_def in &group.enums {
@@ -455,6 +477,7 @@ pub fn schema_from_project(groups: &[Group], with_preset: bool) -> TblSchema {
                 mode: SchemaMode::Enum,
                 fields: Vec::new(),
                 preset,
+                display: enum_def.display_field.clone(),
             });
         }
     }
@@ -531,6 +554,7 @@ pub fn apply_schema_to_project(
                             if new_len < old_len { row.truncate(new_len); }
                         }
                     }
+                    table.display_field = sec.display.clone();
                     table.dirty = true;
                     overwritten += 1;
                 } else {
@@ -546,6 +570,7 @@ pub fn apply_schema_to_project(
                         original_fields: fields,
                         saved: false,
                         fmt_ver: crate::tbl::DEFAULT_TBL_VERSION,
+                        display_field: sec.display.clone(),
                     });
                     added += 1;
                 }
@@ -600,6 +625,7 @@ pub fn apply_schema_to_project(
                     if with_preset {
                         en.entries = entries;
                     }
+                    en.display_field = sec.display.clone();
                     en.dirty = true;
                     overwritten += 1;
                 } else {
@@ -612,6 +638,7 @@ pub fn apply_schema_to_project(
                         dirty: true,
                         deleted: false,
                         original_entries: snap, saved: false,
+                        display_field: sec.display.clone(),
                     });
                     added += 1;
                 }
@@ -620,6 +647,30 @@ pub fn apply_schema_to_project(
     }
 
     (added, overwritten)
+}
+
+/// 把 schema 各段里的 `# @display` 回填到对应节点（被引用展示列，@10）。
+///
+/// `.tbl` 里不含被引用展示列信息——它只住在 project.tblschema。加载项目时先由 .tbl 得到
+/// groups（display_field 全为 None），再调本函数用 schema 段回填。按 (group, name) 匹配。
+pub fn apply_display_to_groups(groups: &mut [Group], schema: &TblSchema) {
+    for sec in &schema.sections {
+        let Some(display) = &sec.display else { continue };
+        let Some(group) = groups.iter_mut().find(|g| g.name == sec.group) else { continue };
+        match sec.mode {
+            SchemaMode::Table => {
+                if let Some(t) = group.tables.iter_mut().find(|t| t.name == sec.name) {
+                    t.display_field = Some(display.clone());
+                }
+            }
+            SchemaMode::Enum => {
+                if let Some(e) = group.enums.iter_mut().find(|e| e.name == sec.name) {
+                    e.display_field = Some(display.clone());
+                }
+            }
+            SchemaMode::Constant => {}
+        }
+    }
 }
 
 /// 解析后给缺失的 metadata 兜底：id 走文件名 stem，name 等于 id（如未填）。
@@ -674,6 +725,7 @@ id | int | cs | x
                 export: "cs".to_string(), desc: "x".to_string(),
             }],
             preset: vec![],
+            display: None,
         });
         let out = serialize_tblschema(&schema);
         assert!(!out.contains("# @sep"), "默认值不应输出 sep 行: {}", out);
@@ -695,6 +747,7 @@ id | int | cs | x
                 export: "cs".to_string(), desc: "x".to_string(),
             }],
             preset: vec![],
+            display: None,
         });
         let out = serialize_tblschema(&schema);
         assert!(out.contains("# @sep Map.entry = ,"), "应写出 Map.entry: {}", out);
@@ -831,6 +884,7 @@ id | int | cs | x
                 desc: "x".to_string(),
             }],
             preset: Vec::new(),
+            display: None,
         });
         let txt = serialize_tblschema(&s);
         assert!(txt.contains("# @meta id: demo"));
@@ -1022,6 +1076,7 @@ id | int | cs | x
                         vec!["1".into(), "Alice".into()],
                         vec!["2".into(), "Bob".into()],
                     ],
+                    display: None,
                 },
                 SchemaSection {
                     group: "global".into(),
@@ -1031,6 +1086,7 @@ id | int | cs | x
                     preset: vec![
                         vec!["max_level".into(), "int".into(), "100".into(), "cs".into(), "最大等级".into()],
                     ],
+                    display: None,
                 },
                 SchemaSection {
                     group: "hero".into(),
@@ -1040,6 +1096,7 @@ id | int | cs | x
                     preset: vec![
                         vec!["1".into(), "WARRIOR".into(), "战士".into()],
                     ],
+                    display: None,
                 },
             ],
         };
@@ -1074,6 +1131,7 @@ id | int | cs | x
                         name: "ignored".into(), tbl_type: "int".into(), export: "cs".into(), desc: "x".into()
                     }],
                     preset: vec![],
+                    display: None,
                 },
                 SchemaSection {
                     group: "g".into(),
@@ -1083,6 +1141,7 @@ id | int | cs | x
                         name: "WAR".into(), tbl_type: "1".into(), export: String::new(), desc: "".into()
                     }],
                     preset: vec![],
+                    display: None,
                 },
             ],
         };
@@ -1096,5 +1155,76 @@ id | int | cs | x
         // 没有 preset 块
         assert!(!txt.contains("@preset"));
         assert!(!txt.contains("has_preset"));
+    }
+
+    #[test]
+    fn display_directive_round_trip() {
+        // 段内 `# @display: <列名>`：非默认输出、默认省略、写盘 → 重新 parse 一致（@10）。
+        let mut schema = TblSchema::default();
+        schema.meta.id = "disp".to_string();
+        schema.sections.push(SchemaSection {
+            group: "hero".into(), name: "HeroBase".into(), mode: SchemaMode::Table,
+            fields: vec![SchemaField { name: "id".into(), tbl_type: "int".into(), export: "cs".into(), desc: "ID".into() }],
+            preset: vec![], display: Some("name".into()),
+        });
+        schema.sections.push(SchemaSection {
+            group: "hero".into(), name: "HeroType".into(), mode: SchemaMode::Enum,
+            fields: vec![], preset: vec![], display: Some("desc".into()),
+        });
+        schema.sections.push(SchemaSection {
+            group: "g".into(), name: "Plain".into(), mode: SchemaMode::Table,
+            fields: vec![SchemaField { name: "id".into(), tbl_type: "int".into(), export: "cs".into(), desc: "x".into() }],
+            preset: vec![], display: None,
+        });
+        let txt = serialize_tblschema(&schema);
+        assert!(txt.contains("[hero/HeroBase] table\n# @display: name"), "txt = {}", txt);
+        assert!(txt.contains("[hero/HeroType] enum\n# @display: desc"), "txt = {}", txt);
+        // 默认段不输出该行
+        let plain_block = txt.split("[g/Plain] table").nth(1).unwrap_or("");
+        assert!(!plain_block.contains("@display"), "默认段不应输出: {}", txt);
+
+        let back = parse_tblschema(&txt).expect("re-parse");
+        assert_eq!(back.sections[0].display.as_deref(), Some("name"));
+        assert_eq!(back.sections[1].display.as_deref(), Some("desc"));
+        assert_eq!(back.sections[2].display, None);
+    }
+
+    #[test]
+    fn apply_display_to_groups_backfills_nodes() {
+        // schema 段 → 节点回填（按 group/name 匹配，@10）。
+        use crate::model::{EnumDef, Group, TableSchema};
+        let schema = TblSchema {
+            meta: SchemaMetadata::default(),
+            separators: Default::default(),
+            sections: vec![
+                SchemaSection {
+                    group: "hero".into(), name: "HeroBase".into(), mode: SchemaMode::Table,
+                    fields: vec![], preset: vec![], display: Some("name".into()),
+                },
+                SchemaSection {
+                    group: "hero".into(), name: "HeroType".into(), mode: SchemaMode::Enum,
+                    fields: vec![], preset: vec![], display: Some("desc".into()),
+                },
+            ],
+        };
+        let mut groups = vec![Group {
+            name: "hero".into(), dir: std::path::PathBuf::new(),
+            tables: vec![Table {
+                name: "HeroBase".into(), path: std::path::PathBuf::new(),
+                schema: TableSchema { fields: vec![] }, records: vec![],
+                dirty: false, deleted: false, original_records: vec![], original_fields: vec![],
+                saved: true, fmt_ver: crate::tbl::DEFAULT_TBL_VERSION, display_field: None,
+            }],
+            constants: vec![],
+            enums: vec![EnumDef {
+                name: "HeroType".into(), path: std::path::PathBuf::new(),
+                entries: vec![], dirty: false, deleted: false,
+                original_entries: vec![], saved: true, display_field: None,
+            }],
+            is_new: false,
+        }];
+        apply_display_to_groups(&mut groups, &schema);
+        assert_eq!(groups[0].tables[0].display_field.as_deref(), Some("name"));
+        assert_eq!(groups[0].enums[0].display_field.as_deref(), Some("desc"));
     }
 }

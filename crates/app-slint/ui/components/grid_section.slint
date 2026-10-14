@@ -1,7 +1,7 @@
 // 表格大区（GridSection）：右侧主区域，聚合所有表格相关子区域。
 // 子区域顺序（从上到下）：
 //   1. GridHeaderBar  ─ 详情标题（表名 / 行列数）
-//   2. GridRibbon     ─ 表级功能 bar（枚举显示名字…）
+//   2. GridRibbon     ─ 表级功能 bar（显示引用名称 / 被引用展示列…）
 //   3. FormulaBar     ─ 公式栏（仅在选中单元格时显示）
 //   4. GridArea       ─ 表格本体（vertical-stretch）
 //   5. StatusBar      ─ 状态栏（选区 / 光标位置）
@@ -21,10 +21,14 @@ export component GridSection inherits Rectangle {
     in property <string> subtitle: "";
 
     // ── 功能 bar ──
-    in-out property <bool> show-enum-name: false;
-    in property <bool> show-enum-name-enabled: true;
+    in-out property <bool> show-ref-name: false;
+    in property <bool> show-ref-name-enabled: true;
+    in property <[string]> display-field-options: ["ID"];
+    in-out property <int> display-field-index: 0;
+    in property <bool> display-field-enabled: false;
     in property <bool> excel-edit-enabled: false;
-    callback show-enum-name-toggled(bool);
+    callback show-ref-name-toggled(bool);
+    callback display-field-selected(string);
     callback excel-edit-clicked();
 
     // ── 公式栏 ──
@@ -93,10 +97,14 @@ export component GridSection inherits Rectangle {
             subtitle: root.subtitle;
         }
         GridRibbon {
-            show-enum-name <=> root.show-enum-name;
-            show-enum-name-enabled: root.show-enum-name-enabled;
+            show-ref-name <=> root.show-ref-name;
+            show-ref-name-enabled: root.show-ref-name-enabled;
+            display-field-options: root.display-field-options;
+            display-field-index <=> root.display-field-index;
+            display-field-enabled: root.display-field-enabled;
             excel-edit-enabled: root.excel-edit-enabled;
-            show-enum-name-toggled(c) => { root.show-enum-name-toggled(c); }
+            show-ref-name-toggled(c) => { root.show-ref-name-toggled(c); }
+            display-field-selected(s) => { root.display-field-selected(s); }
             excel-edit-clicked => { root.excel-edit-clicked(); }
         }
         FormulaBar {
@@ -167,7 +175,10 @@ export component GridSectionPreview inherits Window {
     GridSection {
         title: "📊 hero / HeroBase";
         subtitle: "Table · 3 行 · 5 列";
-        show-enum-name: true;
+        show-ref-name: true;
+        display-field-options: ["ID", "name", "desc"];
+        display-field-index: 1;
+        display-field-enabled: true;
         coord: "B3";
         formula-display: "战士";
         formula-editable: true;

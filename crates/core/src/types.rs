@@ -382,6 +382,16 @@ impl TblType {
         None
     }
 
+    /// 是否可作为「被引用展示列」（@10）：`str` / `int` / `txt` 的独立叶子列。
+    /// 排除引用（`@X`）、复合类型（`List` / `Set` / `Map` / `Tuple`）及 `long` / `float` / `double` / `bool`。
+    pub fn is_displayable(&self) -> bool {
+        self.paradigm == Paradigm::Base
+            && matches!(
+                self.params.first(),
+                Some(TypeParam::Base(BaseType::Str | BaseType::Int | BaseType::Txt))
+            )
+    }
+
     pub fn to_type_string(&self) -> String {
         let p: Vec<String> = self.params.iter().map(|b| b.type_string()).collect();
         match &self.paradigm {

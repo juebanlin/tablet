@@ -576,6 +576,7 @@ mod tests {
                 EnumEntry { id: "2".to_string(), name: "Mage".to_string(), desc: "法师".to_string() },
             ],
             dirty: false, deleted: false, original_entries: Vec::new(), saved: true,
+            display_field: None,
         };
         let out = gen_enum_file(&e, "Game.Config");
         assert!(out.contains("namespace Game.Config"));

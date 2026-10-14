@@ -356,7 +356,7 @@ GUI 入口：项目右键 →「项目设置...」→「分隔符」tab（含 25
 
 - 名字必须是有效配置项名（PascalCase，详见 @8.1）
 - 数据文件层**永远存 id**（int），不存名字
-- UI 渲染时可切换显示名字（详见 @04.5.2 功能区「枚举显示名字」开关）
+- UI 渲染时可切换引用列展示哪一列（详见 @10 / @04.5.2 功能区「显示引用名称」总闸 + 「被引用展示列」下拉）
 - 不能引用 constant（无 id 概念）
 - **可进入复合类型**：ref 作为「特殊 int」参与嵌套，`List<@Hero>` / `Map<int,@Skill>` / `Tuple2<@Hero,int>` 均合法（@S24）
   - 声明带目标表名；数据值仍是 int id；导出按 ref 语义退化为 int（enum 复合类型内的 XxxEnum 化暂未排期）
@@ -629,7 +629,7 @@ Lua 端全部展开为 table 字面量，不降级为 string。
 - 老 .tblschema 无 `# @meta` 行 → id 走文件名 stem 兜底（`full.tblschema` → `id=full`），name 等于 id
 - 重复 key 后者覆盖前者
 - key 大小写敏感
-- `# @meta` / `# @sep` directive 行必须出现在第一个 `[group/Name]` 之前；之后的 `#` 行视作普通注释（`# @preset` 例外，见 @08.4）
+- `# @meta` / `# @sep` directive 行必须出现在第一个 `[group/Name]` 之前；之后的 `#` 行视作普通注释（段内的 `# @preset` / `# @display` 例外，见 @01.10.5 / @01.10.6）
 
 UI 上是否展示 id 还是 name 由全局开关 `[ui] show_meta_id` 决定（@04.5.x、@03.4.10），默认 false 显示 name。
 
@@ -715,11 +715,32 @@ start_pos | Tuple2<int,int> | 5,10 | cs | 出生坐标
 
 预设数据是模板「开箱即用」的核心——例如三国题材模板 `sanguo.tblschema` 把所有英雄 / 兵种 / 建筑数据都打进 preset，新建项目时一键生成。
 
-### 10.6 注释与空行
+### 10.6 引用显示 directive `# @display`
 
-`#` 开头行 = 注释（除 `# @meta` / `# @sep` / `# @preset` 三种 directive）。空行 = 忽略。
+格式：在 `[group/Name] mode` 段内、段头行之后插入 `# @display: <列名>`，声明「本节点被 `@本节点名` 引用时展示哪一列」。这是工具内的**视图偏好**（详见 @10），不影响 .tbl 数据与导出。
 
-### 10.7 多文件合并
+```
+[hero/HeroType] enum
+# @display: name
+
+[hero/HeroBase] table
+# @display: title
+id    | int | cs | 英雄ID
+title | str | cs | 标题
+```
+
+约束：
+
+- 仅 Table / Enum 段有意义；Constant 段即使写了也被忽略（Constant 不作为引用目标）
+- 列名须为目标的**合格列**：枚举 = `name` / `desc`；表 = 类型为 `str` / `int` / `txt` 的字段
+- 缺省（不写该行）= 用类型默认（枚举 → `name`，表 → 原始 id）；序列化时默认不输出
+- 该信息**只住在 schema**，不写进 .tbl 数据；加载项目时由 schema 段回填到节点（详见 @10.4）
+
+### 10.7 注释与空行
+
+`#` 开头行 = 注释（除 `# @meta` / `# @sep` / `# @preset` / `# @display` 四种 directive）。空行 = 忽略。
+
+### 10.8 多文件合并
 
 | 规则 | 处理 |
 |------|------|

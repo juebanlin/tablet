@@ -144,11 +144,13 @@ fn enrich_selection(snap: &mut GridSnapshot, state: &AppState) {
 fn cell_display(state: &AppState, snap: &GridSnapshot, _r: usize, c: usize, raw: &str) -> String {
     if raw.is_empty() { return String::new(); }
     match snap.column_kinds.get(c) {
-        Some(ColumnKind::Ref { target }) if state.view_show_enum_name => {
-            display_for_table_cell(state, &Some((target.clone(), false, false)), raw)
+        Some(ColumnKind::Ref { target }) if state.view_show_ref_name => {
+            let maps = build_ref_display_maps(state, std::iter::once(target.as_str()));
+            display_for_table_cell(state, &maps, &Some((target.clone(), false, false)), raw)
         }
-        Some(ColumnKind::RefList { target }) if state.view_show_enum_name => {
-            display_for_table_cell(state, &Some((target.clone(), true, column_is_set(state, c))), raw)
+        Some(ColumnKind::RefList { target }) if state.view_show_ref_name => {
+            let maps = build_ref_display_maps(state, std::iter::once(target.as_str()));
+            display_for_table_cell(state, &maps, &Some((target.clone(), true, column_is_set(state, c))), raw)
         }
         Some(ColumnKind::ExportEnumCol) => {
             tablet_core::model::Export::from_str(raw).display().to_string()
@@ -275,6 +277,13 @@ fn build_table_grid(state: &AppState, group: &str, name: &str) -> GridSnapshot {
         mk_header_kinds_id_ro(ColumnKind::Text),             // field
     ];
 
+    // 被引用展示列（@10）：按本网格用到的目标预建 id→显示值 映射（一次构建，单元格 O(1) 查）。
+    let ref_maps = if state.view_show_ref_name {
+        build_ref_display_maps(state, ref_targets.iter().filter_map(|t| t.as_ref().map(|(n, _, _)| n.as_str())))
+    } else {
+        RefDisplayMaps::new()
+    };
+
     let display_rows = valid_count + EXTRA_ROWS;
     let mut data_rows = Vec::with_capacity(display_rows);
     for r in 0..display_rows {
@@ -283,7 +292,7 @@ fn build_table_grid(state: &AppState, group: &str, name: &str) -> GridSnapshot {
             let raw = row_data.and_then(|row| row.get(c)).cloned().unwrap_or_default();
             let has_error = state.engine.has_active_cell_error(group, name, r, c);
             let is_empty_ref = ref_targets[c].is_some() && raw.is_empty();
-            let display = display_for_table_cell(state, &ref_targets[c], &raw);
+            let display = display_for_table_cell(state, &ref_maps, &ref_targets[c], &raw);
             DataCell {
                 text: SharedString::from(display),
                 has_error,
@@ -326,6 +335,15 @@ fn build_constant_grid(state: &AppState, group: &str, name: &str) -> GridSnapsho
 
     let valid_count = constant.entries.iter().filter(|e| !e.name.is_empty()).count();
 
+    // 被引用展示列（@10）：预建本 Constant 各引用目标的 id→显示值 映射。
+    let const_ref_targets: Vec<Option<(String, bool, bool)>> =
+        constant.entries.iter().map(const_value_ref_target).collect();
+    let ref_maps = if state.view_show_ref_name {
+        build_ref_display_maps(state, const_ref_targets.iter().filter_map(|t| t.as_ref().map(|(n, _, _)| n.as_str())))
+    } else {
+        RefDisplayMaps::new()
+    };
+
     let display_rows = valid_count + EXTRA_ROWS;
     let mut data_rows = Vec::with_capacity(display_rows);
     for r in 0..display_rows {
@@ -333,19 +351,9 @@ fn build_constant_grid(state: &AppState, group: &str, name: &str) -> GridSnapsho
         let cells = match entry {
             Some(e) => {
                 let export_disp = e.export.display().to_string();
-                // value 列：若 tbl_type 是 @Xxx 引用（或 List<@X>），按 view_show_enum_name 走 id→name 翻译
-                let value_ref_target: Option<(String, bool, bool)> = tablet_core::types::TblType::parse(&e.tbl_type)
-                    .and_then(|t| match t.paradigm {
-                        tablet_core::types::Paradigm::Ref => t.ref_name.map(|n| (n, false, false)),
-                        tablet_core::types::Paradigm::List | tablet_core::types::Paradigm::Set => {
-                            match t.params.first() {
-                                Some(tablet_core::types::TypeParam::Ref(n)) => Some((n.clone(), true, t.paradigm == tablet_core::types::Paradigm::Set)),
-                                _ => None,
-                            }
-                        }
-                        _ => None,
-                    });
-                let value_disp = display_for_table_cell(state, &value_ref_target, &e.value);
+                // value 列：若 tbl_type 是 @Xxx 引用（或 List<@X>），按总闸走 id→显示值 翻译
+                let value_ref_target = const_ref_targets.get(r).cloned().flatten();
+                let value_disp = display_for_table_cell(state, &ref_maps, &value_ref_target, &e.value);
                 let value_has_error = state.engine.has_active_cell_error(group, name, r, 2);
                 let value_is_empty_ref = value_ref_target.is_some() && e.value.is_empty();
                 vec![
@@ -456,28 +464,99 @@ fn plain_cell(state: &AppState, group: &str, name: &str, r: usize, c: usize, tex
     }
 }
 
-/// Table 单元格的 display 转换：处理 @EnumName 引用列的 id → entry.name 映射。
-/// `(name, multi, is_set)`：multi 时按 List/Set 分隔符切分逐 id 翻译。
-fn display_for_table_cell(state: &AppState, ref_target: &Option<(String, bool, bool)>, raw: &str) -> String {
-    if raw.is_empty() { return String::new(); }
-    if !state.view_show_enum_name { return raw.to_string(); }
-    let (ref_name, multi, is_set) = match ref_target { Some(t) => t, None => return raw.to_string() };
-    for g in &state.engine.project().groups {
+// ──────── 被引用展示列（@10）────────
+
+/// 目标名 → (id → 显示值)。`None` = 该目标不翻译（无 display_field / 列不合格 / 不是表或枚举）。
+/// 每次 build_grid 按当前网格用到的目标构建一次，单元格查表 O(1)——避免逐格扫全表。
+type RefDisplayMaps = std::collections::HashMap<String, Option<std::collections::HashMap<String, String>>>;
+
+/// 为若干目标名构建 id→显示值 映射。
+fn build_ref_display_maps<'a>(
+    state: &AppState,
+    targets: impl Iterator<Item = &'a str>,
+) -> RefDisplayMaps {
+    let mut maps = RefDisplayMaps::new();
+    for t in targets {
+        if maps.contains_key(t) { continue; }
+        maps.insert(t.to_string(), build_one_target_map(state, t));
+    }
+    maps
+}
+
+/// 单个目标（表 / 枚举）的 id→显示值 映射。无 display_field 或列不合格 → None。
+fn build_one_target_map(state: &AppState, target: &str) -> Option<std::collections::HashMap<String, String>> {
+    use std::collections::HashMap;
+    let groups = &state.engine.project().groups;
+    // 枚举：display_field ∈ {name, desc}；未显式设 → 默认 name（@10）
+    for g in groups {
         for e in &g.enums {
-            if e.deleted || e.name != *ref_name { continue; }
-            let lookup = |id: &str| -> String {
-                e.entries.iter()
-                    .find(|en| en.id == id && !en.name.is_empty())
-                    .map(|en| en.name.clone())
-                    .unwrap_or_else(|| id.to_string())
-            };
-            if *multi {
-                let seps = &state.engine.project().schema.separators;
-                let sep = if *is_set { &seps.set } else { &seps.list };
-                return raw.split(sep).map(|s| lookup(s.trim())).collect::<Vec<_>>().join(sep);
+            if e.deleted || e.name != target { continue; }
+            let field = e.display_field.as_deref().unwrap_or(tablet_core::model::ENUM_DEFAULT_DISPLAY_FIELD);
+            let mut m = HashMap::new();
+            for en in &e.entries {
+                if en.id.is_empty() { continue; }
+                let v = if field == "desc" { &en.desc } else { &en.name };
+                if !v.is_empty() { m.insert(en.id.clone(), v.clone()); }
             }
-            return lookup(raw);
+            return Some(m);
         }
     }
-    raw.to_string()
+    // 表：display_field 必须是 str/int/txt 叶子列
+    for g in groups {
+        for t in &g.tables {
+            if t.deleted || t.name != target { continue; }
+            let field = t.display_field.as_deref()?;
+            let col = t.schema.fields.iter().position(|f| f.name == field
+                && tablet_core::types::TblType::parse(&f.tbl_type).map_or(false, |ty| ty.is_displayable()))?;
+            let idc = t.schema.index_col()?;
+            let mut m = HashMap::new();
+            for row in &t.records {
+                let id = row.get(idc).map(|s| s.trim()).unwrap_or("");
+                let v = row.get(col).map(|s| s.as_str()).unwrap_or("");
+                if !id.is_empty() && !v.is_empty() { m.insert(id.to_string(), v.to_string()); }
+            }
+            return Some(m);
+        }
+    }
+    None
+}
+
+/// Constant value 列的引用目标：`@X` / `List<@X>` / `Set<@X>` → (目标名, multi, is_set)。
+fn const_value_ref_target(e: &tablet_core::model::ConstEntry) -> Option<(String, bool, bool)> {
+    tablet_core::types::TblType::parse(&e.tbl_type).and_then(|t| match t.paradigm {
+        tablet_core::types::Paradigm::Ref => t.ref_name.map(|n| (n, false, false)),
+        tablet_core::types::Paradigm::List | tablet_core::types::Paradigm::Set => {
+            match t.params.first() {
+                Some(tablet_core::types::TypeParam::Ref(n)) => Some((n.clone(), true, t.paradigm == tablet_core::types::Paradigm::Set)),
+                _ => None,
+            }
+        }
+        _ => None,
+    })
+}
+
+/// 引用单元格的 display：按目标节点 `display_field` 把 id 翻成显示值（@10）。
+/// `(name, multi, is_set)`：multi 时按 List/Set 分隔符切分逐元素翻译。
+fn display_for_table_cell(
+    state: &AppState,
+    maps: &RefDisplayMaps,
+    ref_target: &Option<(String, bool, bool)>,
+    raw: &str,
+) -> String {
+    if raw.is_empty() { return String::new(); }
+    if !state.view_show_ref_name { return raw.to_string(); }
+    let (ref_name, multi, is_set) = match ref_target { Some(t) => t, None => return raw.to_string() };
+    let map = match maps.get(ref_name).and_then(|m| m.as_ref()) {
+        Some(m) => m,
+        None => return raw.to_string(),
+    };
+    let lookup = |id: &str| -> String {
+        map.get(id.trim()).cloned().unwrap_or_else(|| id.to_string())
+    };
+    if *multi {
+        let seps = &state.engine.project().schema.separators;
+        let sep = if *is_set { &seps.set } else { &seps.list };
+        return raw.split(sep).map(|s| lookup(s)).collect::<Vec<_>>().join(sep);
+    }
+    lookup(raw)
 }

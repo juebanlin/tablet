@@ -565,6 +565,7 @@ mod tests {
             original_fields: fields,
             saved: false,
             fmt_ver: DEFAULT_TBL_VERSION,
+            display_field: None,
         }
     }
 
@@ -589,6 +590,7 @@ mod tests {
                 EnumEntry { id: "1".into(), name: "RED".into(), desc: "红".into() },
             ],
             dirty: false, deleted: false, original_entries: vec![EnumEntry { id: "1".into(), name: "RED".into(), desc: "红".into() }], saved: false,
+            display_field: None,
         }
     }
 

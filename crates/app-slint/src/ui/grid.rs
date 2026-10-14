@@ -26,6 +26,77 @@ fn shown_node_key(state: &AppState) -> String {
     }
 }
 
+/// 「被引用展示列」下拉里代表「不转换、显示原始 id」的选项标签（@10）。
+const DISPLAY_FIELD_ID: &str = "ID";
+
+/// 计算「被引用展示列」下拉的选项 / 当前下标 / 是否可用（@10）。
+/// 仅选中 表/枚举 节点时可用；选项 = `[ID] + 合格列`（表 = str/int/txt 叶子列，枚举 = name/desc）。
+fn display_field_dropdown(state: &AppState) -> (Vec<slint::SharedString>, i32, bool) {
+    let mut options: Vec<String> = Vec::new();
+    let mut current: Option<String> = None;
+    let mut enabled = false;
+    match &state.selected {
+        Some(SelectedNode::Table { group, name, .. }) => {
+            enabled = true;
+            options.push(DISPLAY_FIELD_ID.to_string());
+            if let Some(t) = state.engine.find_table(group, name) {
+                current = t.display_field.clone();
+                for f in &t.schema.fields {
+                    if f.name == "id" { continue; }
+                    if tablet_core::types::TblType::parse(&f.tbl_type).map_or(false, |ty| ty.is_displayable()) {
+                        options.push(f.name.clone());
+                    }
+                }
+            }
+        }
+        Some(SelectedNode::Enum { group, name, .. }) => {
+            enabled = true;
+            // 枚举默认展示 name，故选项为 name/desc、不含 ID（@10）
+            options.push(tablet_core::model::ENUM_DEFAULT_DISPLAY_FIELD.to_string());
+            options.push("desc".to_string());
+            if let Some(e) = state.engine.find_enum(group, name) {
+                current = e.display_field.clone();
+            }
+        }
+        _ => {}
+    }
+    if options.is_empty() { options.push(DISPLAY_FIELD_ID.to_string()); }
+    let index = current
+        .and_then(|c| options.iter().position(|o| *o == c))
+        .unwrap_or(0) as i32;
+    (options.into_iter().map(|s| s.into()).collect(), index, enabled)
+}
+
+/// 「被引用展示列」下拉回调（@10）：把当前选中表/枚举节点的 display_field 设为 value
+/// （`ID` = 清除），标 schema_dirty，等保存项目时随 project.tblschema 落盘。
+fn set_selected_display_field(state: &Rc<RefCell<AppState>>, value: &str) {
+    let mut st = state.borrow_mut();
+    let sel = st.selected.clone();
+    match sel {
+        Some(SelectedNode::Table { project_id, group, name }) => {
+            if st.engine.active_project_id() != Some(project_id.as_str()) { return; }
+            // 表的「ID」= 不转换（清空）；其它列名显式存储（@10）
+            let new = if value == DISPLAY_FIELD_ID { None } else { Some(value.to_string()) };
+            let Some(t) = st.engine.find_table_mut(&group, &name) else { return; };
+            if t.display_field == new { return; }
+            t.display_field = new;
+        }
+        Some(SelectedNode::Enum { project_id, group, name }) => {
+            if st.engine.active_project_id() != Some(project_id.as_str()) { return; }
+            // 枚举默认即 name：选 name = 清空（回默认）；其余显式存储（@10）
+            let new = if value == tablet_core::model::ENUM_DEFAULT_DISPLAY_FIELD { None } else { Some(value.to_string()) };
+            let Some(e) = st.engine.find_enum_mut(&group, &name) else { return; };
+            if e.display_field == new { return; }
+            e.display_field = new;
+        }
+        _ => return,
+    }
+    if let Some(p) = st.engine.active_mut() {
+        p.schema_dirty = true;
+    }
+    st.engine.ui_log(format!("[被引用展示列] 设为 {}", value));
+}
+
 pub fn push(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
     // 切表/切到不同节点时，把表格区滚动条重置到顶部/左上；
     // 同一节点内的编辑类 push（改格/增删行列）key 不变，不误重置。
@@ -57,14 +128,21 @@ pub fn push(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
     }
     ui_h.set_grid_title(snap.title.into());
     ui_h.set_grid_subtitle(snap.subtitle.into());
-    // 「枚举显示名字」对 Table / Constant 启用：
+    // 「显示引用名称」总闸（@10）对 Table / Constant 启用：
     // - Table：列级 @ref 列；
     // - Constant：value 列单元格级 @ref 类型（视行 entry.tbl_type 而定）。
     // Enum 没有引用列，禁用。
-    ui_h.set_show_enum_name_enabled(matches!(
+    ui_h.set_show_ref_name_enabled(matches!(
         state.borrow().selected,
         Some(SelectedNode::Table { .. } | SelectedNode::Constant { .. })
     ));
+    // 「被引用展示列」下拉（@10）：选中 表/枚举 节点时，可设该节点被引用时的展示列。
+    {
+        let (opts, idx, en) = display_field_dropdown(&state.borrow());
+        ui_h.set_display_field_options(slint::ModelRc::new(slint::VecModel::from(opts)));
+        ui_h.set_display_field_index(idx);
+        ui_h.set_display_field_enabled(en);
+    }
     // 「Excel 编辑」绑定具体节点（Table / Constant / Enum 都接受）；
     // - 未选中或选 Project / Group → disabled
     // - 已有 Excel 编辑会话进行中 → disabled（@plans §2.4 全局锁）
@@ -133,12 +211,21 @@ fn push_selection_only(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
 pub fn wire(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
     use super::grid_actions;
 
-    // 「枚举显示名字」开关 → 重建 grid 让 @EnumName 列展示切换
+    // 「显示引用名称」总闸（@10）→ 重建 grid 让引用列展示切换
     {
         let s = state.clone();
         let weak = ui_h.as_weak();
-        ui_h.on_show_enum_name_toggled(move |c| {
-            s.borrow_mut().view_show_enum_name = c;
+        ui_h.on_show_ref_name_toggled(move |c| {
+            s.borrow_mut().view_show_ref_name = c;
+            if let Some(ui_h) = weak.upgrade() { push(&ui_h, &s); }
+        });
+    }
+    // 「被引用展示列」下拉（@10）：改当前选中表/枚举节点的 display_field → 标 schema_dirty → 重建 grid
+    {
+        let s = state.clone();
+        let weak = ui_h.as_weak();
+        ui_h.on_display_field_selected(move |value| {
+            set_selected_display_field(&s, value.as_str());
             if let Some(ui_h) = weak.upgrade() { push(&ui_h, &s); }
         });
     }

@@ -30,7 +30,7 @@
   - 节点三层：Project（🏠）→ Group（📁）→ Table（📊）/ Constant（📋）/ Enum（🔤）
   - 状态 chip：`+` 新增（绿） / `*` 修改（黄） / `-` 删除（红） / `!` 验证错（红）
 - **中间 GridSection** —— Excel 风格表格编辑：
-  - GridRibbon：`Excel 编辑`（调起外部 Excel/WPS/LibreOffice）+ 枚举显示名字开关
+  - GridRibbon：`Excel 编辑`（调起外部 Excel/WPS/LibreOffice）+ 显示引用名称总闸 + 被引用展示列下拉（@10）
   - Table 4 行表头（desc 描述 / export 导出方向 / type 类型 / field 字段名）+ 数据区直接编辑
   - 单击进选区，双击进编辑，Ctrl+C/X/V 与 Excel 完全互通；列右键插入/删除列；行号右键插入/删除行
   - 类型选择器 / 引用选择器弹窗，支持 14 种范式（List / Set / Map / Tuple2-4 / @ref ...）

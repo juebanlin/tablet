@@ -264,7 +264,7 @@ impl TypeSelectorState {
 }
 
 /// 引用选择器状态。Ref 列单击呼出，列出被引用 table/enum 的所有可选条目。
-/// 选中后写入 id（数据文件层永远存 id；展示按 ref_show_enum_name 决定）。
+/// 选中后写入 id（数据文件层永远存 id；展示由「显示引用名称」总闸 + 目标 display_field 决定，@10）。
 pub struct RefPickerState {
     pub open: bool,
     /// 被引用项名称（@HeroBase / @HeroType 中的 HeroBase / HeroType）
@@ -904,8 +904,9 @@ pub struct AppState {
     pub project_expanded: HashSet<String>,
     /// slint TreeNode.id → TreeTarget；每次 rebuild 时同步刷新。
     pub tree_targets: Vec<TreeTarget>,
-    /// 工具栏「枚举名」开关：开启时 @EnumName 列展示 entry.name，关闭时展示 id。
-    pub view_show_enum_name: bool,
+    /// 工具栏「显示引用名称」总闸（@10）：开启时引用列按目标节点 display_field 显示，
+    /// 关闭时一律显示原始 id。会话内状态，不持久化。
+    pub view_show_ref_name: bool,
     /// 当前 grid 选区（用于公式栏 / 状态栏）。切换节点时清空。
     pub grid_selection: GridSelection,
     /// 当前 grid 正在显示的节点 key（"P:/G:/T:/C:/E:..."）。grid::push 用它判断是否发生了
@@ -1011,7 +1012,7 @@ impl AppState {
             tree_expanded: expanded,
             project_expanded,
             tree_targets: Vec::new(),
-            view_show_enum_name: false,
+            view_show_ref_name: false,
             grid_selection: GridSelection::None,
             grid_shown_key: String::new(),
             grid_column_kinds: Vec::new(),

@@ -134,13 +134,15 @@ fn load_specific_project_impl(
     // （project.toml 中的 [separators] 段会被忽略）
 
     let data_dir = project_root.join("config");
-    let groups = if data_dir.is_dir() {
+    let mut groups = if data_dir.is_dir() {
         load_groups_in(&data_dir)?
     } else {
         std::fs::create_dir_all(&data_dir)?;
         println!("已创建配置目录: {}", data_dir.display());
         Vec::new()
     };
+    // 被引用展示列（@10）：.tbl 不含该信息，从 project.tblschema 段回填到节点。
+    crate::tblschema::apply_display_to_groups(&mut groups, &schema);
 
     Ok(Project {
         workdir: workdir.to_path_buf(),

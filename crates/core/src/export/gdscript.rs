@@ -459,6 +459,7 @@ mod tests {
             dirty: false,
             deleted: false,
             original_entries: Vec::new(), saved: true,
+            display_field: None,
         };
         let out = export_enum_gd(&e);
         assert!(out.contains("const HeroType = {"));

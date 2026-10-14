@@ -831,6 +831,7 @@ mod tests {
             original_fields: vec![],
             saved: true,
             fmt_ver: crate::tbl::TblVersion::V3,
+            display_field: None,
         }
     }
 

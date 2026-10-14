@@ -1,14 +1,20 @@
-// 表格区功能 bar：归属于当前选中表，显示表级开关 / 动作（枚举显示名字、Excel 编辑…）。
-// 与 GridArea 等宽。对应 docs/02-UI设计.md §5.2。
+// 表格区功能 bar：归属于当前选中表，显示表级开关 / 动作（显示引用名称、被引用展示列、Excel 编辑…）。
+// 与 GridArea 等宽。对应 docs/02-UI设计.md §5.2 / docs/10-引用显示.md。
 
 import { Theme } from "../theme.slint";
-import { Button, CheckBox } from "std-widgets.slint";
+import { Button, CheckBox, ComboBox } from "std-widgets.slint";
 
 export component GridRibbon inherits Rectangle {
-    in-out property <bool> show-enum-name: false;
-    in property <bool> show-enum-name-enabled: true;
+    // 显示引用名称总闸（@10）：勾上时引用列按目标节点 display_field 显示；不勾一律显原始 id。
+    in-out property <bool> show-ref-name: false;
+    in property <bool> show-ref-name-enabled: true;
+    // 被引用展示列下拉（@10）：当前 表/枚举 节点被引用时的展示列。选项由后端推送。
+    in property <[string]> display-field-options: ["ID"];
+    in-out property <int> display-field-index: 0;
+    in property <bool> display-field-enabled: false;
     in property <bool> excel-edit-enabled: false;
-    callback show-enum-name-toggled(bool);
+    callback show-ref-name-toggled(bool);
+    callback display-field-selected(string);
     callback excel-edit-clicked();
 
     height: Theme.ribbon-h;
@@ -28,10 +34,27 @@ export component GridRibbon inherits Rectangle {
             clicked => { root.excel-edit-clicked(); }
         }
         CheckBox {
-            text: "枚举显示名字";
-            checked <=> root.show-enum-name;
-            enabled: root.show-enum-name-enabled;
-            toggled => { root.show-enum-name-toggled(self.checked); }
+            text: "显示引用名称";
+            checked <=> root.show-ref-name;
+            enabled: root.show-ref-name-enabled;
+            toggled => { root.show-ref-name-toggled(self.checked); }
+        }
+        HorizontalLayout {
+            spacing: Theme.sp-2;
+            alignment: start;
+            Text {
+                text: "被引用展示列:";
+                vertical-alignment: center;
+                color: Theme.text-secondary;
+                font-size: Theme.fs-normal;
+            }
+            ComboBox {
+                model: root.display-field-options;
+                current-index <=> root.display-field-index;
+                enabled: root.display-field-enabled;
+                width: 140px;
+                selected(s) => { root.display-field-selected(s); }
+            }
         }
     }
 }
@@ -42,7 +65,10 @@ export component GridRibbonPreview inherits Window {
     height: 50px;
 
     GridRibbon {
-        show-enum-name: true;
+        show-ref-name: true;
+        display-field-options: ["ID", "name", "desc", "title"];
+        display-field-index: 1;
+        display-field-enabled: true;
         excel-edit-enabled: true;
     }
 }
