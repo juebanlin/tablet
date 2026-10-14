@@ -1,5 +1,6 @@
 // 引用选择器对话框：被引用项的列表 + id 列 + 辅助列 + 手动输入。
 
+use std::cell::OnceCell;
 use std::cell::RefCell;
 use std::rc::Rc;
 
@@ -208,7 +209,20 @@ pub fn push(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
             selected,
         }
     }).collect();
-    ui_h.set_rp_rows(slint::ModelRc::new(slint::VecModel::from(filtered)));
+    // 复用同一个 rows model（in-place set_row_data），不要整张替换：
+    // 单击选中会触发 push，若此处重建 model，slint Repeater 会销毁行 TouchArea，
+    // 第二次点击落在新实例上 → double-clicked 永远不触发，双击确认失效。
+    thread_local! {
+        static REF_ROWS_MODEL: OnceCell<Rc<slint::VecModel<RefRow>>> = const { OnceCell::new() };
+    }
+    REF_ROWS_MODEL.with(|cell| {
+        let model = cell.get_or_init(|| {
+            let m = Rc::new(slint::VecModel::<RefRow>::default());
+            ui_h.set_rp_rows(slint::ModelRc::from(m.clone()));
+            m
+        });
+        crate::ui::model_sync::sync_vec_model(model, filtered);
+    });
 
     let preview = if rp.multi {
         if rp.selected_ids.is_empty() {
@@ -230,8 +244,10 @@ pub fn push(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
 }
 
 /// 写回当前 RefPicker 的选中 id 到 cell（空字符串 = 清空）。
-fn commit(state: &Rc<RefCell<AppState>>, value: String) {
-    let mut st = state.borrow_mut();
+///
+/// 接 `&mut AppState` 而不是 `&Rc<RefCell<AppState>>`：调用方多半已经持有借用，
+/// 这里再 borrow_mut() 会 panic。用 `&mut` 让编译器保证「调用时无未释放的借用」。
+fn commit(st: &mut AppState, value: String) {
     let r = match st.ref_picker.editing_row { Some(v) => v, None => return };
     let c = match st.ref_picker.editing_col { Some(v) => v, None => return };
     let group = st.ref_picker.editing_group.clone();
@@ -331,10 +347,14 @@ pub fn wire(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
                     toggle_multi(&s, &id);
                     if let Some(ui_h) = weak.upgrade() { push(&ui_h, &s); }
                 } else {
-                    let mut st = s.borrow_mut();
-                    st.ref_picker.selected_id = id.clone();
-                    st.ref_picker.manual_value = id.clone();
-                    commit(&s, id);
+                    // 借用包在块里：commit / refresh 都还要拿 state，
+                    // guard 留到外块就是「already borrowed」panic。
+                    {
+                        let mut st = s.borrow_mut();
+                        st.ref_picker.selected_id = id.clone();
+                        st.ref_picker.manual_value = id.clone();
+                        commit(&mut st, id);
+                    }
                     if let Some(ui_h) = weak.upgrade() {
                         refresh::after_grid_edit(&ui_h, &s);
                         push(&ui_h, &s);
@@ -363,7 +383,7 @@ pub fn wire(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
                     st.ref_picker.selected_id.clone()
                 }
             };
-            commit(&s, val);
+            commit(&mut s.borrow_mut(), val);
             if let Some(ui_h) = weak.upgrade() {
                 refresh::after_grid_edit(&ui_h, &s);
                 push(&ui_h, &s);
@@ -374,7 +394,7 @@ pub fn wire(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
         let s = state.clone();
         let weak = ui_h.as_weak();
         ui_h.on_rp_clear(move || {
-            commit(&s, String::new());
+            commit(&mut s.borrow_mut(), String::new());
             if let Some(ui_h) = weak.upgrade() {
                 refresh::after_grid_edit(&ui_h, &s);
                 push(&ui_h, &s);

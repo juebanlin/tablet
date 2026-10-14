@@ -21,7 +21,7 @@ use crate::{dialogs, refresh, ui, AppWindow, TreeNode};
 pub fn push(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
     let nodes = convert::build_tree_nodes(&mut state.borrow_mut());
     thread_local! {
-        static TREE_MODEL: OnceCell<Rc<slint::VecModel<TreeNode>>> = OnceCell::new();
+        static TREE_MODEL: OnceCell<Rc<slint::VecModel<TreeNode>>> = const { OnceCell::new() };
     }
     TREE_MODEL.with(|cell| {
         let model = cell.get_or_init(|| {
@@ -29,29 +29,8 @@ pub fn push(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
             ui_h.set_tree_nodes(slint::ModelRc::from(m.clone()));
             m
         });
-        sync_vec_model(model, nodes);
+        crate::ui::model_sync::sync_vec_model(model, nodes);
     });
-}
-
-/// 把 model 内容刷新成 new_items，复用尽可能多的行（in-place set_row_data），
-/// 使 slint Repeater 不销毁现有 TouchArea。
-fn sync_vec_model<T: Clone + 'static>(model: &Rc<slint::VecModel<T>>, new_items: Vec<T>) {
-    use slint::Model;
-    let old_len = model.row_count();
-    let new_len = new_items.len();
-    let common = old_len.min(new_len);
-    for (i, item) in new_items.iter().take(common).enumerate() {
-        model.set_row_data(i, item.clone());
-    }
-    if new_len > old_len {
-        for item in new_items.into_iter().skip(common) {
-            model.push(item);
-        }
-    } else {
-        for _ in new_len..old_len {
-            model.remove(new_len);
-        }
-    }
 }
 
 /// project_sort 字符串 ↔ slint ComboBox 索引。
