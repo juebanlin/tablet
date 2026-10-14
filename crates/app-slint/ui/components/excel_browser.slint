@@ -9,7 +9,15 @@ export component ExcelBrowser inherits Rectangle {
     callback sync-clicked();
     callback delete-clicked();
     callback refresh-clicked();
+    callback open-folder-clicked();
     callback file-opened(int);
+
+    // ── 卡片平铺：固定尺寸 + 按面板宽度自适应列数 ──
+    property <length> card-w: 104px;
+    property <length> card-h: 68px;
+    // length / length 得 float，赋给 int 隐式截断（= floor）。
+    // 减去 sp-6 预留右侧滚动条与内边距，避免出现横向滚动条。
+    property <int> cols: max(1, floor((root.width - Theme.sp-6) / (card-w + Theme.sp-2)));
 
     background: Theme.bg-panel;
     VerticalLayout {
@@ -41,36 +49,63 @@ export component ExcelBrowser inherits Rectangle {
                     Text { text: "打开"; font-size: Theme.fs-tiny; color: Theme.text-secondary; vertical-alignment: center; horizontal-alignment: center; }
                     TouchArea { clicked => { root.open-selected(); } }
                 }
+                Rectangle { width: 56px; height: 18px;
+                    background: Theme.bg-row-hover; border-radius: 2px;
+                    Text { text: "打开目录"; font-size: Theme.fs-tiny; color: Theme.text-secondary; vertical-alignment: center; horizontal-alignment: center; }
+                    TouchArea { clicked => { root.open-folder-clicked(); } }
+                }
             }
         }
+        // 卡片平铺网格：GridLayout 不自动换行，靠 row/col 显式定位
         ScrollView {
-            VerticalLayout { spacing: 2px; padding: 4px;
-                if root.files.length == 0 : Rectangle { height: 22px;
+            GridLayout {
+                spacing: Theme.sp-2;
+                padding: Theme.sp-2;
+                if root.files.length == 0 : Rectangle {
+                    row: 0; col: 0;
+                    height: 22px;
                     Text { x: 6px; text: "(无 Excel 文件)"; font-size: Theme.fs-tiny; color: Theme.text-disabled; vertical-alignment: center; }
                 }
                 for file[i] in root.files : Rectangle {
-                    height: 28px;
+                    row: i / root.cols;
+                    col: mod(i, root.cols);
+                    width: root.card-w;
+                    height: root.card-h;
                     border-width: 1px; border-radius: 3px;
                     border-color: root.selected[i] ? Theme.border-selected : Theme.border-light;
-                    background: root.selected[i] ? Theme.bg-row-selected : Theme.bg-panel;
-                    HorizontalLayout { spacing: 4px; padding-left: 4px;
+                    background: root.selected[i] ? Theme.bg-row-selected
+                              : (hover.has-hover ? Theme.bg-row-hover : Theme.bg-panel);
+                    VerticalLayout {
+                        spacing: 2px; padding: Theme.sp-2;
                         Text {
-                            text: "📄"; font-size: Theme.fs-small; vertical-alignment: center; width: 20px;
+                            text: "📄"; font-size: Theme.fs-heading;
+                            horizontal-alignment: center; vertical-alignment: center;
                         }
                         Text {
                             text: file;
-                            font-size: Theme.fs-small; color: Theme.text-primary; vertical-alignment: center;
+                            font-size: Theme.fs-tiny; color: Theme.text-primary;
+                            horizontal-alignment: center; overflow: elide;
                         }
                     }
-                    TouchArea {
-                        clicked => { root.toggle-file(i); }
-                        double-clicked => { root.file-opened(i); }
+                    hover := TouchArea {
+                        // clicked 信号不暴露 modifiers，故用 pointer-event 在按下时记录 Ctrl 状态
+                        // （同 grid_area.slint 对 shift 的兜底手法）。
+                        property <bool> last-ctrl: false;
+                        clicked => {
+                            if (self.last-ctrl) { root.toggle-file(i); } // Ctrl+单击 = 切换该项（多选）
+                            else { root.select-file(i); }                 // 单击 = 单选
+                        }
+                        double-clicked => { root.file-opened(i); }        // 双击 = 打开
+                        pointer-event(e) => {
+                            if (e.kind == PointerEventKind.down) { self.last-ctrl = e.modifiers.control; }
+                        }
                     }
                 }
             }
         }
     }
 
+    callback select-file(int);
     callback toggle-file(int);
     callback open-selected();
 }

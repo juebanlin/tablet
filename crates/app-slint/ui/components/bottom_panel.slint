@@ -89,7 +89,9 @@ export component BottomPanel inherits Rectangle {
                 sync-clicked => { root.excel-sync-clicked(); }
                 delete-clicked => { root.excel-delete-clicked(); }
                 refresh-clicked => { root.excel-refresh-clicked(); }
+                open-folder-clicked => { root.excel-open-folder-clicked(); }
                 file-opened(idx) => { root.excel-file-opened(idx); }
+                select-file(i) => { root.excel-select-file(i); }
                 toggle-file(i) => { root.excel-toggle-file(i); }
                 open-selected => { root.excel-open-selected(); }
             }
@@ -103,7 +105,9 @@ export component BottomPanel inherits Rectangle {
     callback excel-sync-clicked();
     callback excel-delete-clicked();
     callback excel-refresh-clicked();
+    callback excel-open-folder-clicked();
     callback excel-file-opened(int);
+    callback excel-select-file(int);
     callback excel-toggle-file(int);
     callback excel-open-selected();
 }

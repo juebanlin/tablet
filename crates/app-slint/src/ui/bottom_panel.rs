@@ -115,18 +115,41 @@ pub fn wire(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
         }
     });
 
-    // toggle-file: toggle one file in/out of selection
+    // open-folder: 用系统文件管理器打开存放 excel 文件的 .excel 目录
+    let s = state.clone();
+    ui.on_excel_open_folder_clicked(move || {
+        let st = s.borrow();
+        let Some(pid) = st.engine.active_project_id() else { return };
+        let Some(project) = st.engine.find_project(pid) else { return };
+        let dir = project.project_root.join(".excel");
+        let _ = std::fs::create_dir_all(&dir); // 目录不存在也先建再开，保证必开得出来
+        let _ = open::that(&dir);              // 复用 pending.rs 的 open::that(目录) 手法
+    });
+
+    // select-file: 单选（资源管理器式单击选中，只保留一项）
+    let ui_h2 = ui.as_weak();
+    ui.on_excel_select_file(move |idx| {
+        let Some(u) = ui_h2.upgrade() else { return };
+        let n = u.get_excel_selected().row_count();
+        if idx < 0 || idx as usize >= n { return; }
+        let mut new_sel = vec![false; n];
+        new_sel[idx as usize] = true;
+        u.set_excel_selected(slint::ModelRc::new(slint::VecModel::from(new_sel)));
+        u.set_excel_has_selection(true);
+    });
+
+    // toggle-file: Ctrl+单击 —— 在现有选区上切换该项（多选）
     let ui_h2 = ui.as_weak();
     ui.on_excel_toggle_file(move |idx| {
         let Some(u) = ui_h2.upgrade() else { return };
         let sel_model = u.get_excel_selected();
         let n = sel_model.row_count();
-        if idx >= n as i32 { return; }
+        if idx < 0 || idx as usize >= n { return; }
         let cur = sel_model.row_data(idx as usize).unwrap_or(false);
         let mut new_sel: Vec<bool> = (0..n).map(|i| sel_model.row_data(i).unwrap_or(false)).collect();
         new_sel[idx as usize] = !cur;
-        u.set_excel_selected(slint::ModelRc::new(slint::VecModel::from(new_sel.clone())));
         u.set_excel_has_selection(new_sel.iter().any(|x| *x));
+        u.set_excel_selected(slint::ModelRc::new(slint::VecModel::from(new_sel)));
     });
 
     // open-selected: open all selected files
