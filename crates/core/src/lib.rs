@@ -2,6 +2,7 @@
 // Copyright 2026 juebanlin <juebanlin@gmail.com>
 
 pub mod model;
+pub mod export_keys;
 pub mod types;
 pub mod enums;
 pub mod tbl;
