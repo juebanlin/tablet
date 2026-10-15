@@ -495,7 +495,7 @@ fn parse_constant_sheet(range: &Range<Data>, constant: &Constant) -> Result<Vec<
             name: cell_to_string(&row[0]),
             tbl_type: cell_to_string(&row[1]),
             value: cell_to_string(&row[2]),
-            export: Export::from_str(&cell_to_string(&row[3])),
+            export: Export::from_input(&cell_to_string(&row[3])),
             desc: cell_to_string(&row[4]),
         });
     }

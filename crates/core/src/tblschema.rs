@@ -166,6 +166,17 @@ pub fn parse_tblschema(content: &str) -> Result<TblSchema> {
                     .into_iter()
                     .map(|s| tbl_str::decode(s.trim(), "txt"))
                     .collect();
+                // 常量预设行的第 4 列是 export，和字段行同一个规矩：只认短码
+                if matches!(sec.mode, SchemaMode::Constant) {
+                    if let Some(raw) = cells.get(3) {
+                        if Export::parse_code(raw).is_none() {
+                            bail!("line {}: 常量 {} 的 export 值 \"{}\" 不合法——只接受短码 cs / c / s / -，留空 = cs",
+                                line_num + 1,
+                                cells.first().map(String::as_str).unwrap_or("").trim(),
+                                raw.trim());
+                        }
+                    }
+                }
                 sec.preset.push(cells);
             } else {
                 match sec.mode {
@@ -280,6 +291,12 @@ fn parse_field_line(line: &str, line_num: usize, mode: &SchemaMode) -> Result<Sc
         _ => {
             if parts.len() < 3 {
                 bail!("line {}: field needs at least name|type|export", line_num + 1);
+            }
+            // export 只认短码。以前这里不校验、`Export::from_str` 把任何不认识的
+            // 值静默当成"双端导出"——写错了也看不出来（@01.10）。
+            if Export::parse_code(parts[2].trim()).is_none() {
+                bail!("line {}: 字段 {} 的 export 值 \"{}\" 不合法——只接受短码 cs / c / s / -，留空 = cs",
+                    line_num + 1, parts[0].trim(), parts[2].trim());
             }
             Ok(SchemaField {
                 name: parts[0].trim().to_string(),
@@ -528,7 +545,8 @@ pub fn apply_schema_to_project(
                     name: f.name.clone(),
                     desc: f.desc.clone(),
                     tbl_type: f.tbl_type.clone(),
-                    export: Export::from_str(&f.export),
+                    // .tblschema 的字段行在 `parse_field_line` 已严格校验；这里拿到的是已校验数据
+                    export: Export::from_input(&f.export),
                 }).collect();
                 let new_len = fields.len();
 
@@ -585,7 +603,8 @@ pub fn apply_schema_to_project(
                         name:     row.first()  .cloned().unwrap_or_default(),
                         tbl_type: row.get(1)   .cloned().unwrap_or_default(),
                         value:    row.get(2)   .cloned().unwrap_or_default(),
-                        export:   Export::from_str(row.get(3).map(String::as_str).unwrap_or("cs")),
+                        // 常量预设行同样在 parse_tblschema 里校验过
+                        export:   Export::from_input(row.get(3).map(String::as_str).unwrap_or("cs")),
                         desc:     row.get(4)   .cloned().unwrap_or_default(),
                     }).collect()
                 } else {
@@ -908,6 +927,34 @@ id | int | cs | x
         assert_eq!(back.meta.category, "test");
         assert_eq!(back.meta.version, "0.1.0");
         assert_eq!(back.sections.len(), 1);
+    }
+
+    #[test]
+    fn rejects_non_short_code_export_with_line_number() {
+        // 以前这里不校验，`Export::from_str` 把任何不认识的值静默当成"双端导出"
+        let src = "#!tblschema v1
+
+[g/T] table
+id | int | cs | ID
+name | str | 前后端 | 名称
+";
+        let err = parse_tblschema(src).expect_err("中文 export 应当被拒绝");
+        let msg = err.to_string();
+        assert!(msg.contains("line 5"), "应当给出行号: {}", msg);
+        assert!(msg.contains("前后端"), "应当给出非法值: {}", msg);
+        assert!(msg.contains("name"), "应当点名字段: {}", msg);
+    }
+
+    #[test]
+    fn rejects_non_short_code_export_in_constant_preset() {
+        let src = "#!tblschema v1
+[global/C] constant
+# @preset
+max_level | int | 100 | 前后端 | 最大等级
+";
+        let err = parse_tblschema(src).expect_err("常量预设里的中文 export 应当被拒绝");
+        let msg = err.to_string();
+        assert!(msg.contains("max_level") && msg.contains("前后端"), "{}", msg);
     }
 
     #[test]

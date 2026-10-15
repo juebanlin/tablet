@@ -160,7 +160,7 @@ fn cell_display(state: &AppState, snap: &GridSnapshot, _r: usize, c: usize, raw:
             display_for_table_cell(state, &maps, &Some((target.clone(), true, column_is_set(state, c))), raw)
         }
         Some(ColumnKind::ExportEnumCol) => {
-            tablet_core::model::Export::from_str(raw).display().to_string()
+            tablet_core::model::Export::from_input(raw).display().to_string()
         }
         _ => raw.to_string(),
     }

@@ -61,11 +61,16 @@ impl TableCodec for V2Codec {
         let n = field_names.len();
         let mut field_defs = Vec::with_capacity(n);
         for i in 0..n {
+            let raw_export = exports.get(i).copied().unwrap_or("");
+            let Some(export) = Export::parse_code(raw_export) else {
+                bail!("{}: 第 {} 列（字段 {}）的 export 值 \"{}\" 不合法——只接受短码 cs / c / s / -，留空 = cs",
+                    path.display(), i + 1, field_names[i].trim(), raw_export.trim());
+            };
             field_defs.push(FieldDef {
                 name: field_names[i].trim().to_string(),
                 desc: descs.get(i).map(|s| s.trim().to_string()).unwrap_or_default(),
                 tbl_type: types.get(i).unwrap_or(&"str").trim().to_string(),
-                export: Export::from_str(exports.get(i).unwrap_or(&"")),
+                export,
             });
         }
 
@@ -170,7 +175,13 @@ impl TableCodec for V3Codec {
                         // 写盘走 `encode(desc, "txt")`（`serialize_table`），这里必须 decode 回去。
                         // 漏了的话 `|` 会被写成 `\|` 并把反斜杠留在 desc 里（V2 那条路是解码的）。
                         "desc" => f.desc = decode(val, "txt"),
-                        "export" => f.export = Export::from_str(val),
+                        "export" => {
+                            let Some(e) = Export::parse_code(val) else {
+                                bail!("{}: @field {} 的 export 值 \"{}\" 不合法——只接受短码 cs / c / s / -",
+                                    path.display(), f.name, val);
+                            };
+                            f.export = e;
+                        }
                         "type" => f.tbl_type = val.to_string(),
                         _ => {}
                     }
@@ -337,9 +348,13 @@ fn parse_constant(path: &Path, data_lines: &[&str]) -> Result<TblFile> {
         let value = decode(&raw[2], &tbl_type);
         let export_raw = raw.get(3).map(|s| decode(s, "str")).unwrap_or_default();
         let desc = raw.get(4).map(|s| decode(s, "txt")).unwrap_or_default();
+        let Some(export) = Export::parse_code(&export_raw) else {
+            bail!("{}: 常量 {} 的 export 值 \"{}\" 不合法——只接受短码 cs / c / s / -，留空 = cs",
+                path.display(), name.trim(), export_raw.trim());
+        };
         entries.push(ConstEntry {
             name: name.trim().to_string(), tbl_type: tbl_type.trim().to_string(),
-            value: value.trim().to_string(), export: Export::from_str(&export_raw),
+            value: value.trim().to_string(), export,
             desc: desc.trim().to_string(),
         });
     }
@@ -450,4 +465,41 @@ mod tests {
             assert_eq!(back.schema.fields[1].desc, desc, "desc 往返失真:\n{}", txt);
         }
     }
+    /// 中文展示值不是磁盘格式的一部分：`.tbl` 里读到就报错，不静默兜底
+    /// （CLAUDE.md「数据格式：不做旧数据兼容」）。
+    #[test]
+    fn v3_rejects_a_non_short_code_export() {
+        let good = serialize_table(&table_with_desc("x"));
+        assert!(good.contains("  export:cs"), "写盘应当是短码:
+{}", good);
+
+        // 只改 name 那一段——id 在前面，全量 replace 会先报 id
+        let bad = good.replace("desc:x
+  export:cs", "desc:x
+  export:前后端");
+        assert_ne!(bad, good, "夹具没改到，锚点过时了");
+        let p = tmp("bad_export");
+        std::fs::write(&p, &bad).unwrap();
+        let err = match parse_tbl(&p) { Err(e) => e, Ok(_) => panic!("中文 export 应当被拒绝") };
+        let _ = std::fs::remove_file(&p);
+        let msg = err.to_string();
+        assert!(msg.contains("前后端"), "错误里应当有那个值: {}", msg);
+        assert!(msg.contains("cs / c / s / -"), "错误里应当说清合法集合: {}", msg);
+        assert!(msg.contains("name"), "错误里应当点名是哪个字段: {}", msg);
+    }
+
+    #[test]
+    fn constant_tbl_rejects_a_non_short_code_export() {
+        let text = "#!tbl v2
+#mode constant
+---
+max_level|int|100|前后端|最大等级
+";
+        let p = tmp("bad_const_export");
+        std::fs::write(&p, text).unwrap();
+        let err = match parse_tbl(&p) { Err(e) => e, Ok(_) => panic!("中文 export 应当被拒绝") };
+        let _ = std::fs::remove_file(&p);
+        assert!(err.to_string().contains("max_level"), "应当点名是哪个常量: {}", err);
+    }
+
 }

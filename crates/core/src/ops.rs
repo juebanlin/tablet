@@ -1216,7 +1216,7 @@ impl ProjectEngine {
                         0 => entry.name = val,
                         1 => entry.tbl_type = val,
                         2 => entry.value = val,
-                        3 => entry.export = Export::from_str(&val),
+                        3 => entry.export = Export::from_input(&val),
                         4 => entry.desc = val,
                         _ => {}
                     }
@@ -1236,7 +1236,7 @@ impl ProjectEngine {
                 if let Some(field) = t.schema.fields.get_mut(col) {
                     match header_row {
                         0 => field.desc = val,
-                        1 => field.export = Export::from_str(&val),
+                        1 => field.export = Export::from_input(&val),
                         2 => field.tbl_type = val,
                         3 => {
                             let v = val.trim().to_string();
@@ -1370,7 +1370,7 @@ impl ProjectEngine {
                             0 => entry.name = cell.clone(),
                             1 => entry.tbl_type = cell.clone(),
                             2 => entry.value = cell.clone(),
-                            3 => entry.export = Export::from_str(cell),
+                            3 => entry.export = Export::from_input(cell),
                             4 => entry.desc = cell.clone(),
                             _ => {}
                         }

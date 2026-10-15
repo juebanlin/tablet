@@ -761,14 +761,32 @@ pub enum Export {
 }
 
 impl Export {
-    pub fn from_str(s: &str) -> Self {
+    /// **严格**解析：只认短码 `cs` / `c` / `s` / `-`；空串按 @01.10 的约定算默认 `cs`。
+    ///
+    /// 读 `.tbl` 与 `.tblschema` 一律走这里——**不合法就是 `None`，由调用方报错**，
+    /// 不静默兜底。中文展示值是给人和 Excel 用的，不是磁盘格式的一部分。
+    pub fn parse_code(s: &str) -> Option<Self> {
         match s.trim() {
-            "前后端" | "cs" | "" => Self::ClientServer,
-            "客户端" | "c" => Self::ClientOnly,
-            "服务器" | "s" => Self::ServerOnly,
-            "不导出" | "-" => Self::None,
-            _ => Self::ClientServer,  // 无效值默认为双端导出
+            "" | "cs" => Some(Self::ClientServer),
+            "c" => Some(Self::ClientOnly),
+            "s" => Some(Self::ServerOnly),
+            "-" => Some(Self::None),
+            _ => None,
         }
+    }
+
+    /// **宽松**解析：短码 + 中文展示值。**只给「人给的输入」用**——
+    /// 表头单元格编辑、剪贴板粘贴、以及 Excel 同步回读（策划在 Excel 里看到的就是中文）。
+    ///
+    /// 认不出来时返回双端导出（UI 侧输入框本来就有下拉，落到这里说明不是手打就是脏数据）。
+    pub fn from_input(s: &str) -> Self {
+        Self::parse_code(s).unwrap_or(match s.trim() {
+            "前后端" => Self::ClientServer,
+            "客户端" => Self::ClientOnly,
+            "服务器" => Self::ServerOnly,
+            "不导出" => Self::None,
+            _ => Self::ClientServer,
+        })
     }
 
     /// 展示值（界面用）：前后端 / 客户端 / 服务器 / 不导出
@@ -798,5 +816,31 @@ impl Export {
 
     pub fn options() -> &'static [Export] {
         &[Export::ClientServer, Export::ClientOnly, Export::ServerOnly, Export::None]
+    }
+}
+
+#[cfg(test)]
+mod export_parse_tests {
+    use super::*;
+
+    #[test]
+    fn parse_code_is_strict_and_from_input_is_not() {
+        // 短码：两个入口都认
+        for (raw, want) in [
+            ("", Export::ClientServer), ("cs", Export::ClientServer), (" cs ", Export::ClientServer),
+            ("c", Export::ClientOnly), ("s", Export::ServerOnly), ("-", Export::None),
+        ] {
+            assert_eq!(Export::parse_code(raw), Some(want.clone()), "raw={:?}", raw);
+            assert_eq!(Export::from_input(raw), want, "raw={:?}", raw);
+        }
+        // 中文：只有宽松入口认（UI 展示 / Excel 回读）
+        for raw in ["前后端", "客户端", "服务器", "不导出"] {
+            assert_eq!(Export::parse_code(raw), None, "严格解析不该接受中文: {}", raw);
+        }
+        assert_eq!(Export::from_input("前后端"), Export::ClientServer);
+        assert_eq!(Export::from_input("不导出"), Export::None);
+        // 垃圾值：严格拒绝；宽松兜底成双端（UI 输入框本来就有下拉）
+        assert_eq!(Export::parse_code("xyz"), None);
+        assert_eq!(Export::from_input("xyz"), Export::ClientServer);
     }
 }

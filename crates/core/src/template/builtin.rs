@@ -126,7 +126,7 @@ mod tests {
                             name: f.name.clone(),
                             desc: f.desc.clone(),
                             tbl_type: f.tbl_type.clone(),
-                            export: Export::from_str(&f.export),
+                            export: Export::from_input(&f.export),
                         }).collect();
                         let snap_fields = fields.clone();
                         g.tables.push(Table {
@@ -152,7 +152,7 @@ mod tests {
                                 name: g(0),
                                 tbl_type: g(1),
                                 value: g(2),
-                                export: Export::from_str(&g(3)),
+                                export: Export::from_input(&g(3)),
                                 desc: g(4),
                             }
                         }).collect();
