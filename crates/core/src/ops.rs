@@ -1807,6 +1807,9 @@ impl ProjectEngine {
                 }
             }
             ProjectAction::RenameGroup { project_id, old_name, new_name } => {
+                // 重命名弹窗预填当前名，直接回车 = 没改名。放过它——否则会白标一次
+                // schema_dirty（树上凭空多一个 🟡），盘上还做一次 A → A 的空 rename。
+                if old_name == new_name { return; }
                 let pid = project_id.clone();
                 if let Some(project) = self.find_project_mut(&pid) {
                     let config_dir = project.data_dir();
@@ -1834,6 +1837,8 @@ impl ProjectEngine {
                 self.ui_log(format!("[{}] 重命名 Group: {} → {}", project_id, old_name, new_name));
             }
             ProjectAction::RenameNode { project_id, group, old_name, new_name } => {
+                // 同 RenameGroup：预填后直接确认属常见操作，不是一次真正的改名。
+                if old_name == new_name { return; }
                 if let Some(project) = self.find_project_mut(project_id) {
                     if let Some(g) = project.groups.iter_mut().find(|g| g.name == *group) {
                         let old_path = g.dir.join(format!("{}.tbl", old_name));

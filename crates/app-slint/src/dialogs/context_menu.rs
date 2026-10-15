@@ -208,9 +208,8 @@ pub fn wire(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
                     s.borrow_mut().pending.open(PendingAction::NewEnum { project_id, group: name });
                 }
                 (Some(CtxMenuKind::TreeGroup { project_id, name }), "tree.rename-group") => {
-                    let mut st = s.borrow_mut();
-                    st.pending.open(PendingAction::RenameGroup { project_id, old_name: name.clone() });
-                    st.pending.input_buffer = name;
+                    // 预填由 PendingActionState::open 统一做（按 old_name）
+                    s.borrow_mut().pending.open(PendingAction::RenameGroup { project_id, old_name: name });
                 }
                 (Some(CtxMenuKind::TreeGroup { project_id, name }), "tree.delete-group") => {
                     s.borrow_mut().pending.open(PendingAction::DeleteGroup { project_id, group: name });
@@ -255,9 +254,8 @@ pub fn wire(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
                     }
                 }
                 (Some(CtxMenuKind::TreeNode { project_id, group, name, .. }), "tree.rename-node") => {
-                    let mut st = s.borrow_mut();
-                    st.pending.open(PendingAction::RenameNode { project_id, group, old_name: name.clone() });
-                    st.pending.input_buffer = name;
+                    // 预填由 PendingActionState::open 统一做（按 old_name）
+                    s.borrow_mut().pending.open(PendingAction::RenameNode { project_id, group, old_name: name });
                 }
                 (Some(CtxMenuKind::TreeNode { project_id, group, name, .. }), "tree.delete-node") => {
                     s.borrow_mut().pending.open(PendingAction::DeleteNode { project_id, group, name });

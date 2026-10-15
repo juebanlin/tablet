@@ -505,8 +505,14 @@ pub struct PendingActionState {
 
 impl PendingActionState {
     pub fn open(&mut self, action: PendingAction) {
+        // 重命名预填当前名字：录入框打开的应该是「现值可改」，不是空框。
+        // 放在这里而不是各调用点——调用点漏一次就退化成空框。
+        self.input_buffer = match &action {
+            PendingAction::RenameGroup { old_name, .. }
+            | PendingAction::RenameNode { old_name, .. } => old_name.clone(),
+            _ => String::new(),
+        };
         self.action = Some(action);
-        self.input_buffer.clear();
         self.error = None;
     }
     pub fn close(&mut self) {

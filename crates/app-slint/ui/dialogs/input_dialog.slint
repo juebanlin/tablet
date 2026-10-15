@@ -44,7 +44,10 @@ export component InputDialog inherits Rectangle {
                     width: 60px;
                 }
                 LineEdit {
-                    text: root.input-buffer;
+                    // 必须双向（`<=>`）：LineEdit 每次按键都会内部给自己赋 text，
+                    // 单向 `text: X` 的绑定会被这一赋打断，之后 Rust 再推 buffer
+                    // 就再也到不了这里——对话框会一直显示上一次输入的名字。
+                    text <=> root.input-buffer;
                     edited(s) => { root.set-input(s); }
                     accepted(s) => {
                         if (root.can-confirm) { root.confirm(); }
