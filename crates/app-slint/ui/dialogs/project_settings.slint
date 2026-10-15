@@ -3,6 +3,7 @@
 import { Theme } from "../theme.slint";
 import { Icons } from "../icons.slint";
 import { ModifiedField } from "../components/modified_field.slint";
+import { SepRow } from "../components/sep_row.slint";
 import { DialogChrome } from "dialog_chrome.slint";
 import { LineEdit, ScrollView, ComboBox, CheckBox } from "std-widgets.slint";
 
@@ -60,76 +61,6 @@ component TabBar inherits Rectangle {
     }
 }
 
-// 单条紧凑分隔符行：[label][input][label][input]...（label 70px，input 64px）
-component SepRow inherits HorizontalLayout {
-    in property <string> l1;
-    in-out property <string> v1;
-    in property <bool> m1: false;
-    in property <string> l2;
-    in-out property <string> v2;
-    in property <bool> m2: false;
-    in property <string> l3;
-    in-out property <string> v3;
-    in property <bool> m3: false;
-    in property <bool> show2: true;
-    in property <bool> show3: false;
-    callback edited1(string);
-    callback edited2(string);
-    callback edited3(string);
-    callback revert1();
-    callback revert2();
-    callback revert3();
-
-    spacing: Theme.sp-2;
-    alignment: start;
-
-    Text {
-        text: root.l1; width: 96px;
-        color: Theme.text-primary;
-        vertical-alignment: center;
-        horizontal-alignment: end;
-    }
-    ModifiedField {
-        // 宽度常驻（不亮时只藏 opacity），否则每敲一个字整行左右跳
-        modified: root.m1;
-        revert => { root.revert1(); }
-        LineEdit {
-            text <=> root.v1;
-            width: 56px;
-            edited(s) => { root.edited1(s); }
-        }
-    }
-    if root.show2: Text {
-        text: root.l2; width: 96px;
-        color: Theme.text-primary;
-        vertical-alignment: center;
-        horizontal-alignment: end;
-    }
-    if root.show2: ModifiedField {
-        modified: root.m2;
-        revert => { root.revert2(); }
-        LineEdit {
-            text <=> root.v2;
-            width: 56px;
-            edited(s) => { root.edited2(s); }
-        }
-    }
-    if root.show3: Text {
-        text: root.l3; width: 96px;
-        color: Theme.text-primary;
-        vertical-alignment: center;
-        horizontal-alignment: end;
-    }
-    if root.show3: ModifiedField {
-        modified: root.m3;
-        revert => { root.revert3(); }
-        LineEdit {
-            text <=> root.v3;
-            width: 56px;
-            edited(s) => { root.edited3(s); }
-        }
-    }
-}
 
 export component ProjectSettingsDialog inherits Rectangle {
     in property <bool> open: false;

@@ -1,6 +1,8 @@
 // 全局设置对话框：UI设置 / 分隔符 / 导出设置 3 tab。
 
 import { Theme } from "../theme.slint";
+import { ModifiedField } from "../components/modified_field.slint";
+import { SepRow } from "../components/sep_row.slint";
 import { DialogChrome } from "dialog_chrome.slint";
 import { Button, LineEdit, ScrollView, CheckBox, ComboBox } from "std-widgets.slint";
 
@@ -58,149 +60,157 @@ component TabBar inherits Rectangle {
     }
 }
 
-// 单条紧凑分隔符行：复用项目设置的组件
-component SepRow inherits HorizontalLayout {
-    in property <string> l1;
-    in-out property <string> v1;
-    in property <string> l2;
-    in-out property <string> v2;
-    in property <string> l3;
-    in-out property <string> v3;
-    in property <bool> show2: true;
-    in property <bool> show3: false;
-    callback edited1(string);
-    callback edited2(string);
-    callback edited3(string);
-
-    spacing: Theme.sp-2;
-    alignment: start;
-
-    Text {
-        text: root.l1; width: 96px;
-        color: Theme.text-primary;
-        vertical-alignment: center;
-        horizontal-alignment: end;
-    }
-    LineEdit {
-        text <=> root.v1;
-        width: 56px;
-        edited(s) => { root.edited1(s); }
-    }
-    if root.show2: Text {
-        text: root.l2; width: 96px;
-        color: Theme.text-primary;
-        vertical-alignment: center;
-        horizontal-alignment: end;
-    }
-    if root.show2: LineEdit {
-        text <=> root.v2;
-        width: 56px;
-        edited(s) => { root.edited2(s); }
-    }
-    if root.show3: Text {
-        text: root.l3; width: 96px;
-        color: Theme.text-primary;
-        vertical-alignment: center;
-        horizontal-alignment: end;
-    }
-    if root.show3: LineEdit {
-        text <=> root.v3;
-        width: 56px;
-        edited(s) => { root.edited3(s); }
-    }
-}
 
 export component GlobalSettingsDialog inherits Rectangle {
     in property <bool> open: false;
     in property <int> tab: 0;
-    in-out property <bool> ui-tab-modified: false;
-    in-out property <bool> sep-tab-modified: false;
-    in-out property <bool> export-tab-modified: false;
-
+    // 属性名 = AppWindow 上的 `gs-*` 去掉 `gs-` 前缀，app.slint 那边一比一机械绑定。
+    // `*-modified` = 「和打开对话框那一刻的 tablet.toml 不一样吗」，后端按 current_snapshot
+    // 算好推上来（@02.26.6）。这里不做比较 —— `None` 与 `Some(默认值)` 在渲染值上看不出来。
     // 枚举选项列表（由后端推送）
-    in property <[string]> gs-log-level-options;
-    in property <[string]> gs-picker-trigger-options;
-    in property <[string]> gs-ref-picker-strategy-options;
-    in property <[string]> gs-encoding-options;
-    in property <[string]> gs-line-ending-options;
-    in property <[string]> gs-json-empty-as-options;
-    in property <[string]> gs-xml-empty-as-options;
-    in property <[string]> gs-cpp-json-lib-options;
-
-    // UI 设置 buf
+    in property <[string]> log-level-options;
+    in property <[string]> picker-trigger-options;
+    in property <[string]> ref-picker-strategy-options;
+    in property <[string]> encoding-options;
+    in property <[string]> line-ending-options;
+    in property <[string]> json-empty-as-options;
+    in property <[string]> xml-empty-as-options;
+    in property <[string]> cpp-json-lib-options;
+    // UI 设置
     in-out property <bool> ui-auto-commit-on-blur;
+    in property <bool> ui-auto-commit-on-blur-modified: false;
     in-out property <bool> ui-realtime-validate;
-    in-out property <int> ui-log-level-index;
-    in-out property <int> ui-picker-trigger-header-index;
-    in-out property <int> ui-picker-trigger-data-index;
+    in property <bool> ui-realtime-validate-modified: false;
     in-out property <bool> ui-show-meta-id;
+    in property <bool> ui-show-meta-id-modified: false;
     in-out property <bool> ui-constant-ref-allowed;
+    in property <bool> ui-constant-ref-allowed-modified: false;
+    in-out property <int> ui-log-level-index;
+    in property <bool> ui-log-level-modified: false;
     in-out property <int> ui-ref-picker-strategy-index;
-
-    // 分隔符 buf（25 个）
+    in property <bool> ui-ref-picker-strategy-modified: false;
+    in-out property <int> ui-picker-trigger-header-index;
+    in property <bool> ui-picker-trigger-header-modified: false;
+    in-out property <int> ui-picker-trigger-data-index;
+    in property <bool> ui-picker-trigger-data-modified: false;
+    // 分隔符（25 个）
     in-out property <string> sep-tuple2;
+    in property <bool> sep-tuple2-modified: false;
     in-out property <string> sep-tuple3;
+    in property <bool> sep-tuple3-modified: false;
     in-out property <string> sep-tuple4;
+    in property <bool> sep-tuple4-modified: false;
     in-out property <string> sep-list;
+    in property <bool> sep-list-modified: false;
     in-out property <string> sep-set;
+    in property <bool> sep-set-modified: false;
     in-out property <string> sep-map-kv;
+    in property <bool> sep-map-kv-modified: false;
     in-out property <string> sep-map-entry;
+    in property <bool> sep-map-entry-modified: false;
     in-out property <string> sep-lt2-tuple;
+    in property <bool> sep-lt2-tuple-modified: false;
     in-out property <string> sep-lt2-list;
+    in property <bool> sep-lt2-list-modified: false;
     in-out property <string> sep-lt3-tuple;
+    in property <bool> sep-lt3-tuple-modified: false;
     in-out property <string> sep-lt3-list;
+    in property <bool> sep-lt3-list-modified: false;
     in-out property <string> sep-lt4-tuple;
+    in property <bool> sep-lt4-tuple-modified: false;
     in-out property <string> sep-lt4-list;
+    in property <bool> sep-lt4-list-modified: false;
     in-out property <string> sep-mt2-kv;
+    in property <bool> sep-mt2-kv-modified: false;
     in-out property <string> sep-mt2-tuple;
+    in property <bool> sep-mt2-tuple-modified: false;
     in-out property <string> sep-mt2-entry;
+    in property <bool> sep-mt2-entry-modified: false;
     in-out property <string> sep-mt3-kv;
+    in property <bool> sep-mt3-kv-modified: false;
     in-out property <string> sep-mt3-tuple;
+    in property <bool> sep-mt3-tuple-modified: false;
     in-out property <string> sep-mt3-entry;
+    in property <bool> sep-mt3-entry-modified: false;
     in-out property <string> sep-mt4-kv;
+    in property <bool> sep-mt4-kv-modified: false;
     in-out property <string> sep-mt4-tuple;
+    in property <bool> sep-mt4-tuple-modified: false;
     in-out property <string> sep-mt4-entry;
+    in property <bool> sep-mt4-entry-modified: false;
     in-out property <string> sep-ml-kv;
+    in property <bool> sep-ml-kv-modified: false;
     in-out property <string> sep-ml-item;
+    in property <bool> sep-ml-item-modified: false;
     in-out property <string> sep-ml-entry;
-
-    // 导出设置 buf
-    in-out property <int> gs-export-encoding-index;
-    in-out property <int> gs-export-line-ending-index;
-    in-out property <int> gs-export-json-empty-as-index;
-    in-out property <int> gs-export-xml-empty-as-index;
-    in-out property <string> gs-export-server-data-output;
-    in-out property <string> gs-export-java-package;
-    in-out property <string> gs-export-java-code-output;
-    in-out property <bool> gs-export-java-lombok;
-    in-out property <bool> gs-export-java-custom-regions;
-    in-out property <string> gs-export-go-package;
-    in-out property <string> gs-export-go-code-output;
-    in-out property <bool> gs-export-go-custom-regions;
-    in-out property <string> gs-export-cpp-namespace;
-    in-out property <string> gs-export-cpp-code-output;
-    in-out property <int> gs-export-cpp-json-lib-index;
-    in-out property <bool> gs-export-cpp-custom-regions;
-    in-out property <string> gs-export-csharp-dotnet-namespace;
-    in-out property <string> gs-export-csharp-dotnet-code-output;
-    in-out property <bool> gs-export-csharp-dotnet-custom-regions;
-    in-out property <string> gs-export-typescript-server-code-output;
-    in-out property <string> gs-export-lua-output;
-    in-out property <string> gs-export-gdscript-output;
-    in-out property <string> gs-export-typescript-client-output;
-    in-out property <string> gs-export-csharp-unity-namespace;
-    in-out property <string> gs-export-csharp-unity-code-output;
-    in-out property <bool> gs-export-csharp-unity-custom-regions;
-    in-out property <string> gs-export-csharp-godot-namespace;
-    in-out property <string> gs-export-csharp-godot-code-output;
-    in-out property <bool> gs-export-csharp-godot-custom-regions;
-
+    in property <bool> sep-ml-entry-modified: false;
+    // 导出设置
+    in-out property <int> export-encoding-index;
+    in property <bool> export-encoding-modified: false;
+    in-out property <int> export-line-ending-index;
+    in property <bool> export-line-ending-modified: false;
+    in-out property <int> export-json-empty-as-index;
+    in property <bool> export-json-empty-as-modified: false;
+    in-out property <int> export-xml-empty-as-index;
+    in property <bool> export-xml-empty-as-modified: false;
+    in-out property <int> export-cpp-json-lib-index;
+    in property <bool> export-cpp-json-lib-modified: false;
+    in-out property <string> export-server-data-output;
+    in property <bool> export-server-data-output-modified: false;
+    in-out property <string> export-java-package;
+    in property <bool> export-java-package-modified: false;
+    in-out property <string> export-java-code-output;
+    in property <bool> export-java-code-output-modified: false;
+    in-out property <string> export-go-package;
+    in property <bool> export-go-package-modified: false;
+    in-out property <string> export-go-code-output;
+    in property <bool> export-go-code-output-modified: false;
+    in-out property <string> export-cpp-namespace;
+    in property <bool> export-cpp-namespace-modified: false;
+    in-out property <string> export-cpp-code-output;
+    in property <bool> export-cpp-code-output-modified: false;
+    in-out property <string> export-csharp-dotnet-namespace;
+    in property <bool> export-csharp-dotnet-namespace-modified: false;
+    in-out property <string> export-csharp-dotnet-code-output;
+    in property <bool> export-csharp-dotnet-code-output-modified: false;
+    in-out property <string> export-typescript-server-code-output;
+    in property <bool> export-typescript-server-code-output-modified: false;
+    in-out property <string> export-lua-output;
+    in property <bool> export-lua-output-modified: false;
+    in-out property <string> export-gdscript-output;
+    in property <bool> export-gdscript-output-modified: false;
+    in-out property <string> export-typescript-client-output;
+    in property <bool> export-typescript-client-output-modified: false;
+    in-out property <string> export-csharp-unity-namespace;
+    in property <bool> export-csharp-unity-namespace-modified: false;
+    in-out property <string> export-csharp-unity-code-output;
+    in property <bool> export-csharp-unity-code-output-modified: false;
+    in-out property <string> export-csharp-godot-namespace;
+    in property <bool> export-csharp-godot-namespace-modified: false;
+    in-out property <string> export-csharp-godot-code-output;
+    in property <bool> export-csharp-godot-code-output-modified: false;
+    in-out property <bool> export-cpp-custom-regions;
+    in property <bool> export-cpp-custom-regions-modified: false;
+    in-out property <bool> export-java-lombok;
+    in property <bool> export-java-lombok-modified: false;
+    in-out property <bool> export-java-custom-regions;
+    in property <bool> export-java-custom-regions-modified: false;
+    in-out property <bool> export-go-custom-regions;
+    in property <bool> export-go-custom-regions-modified: false;
+    in-out property <bool> export-csharp-dotnet-custom-regions;
+    in property <bool> export-csharp-dotnet-custom-regions-modified: false;
+    in-out property <bool> export-csharp-unity-custom-regions;
+    in property <bool> export-csharp-unity-custom-regions-modified: false;
+    in-out property <bool> export-csharp-godot-custom-regions;
+    in property <bool> export-csharp-godot-custom-regions-modified: false;
     callback tab-changed(int);
     callback ui-field-edited(string, string);
     callback sep-edited(string, string);
     callback export-field-edited(string, string);
+    callback ui-revert(string);
+    callback sep-revert(string);
+    callback export-revert(string);
     callback reset-clicked();
-    callback undo-clicked();
     callback confirm();
     callback cancel();
 
@@ -221,10 +231,8 @@ export component GlobalSettingsDialog inherits Rectangle {
         secondary-text: "使用默认值";
         default-enabled: true;
         secondary-clicked => { root.reset-clicked(); }
-        show-third: true;
-        third-text: "撤销改动";
-        third-enabled: root.tab == 0 ? root.ui-tab-modified : (root.tab == 1 ? root.sep-tab-modified : root.export-tab-modified);
-        third-clicked => { root.undo-clicked(); }
+        // 刻意**不做**页面级「全部还原」：全局设置的「取消」已经是它了（区别只是关不关窗）。
+        // 反悔的入口是每个字段右侧的还原按钮（@02.26.6）。
 
         VerticalLayout {
             spacing: 0;
@@ -245,18 +253,26 @@ export component GlobalSettingsDialog inherits Rectangle {
                     Text { text: "编辑行为"; color: Theme.text-secondary; font-size: Theme.fs-small; }
                     HorizontalLayout {
                         spacing: Theme.sp-3;
-                        CheckBox {
-                            text: "失焦自动提交";
-                            checked <=> root.ui-auto-commit-on-blur;
-                            toggled => { root.ui-field-edited("auto_commit_on_blur", root.ui-auto-commit-on-blur ? "true" : "false"); }
+                        ModifiedField {
+                            modified: root.ui-auto-commit-on-blur-modified;
+                            revert => { root.ui-revert("auto_commit_on_blur"); }
+                            CheckBox {
+                                text: "失焦自动提交";
+                                checked <=> root.ui-auto-commit-on-blur;
+                                toggled => { root.ui-field-edited("auto_commit_on_blur", root.ui-auto-commit-on-blur ? "true" : "false"); }
+                            }
                         }
                     }
                     HorizontalLayout {
                         spacing: Theme.sp-3;
-                        CheckBox {
-                            text: "实时验证";
-                            checked <=> root.ui-realtime-validate;
-                            toggled => { root.ui-field-edited("realtime_validate", root.ui-realtime-validate ? "true" : "false"); }
+                        ModifiedField {
+                            modified: root.ui-realtime-validate-modified;
+                            revert => { root.ui-revert("realtime_validate"); }
+                            CheckBox {
+                                text: "实时验证";
+                                checked <=> root.ui-realtime-validate;
+                                toggled => { root.ui-field-edited("realtime_validate", root.ui-realtime-validate ? "true" : "false"); }
+                            }
                         }
                     }
 
@@ -265,40 +281,56 @@ export component GlobalSettingsDialog inherits Rectangle {
                         spacing: Theme.sp-3;
                         alignment: start;
                         Text { text: "表头触发方式:"; width: 120px; vertical-alignment: center; color: Theme.text-primary; }
-                        ComboBox {
-                            model: root.gs-picker-trigger-options;
-                            current-index <=> root.ui-picker-trigger-header-index;
-                            width: 120px;
-                            selected(s) => { root.ui-field-edited("picker_trigger_header", s); }
+                        ModifiedField {
+                            modified: root.ui-picker-trigger-header-modified;
+                            revert => { root.ui-revert("picker_trigger_header"); }
+                            ComboBox {
+                                model: root.picker-trigger-options;
+                                current-index <=> root.ui-picker-trigger-header-index;
+                                width: 120px;
+                                selected(s) => { root.ui-field-edited("picker_trigger_header", s); }
+                            }
                         }
                     }
                     HorizontalLayout {
                         spacing: Theme.sp-3;
                         alignment: start;
                         Text { text: "数据区触发方式:"; width: 120px; vertical-alignment: center; color: Theme.text-primary; }
-                        ComboBox {
-                            model: root.gs-picker-trigger-options;
-                            current-index <=> root.ui-picker-trigger-data-index;
-                            width: 120px;
-                            selected(s) => { root.ui-field-edited("picker_trigger_data", s); }
+                        ModifiedField {
+                            modified: root.ui-picker-trigger-data-modified;
+                            revert => { root.ui-revert("picker_trigger_data"); }
+                            ComboBox {
+                                model: root.picker-trigger-options;
+                                current-index <=> root.ui-picker-trigger-data-index;
+                                width: 120px;
+                                selected(s) => { root.ui-field-edited("picker_trigger_data", s); }
+                            }
                         }
                     }
 
                     Text { text: "显示选项"; color: Theme.text-secondary; font-size: Theme.fs-small; }
                     HorizontalLayout {
                         spacing: Theme.sp-3;
-                        CheckBox {
-                            text: "显示元数据 ID";
-                            checked <=> root.ui-show-meta-id;
-                            toggled => { root.ui-field-edited("show_meta_id", root.ui-show-meta-id ? "true" : "false"); }
+                        ModifiedField {
+                            modified: root.ui-show-meta-id-modified;
+                            revert => { root.ui-revert("show_meta_id"); }
+                            CheckBox {
+                                text: "显示元数据 ID";
+                                checked <=> root.ui-show-meta-id;
+                                toggled => { root.ui-field-edited("show_meta_id", root.ui-show-meta-id ? "true" : "false"); }
+                            }
                         }
                     }
                     HorizontalLayout {
                         spacing: Theme.sp-3;
-                        CheckBox {
-                            text: "允许常量表引用";
-                            checked <=> root.ui-constant-ref-allowed;
-                            toggled => { root.ui-field-edited("constant_ref_allowed", root.ui-constant-ref-allowed ? "true" : "false"); }
+                        ModifiedField {
+                            modified: root.ui-constant-ref-allowed-modified;
+                            revert => { root.ui-revert("constant_ref_allowed"); }
+                            CheckBox {
+                                text: "允许常量表引用";
+                                checked <=> root.ui-constant-ref-allowed;
+                                toggled => { root.ui-field-edited("constant_ref_allowed", root.ui-constant-ref-allowed ? "true" : "false"); }
+                            }
                         }
                     }
 
@@ -307,11 +339,15 @@ export component GlobalSettingsDialog inherits Rectangle {
                         spacing: Theme.sp-3;
                         alignment: start;
                         Text { text: "默认策略:"; width: 120px; vertical-alignment: center; color: Theme.text-primary; }
-                        ComboBox {
-                            model: root.gs-ref-picker-strategy-options;
-                            current-index <=> root.ui-ref-picker-strategy-index;
-                            width: 120px;
-                            selected(s) => { root.ui-field-edited("ref_picker_strategy", s); }
+                        ModifiedField {
+                            modified: root.ui-ref-picker-strategy-modified;
+                            revert => { root.ui-revert("ref_picker_strategy"); }
+                            ComboBox {
+                                model: root.ref-picker-strategy-options;
+                                current-index <=> root.ui-ref-picker-strategy-index;
+                                width: 120px;
+                                selected(s) => { root.ui-field-edited("ref_picker_strategy", s); }
+                            }
                         }
                     }
 
@@ -320,11 +356,15 @@ export component GlobalSettingsDialog inherits Rectangle {
                         spacing: Theme.sp-3;
                         alignment: start;
                         Text { text: "日志级别:"; width: 120px; vertical-alignment: center; color: Theme.text-primary; }
-                        ComboBox {
-                            model: root.gs-log-level-options;
-                            current-index <=> root.ui-log-level-index;
-                            width: 120px;
-                            selected(s) => { root.ui-field-edited("log_level", s); }
+                        ModifiedField {
+                            modified: root.ui-log-level-modified;
+                            revert => { root.ui-revert("log_level"); }
+                            ComboBox {
+                                model: root.log-level-options;
+                                current-index <=> root.ui-log-level-index;
+                                width: 120px;
+                                selected(s) => { root.ui-field-edited("log_level", s); }
+                            }
                         }
                     }
 
@@ -351,6 +391,12 @@ export component GlobalSettingsDialog inherits Rectangle {
                         l2: "Tuple3"; v2 <=> root.sep-tuple3;
                         l3: "Tuple4"; v3 <=> root.sep-tuple4;
                         show2: true; show3: true;
+                        m1: root.sep-tuple2-modified;
+                        revert1 => { root.sep-revert("Tuple2"); }
+                        m2: root.sep-tuple3-modified;
+                        revert2 => { root.sep-revert("Tuple3"); }
+                        m3: root.sep-tuple4-modified;
+                        revert3 => { root.sep-revert("Tuple4"); }
                         edited1(s) => { root.sep-edited("Tuple2", s); }
                         edited2(s) => { root.sep-edited("Tuple3", s); }
                         edited3(s) => { root.sep-edited("Tuple4", s); }
@@ -359,6 +405,10 @@ export component GlobalSettingsDialog inherits Rectangle {
                         l1: "List"; v1 <=> root.sep-list;
                         l2: "Set"; v2 <=> root.sep-set;
                         show2: true; show3: false;
+                        m1: root.sep-list-modified;
+                        revert1 => { root.sep-revert("List"); }
+                        m2: root.sep-set-modified;
+                        revert2 => { root.sep-revert("Set"); }
                         edited1(s) => { root.sep-edited("List", s); }
                         edited2(s) => { root.sep-edited("Set", s); }
                     }
@@ -368,6 +418,10 @@ export component GlobalSettingsDialog inherits Rectangle {
                         l1: "Map.kv"; v1 <=> root.sep-map-kv;
                         l2: "Map.entry"; v2 <=> root.sep-map-entry;
                         show2: true; show3: false;
+                        m1: root.sep-map-kv-modified;
+                        revert1 => { root.sep-revert("Map.kv"); }
+                        m2: root.sep-map-entry-modified;
+                        revert2 => { root.sep-revert("Map.entry"); }
                         edited1(s) => { root.sep-edited("Map.kv", s); }
                         edited2(s) => { root.sep-edited("Map.entry", s); }
                     }
@@ -377,6 +431,10 @@ export component GlobalSettingsDialog inherits Rectangle {
                         l1: "List_Tuple2.tuple"; v1 <=> root.sep-lt2-tuple;
                         l2: "List_Tuple2.list"; v2 <=> root.sep-lt2-list;
                         show2: true; show3: false;
+                        m1: root.sep-lt2-tuple-modified;
+                        revert1 => { root.sep-revert("List_Tuple2.tuple"); }
+                        m2: root.sep-lt2-list-modified;
+                        revert2 => { root.sep-revert("List_Tuple2.list"); }
                         edited1(s) => { root.sep-edited("List_Tuple2.tuple", s); }
                         edited2(s) => { root.sep-edited("List_Tuple2.list", s); }
                     }
@@ -384,6 +442,10 @@ export component GlobalSettingsDialog inherits Rectangle {
                         l1: "List_Tuple3.tuple"; v1 <=> root.sep-lt3-tuple;
                         l2: "List_Tuple3.list"; v2 <=> root.sep-lt3-list;
                         show2: true; show3: false;
+                        m1: root.sep-lt3-tuple-modified;
+                        revert1 => { root.sep-revert("List_Tuple3.tuple"); }
+                        m2: root.sep-lt3-list-modified;
+                        revert2 => { root.sep-revert("List_Tuple3.list"); }
                         edited1(s) => { root.sep-edited("List_Tuple3.tuple", s); }
                         edited2(s) => { root.sep-edited("List_Tuple3.list", s); }
                     }
@@ -391,6 +453,10 @@ export component GlobalSettingsDialog inherits Rectangle {
                         l1: "List_Tuple4.tuple"; v1 <=> root.sep-lt4-tuple;
                         l2: "List_Tuple4.list"; v2 <=> root.sep-lt4-list;
                         show2: true; show3: false;
+                        m1: root.sep-lt4-tuple-modified;
+                        revert1 => { root.sep-revert("List_Tuple4.tuple"); }
+                        m2: root.sep-lt4-list-modified;
+                        revert2 => { root.sep-revert("List_Tuple4.list"); }
                         edited1(s) => { root.sep-edited("List_Tuple4.tuple", s); }
                         edited2(s) => { root.sep-edited("List_Tuple4.list", s); }
                     }
@@ -401,6 +467,12 @@ export component GlobalSettingsDialog inherits Rectangle {
                         l2: "Map_Tuple2.tuple"; v2 <=> root.sep-mt2-tuple;
                         l3: "Map_Tuple2.entry"; v3 <=> root.sep-mt2-entry;
                         show2: true; show3: true;
+                        m1: root.sep-mt2-kv-modified;
+                        revert1 => { root.sep-revert("Map_Tuple2.kv"); }
+                        m2: root.sep-mt2-tuple-modified;
+                        revert2 => { root.sep-revert("Map_Tuple2.tuple"); }
+                        m3: root.sep-mt2-entry-modified;
+                        revert3 => { root.sep-revert("Map_Tuple2.entry"); }
                         edited1(s) => { root.sep-edited("Map_Tuple2.kv", s); }
                         edited2(s) => { root.sep-edited("Map_Tuple2.tuple", s); }
                         edited3(s) => { root.sep-edited("Map_Tuple2.entry", s); }
@@ -410,6 +482,12 @@ export component GlobalSettingsDialog inherits Rectangle {
                         l2: "Map_Tuple3.tuple"; v2 <=> root.sep-mt3-tuple;
                         l3: "Map_Tuple3.entry"; v3 <=> root.sep-mt3-entry;
                         show2: true; show3: true;
+                        m1: root.sep-mt3-kv-modified;
+                        revert1 => { root.sep-revert("Map_Tuple3.kv"); }
+                        m2: root.sep-mt3-tuple-modified;
+                        revert2 => { root.sep-revert("Map_Tuple3.tuple"); }
+                        m3: root.sep-mt3-entry-modified;
+                        revert3 => { root.sep-revert("Map_Tuple3.entry"); }
                         edited1(s) => { root.sep-edited("Map_Tuple3.kv", s); }
                         edited2(s) => { root.sep-edited("Map_Tuple3.tuple", s); }
                         edited3(s) => { root.sep-edited("Map_Tuple3.entry", s); }
@@ -419,6 +497,12 @@ export component GlobalSettingsDialog inherits Rectangle {
                         l2: "Map_Tuple4.tuple"; v2 <=> root.sep-mt4-tuple;
                         l3: "Map_Tuple4.entry"; v3 <=> root.sep-mt4-entry;
                         show2: true; show3: true;
+                        m1: root.sep-mt4-kv-modified;
+                        revert1 => { root.sep-revert("Map_Tuple4.kv"); }
+                        m2: root.sep-mt4-tuple-modified;
+                        revert2 => { root.sep-revert("Map_Tuple4.tuple"); }
+                        m3: root.sep-mt4-entry-modified;
+                        revert3 => { root.sep-revert("Map_Tuple4.entry"); }
                         edited1(s) => { root.sep-edited("Map_Tuple4.kv", s); }
                         edited2(s) => { root.sep-edited("Map_Tuple4.tuple", s); }
                         edited3(s) => { root.sep-edited("Map_Tuple4.entry", s); }
@@ -430,6 +514,12 @@ export component GlobalSettingsDialog inherits Rectangle {
                         l2: "Map_List.item"; v2 <=> root.sep-ml-item;
                         l3: "Map_List.entry"; v3 <=> root.sep-ml-entry;
                         show2: true; show3: true;
+                        m1: root.sep-ml-kv-modified;
+                        revert1 => { root.sep-revert("Map_List.kv"); }
+                        m2: root.sep-ml-item-modified;
+                        revert2 => { root.sep-revert("Map_List.item"); }
+                        m3: root.sep-ml-entry-modified;
+                        revert3 => { root.sep-revert("Map_List.entry"); }
                         edited1(s) => { root.sep-edited("Map_List.kv", s); }
                         edited2(s) => { root.sep-edited("Map_List.item", s); }
                         edited3(s) => { root.sep-edited("Map_List.entry", s); }
@@ -450,22 +540,30 @@ export component GlobalSettingsDialog inherits Rectangle {
                         spacing: Theme.sp-3;
                         alignment: start;
                         Text { text: "编码:"; width: 140px; vertical-alignment: center; color: Theme.text-primary; }
-                        ComboBox {
-                            model: root.gs-encoding-options;
-                            current-index <=> root.gs-export-encoding-index;
-                            width: 180px;
-                            selected(s) => { root.export-field-edited("encoding", s); }
+                        ModifiedField {
+                            modified: root.export-encoding-modified;
+                            revert => { root.export-revert("encoding"); }
+                            ComboBox {
+                                model: root.encoding-options;
+                                current-index <=> root.export-encoding-index;
+                                width: 180px;
+                                selected(s) => { root.export-field-edited("encoding", s); }
+                            }
                         }
                     }
                     HorizontalLayout {
                         spacing: Theme.sp-3;
                         alignment: start;
                         Text { text: "换行符:"; width: 140px; vertical-alignment: center; color: Theme.text-primary; }
-                        ComboBox {
-                            model: root.gs-line-ending-options;
-                            current-index <=> root.gs-export-line-ending-index;
-                            width: 180px;
-                            selected(s) => { root.export-field-edited("line_ending", s); }
+                        ModifiedField {
+                            modified: root.export-line-ending-modified;
+                            revert => { root.export-revert("line_ending"); }
+                            ComboBox {
+                                model: root.line-ending-options;
+                                current-index <=> root.export-line-ending-index;
+                                width: 180px;
+                                selected(s) => { root.export-field-edited("line_ending", s); }
+                            }
                         }
                     }
 
@@ -477,22 +575,30 @@ export component GlobalSettingsDialog inherits Rectangle {
                         spacing: Theme.sp-3;
                         alignment: start;
                         Text { text: "JSON 空值处理:"; width: 140px; vertical-alignment: center; color: Theme.text-primary; }
-                        ComboBox {
-                            model: root.gs-json-empty-as-options;
-                            current-index <=> root.gs-export-json-empty-as-index;
-                            width: 180px;
-                            selected(s) => { root.export-field-edited("json_empty_as", s); }
+                        ModifiedField {
+                            modified: root.export-json-empty-as-modified;
+                            revert => { root.export-revert("json_empty_as"); }
+                            ComboBox {
+                                model: root.json-empty-as-options;
+                                current-index <=> root.export-json-empty-as-index;
+                                width: 180px;
+                                selected(s) => { root.export-field-edited("json_empty_as", s); }
+                            }
                         }
                     }
                     HorizontalLayout {
                         spacing: Theme.sp-3;
                         alignment: start;
                         Text { text: "XML 空值处理:"; width: 140px; vertical-alignment: center; color: Theme.text-primary; }
-                        ComboBox {
-                            model: root.gs-xml-empty-as-options;
-                            current-index <=> root.gs-export-xml-empty-as-index;
-                            width: 180px;
-                            selected(s) => { root.export-field-edited("xml_empty_as", s); }
+                        ModifiedField {
+                            modified: root.export-xml-empty-as-modified;
+                            revert => { root.export-revert("xml_empty_as"); }
+                            ComboBox {
+                                model: root.xml-empty-as-options;
+                                current-index <=> root.export-xml-empty-as-index;
+                                width: 180px;
+                                selected(s) => { root.export-field-edited("xml_empty_as", s); }
+                            }
                         }
                     }
 
@@ -504,10 +610,14 @@ export component GlobalSettingsDialog inherits Rectangle {
                         spacing: Theme.sp-3;
                         alignment: start;
                         Text { text: "数据输出目录:"; width: 140px; vertical-alignment: center; color: Theme.text-primary; }
-                        LineEdit {
-                            text <=> root.gs-export-server-data-output;
-                            width: 300px;
-                            edited(s) => { root.export-field-edited("server_data_output", s); }
+                        ModifiedField {
+                            modified: root.export-server-data-output-modified;
+                            revert => { root.export-revert("server_data_output"); }
+                            LineEdit {
+                                text <=> root.export-server-data-output;
+                                width: 300px;
+                                edited(s) => { root.export-field-edited("server_data_output", s); }
+                            }
                         }
                     }
 
@@ -516,40 +626,56 @@ export component GlobalSettingsDialog inherits Rectangle {
                         spacing: Theme.sp-3;
                         alignment: start;
                         Text { text: "  package:"; width: 140px; vertical-alignment: center; color: Theme.text-primary; }
-                        LineEdit {
-                            text <=> root.gs-export-java-package;
-                            width: 300px;
-                            edited(s) => { root.export-field-edited("java_package", s); }
+                        ModifiedField {
+                            modified: root.export-java-package-modified;
+                            revert => { root.export-revert("java_package"); }
+                            LineEdit {
+                                text <=> root.export-java-package;
+                                width: 300px;
+                                edited(s) => { root.export-field-edited("java_package", s); }
+                            }
                         }
                     }
                     HorizontalLayout {
                         spacing: Theme.sp-3;
                         alignment: start;
                         Text { text: "  code_output:"; width: 140px; vertical-alignment: center; color: Theme.text-primary; }
-                        LineEdit {
-                            text <=> root.gs-export-java-code-output;
-                            width: 300px;
-                            edited(s) => { root.export-field-edited("java_code_output", s); }
+                        ModifiedField {
+                            modified: root.export-java-code-output-modified;
+                            revert => { root.export-revert("java_code_output"); }
+                            LineEdit {
+                                text <=> root.export-java-code-output;
+                                width: 300px;
+                                edited(s) => { root.export-field-edited("java_code_output", s); }
+                            }
                         }
                     }
                     HorizontalLayout {
                         spacing: Theme.sp-3;
                         alignment: start;
                         Text { text: "  lombok:"; width: 140px; vertical-alignment: center; color: Theme.text-primary; }
-                        CheckBox {
-                            text: "@Getter 代替手写 getter";
-                            checked <=> root.gs-export-java-lombok;
-                            toggled => { root.export-field-edited("java_lombok", root.gs-export-java-lombok ? "true" : "false"); }
+                        ModifiedField {
+                            modified: root.export-java-lombok-modified;
+                            revert => { root.export-revert("java_lombok"); }
+                            CheckBox {
+                                text: "@Getter 代替手写 getter";
+                                checked <=> root.export-java-lombok;
+                                toggled => { root.export-field-edited("java_lombok", root.export-java-lombok ? "true" : "false"); }
+                            }
                         }
                     }
                     HorizontalLayout {
                         spacing: Theme.sp-3;
                         alignment: start;
                         Text { text: "  custom_regions:"; width: 140px; vertical-alignment: center; color: Theme.text-primary; }
-                        CheckBox {
-                            text: "产物带业务扩展保留区间";
-                            checked <=> root.gs-export-java-custom-regions;
-                            toggled => { root.export-field-edited("java_custom_regions", root.gs-export-java-custom-regions ? "true" : "false"); }
+                        ModifiedField {
+                            modified: root.export-java-custom-regions-modified;
+                            revert => { root.export-revert("java_custom_regions"); }
+                            CheckBox {
+                                text: "产物带业务扩展保留区间";
+                                checked <=> root.export-java-custom-regions;
+                                toggled => { root.export-field-edited("java_custom_regions", root.export-java-custom-regions ? "true" : "false"); }
+                            }
                         }
                     }
 
@@ -558,30 +684,42 @@ export component GlobalSettingsDialog inherits Rectangle {
                         spacing: Theme.sp-3;
                         alignment: start;
                         Text { text: "  package:"; width: 140px; vertical-alignment: center; color: Theme.text-primary; }
-                        LineEdit {
-                            text <=> root.gs-export-go-package;
-                            width: 300px;
-                            edited(s) => { root.export-field-edited("go_package", s); }
+                        ModifiedField {
+                            modified: root.export-go-package-modified;
+                            revert => { root.export-revert("go_package"); }
+                            LineEdit {
+                                text <=> root.export-go-package;
+                                width: 300px;
+                                edited(s) => { root.export-field-edited("go_package", s); }
+                            }
                         }
                     }
                     HorizontalLayout {
                         spacing: Theme.sp-3;
                         alignment: start;
                         Text { text: "  code_output:"; width: 140px; vertical-alignment: center; color: Theme.text-primary; }
-                        LineEdit {
-                            text <=> root.gs-export-go-code-output;
-                            width: 300px;
-                            edited(s) => { root.export-field-edited("go_code_output", s); }
+                        ModifiedField {
+                            modified: root.export-go-code-output-modified;
+                            revert => { root.export-revert("go_code_output"); }
+                            LineEdit {
+                                text <=> root.export-go-code-output;
+                                width: 300px;
+                                edited(s) => { root.export-field-edited("go_code_output", s); }
+                            }
                         }
                     }
                     HorizontalLayout {
                         spacing: Theme.sp-3;
                         alignment: start;
                         Text { text: "  custom_regions:"; width: 140px; vertical-alignment: center; color: Theme.text-primary; }
-                        CheckBox {
-                            text: "产物带业务扩展保留区间";
-                            checked <=> root.gs-export-go-custom-regions;
-                            toggled => { root.export-field-edited("go_custom_regions", root.gs-export-go-custom-regions ? "true" : "false"); }
+                        ModifiedField {
+                            modified: root.export-go-custom-regions-modified;
+                            revert => { root.export-revert("go_custom_regions"); }
+                            CheckBox {
+                                text: "产物带业务扩展保留区间";
+                                checked <=> root.export-go-custom-regions;
+                                toggled => { root.export-field-edited("go_custom_regions", root.export-go-custom-regions ? "true" : "false"); }
+                            }
                         }
                     }
 
@@ -590,41 +728,57 @@ export component GlobalSettingsDialog inherits Rectangle {
                         spacing: Theme.sp-3;
                         alignment: start;
                         Text { text: "  namespace:"; width: 140px; vertical-alignment: center; color: Theme.text-primary; }
-                        LineEdit {
-                            text <=> root.gs-export-cpp-namespace;
-                            width: 300px;
-                            edited(s) => { root.export-field-edited("cpp_namespace", s); }
+                        ModifiedField {
+                            modified: root.export-cpp-namespace-modified;
+                            revert => { root.export-revert("cpp_namespace"); }
+                            LineEdit {
+                                text <=> root.export-cpp-namespace;
+                                width: 300px;
+                                edited(s) => { root.export-field-edited("cpp_namespace", s); }
+                            }
                         }
                     }
                     HorizontalLayout {
                         spacing: Theme.sp-3;
                         alignment: start;
                         Text { text: "  code_output:"; width: 140px; vertical-alignment: center; color: Theme.text-primary; }
-                        LineEdit {
-                            text <=> root.gs-export-cpp-code-output;
-                            width: 300px;
-                            edited(s) => { root.export-field-edited("cpp_code_output", s); }
+                        ModifiedField {
+                            modified: root.export-cpp-code-output-modified;
+                            revert => { root.export-revert("cpp_code_output"); }
+                            LineEdit {
+                                text <=> root.export-cpp-code-output;
+                                width: 300px;
+                                edited(s) => { root.export-field-edited("cpp_code_output", s); }
+                            }
                         }
                     }
                     HorizontalLayout {
                         spacing: Theme.sp-3;
                         alignment: start;
                         Text { text: "  json_lib:"; width: 140px; vertical-alignment: center; color: Theme.text-primary; }
-                        ComboBox {
-                            model: root.gs-cpp-json-lib-options;
-                            current-index <=> root.gs-export-cpp-json-lib-index;
-                            width: 180px;
-                            selected(s) => { root.export-field-edited("cpp_json_lib", s); }
+                        ModifiedField {
+                            modified: root.export-cpp-json-lib-modified;
+                            revert => { root.export-revert("cpp_json_lib"); }
+                            ComboBox {
+                                model: root.cpp-json-lib-options;
+                                current-index <=> root.export-cpp-json-lib-index;
+                                width: 180px;
+                                selected(s) => { root.export-field-edited("cpp_json_lib", s); }
+                            }
                         }
                     }
                     HorizontalLayout {
                         spacing: Theme.sp-3;
                         alignment: start;
                         Text { text: "  custom_regions:"; width: 140px; vertical-alignment: center; color: Theme.text-primary; }
-                        CheckBox {
-                            text: "产物带业务扩展保留区间";
-                            checked <=> root.gs-export-cpp-custom-regions;
-                            toggled => { root.export-field-edited("cpp_custom_regions", root.gs-export-cpp-custom-regions ? "true" : "false"); }
+                        ModifiedField {
+                            modified: root.export-cpp-custom-regions-modified;
+                            revert => { root.export-revert("cpp_custom_regions"); }
+                            CheckBox {
+                                text: "产物带业务扩展保留区间";
+                                checked <=> root.export-cpp-custom-regions;
+                                toggled => { root.export-field-edited("cpp_custom_regions", root.export-cpp-custom-regions ? "true" : "false"); }
+                            }
                         }
                     }
 
@@ -633,30 +787,42 @@ export component GlobalSettingsDialog inherits Rectangle {
                         spacing: Theme.sp-3;
                         alignment: start;
                         Text { text: "  namespace:"; width: 140px; vertical-alignment: center; color: Theme.text-primary; }
-                        LineEdit {
-                            text <=> root.gs-export-csharp-dotnet-namespace;
-                            width: 300px;
-                            edited(s) => { root.export-field-edited("csharp_dotnet_namespace", s); }
+                        ModifiedField {
+                            modified: root.export-csharp-dotnet-namespace-modified;
+                            revert => { root.export-revert("csharp_dotnet_namespace"); }
+                            LineEdit {
+                                text <=> root.export-csharp-dotnet-namespace;
+                                width: 300px;
+                                edited(s) => { root.export-field-edited("csharp_dotnet_namespace", s); }
+                            }
                         }
                     }
                     HorizontalLayout {
                         spacing: Theme.sp-3;
                         alignment: start;
                         Text { text: "  code_output:"; width: 140px; vertical-alignment: center; color: Theme.text-primary; }
-                        LineEdit {
-                            text <=> root.gs-export-csharp-dotnet-code-output;
-                            width: 300px;
-                            edited(s) => { root.export-field-edited("csharp_dotnet_code_output", s); }
+                        ModifiedField {
+                            modified: root.export-csharp-dotnet-code-output-modified;
+                            revert => { root.export-revert("csharp_dotnet_code_output"); }
+                            LineEdit {
+                                text <=> root.export-csharp-dotnet-code-output;
+                                width: 300px;
+                                edited(s) => { root.export-field-edited("csharp_dotnet_code_output", s); }
+                            }
                         }
                     }
                     HorizontalLayout {
                         spacing: Theme.sp-3;
                         alignment: start;
                         Text { text: "  custom_regions:"; width: 140px; vertical-alignment: center; color: Theme.text-primary; }
-                        CheckBox {
-                            text: "产物带业务扩展保留区间";
-                            checked <=> root.gs-export-csharp-dotnet-custom-regions;
-                            toggled => { root.export-field-edited("csdn_custom_regions", root.gs-export-csharp-dotnet-custom-regions ? "true" : "false"); }
+                        ModifiedField {
+                            modified: root.export-csharp-dotnet-custom-regions-modified;
+                            revert => { root.export-revert("csharp_dotnet_custom_regions"); }
+                            CheckBox {
+                                text: "产物带业务扩展保留区间";
+                                checked <=> root.export-csharp-dotnet-custom-regions;
+                                toggled => { root.export-field-edited("csharp_dotnet_custom_regions", root.export-csharp-dotnet-custom-regions ? "true" : "false"); }
+                            }
                         }
                     }
 
@@ -665,10 +831,14 @@ export component GlobalSettingsDialog inherits Rectangle {
                         spacing: Theme.sp-3;
                         alignment: start;
                         Text { text: "  code_output:"; width: 140px; vertical-alignment: center; color: Theme.text-primary; }
-                        LineEdit {
-                            text <=> root.gs-export-typescript-server-code-output;
-                            width: 300px;
-                            edited(s) => { root.export-field-edited("typescript_server_code_output", s); }
+                        ModifiedField {
+                            modified: root.export-typescript-server-code-output-modified;
+                            revert => { root.export-revert("typescript_server_code_output"); }
+                            LineEdit {
+                                text <=> root.export-typescript-server-code-output;
+                                width: 300px;
+                                edited(s) => { root.export-field-edited("typescript_server_code_output", s); }
+                            }
                         }
                     }
 
@@ -682,10 +852,14 @@ export component GlobalSettingsDialog inherits Rectangle {
                         spacing: Theme.sp-3;
                         alignment: start;
                         Text { text: "  output:"; width: 140px; vertical-alignment: center; color: Theme.text-primary; }
-                        LineEdit {
-                            text <=> root.gs-export-lua-output;
-                            width: 300px;
-                            edited(s) => { root.export-field-edited("lua_output", s); }
+                        ModifiedField {
+                            modified: root.export-lua-output-modified;
+                            revert => { root.export-revert("lua_output"); }
+                            LineEdit {
+                                text <=> root.export-lua-output;
+                                width: 300px;
+                                edited(s) => { root.export-field-edited("lua_output", s); }
+                            }
                         }
                     }
 
@@ -694,10 +868,14 @@ export component GlobalSettingsDialog inherits Rectangle {
                         spacing: Theme.sp-3;
                         alignment: start;
                         Text { text: "  output:"; width: 140px; vertical-alignment: center; color: Theme.text-primary; }
-                        LineEdit {
-                            text <=> root.gs-export-gdscript-output;
-                            width: 300px;
-                            edited(s) => { root.export-field-edited("gdscript_output", s); }
+                        ModifiedField {
+                            modified: root.export-gdscript-output-modified;
+                            revert => { root.export-revert("gdscript_output"); }
+                            LineEdit {
+                                text <=> root.export-gdscript-output;
+                                width: 300px;
+                                edited(s) => { root.export-field-edited("gdscript_output", s); }
+                            }
                         }
                     }
 
@@ -706,10 +884,14 @@ export component GlobalSettingsDialog inherits Rectangle {
                         spacing: Theme.sp-3;
                         alignment: start;
                         Text { text: "  output:"; width: 140px; vertical-alignment: center; color: Theme.text-primary; }
-                        LineEdit {
-                            text <=> root.gs-export-typescript-client-output;
-                            width: 300px;
-                            edited(s) => { root.export-field-edited("typescript_client_output", s); }
+                        ModifiedField {
+                            modified: root.export-typescript-client-output-modified;
+                            revert => { root.export-revert("typescript_client_output"); }
+                            LineEdit {
+                                text <=> root.export-typescript-client-output;
+                                width: 300px;
+                                edited(s) => { root.export-field-edited("typescript_client_output", s); }
+                            }
                         }
                     }
 
@@ -718,30 +900,42 @@ export component GlobalSettingsDialog inherits Rectangle {
                         spacing: Theme.sp-3;
                         alignment: start;
                         Text { text: "  namespace:"; width: 140px; vertical-alignment: center; color: Theme.text-primary; }
-                        LineEdit {
-                            text <=> root.gs-export-csharp-unity-namespace;
-                            width: 300px;
-                            edited(s) => { root.export-field-edited("csharp_unity_namespace", s); }
+                        ModifiedField {
+                            modified: root.export-csharp-unity-namespace-modified;
+                            revert => { root.export-revert("csharp_unity_namespace"); }
+                            LineEdit {
+                                text <=> root.export-csharp-unity-namespace;
+                                width: 300px;
+                                edited(s) => { root.export-field-edited("csharp_unity_namespace", s); }
+                            }
                         }
                     }
                     HorizontalLayout {
                         spacing: Theme.sp-3;
                         alignment: start;
                         Text { text: "  code_output:"; width: 140px; vertical-alignment: center; color: Theme.text-primary; }
-                        LineEdit {
-                            text <=> root.gs-export-csharp-unity-code-output;
-                            width: 300px;
-                            edited(s) => { root.export-field-edited("csharp_unity_code_output", s); }
+                        ModifiedField {
+                            modified: root.export-csharp-unity-code-output-modified;
+                            revert => { root.export-revert("csharp_unity_code_output"); }
+                            LineEdit {
+                                text <=> root.export-csharp-unity-code-output;
+                                width: 300px;
+                                edited(s) => { root.export-field-edited("csharp_unity_code_output", s); }
+                            }
                         }
                     }
                     HorizontalLayout {
                         spacing: Theme.sp-3;
                         alignment: start;
                         Text { text: "  custom_regions:"; width: 140px; vertical-alignment: center; color: Theme.text-primary; }
-                        CheckBox {
-                            text: "产物带业务扩展保留区间";
-                            checked <=> root.gs-export-csharp-unity-custom-regions;
-                            toggled => { root.export-field-edited("csu_custom_regions", root.gs-export-csharp-unity-custom-regions ? "true" : "false"); }
+                        ModifiedField {
+                            modified: root.export-csharp-unity-custom-regions-modified;
+                            revert => { root.export-revert("csharp_unity_custom_regions"); }
+                            CheckBox {
+                                text: "产物带业务扩展保留区间";
+                                checked <=> root.export-csharp-unity-custom-regions;
+                                toggled => { root.export-field-edited("csharp_unity_custom_regions", root.export-csharp-unity-custom-regions ? "true" : "false"); }
+                            }
                         }
                     }
 
@@ -750,30 +944,42 @@ export component GlobalSettingsDialog inherits Rectangle {
                         spacing: Theme.sp-3;
                         alignment: start;
                         Text { text: "  namespace:"; width: 140px; vertical-alignment: center; color: Theme.text-primary; }
-                        LineEdit {
-                            text <=> root.gs-export-csharp-godot-namespace;
-                            width: 300px;
-                            edited(s) => { root.export-field-edited("csharp_godot_namespace", s); }
+                        ModifiedField {
+                            modified: root.export-csharp-godot-namespace-modified;
+                            revert => { root.export-revert("csharp_godot_namespace"); }
+                            LineEdit {
+                                text <=> root.export-csharp-godot-namespace;
+                                width: 300px;
+                                edited(s) => { root.export-field-edited("csharp_godot_namespace", s); }
+                            }
                         }
                     }
                     HorizontalLayout {
                         spacing: Theme.sp-3;
                         alignment: start;
                         Text { text: "  code_output:"; width: 140px; vertical-alignment: center; color: Theme.text-primary; }
-                        LineEdit {
-                            text <=> root.gs-export-csharp-godot-code-output;
-                            width: 300px;
-                            edited(s) => { root.export-field-edited("csharp_godot_code_output", s); }
+                        ModifiedField {
+                            modified: root.export-csharp-godot-code-output-modified;
+                            revert => { root.export-revert("csharp_godot_code_output"); }
+                            LineEdit {
+                                text <=> root.export-csharp-godot-code-output;
+                                width: 300px;
+                                edited(s) => { root.export-field-edited("csharp_godot_code_output", s); }
+                            }
                         }
                     }
                     HorizontalLayout {
                         spacing: Theme.sp-3;
                         alignment: start;
                         Text { text: "  custom_regions:"; width: 140px; vertical-alignment: center; color: Theme.text-primary; }
-                        CheckBox {
-                            text: "产物带业务扩展保留区间";
-                            checked <=> root.gs-export-csharp-godot-custom-regions;
-                            toggled => { root.export-field-edited("csg_custom_regions", root.gs-export-csharp-godot-custom-regions ? "true" : "false"); }
+                        ModifiedField {
+                            modified: root.export-csharp-godot-custom-regions-modified;
+                            revert => { root.export-revert("csharp_godot_custom_regions"); }
+                            CheckBox {
+                                text: "产物带业务扩展保留区间";
+                                checked <=> root.export-csharp-godot-custom-regions;
+                                toggled => { root.export-field-edited("csharp_godot_custom_regions", root.export-csharp-godot-custom-regions ? "true" : "false"); }
+                            }
                         }
                     }
 

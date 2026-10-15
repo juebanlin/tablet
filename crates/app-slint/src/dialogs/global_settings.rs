@@ -1,20 +1,28 @@
-﻿// 全局设置对话框：UI设置 / 分隔符 / 导出设置 3 tab。
+// 全局设置对话框：UI设置 / 分隔符 / 导出设置 3 tab。
 //
-// 数据范式：current + apply 模式
-// - current: engine.global_config（当前已保存的内存值，等于硬盘值）
-// - apply: global_settings 各 buf 字段（待应用的编辑缓冲）
-// - current_snapshot: 打开对话框时 current 的快照，用于撤销和对比
-// - modified: 后端对比计算（apply != current_snapshot）
+// 数据范式：**编辑缓冲 + 打开时快照**（@02.26.6）
+// - apply：`global_settings` 的 ui / sep / export —— 待应用的编辑缓冲。
+//   **这个缓冲必须留**：`engine.global_config` 是活的工作区状态，别的东西会读它
+//   （分隔符驱动校验、导出配置），而且它的 `project_management` 段自己会变。
+// - 参照物：`current_snapshot`（打开对话框那一刻的 tablet.toml 值）。
+//   因为「确定」就是写盘点，「内存 ≠ 盘上」这段窗口**恰好只有对话框开着的时候** ——
+//   关掉就没有东西需要留存了，所以这里不需要像项目设置那样把 `original_*` 存进数据结构。
+// - modified：每个字段自己回答「和快照不一样吗」，后端算好推上来；**按 tab 分块比**
+//   （`GlobalConfig` 里的 `project_management` 段不归这个对话框管）。
 //
-// 与项目设置的区别：点击「确定」后立即写 tablet.toml，不是标记 dirty。
-// 修改全局配置后会重新合并所有已打开项目的配置，分隔符改变时重新验证数据。
+// 点击「确定」后立即写 tablet.toml（工作区级、一定已存在，@02.26.3）。
+// **保留「取消」**：确定就是落盘，去掉取消等于「关窗即改工作区配置」——这个副作用比
+// 项目设置重得多（工作区级、立即生效，分隔符还会触发全项目重校验）。
 
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::str::FromStr;
 
 use slint::ComponentHandle;
+use tablet_core::export_keys::ExportKey;
+use tablet_core::model::{ExportConfig, UiConfig};
 use tablet_core::types::{SepKey, SeparatorsSection};
+use tablet_core::ui_keys::UiKey;
 
 use crate::state::AppState;
 use crate::{refresh, AppWindow};
@@ -41,9 +49,6 @@ pub fn open(state: &Rc<RefCell<AppState>>, ui_h: &AppWindow) {
     let gs = &mut st.global_settings;
     gs.open = true;
     gs.tab = 0;
-    gs.ui_tab_modified = false;
-    gs.sep_tab_modified = false;
-    gs.export_tab_modified = false;
     gs.ui = current.ui.clone().unwrap_or_default();
     gs.sep = current.separators.clone();
     gs.export = current.export.clone().unwrap_or_default();
@@ -123,6 +128,11 @@ pub fn open(state: &Rc<RefCell<AppState>>, ui_h: &AppWindow) {
     ));
 }
 
+/// 下拉字段：在选项表里找当前值，得到下标。找不到（手改过 tablet.toml）落第一项。
+fn index_of(options: Vec<&'static str>, value: &str) -> i32 {
+    options.iter().position(|s| *s == value).unwrap_or(0) as i32
+}
+
 pub fn push(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
     let st = state.borrow();
     let gs = &st.global_settings;
@@ -132,164 +142,169 @@ pub fn push(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
         return;
     }
     ui_h.set_gs_tab(gs.tab);
-    ui_h.set_gs_ui_tab_modified(gs.ui_tab_modified);
-    ui_h.set_gs_sep_tab_modified(gs.sep_tab_modified);
-    ui_h.set_gs_export_tab_modified(gs.export_tab_modified);
 
-    // UI 设置
-    ui_h.set_gs_ui_auto_commit_on_blur(gs.ui.auto_commit_on_blur);
-    ui_h.set_gs_ui_realtime_validate(gs.ui.realtime_validate);
-
-    let log_level = gs.ui.log_level.unwrap_or(tablet_core::enums::LogLevel::default());
-    let log_level_idx = tablet_core::enums::LogLevel::all().iter().position(|&l| l == log_level).unwrap_or(0) as i32;
-    ui_h.set_gs_ui_log_level_index(log_level_idx);
-
-    // 使用 current-index 而不是 current-value
-    let header_idx = tablet_core::enums::PickerTrigger::all().iter().position(|&t| t == gs.ui.picker_trigger_header).unwrap_or(0) as i32;
-    let data_idx = tablet_core::enums::PickerTrigger::all().iter().position(|&t| t == gs.ui.picker_trigger_data).unwrap_or(0) as i32;
-    ui_h.set_gs_ui_picker_trigger_header_index(header_idx);
-    ui_h.set_gs_ui_picker_trigger_data_index(data_idx);
-    ui_h.set_gs_ui_show_meta_id(gs.ui.show_meta_id);
-    ui_h.set_gs_ui_constant_ref_allowed(gs.ui.constant_ref_allowed);
-
-    let ref_picker_strategy_idx = tablet_core::enums::RefPickerStrategy::all().iter().position(|&s| s == gs.ui.ref_picker.default_strategy).unwrap_or(0) as i32;
-    ui_h.set_gs_ui_ref_picker_strategy_index(ref_picker_strategy_idx);
-
-    // 分隔符（25 个）
-    push_separators(ui_h, &gs.sep);
-
-    // 导出设置
-    let encoding = gs.export.encoding.unwrap_or(tablet_core::enums::Encoding::default());
-    let encoding_idx = tablet_core::enums::Encoding::all().iter().position(|&e| e == encoding).unwrap_or(0) as i32;
-    ui_h.set_gs_export_encoding_index(encoding_idx);
-
-    let line_ending = gs.export.line_ending.unwrap_or(tablet_core::enums::LineEnding::default());
-    let line_ending_idx = tablet_core::enums::LineEnding::all().iter().position(|&l| l == line_ending).unwrap_or(0) as i32;
-    ui_h.set_gs_export_line_ending_index(line_ending_idx);
-
-    // JSON/XML 空值处理
-    let json_empty_as = gs.export.json.as_ref().and_then(|j| j.empty_as).unwrap_or(tablet_core::enums::JsonEmptyAs::default());
-    let json_empty_as_idx = tablet_core::enums::JsonEmptyAs::all().iter().position(|&e| e == json_empty_as).unwrap_or(0) as i32;
-    ui_h.set_gs_export_json_empty_as_index(json_empty_as_idx);
-
-    let xml_empty_as = gs.export.xml.as_ref().and_then(|x| x.empty_as).unwrap_or(tablet_core::enums::XmlEmptyAs::default());
-    let xml_empty_as_idx = tablet_core::enums::XmlEmptyAs::all().iter().position(|&e| e == xml_empty_as).unwrap_or(0) as i32;
-    ui_h.set_gs_export_xml_empty_as_index(xml_empty_as_idx);
-
-    // Server
-    ui_h.set_gs_export_server_data_output(
-        gs.export.server.as_ref().and_then(|s| s.data_output.as_ref()).cloned().unwrap_or_default().into()
-    );
-    ui_h.set_gs_export_java_package(
-        gs.export.server.as_ref().and_then(|s| s.java.as_ref()).and_then(|j| j.package.as_ref()).cloned().unwrap_or_default().into()
-    );
-    ui_h.set_gs_export_java_code_output(
-        gs.export.server.as_ref().and_then(|s| s.java.as_ref()).and_then(|j| j.code_output.as_ref()).cloned().unwrap_or_default().into()
-    );
-    // 缺省开：与 export/java.rs 里的 unwrap_or(true) 保持同一口径
-    ui_h.set_gs_export_java_lombok(
-        gs.export.server.as_ref().and_then(|s| s.java.as_ref()).and_then(|j| j.lombok).unwrap_or(true)
-    );
-    ui_h.set_gs_export_java_custom_regions(
-        gs.export.server.as_ref().and_then(|s| s.java.as_ref()).and_then(|x| x.custom_regions).unwrap_or(true)
-    );
-    ui_h.set_gs_export_go_package(
-        gs.export.server.as_ref().and_then(|s| s.go.as_ref()).and_then(|g| g.package.as_ref()).cloned().unwrap_or_default().into()
-    );
-    ui_h.set_gs_export_go_code_output(
-        gs.export.server.as_ref().and_then(|s| s.go.as_ref()).and_then(|g| g.code_output.as_ref()).cloned().unwrap_or_default().into()
-    );
-    ui_h.set_gs_export_go_custom_regions(
-        gs.export.server.as_ref().and_then(|s| s.go.as_ref()).and_then(|x| x.custom_regions).unwrap_or(true)
-    );
-    ui_h.set_gs_export_cpp_namespace(
-        gs.export.server.as_ref().and_then(|s| s.cpp.as_ref()).and_then(|c| c.namespace.as_ref()).cloned().unwrap_or_default().into()
-    );
-    ui_h.set_gs_export_cpp_code_output(
-        gs.export.server.as_ref().and_then(|s| s.cpp.as_ref()).and_then(|c| c.code_output.as_ref()).cloned().unwrap_or_default().into()
-    );
-    ui_h.set_gs_export_cpp_custom_regions(
-        gs.export.server.as_ref().and_then(|s| s.cpp.as_ref()).and_then(|x| x.custom_regions).unwrap_or(true)
-    );
-    let cpp_json_lib = gs.export.server.as_ref().and_then(|s| s.cpp.as_ref()).and_then(|c| c.json_lib).unwrap_or(tablet_core::enums::CppJsonLib::default());
-    let cpp_json_lib_idx = tablet_core::enums::CppJsonLib::all().iter().position(|&l| l == cpp_json_lib).unwrap_or(0) as i32;
-    ui_h.set_gs_export_cpp_json_lib_index(cpp_json_lib_idx);
-
-    ui_h.set_gs_export_csharp_dotnet_namespace(
-        gs.export.server.as_ref().and_then(|s| s.csharp_dotnet.as_ref()).and_then(|c| c.namespace.as_ref()).cloned().unwrap_or_default().into()
-    );
-    ui_h.set_gs_export_csharp_dotnet_code_output(
-        gs.export.server.as_ref().and_then(|s| s.csharp_dotnet.as_ref()).and_then(|c| c.code_output.as_ref()).cloned().unwrap_or_default().into()
-    );
-    ui_h.set_gs_export_csharp_dotnet_custom_regions(
-        gs.export.server.as_ref().and_then(|s| s.csharp_dotnet.as_ref()).and_then(|x| x.custom_regions).unwrap_or(true)
-    );
-    ui_h.set_gs_export_typescript_server_code_output(
-        gs.export.server.as_ref().and_then(|s| s.typescript.as_ref()).and_then(|t| t.output.as_ref()).cloned().unwrap_or_default().into()
-    );
-
-    // Client
-    ui_h.set_gs_export_lua_output(
-        gs.export.client.as_ref().and_then(|c| c.lua.as_ref()).and_then(|l| l.output.as_ref()).cloned().unwrap_or_default().into()
-    );
-    ui_h.set_gs_export_gdscript_output(
-        gs.export.client.as_ref().and_then(|c| c.gdscript.as_ref()).and_then(|g| g.output.as_ref()).cloned().unwrap_or_default().into()
-    );
-    ui_h.set_gs_export_typescript_client_output(
-        gs.export.client.as_ref().and_then(|c| c.typescript.as_ref()).and_then(|t| t.output.as_ref()).cloned().unwrap_or_default().into()
-    );
-    ui_h.set_gs_export_csharp_unity_namespace(
-        gs.export.client.as_ref().and_then(|c| c.csharp_unity.as_ref()).and_then(|u| u.namespace.as_ref()).cloned().unwrap_or_default().into()
-    );
-    ui_h.set_gs_export_csharp_unity_code_output(
-        gs.export.client.as_ref().and_then(|c| c.csharp_unity.as_ref()).and_then(|u| u.code_output.as_ref()).cloned().unwrap_or_default().into()
-    );
-    ui_h.set_gs_export_csharp_unity_custom_regions(
-        gs.export.client.as_ref().and_then(|c| c.csharp_unity.as_ref()).and_then(|x| x.custom_regions).unwrap_or(true)
-    );
-    ui_h.set_gs_export_csharp_godot_namespace(
-        gs.export.client.as_ref().and_then(|c| c.csharp_godot.as_ref()).and_then(|g| g.namespace.as_ref()).cloned().unwrap_or_default().into()
-    );
-    ui_h.set_gs_export_csharp_godot_code_output(
-        gs.export.client.as_ref().and_then(|c| c.csharp_godot.as_ref()).and_then(|g| g.code_output.as_ref()).cloned().unwrap_or_default().into()
-    );
-    ui_h.set_gs_export_csharp_godot_custom_regions(
-        gs.export.client.as_ref().and_then(|c| c.csharp_godot.as_ref()).and_then(|x| x.custom_regions).unwrap_or(true)
-    );
-}
-
-fn push_separators(ui_h: &AppWindow, sep: &SeparatorsSection) {
-    ui_h.set_gs_sep_tuple2(SepKey::Tuple2.get(sep).into());
-    ui_h.set_gs_sep_tuple3(SepKey::Tuple3.get(sep).into());
-    ui_h.set_gs_sep_tuple4(SepKey::Tuple4.get(sep).into());
-    ui_h.set_gs_sep_list(SepKey::List.get(sep).into());
-    ui_h.set_gs_sep_set(SepKey::Set.get(sep).into());
-    ui_h.set_gs_sep_map_kv(SepKey::MapKv.get(sep).into());
-    ui_h.set_gs_sep_map_entry(SepKey::MapEntry.get(sep).into());
-    ui_h.set_gs_sep_lt2_tuple(SepKey::ListTuple2Tuple.get(sep).into());
-    ui_h.set_gs_sep_lt2_list(SepKey::ListTuple2List.get(sep).into());
-    ui_h.set_gs_sep_lt3_tuple(SepKey::ListTuple3Tuple.get(sep).into());
-    ui_h.set_gs_sep_lt3_list(SepKey::ListTuple3List.get(sep).into());
-    ui_h.set_gs_sep_lt4_tuple(SepKey::ListTuple4Tuple.get(sep).into());
-    ui_h.set_gs_sep_lt4_list(SepKey::ListTuple4List.get(sep).into());
-    ui_h.set_gs_sep_mt2_kv(SepKey::MapTuple2Kv.get(sep).into());
-    ui_h.set_gs_sep_mt2_tuple(SepKey::MapTuple2Tuple.get(sep).into());
-    ui_h.set_gs_sep_mt2_entry(SepKey::MapTuple2Entry.get(sep).into());
-    ui_h.set_gs_sep_mt3_kv(SepKey::MapTuple3Kv.get(sep).into());
-    ui_h.set_gs_sep_mt3_tuple(SepKey::MapTuple3Tuple.get(sep).into());
-    ui_h.set_gs_sep_mt3_entry(SepKey::MapTuple3Entry.get(sep).into());
-    ui_h.set_gs_sep_mt4_kv(SepKey::MapTuple4Kv.get(sep).into());
-    ui_h.set_gs_sep_mt4_tuple(SepKey::MapTuple4Tuple.get(sep).into());
-    ui_h.set_gs_sep_mt4_entry(SepKey::MapTuple4Entry.get(sep).into());
-    ui_h.set_gs_sep_ml_kv(SepKey::MapListKv.get(sep).into());
-    ui_h.set_gs_sep_ml_item(SepKey::MapListItem.get(sep).into());
-    ui_h.set_gs_sep_ml_entry(SepKey::MapListEntry.get(sep).into());
-}
-
-fn apply_sep_kv(sep: &mut SeparatorsSection, key: &str, value: &str) {
-    if let Some(k) = SepKey::from_directive_key(key) {
-        k.set(sep, value.to_string());
+    // 参照物 = 打开对话框那一刻的 tablet.toml。**按 tab 分块比** —— `GlobalConfig` 里的
+    // `project_management` 段不归这个对话框管（拖项目排序也会写 tablet.toml），
+    // 整份 `!=` 会让「拖一下排序」把对话框误判成有未保存改动。
+    let snap = gs.current_snapshot.clone().unwrap_or_default();
+    match gs.tab {
+        0 => push_ui(ui_h, &gs.ui, &snap.ui.clone().unwrap_or_default()),
+        1 => push_sep(ui_h, &gs.sep, &snap.separators),
+        2 => push_export(ui_h, &gs.export, &snap.export.clone().unwrap_or_default()),
+        _ => {}
     }
+}
+
+fn push_ui(ui_h: &AppWindow, live: &UiConfig, orig: &UiConfig) {
+    use tablet_core::enums::{LogLevel, PickerTrigger, RefPickerStrategy};
+    let v = |k: UiKey| k.get(live);
+    let m = |k: UiKey| k.modified(live, orig);
+
+    // 布尔：值 + 「和快照不一样吗」。成对写，加字段时不会只加一半。
+    ui_h.set_gs_ui_auto_commit_on_blur(v(UiKey::AutoCommitOnBlur) == "true");
+    ui_h.set_gs_ui_auto_commit_on_blur_modified(m(UiKey::AutoCommitOnBlur));
+    ui_h.set_gs_ui_realtime_validate(v(UiKey::RealtimeValidate) == "true");
+    ui_h.set_gs_ui_realtime_validate_modified(m(UiKey::RealtimeValidate));
+    ui_h.set_gs_ui_show_meta_id(v(UiKey::ShowMetaId) == "true");
+    ui_h.set_gs_ui_show_meta_id_modified(m(UiKey::ShowMetaId));
+    ui_h.set_gs_ui_constant_ref_allowed(v(UiKey::ConstantRefAllowed) == "true");
+    ui_h.set_gs_ui_constant_ref_allowed_modified(m(UiKey::ConstantRefAllowed));
+
+    // 下拉：下标 + 改没改
+    ui_h.set_gs_ui_log_level_index(index_of(LogLevel::all_str(), &v(UiKey::LogLevel)));
+    ui_h.set_gs_ui_log_level_modified(m(UiKey::LogLevel));
+    ui_h.set_gs_ui_ref_picker_strategy_index(
+        index_of(RefPickerStrategy::all_str(), &v(UiKey::RefPickerStrategy)));
+    ui_h.set_gs_ui_ref_picker_strategy_modified(m(UiKey::RefPickerStrategy));
+    ui_h.set_gs_ui_picker_trigger_header_index(
+        index_of(PickerTrigger::all_str(), &v(UiKey::PickerTriggerHeader)));
+    ui_h.set_gs_ui_picker_trigger_header_modified(m(UiKey::PickerTriggerHeader));
+    ui_h.set_gs_ui_picker_trigger_data_index(
+        index_of(PickerTrigger::all_str(), &v(UiKey::PickerTriggerData)));
+    ui_h.set_gs_ui_picker_trigger_data_modified(m(UiKey::PickerTriggerData));
+}
+
+fn push_sep(ui_h: &AppWindow, live: &SeparatorsSection, orig: &SeparatorsSection) {
+    let v = |k: SepKey| k.get(live).to_string();
+    let m = |k: SepKey| k.get(live) != k.get(orig);
+
+    ui_h.set_gs_sep_tuple2(v(SepKey::Tuple2).into());
+    ui_h.set_gs_sep_tuple2_modified(m(SepKey::Tuple2));
+    ui_h.set_gs_sep_tuple3(v(SepKey::Tuple3).into());
+    ui_h.set_gs_sep_tuple3_modified(m(SepKey::Tuple3));
+    ui_h.set_gs_sep_tuple4(v(SepKey::Tuple4).into());
+    ui_h.set_gs_sep_tuple4_modified(m(SepKey::Tuple4));
+    ui_h.set_gs_sep_list(v(SepKey::List).into());
+    ui_h.set_gs_sep_list_modified(m(SepKey::List));
+    ui_h.set_gs_sep_set(v(SepKey::Set).into());
+    ui_h.set_gs_sep_set_modified(m(SepKey::Set));
+    ui_h.set_gs_sep_map_kv(v(SepKey::MapKv).into());
+    ui_h.set_gs_sep_map_kv_modified(m(SepKey::MapKv));
+    ui_h.set_gs_sep_map_entry(v(SepKey::MapEntry).into());
+    ui_h.set_gs_sep_map_entry_modified(m(SepKey::MapEntry));
+    ui_h.set_gs_sep_lt2_tuple(v(SepKey::ListTuple2Tuple).into());
+    ui_h.set_gs_sep_lt2_tuple_modified(m(SepKey::ListTuple2Tuple));
+    ui_h.set_gs_sep_lt2_list(v(SepKey::ListTuple2List).into());
+    ui_h.set_gs_sep_lt2_list_modified(m(SepKey::ListTuple2List));
+    ui_h.set_gs_sep_lt3_tuple(v(SepKey::ListTuple3Tuple).into());
+    ui_h.set_gs_sep_lt3_tuple_modified(m(SepKey::ListTuple3Tuple));
+    ui_h.set_gs_sep_lt3_list(v(SepKey::ListTuple3List).into());
+    ui_h.set_gs_sep_lt3_list_modified(m(SepKey::ListTuple3List));
+    ui_h.set_gs_sep_lt4_tuple(v(SepKey::ListTuple4Tuple).into());
+    ui_h.set_gs_sep_lt4_tuple_modified(m(SepKey::ListTuple4Tuple));
+    ui_h.set_gs_sep_lt4_list(v(SepKey::ListTuple4List).into());
+    ui_h.set_gs_sep_lt4_list_modified(m(SepKey::ListTuple4List));
+    ui_h.set_gs_sep_mt2_kv(v(SepKey::MapTuple2Kv).into());
+    ui_h.set_gs_sep_mt2_kv_modified(m(SepKey::MapTuple2Kv));
+    ui_h.set_gs_sep_mt2_tuple(v(SepKey::MapTuple2Tuple).into());
+    ui_h.set_gs_sep_mt2_tuple_modified(m(SepKey::MapTuple2Tuple));
+    ui_h.set_gs_sep_mt2_entry(v(SepKey::MapTuple2Entry).into());
+    ui_h.set_gs_sep_mt2_entry_modified(m(SepKey::MapTuple2Entry));
+    ui_h.set_gs_sep_mt3_kv(v(SepKey::MapTuple3Kv).into());
+    ui_h.set_gs_sep_mt3_kv_modified(m(SepKey::MapTuple3Kv));
+    ui_h.set_gs_sep_mt3_tuple(v(SepKey::MapTuple3Tuple).into());
+    ui_h.set_gs_sep_mt3_tuple_modified(m(SepKey::MapTuple3Tuple));
+    ui_h.set_gs_sep_mt3_entry(v(SepKey::MapTuple3Entry).into());
+    ui_h.set_gs_sep_mt3_entry_modified(m(SepKey::MapTuple3Entry));
+    ui_h.set_gs_sep_mt4_kv(v(SepKey::MapTuple4Kv).into());
+    ui_h.set_gs_sep_mt4_kv_modified(m(SepKey::MapTuple4Kv));
+    ui_h.set_gs_sep_mt4_tuple(v(SepKey::MapTuple4Tuple).into());
+    ui_h.set_gs_sep_mt4_tuple_modified(m(SepKey::MapTuple4Tuple));
+    ui_h.set_gs_sep_mt4_entry(v(SepKey::MapTuple4Entry).into());
+    ui_h.set_gs_sep_mt4_entry_modified(m(SepKey::MapTuple4Entry));
+    ui_h.set_gs_sep_ml_kv(v(SepKey::MapListKv).into());
+    ui_h.set_gs_sep_ml_kv_modified(m(SepKey::MapListKv));
+    ui_h.set_gs_sep_ml_item(v(SepKey::MapListItem).into());
+    ui_h.set_gs_sep_ml_item_modified(m(SepKey::MapListItem));
+    ui_h.set_gs_sep_ml_entry(v(SepKey::MapListEntry).into());
+    ui_h.set_gs_sep_ml_entry_modified(m(SepKey::MapListEntry));
+}
+
+fn push_export(ui_h: &AppWindow, live: &ExportConfig, orig: &ExportConfig) {
+    use tablet_core::enums::{CppJsonLib, Encoding, JsonEmptyAs, LineEnding, XmlEmptyAs};
+    let v = |k: ExportKey| k.get(live);
+    let m = |k: ExportKey| k.modified(live, orig);
+
+    ui_h.set_gs_export_encoding_index(index_of(Encoding::all_str(), &v(ExportKey::Encoding)));
+    ui_h.set_gs_export_encoding_modified(m(ExportKey::Encoding));
+    ui_h.set_gs_export_line_ending_index(index_of(LineEnding::all_str(), &v(ExportKey::LineEnding)));
+    ui_h.set_gs_export_line_ending_modified(m(ExportKey::LineEnding));
+    ui_h.set_gs_export_json_empty_as_index(index_of(JsonEmptyAs::all_str(), &v(ExportKey::JsonEmptyAs)));
+    ui_h.set_gs_export_json_empty_as_modified(m(ExportKey::JsonEmptyAs));
+    ui_h.set_gs_export_xml_empty_as_index(index_of(XmlEmptyAs::all_str(), &v(ExportKey::XmlEmptyAs)));
+    ui_h.set_gs_export_xml_empty_as_modified(m(ExportKey::XmlEmptyAs));
+    ui_h.set_gs_export_cpp_json_lib_index(index_of(CppJsonLib::all_str(), &v(ExportKey::CppJsonLib)));
+    ui_h.set_gs_export_cpp_json_lib_modified(m(ExportKey::CppJsonLib));
+
+    ui_h.set_gs_export_server_data_output(v(ExportKey::ServerDataOutput).into());
+    ui_h.set_gs_export_server_data_output_modified(m(ExportKey::ServerDataOutput));
+    ui_h.set_gs_export_java_package(v(ExportKey::JavaPackage).into());
+    ui_h.set_gs_export_java_package_modified(m(ExportKey::JavaPackage));
+    ui_h.set_gs_export_java_code_output(v(ExportKey::JavaCodeOutput).into());
+    ui_h.set_gs_export_java_code_output_modified(m(ExportKey::JavaCodeOutput));
+    ui_h.set_gs_export_go_package(v(ExportKey::GoPackage).into());
+    ui_h.set_gs_export_go_package_modified(m(ExportKey::GoPackage));
+    ui_h.set_gs_export_go_code_output(v(ExportKey::GoCodeOutput).into());
+    ui_h.set_gs_export_go_code_output_modified(m(ExportKey::GoCodeOutput));
+    ui_h.set_gs_export_cpp_namespace(v(ExportKey::CppNamespace).into());
+    ui_h.set_gs_export_cpp_namespace_modified(m(ExportKey::CppNamespace));
+    ui_h.set_gs_export_cpp_code_output(v(ExportKey::CppCodeOutput).into());
+    ui_h.set_gs_export_cpp_code_output_modified(m(ExportKey::CppCodeOutput));
+    ui_h.set_gs_export_csharp_dotnet_namespace(v(ExportKey::CsharpDotnetNamespace).into());
+    ui_h.set_gs_export_csharp_dotnet_namespace_modified(m(ExportKey::CsharpDotnetNamespace));
+    ui_h.set_gs_export_csharp_dotnet_code_output(v(ExportKey::CsharpDotnetCodeOutput).into());
+    ui_h.set_gs_export_csharp_dotnet_code_output_modified(m(ExportKey::CsharpDotnetCodeOutput));
+    ui_h.set_gs_export_typescript_server_code_output(v(ExportKey::TypescriptServerCodeOutput).into());
+    ui_h.set_gs_export_typescript_server_code_output_modified(m(ExportKey::TypescriptServerCodeOutput));
+    ui_h.set_gs_export_lua_output(v(ExportKey::LuaOutput).into());
+    ui_h.set_gs_export_lua_output_modified(m(ExportKey::LuaOutput));
+    ui_h.set_gs_export_gdscript_output(v(ExportKey::GdscriptOutput).into());
+    ui_h.set_gs_export_gdscript_output_modified(m(ExportKey::GdscriptOutput));
+    ui_h.set_gs_export_typescript_client_output(v(ExportKey::TypescriptClientOutput).into());
+    ui_h.set_gs_export_typescript_client_output_modified(m(ExportKey::TypescriptClientOutput));
+    ui_h.set_gs_export_csharp_unity_namespace(v(ExportKey::CsharpUnityNamespace).into());
+    ui_h.set_gs_export_csharp_unity_namespace_modified(m(ExportKey::CsharpUnityNamespace));
+    ui_h.set_gs_export_csharp_unity_code_output(v(ExportKey::CsharpUnityCodeOutput).into());
+    ui_h.set_gs_export_csharp_unity_code_output_modified(m(ExportKey::CsharpUnityCodeOutput));
+    ui_h.set_gs_export_csharp_godot_namespace(v(ExportKey::CsharpGodotNamespace).into());
+    ui_h.set_gs_export_csharp_godot_namespace_modified(m(ExportKey::CsharpGodotNamespace));
+    ui_h.set_gs_export_csharp_godot_code_output(v(ExportKey::CsharpGodotCodeOutput).into());
+    ui_h.set_gs_export_csharp_godot_code_output_modified(m(ExportKey::CsharpGodotCodeOutput));
+
+    ui_h.set_gs_export_cpp_custom_regions(v(ExportKey::CppCustomRegions) == "true");
+    ui_h.set_gs_export_cpp_custom_regions_modified(m(ExportKey::CppCustomRegions));
+    ui_h.set_gs_export_java_lombok(v(ExportKey::JavaLombok) == "true");
+    ui_h.set_gs_export_java_lombok_modified(m(ExportKey::JavaLombok));
+    ui_h.set_gs_export_java_custom_regions(v(ExportKey::JavaCustomRegions) == "true");
+    ui_h.set_gs_export_java_custom_regions_modified(m(ExportKey::JavaCustomRegions));
+    ui_h.set_gs_export_go_custom_regions(v(ExportKey::GoCustomRegions) == "true");
+    ui_h.set_gs_export_go_custom_regions_modified(m(ExportKey::GoCustomRegions));
+    ui_h.set_gs_export_csharp_dotnet_custom_regions(v(ExportKey::CsharpDotnetCustomRegions) == "true");
+    ui_h.set_gs_export_csharp_dotnet_custom_regions_modified(m(ExportKey::CsharpDotnetCustomRegions));
+    ui_h.set_gs_export_csharp_unity_custom_regions(v(ExportKey::CsharpUnityCustomRegions) == "true");
+    ui_h.set_gs_export_csharp_unity_custom_regions_modified(m(ExportKey::CsharpUnityCustomRegions));
+    ui_h.set_gs_export_csharp_godot_custom_regions(v(ExportKey::CsharpGodotCustomRegions) == "true");
+    ui_h.set_gs_export_csharp_godot_custom_regions_modified(m(ExportKey::CsharpGodotCustomRegions));
 }
 
 /// 「确定」逻辑：立即写 tablet.toml，重新合并所有项目配置，分隔符改变时重新验证。
@@ -340,13 +355,10 @@ fn run(state: &Rc<RefCell<AppState>>) {
         st.engine.error_log(format!("[全局设置] 分隔符已更新，重新验证了 {} 个错误", err_count));
     }
 
-    // 确定成功：更新 current_snapshot 为当前配置，并重置改动标记
+    // 确定成功：参照物往前挪到刚写下去的值（于是所有字段的 -modified 自动清掉）
     {
         let mut st = state.borrow_mut();
         st.global_settings.current_snapshot = Some(st.engine.global_config.clone());
-        st.global_settings.ui_tab_modified = false;
-        st.global_settings.sep_tab_modified = false;
-        st.global_settings.export_tab_modified = false;
     }
 }
 
@@ -368,45 +380,18 @@ pub fn wire(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
         let s = state.clone();
         let weak = ui_h.as_weak();
         ui_h.on_gs_ui_field_edited(move |key, value| {
-            let mut st = s.borrow_mut();
-            let gs = &mut st.global_settings;
-            match key.as_str() {
-                "auto_commit_on_blur" => {
-                    gs.ui.auto_commit_on_blur = value == "true";
+            match UiKey::from_str(&key) {
+                Some(k) => {
+                    let mut st = s.borrow_mut();
+                    if !k.set(&mut st.global_settings.ui, &value) {
+                        st.engine.error_log(format!(
+                            "[全局设置] {} 不接受值 {:?}（非法，保持原样）", key, value));
+                    }
                 }
-                "realtime_validate" => {
-                    gs.ui.realtime_validate = value == "true";
-                }
-                "show_meta_id" => {
-                    gs.ui.show_meta_id = value == "true";
-                }
-                "constant_ref_allowed" => {
-                    gs.ui.constant_ref_allowed = value == "true";
-                }
-                "log_level" => {
-                    gs.ui.log_level = if value.is_empty() {
-                        None
-                    } else {
-                        tablet_core::enums::LogLevel::from_str(&value).ok()
-                    };
-                }
-                "picker_trigger_header" => {
-                    gs.ui.picker_trigger_header = tablet_core::enums::PickerTrigger::from_str(&value).unwrap_or_default();
-                }
-                "picker_trigger_data" => {
-                    gs.ui.picker_trigger_data = tablet_core::enums::PickerTrigger::from_str(&value).unwrap_or_default();
-                }
-                "ref_picker_strategy" => {
-                    gs.ui.ref_picker.default_strategy = tablet_core::enums::RefPickerStrategy::from_str(&value).unwrap_or_default();
-                }
-                _ => {}
+                // 认不出的 key 要吵 —— 导出那边静默吞掉三个 key，就是这么漏的
+                None => s.borrow_mut().engine.error_log(format!("[全局设置] 不认识的 UI 字段: {}", key)),
             }
-            // 计算 modified
-            gs.ui_tab_modified = check_ui_modified(gs);
-            drop(st);
-            if let Some(ui_h) = weak.upgrade() {
-                push(&ui_h, &s);
-            }
+            if let Some(ui_h) = weak.upgrade() { push(&ui_h, &s); }
         });
     }
 
@@ -415,268 +400,17 @@ pub fn wire(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
         let s = state.clone();
         let weak = ui_h.as_weak();
         ui_h.on_gs_export_field_edited(move |key, value| {
-            let mut st = s.borrow_mut();
-            let gs = &mut st.global_settings;
-            match key.as_str() {
-                "encoding" => {
-                    gs.export.encoding = if value.is_empty() {
-                        None
-                    } else {
-                        tablet_core::enums::Encoding::from_str(&value).ok()
-                    };
+            match ExportKey::from_str(&key) {
+                Some(k) => {
+                    let mut st = s.borrow_mut();
+                    if !k.set(&mut st.global_settings.export, &value) {
+                        st.engine.error_log(format!(
+                            "[全局设置] 导出配置不接受 {} = {:?}（非法，保持原样）", key, value));
+                    }
                 }
-                "line_ending" => {
-                    gs.export.line_ending = if value.is_empty() {
-                        None
-                    } else {
-                        tablet_core::enums::LineEnding::from_str(&value).ok()
-                    };
-                }
-                "json_empty_as" => {
-                    if gs.export.json.is_none() {
-                        gs.export.json = Some(tablet_core::model::JsonExport::default());
-                    }
-                    gs.export.json.as_mut().unwrap().empty_as =
-                        tablet_core::enums::JsonEmptyAs::from_str(&value).ok();
-                }
-                "xml_empty_as" => {
-                    if gs.export.xml.is_none() {
-                        gs.export.xml = Some(tablet_core::model::XmlExport::default());
-                    }
-                    gs.export.xml.as_mut().unwrap().empty_as =
-                        tablet_core::enums::XmlEmptyAs::from_str(&value).ok();
-                }
-                "server_data_output" => {
-                    if gs.export.server.is_none() {
-                        gs.export.server = Some(tablet_core::model::ServerExport::default());
-                    }
-                    gs.export.server.as_mut().unwrap().data_output = Some(value.to_string());
-                }
-                "java_package" => {
-                    if gs.export.server.is_none() {
-                        gs.export.server = Some(tablet_core::model::ServerExport::default());
-                    }
-                    if gs.export.server.as_mut().unwrap().java.is_none() {
-                        gs.export.server.as_mut().unwrap().java = Some(tablet_core::model::JavaExport::default());
-                    }
-                    gs.export.server.as_mut().unwrap().java.as_mut().unwrap().package = Some(value.to_string());
-                }
-                "java_code_output" => {
-                    if gs.export.server.is_none() {
-                        gs.export.server = Some(tablet_core::model::ServerExport::default());
-                    }
-                    if gs.export.server.as_mut().unwrap().java.is_none() {
-                        gs.export.server.as_mut().unwrap().java = Some(tablet_core::model::JavaExport::default());
-                    }
-                    gs.export.server.as_mut().unwrap().java.as_mut().unwrap().code_output = Some(value.to_string());
-                }
-                "java_lombok" => {
-                    if gs.export.server.is_none() {
-                        gs.export.server = Some(tablet_core::model::ServerExport::default());
-                    }
-                    if gs.export.server.as_mut().unwrap().java.is_none() {
-                        gs.export.server.as_mut().unwrap().java = Some(tablet_core::model::JavaExport::default());
-                    }
-                    gs.export.server.as_mut().unwrap().java.as_mut().unwrap().lombok = Some(value == "true");
-                }
-                "java_custom_regions" => {
-                    if gs.export.server.is_none() {
-                        gs.export.server = Some(tablet_core::model::ServerExport::default());
-                    }
-                    if gs.export.server.as_mut().unwrap().java.is_none() {
-                        gs.export.server.as_mut().unwrap().java = Some(tablet_core::model::JavaExport::default());
-                    }
-                    gs.export.server.as_mut().unwrap().java.as_mut().unwrap().custom_regions = Some(value == "true");
-                }
-                "go_custom_regions" => {
-                    if gs.export.server.is_none() {
-                        gs.export.server = Some(tablet_core::model::ServerExport::default());
-                    }
-                    if gs.export.server.as_mut().unwrap().go.is_none() {
-                        gs.export.server.as_mut().unwrap().go = Some(tablet_core::model::GoExport::default());
-                    }
-                    gs.export.server.as_mut().unwrap().go.as_mut().unwrap().custom_regions = Some(value == "true");
-                }
-                "cpp_custom_regions" => {
-                    if gs.export.server.is_none() {
-                        gs.export.server = Some(tablet_core::model::ServerExport::default());
-                    }
-                    if gs.export.server.as_mut().unwrap().cpp.is_none() {
-                        gs.export.server.as_mut().unwrap().cpp = Some(tablet_core::model::CppExport::default());
-                    }
-                    gs.export.server.as_mut().unwrap().cpp.as_mut().unwrap().custom_regions = Some(value == "true");
-                }
-                "csharp_dotnet_custom_regions" => {
-                    if gs.export.server.is_none() {
-                        gs.export.server = Some(tablet_core::model::ServerExport::default());
-                    }
-                    if gs.export.server.as_mut().unwrap().csharp_dotnet.is_none() {
-                        gs.export.server.as_mut().unwrap().csharp_dotnet = Some(tablet_core::model::DotNetExport::default());
-                    }
-                    gs.export.server.as_mut().unwrap().csharp_dotnet.as_mut().unwrap().custom_regions = Some(value == "true");
-                }
-                "csharp_unity_custom_regions" => {
-                    if gs.export.client.is_none() {
-                        gs.export.client = Some(tablet_core::model::ClientConfig::default());
-                    }
-                    if gs.export.client.as_mut().unwrap().csharp_unity.is_none() {
-                        gs.export.client.as_mut().unwrap().csharp_unity = Some(tablet_core::model::UnityCSharpExport::default());
-                    }
-                    gs.export.client.as_mut().unwrap().csharp_unity.as_mut().unwrap().custom_regions = Some(value == "true");
-                }
-                "csharp_godot_custom_regions" => {
-                    if gs.export.client.is_none() {
-                        gs.export.client = Some(tablet_core::model::ClientConfig::default());
-                    }
-                    if gs.export.client.as_mut().unwrap().csharp_godot.is_none() {
-                        gs.export.client.as_mut().unwrap().csharp_godot = Some(tablet_core::model::GodotCSharpExport::default());
-                    }
-                    gs.export.client.as_mut().unwrap().csharp_godot.as_mut().unwrap().custom_regions = Some(value == "true");
-                }
-                "go_package" => {
-                    if gs.export.server.is_none() {
-                        gs.export.server = Some(tablet_core::model::ServerExport::default());
-                    }
-                    if gs.export.server.as_mut().unwrap().go.is_none() {
-                        gs.export.server.as_mut().unwrap().go = Some(tablet_core::model::GoExport::default());
-                    }
-                    gs.export.server.as_mut().unwrap().go.as_mut().unwrap().package = Some(value.to_string());
-                }
-                "go_code_output" => {
-                    if gs.export.server.is_none() {
-                        gs.export.server = Some(tablet_core::model::ServerExport::default());
-                    }
-                    if gs.export.server.as_mut().unwrap().go.is_none() {
-                        gs.export.server.as_mut().unwrap().go = Some(tablet_core::model::GoExport::default());
-                    }
-                    gs.export.server.as_mut().unwrap().go.as_mut().unwrap().code_output = Some(value.to_string());
-                }
-                "cpp_namespace" => {
-                    if gs.export.server.is_none() {
-                        gs.export.server = Some(tablet_core::model::ServerExport::default());
-                    }
-                    if gs.export.server.as_mut().unwrap().cpp.is_none() {
-                        gs.export.server.as_mut().unwrap().cpp = Some(tablet_core::model::CppExport::default());
-                    }
-                    gs.export.server.as_mut().unwrap().cpp.as_mut().unwrap().namespace = Some(value.to_string());
-                }
-                "cpp_code_output" => {
-                    if gs.export.server.is_none() {
-                        gs.export.server = Some(tablet_core::model::ServerExport::default());
-                    }
-                    if gs.export.server.as_mut().unwrap().cpp.is_none() {
-                        gs.export.server.as_mut().unwrap().cpp = Some(tablet_core::model::CppExport::default());
-                    }
-                    gs.export.server.as_mut().unwrap().cpp.as_mut().unwrap().code_output = Some(value.to_string());
-                }
-                "cpp_json_lib" => {
-                    if gs.export.server.is_none() {
-                        gs.export.server = Some(tablet_core::model::ServerExport::default());
-                    }
-                    if gs.export.server.as_mut().unwrap().cpp.is_none() {
-                        gs.export.server.as_mut().unwrap().cpp = Some(tablet_core::model::CppExport::default());
-                    }
-                    gs.export.server.as_mut().unwrap().cpp.as_mut().unwrap().json_lib =
-                        tablet_core::enums::CppJsonLib::from_str(&value).ok();
-                }
-                "csharp_dotnet_namespace" => {
-                    if gs.export.server.is_none() {
-                        gs.export.server = Some(tablet_core::model::ServerExport::default());
-                    }
-                    if gs.export.server.as_mut().unwrap().csharp_dotnet.is_none() {
-                        gs.export.server.as_mut().unwrap().csharp_dotnet = Some(tablet_core::model::DotNetExport::default());
-                    }
-                    gs.export.server.as_mut().unwrap().csharp_dotnet.as_mut().unwrap().namespace = Some(value.to_string());
-                }
-                "csharp_dotnet_code_output" => {
-                    if gs.export.server.is_none() {
-                        gs.export.server = Some(tablet_core::model::ServerExport::default());
-                    }
-                    if gs.export.server.as_mut().unwrap().csharp_dotnet.is_none() {
-                        gs.export.server.as_mut().unwrap().csharp_dotnet = Some(tablet_core::model::DotNetExport::default());
-                    }
-                    gs.export.server.as_mut().unwrap().csharp_dotnet.as_mut().unwrap().code_output = Some(value.to_string());
-                }
-                "typescript_server_code_output" => {
-                    if gs.export.server.is_none() {
-                        gs.export.server = Some(tablet_core::model::ServerExport::default());
-                    }
-                    if gs.export.server.as_mut().unwrap().typescript.is_none() {
-                        gs.export.server.as_mut().unwrap().typescript = Some(tablet_core::model::ServerTypeScriptExport::default());
-                    }
-                    gs.export.server.as_mut().unwrap().typescript.as_mut().unwrap().output = Some(value.to_string());
-                }
-                "lua_output" => {
-                    if gs.export.client.is_none() {
-                        gs.export.client = Some(tablet_core::model::ClientConfig::default());
-                    }
-                    if gs.export.client.as_mut().unwrap().lua.is_none() {
-                        gs.export.client.as_mut().unwrap().lua = Some(tablet_core::model::LuaExport::default());
-                    }
-                    gs.export.client.as_mut().unwrap().lua.as_mut().unwrap().output = Some(value.to_string());
-                }
-                "gdscript_output" => {
-                    if gs.export.client.is_none() {
-                        gs.export.client = Some(tablet_core::model::ClientConfig::default());
-                    }
-                    if gs.export.client.as_mut().unwrap().gdscript.is_none() {
-                        gs.export.client.as_mut().unwrap().gdscript = Some(tablet_core::model::GdScriptExport::default());
-                    }
-                    gs.export.client.as_mut().unwrap().gdscript.as_mut().unwrap().output = Some(value.to_string());
-                }
-                "typescript_client_output" => {
-                    if gs.export.client.is_none() {
-                        gs.export.client = Some(tablet_core::model::ClientConfig::default());
-                    }
-                    if gs.export.client.as_mut().unwrap().typescript.is_none() {
-                        gs.export.client.as_mut().unwrap().typescript = Some(tablet_core::model::ClientTypeScriptExport::default());
-                    }
-                    gs.export.client.as_mut().unwrap().typescript.as_mut().unwrap().output = Some(value.to_string());
-                }
-                "csharp_unity_namespace" => {
-                    if gs.export.client.is_none() {
-                        gs.export.client = Some(tablet_core::model::ClientConfig::default());
-                    }
-                    if gs.export.client.as_mut().unwrap().csharp_unity.is_none() {
-                        gs.export.client.as_mut().unwrap().csharp_unity = Some(tablet_core::model::UnityCSharpExport::default());
-                    }
-                    gs.export.client.as_mut().unwrap().csharp_unity.as_mut().unwrap().namespace = Some(value.to_string());
-                }
-                "csharp_unity_code_output" => {
-                    if gs.export.client.is_none() {
-                        gs.export.client = Some(tablet_core::model::ClientConfig::default());
-                    }
-                    if gs.export.client.as_mut().unwrap().csharp_unity.is_none() {
-                        gs.export.client.as_mut().unwrap().csharp_unity = Some(tablet_core::model::UnityCSharpExport::default());
-                    }
-                    gs.export.client.as_mut().unwrap().csharp_unity.as_mut().unwrap().code_output = Some(value.to_string());
-                }
-                "csharp_godot_namespace" => {
-                    if gs.export.client.is_none() {
-                        gs.export.client = Some(tablet_core::model::ClientConfig::default());
-                    }
-                    if gs.export.client.as_mut().unwrap().csharp_godot.is_none() {
-                        gs.export.client.as_mut().unwrap().csharp_godot = Some(tablet_core::model::GodotCSharpExport::default());
-                    }
-                    gs.export.client.as_mut().unwrap().csharp_godot.as_mut().unwrap().namespace = Some(value.to_string());
-                }
-                "csharp_godot_code_output" => {
-                    if gs.export.client.is_none() {
-                        gs.export.client = Some(tablet_core::model::ClientConfig::default());
-                    }
-                    if gs.export.client.as_mut().unwrap().csharp_godot.is_none() {
-                        gs.export.client.as_mut().unwrap().csharp_godot = Some(tablet_core::model::GodotCSharpExport::default());
-                    }
-                    gs.export.client.as_mut().unwrap().csharp_godot.as_mut().unwrap().code_output = Some(value.to_string());
-                }
-                _ => {}
+                None => s.borrow_mut().engine.error_log(format!("[全局设置] 不认识的导出字段: {}", key)),
             }
-            // 计算 modified
-            gs.export_tab_modified = check_export_modified(gs);
-            drop(st);
-            if let Some(ui_h) = weak.upgrade() {
-                push(&ui_h, &s);
-            }
+            if let Some(ui_h) = weak.upgrade() { push(&ui_h, &s); }
         });
     }
 
@@ -685,12 +419,10 @@ pub fn wire(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
         let s = state.clone();
         let weak = ui_h.as_weak();
         ui_h.on_gs_sep_edited(move |key, value| {
-            let mut st = s.borrow_mut();
-            apply_sep_kv(&mut st.global_settings.sep, &key, &value);
-            st.global_settings.sep_tab_modified = check_sep_modified(&st.global_settings);
-            let modified = st.global_settings.sep_tab_modified;
-            drop(st);
-            s.borrow_mut().engine.ui_log(format!("[全局设置] 分隔符 {} 编辑，modified={}", key, modified));
+            match SepKey::from_directive_key(&key) {
+                Some(k) => k.set(&mut s.borrow_mut().global_settings.sep, value.to_string()),
+                None => s.borrow_mut().engine.error_log(format!("[全局设置] 不认识的分隔符字段: {}", key)),
+            }
             if let Some(ui_h) = weak.upgrade() { push(&ui_h, &s); }
         });
     }
@@ -705,51 +437,63 @@ pub fn wire(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
             if tab == 0 {
                 // UI 设置：填充硬编码默认值
                 st.global_settings.ui = tablet_core::model::UiConfig::default();
-                st.global_settings.ui_tab_modified = check_ui_modified(&st.global_settings);
             } else if tab == 1 {
                 // 分隔符：填充硬编码默认值
                 st.global_settings.sep = SeparatorsSection::default();
-                st.global_settings.sep_tab_modified = check_sep_modified(&st.global_settings);
             } else if tab == 2 {
                 // 导出设置：填充硬编码默认值
                 st.global_settings.export = tablet_core::model::ExportConfig::default();
-                st.global_settings.export_tab_modified = check_export_modified(&st.global_settings);
             }
             drop(st);
             if let Some(ui_h) = weak.upgrade() { push(&ui_h, &s); }
         });
     }
 
-    // 撤销改动：根据当前 tab 从 current_snapshot 恢复到 apply buffer
+    // 单字段还原：把**打开对话框那一刻的 tablet.toml 值**写回编辑缓冲（@02.26.6）。
+    // 刻意**不做**页面级「全部还原」——「取消」已经是它了（区别只是关不关窗）。
     {
         let s = state.clone();
         let weak = ui_h.as_weak();
-        ui_h.on_gs_undo_clicked(move || {
-            let (tab, snapshot) = {
-                let st = s.borrow();
-                (st.global_settings.tab, st.global_settings.current_snapshot.clone())
-            };
-
-            if let Some(current) = snapshot {
-                let mut st = s.borrow_mut();
-                if tab == 0 {
-                    // UI 设置：从 current 恢复
-                    st.global_settings.ui = current.ui.clone().unwrap_or_default();
-                    st.global_settings.ui_tab_modified = false;
-                } else if tab == 1 {
-                    // 分隔符：从 current 恢复
-                    st.global_settings.sep = current.separators.clone();
-                    st.global_settings.sep_tab_modified = false;
-                } else if tab == 2 {
-                    // 导出设置：从 current 恢复
-                    st.global_settings.export = current.export.clone().unwrap_or_default();
-                    st.global_settings.export_tab_modified = false;
-                }
+        ui_h.on_gs_ui_revert(move |key| {
+            let mut st = s.borrow_mut();
+            let snap = st.global_settings.current_snapshot.as_ref()
+                .and_then(|c| c.ui.clone()).unwrap_or_default();
+            match UiKey::from_str(&key) {
+                Some(k) => k.revert(&mut st.global_settings.ui, &snap),
+                None => st.engine.error_log(format!("[全局设置] 不认识的 UI 字段: {}", key)),
             }
-
-            if let Some(ui_h) = weak.upgrade() {
-                push(&ui_h, &s);
+            drop(st);
+            if let Some(ui_h) = weak.upgrade() { push(&ui_h, &s); }
+        });
+    }
+    {
+        let s = state.clone();
+        let weak = ui_h.as_weak();
+        ui_h.on_gs_sep_revert(move |key| {
+            let mut st = s.borrow_mut();
+            let snap = st.global_settings.current_snapshot.as_ref()
+                .map(|c| c.separators.clone()).unwrap_or_default();
+            match SepKey::from_directive_key(&key) {
+                Some(k) => k.set(&mut st.global_settings.sep, k.get(&snap).to_string()),
+                None => st.engine.error_log(format!("[全局设置] 不认识的分隔符字段: {}", key)),
             }
+            drop(st);
+            if let Some(ui_h) = weak.upgrade() { push(&ui_h, &s); }
+        });
+    }
+    {
+        let s = state.clone();
+        let weak = ui_h.as_weak();
+        ui_h.on_gs_export_revert(move |key| {
+            let mut st = s.borrow_mut();
+            let snap = st.global_settings.current_snapshot.as_ref()
+                .and_then(|c| c.export.clone()).unwrap_or_default();
+            match ExportKey::from_str(&key) {
+                Some(k) => k.revert(&mut st.global_settings.export, &snap),
+                None => st.engine.error_log(format!("[全局设置] 不认识的导出字段: {}", key)),
+            }
+            drop(st);
+            if let Some(ui_h) = weak.upgrade() { push(&ui_h, &s); }
         });
     }
 
@@ -780,33 +524,4 @@ pub fn wire(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
             }
         });
     }
-}
-
-/// 检查 UI 设置 tab 是否有变动（apply != current）
-fn check_ui_modified(gs: &crate::state::GlobalSettingsDialogState) -> bool {
-    let current = match &gs.current_snapshot {
-        Some(c) => c,
-        None => return false,
-    };
-    let current_ui = current.ui.as_ref().cloned().unwrap_or_default();
-    gs.ui != current_ui
-}
-
-/// 检查分隔符 tab 是否有变动（apply != current）
-fn check_sep_modified(gs: &crate::state::GlobalSettingsDialogState) -> bool {
-    let current = match &gs.current_snapshot {
-        Some(c) => c,
-        None => return false,
-    };
-    gs.sep != current.separators
-}
-
-/// 检查导出设置 tab 是否有变动（apply != current）
-fn check_export_modified(gs: &crate::state::GlobalSettingsDialogState) -> bool {
-    let current = match &gs.current_snapshot {
-        Some(c) => c,
-        None => return false,
-    };
-    let current_export = current.export.as_ref().cloned().unwrap_or_default();
-    gs.export != current_export
 }

@@ -798,36 +798,40 @@ impl ProjectSettingsState {
 
 /// 全局设置对话框（菜单栏「设置」→「全局设置...」入口）。
 ///
-/// 与项目设置的区别：点击「确定」后立即写 tablet.toml，而不是标记 dirty 等手动保存。
-/// 修改全局配置后会重新合并所有已打开项目的配置，并在分隔符改变时重新验证数据。
+/// 数据范式：**编辑缓冲 + 打开时快照**（@02.26.6）。
 ///
-/// 数据范式：current + apply 模式。
-/// - current_snapshot: 当前已保存的值（打开对话框时从 engine.global_config 深拷贝，等于硬盘值）
-/// - ui/sep/export: 待应用的编辑缓冲（用户正在编辑）
-/// - modified: 后端对比计算得出（apply != current）
+/// - `current_snapshot`：参照物。打开时从 `engine.global_config` 深拷贝，**等于盘上的值**
+///   —— 因为「确定」就是写盘点，所以它整个会话里都不变。
+/// - `ui` / `sep` / `export`：待应用的编辑缓冲。**这个缓冲必须留** —— `engine.global_config`
+///   是活的工作区状态，别的东西会读它，而且它的 `project_management` 段自己会变。
+/// - `modified`：**不在状态里**。每个字段自己拿缓冲跟快照比，后端算好推给 UI。
 ///
 /// 操作语义：
-/// - open(): current = 硬盘值，apply = current，modified = false
-/// - 编辑: 修改 apply，计算 modified = (apply != current)
-/// - 撤销: apply = current，modified = false
-/// - 默认值: apply = 硬编码默认值，计算 modified = (apply != current)
-/// - 确定: current = apply，写盘，modified = false
-/// - 取消: apply = current（丢弃编辑），关闭对话框
+/// - open():   snapshot = 盘上的值，apply = snapshot
+/// - 编辑:     改 apply；该字段自动变蓝（算出来的，见 @02.26.2）
+/// - 单字段还原: 把 snapshot 的对应叶子写回 apply
+/// - 默认值:   apply = 硬编码默认值（和「还原」不是一回事）
+/// - 确定:     apply 写盘，snapshot 往前挪到刚写下去的值
+/// - 取消:     丢弃 apply，关闭对话框
+///
+/// **与项目设置的关键差别**：那边参照物是住在数据结构上的 `original_*`，因为提交点是
+/// 「保存」，比对状态要跨会话活（关掉再开还是蓝的，树上还亮 🟡）。这边一个打开时的
+/// 快照就够 —— 「确定」= 写盘，不一致的窗口恰好只有对话框开着的时候。
 #[derive(Default)]
 pub struct GlobalSettingsDialogState {
     pub open: bool,
     /// 0=UI设置  1=分隔符  2=导出设置
     pub tab: i32,
-    pub ui_tab_modified: bool,
-    pub sep_tab_modified: bool,
-    pub export_tab_modified: bool,
 
     // —— apply buffer：直接复用核心类型 ——
+    // **必须留**：`engine.global_config` 是活的工作区状态（别的东西会读它、它的
+    // `project_management` 段自己还会变），编辑中的值不能直接写进去。
     pub ui: tablet_core::model::UiConfig,
     pub sep: tablet_core::types::SeparatorsSection,
     pub export: tablet_core::model::ExportConfig,
 
-    /// current：当前已保存的值（打开对话框时的快照，等于硬盘值）
+    /// 参照物：打开对话框那一刻的 tablet.toml 值（= 盘上的值，因为「确定」就是写盘点）。
+    /// 每个字段的 `-modified` 与它的单字段还原都拿它比（@02.26.6）。
     pub current_snapshot: Option<tablet_core::model::GlobalConfig>,
 }
 
@@ -835,9 +839,6 @@ impl GlobalSettingsDialogState {
     pub fn close(&mut self) {
         self.open = false;
         self.tab = 0;
-        self.ui_tab_modified = false;
-        self.sep_tab_modified = false;
-        self.export_tab_modified = false;
         self.current_snapshot = None;
     }
 }

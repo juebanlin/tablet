@@ -1,0 +1,81 @@
+// 单条紧凑分隔符行：[label][input] × 2~3。项目设置与全局设置的「分隔符」tab 共用。
+//
+// 25 个叶子在两边长得一模一样，之前是各抄一份（全局设置那份的注释还写着"复用项目设置的
+// 组件"——其实并没有）。两个对话框现在都用 ModifiedField（@02.26），正好一起收进来。
+//
+// 每个输入框右侧挂一个还原按钮：不亮时宽度**常驻**（只藏 opacity），
+// 否则每敲一个字整行都会左右跳一下。
+
+import { LineEdit } from "std-widgets.slint";
+
+import { Theme } from "../theme.slint";
+import { ModifiedField } from "modified_field.slint";
+
+export component SepRow inherits HorizontalLayout {
+    in property <string> l1;
+    in-out property <string> v1;
+    in property <bool> m1: false;
+    in property <string> l2;
+    in-out property <string> v2;
+    in property <bool> m2: false;
+    in property <string> l3;
+    in-out property <string> v3;
+    in property <bool> m3: false;
+    in property <bool> show2: true;
+    in property <bool> show3: false;
+    callback edited1(string);
+    callback edited2(string);
+    callback edited3(string);
+    callback revert1();
+    callback revert2();
+    callback revert3();
+
+    spacing: Theme.sp-2;
+    alignment: start;
+
+    Text {
+        text: root.l1; width: 96px;
+        color: Theme.text-primary;
+        vertical-alignment: center;
+        horizontal-alignment: end;
+    }
+    ModifiedField {
+        modified: root.m1;
+        revert => { root.revert1(); }
+        LineEdit {
+            text <=> root.v1;
+            width: 56px;
+            edited(s) => { root.edited1(s); }
+        }
+    }
+    if root.show2: Text {
+        text: root.l2; width: 96px;
+        color: Theme.text-primary;
+        vertical-alignment: center;
+        horizontal-alignment: end;
+    }
+    if root.show2: ModifiedField {
+        modified: root.m2;
+        revert => { root.revert2(); }
+        LineEdit {
+            text <=> root.v2;
+            width: 56px;
+            edited(s) => { root.edited2(s); }
+        }
+    }
+    if root.show3: Text {
+        text: root.l3; width: 96px;
+        color: Theme.text-primary;
+        vertical-alignment: center;
+        horizontal-alignment: end;
+    }
+    if root.show3: ModifiedField {
+        modified: root.m3;
+        revert => { root.revert3(); }
+        LineEdit {
+            text <=> root.v3;
+            width: 56px;
+            edited(s) => { root.edited3(s); }
+        }
+    }
+}
