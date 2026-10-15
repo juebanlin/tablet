@@ -115,6 +115,117 @@ impl ExportOptions {
     }
 }
 
+// ─── 业务扩展保留区间 ─────────────────────────────────────────────────────
+//
+// 生成的 Tpl / 常量 / 枚举里需要放一些手写业务代码（缓存读取、临时处理、枚举上的
+// 业务判断函数）。做法：类型末尾放一对注释标记，重新导出时把标记**之间**的内容原样
+// 搬过去。契约只有一条——标记是唯一约定：
+//
+//   · 区间内部  → 原样保留
+//   · 区间外部  → 一律重新生成（手改会被覆盖）
+//   · 标记写坏（只剩一个 / 顺序颠倒 / 重复）→ 整文件重新生成 + 警告
+//   · 标记整个被删 → 当普通文件覆盖，静默（无从判断哪些是手写的）
+//
+// 参与的后端是「产物里有真类型」的四个：Java / Go / C++ / C#。它们的行注释都是 `//`，
+// 所以标记文本完全统一；TS / Lua / GDScript 的产物是数据字面量，放不了方法，不参与。
+
+pub const CUSTOM_REGION_BEGIN: &str = "<TBL-CUSTOM-BEGIN>";
+pub const CUSTOM_REGION_END: &str = "<TBL-CUSTOM-END>";
+
+/// 区间首次生成时写进去的提示。用户没动过它时，重新导出得到逐字节相同的结果
+/// （`Unchanged` 判定因此天然命中，不会每次导出都把文件重写一遍）。
+const CUSTOM_REGION_HINT: &str = "// 业务扩展代码写在这里，重新导出时原样保留";
+
+/// 拼出保留区间（含标记）。`indent` 是落点的缩进——类型体内用四个空格，
+/// Go / C++ 枚举那种文件作用域的落点用空串。
+pub fn custom_region(indent: &str) -> String {
+    format!(
+        "{i}// {begin}\n{i}{hint}\n{i}// {end}",
+        i = indent,
+        begin = CUSTOM_REGION_BEGIN,
+        hint = CUSTOM_REGION_HINT,
+        end = CUSTOM_REGION_END,
+    )
+}
+
+#[derive(Debug, PartialEq)]
+pub enum RegionOutcome {
+    /// 旧文件里没有任何标记（首次生成，或用户把标记整个删了）
+    None,
+    /// 标记不完整 / 顺序颠倒 / 重复——无法安全定位区间
+    Broken,
+    /// 取到的区间内容（不含两个标记行本身）
+    Found(String),
+}
+
+/// 标记行：允许前导空白，因为 Java / C# 的标记是缩进在类型体里的
+fn is_marker_line(line: &str, marker: &str) -> bool {
+    line.trim() == format!("// {}", marker)
+}
+
+pub fn extract_custom_region(old: &str) -> RegionOutcome {
+    let lines: Vec<&str> = old.split('\n').collect();
+    let begins: Vec<usize> = lines.iter().enumerate()
+        .filter(|(_, l)| is_marker_line(l, CUSTOM_REGION_BEGIN))
+        .map(|(i, _)| i)
+        .collect();
+    let ends: Vec<usize> = lines.iter().enumerate()
+        .filter(|(_, l)| is_marker_line(l, CUSTOM_REGION_END))
+        .map(|(i, _)| i)
+        .collect();
+
+    match (begins.len(), ends.len()) {
+        (0, 0) => RegionOutcome::None,
+        // 恰好一对且顺序正确才算数。多一个标记就说明有东西不对，宁可报 Broken 让用户看一眼，
+        // 也不猜他想保留哪一段
+        (1, 1) if begins[0] < ends[0] => {
+            // 按 \n 切之后每行尾部还挂着 CRLF 的 \r，统一剥掉：让取出来的内容只有 \n，
+            // 换行风格由写盘时的 opts.encode 按配置统一决定，这里不掺和
+            let body = lines[begins[0] + 1..ends[0]]
+                .iter()
+                .map(|l| l.strip_suffix('\r').unwrap_or(l))
+                .collect::<Vec<_>>()
+                .join("\n");
+            RegionOutcome::Found(body)
+        }
+        _ => RegionOutcome::Broken,
+    }
+}
+
+/// 把 `preserved` 塞进 `new` 的标记之间。返回 `None` 表示新内容里根本没有标记
+/// （`custom_regions` 关掉了，或这个产物形态不参与）。
+pub fn splice_custom_region(new: &str, preserved: &str) -> Option<String> {
+    let lines: Vec<&str> = new.split('\n').collect();
+    let begin = lines.iter().position(|l| is_marker_line(l, CUSTOM_REGION_BEGIN))?;
+    let end = lines.iter().rposition(|l| is_marker_line(l, CUSTOM_REGION_END))?;
+    if end <= begin {
+        return None;
+    }
+
+    let mut out: Vec<String> = Vec::with_capacity(lines.len());
+    out.extend(lines[..=begin].iter().map(|l| (*l).to_string()));
+    // 区间被用户清空时 preserved 是空串，那就真的什么都不放，别塞回提示
+    if !preserved.is_empty() {
+        out.push(preserved.to_string());
+    }
+    out.extend(lines[end..].iter().map(|l| (*l).to_string()));
+    Some(out.join("\n"))
+}
+
+/// 把旧的字节内容解回文本，好从中取区间。编码解不出来时按 UTF-8 有损解，
+/// 最坏情况是区间里的非 UTF-8 字符被打成替换符——比整块丢掉强。
+fn decode_content(bytes: &[u8], encoding: &str) -> String {
+    match encoding {
+        "utf-8" | "utf8" => String::from_utf8_lossy(bytes).into_owned(),
+        _ => {
+            let enc = encoding_rs::Encoding::for_label(encoding.as_bytes())
+                .unwrap_or(encoding_rs::UTF_8);
+            let (s, _, _) = enc.decode(bytes);
+            s.into_owned()
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum FileStatus {
     Added,
@@ -129,9 +240,12 @@ pub struct ExportFile {
     pub status: FileStatus,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct ExportResult {
     pub files: Vec<ExportFile>,
+    /// 保留了内容但没能如期搬过去、以及标记写坏这类「代码可能丢了」的情况。
+    /// 调用方必须显示出来——只收集不显示等于没有。
+    pub warnings: Vec<String>,
 }
 
 impl ExportResult {
@@ -141,10 +255,18 @@ impl ExportResult {
     pub fn deleted(&self) -> usize { self.files.iter().filter(|f| f.status == FileStatus::Deleted).count() }
 }
 
+/// 把生成内容同步到输出目录。
+///
+/// 收的是**未编码的源码**（`String`），因为保留区间要在这里拼接：旧文件内容只有在这个
+/// 函数里才拿得到。编码（换行符归一 + 字符编码）也一并收进来，拼接完再编码。
+///
+/// 传 `Vec<u8>` 的老签名做不到这件事——那样字符串边界在各后端自己的 collect 闭包里，
+/// 到了这儿已经是字节，再解回来就是有损的。
 pub fn sync_export_dir(
     output_dir: &std::path::Path,
     extension: &str,
-    generated: Vec<(std::path::PathBuf, Vec<u8>)>,
+    generated: Vec<(std::path::PathBuf, String)>,
+    opts: &ExportOptions,
 ) -> anyhow::Result<ExportResult> {
     use std::collections::HashSet;
     use std::path::PathBuf;
@@ -155,22 +277,62 @@ pub fn sync_export_dir(
     }
 
     let mut files = Vec::new();
+    let mut warnings = Vec::new();
 
     for (path, content) in &generated {
         std::fs::create_dir_all(path.parent().unwrap())?;
         existing.remove(path);
         let display = normalize_path(path);
 
+        // 保留区间：只有旧文件存在时才需要读它
+        let mut spliced: Option<String> = None;
+        if path.exists() {
+            let old_bytes = std::fs::read(path)?;
+            let old = decode_content(&old_bytes, &opts.encoding);
+            match extract_custom_region(&old) {
+                RegionOutcome::Found(preserved) => {
+                    match splice_custom_region(content, &preserved) {
+                        Some(s) => spliced = Some(s),
+                        None => {
+                            // 新内容里没有标记。只可能是 custom_regions 被关掉了
+                            // （或这个产物形态本来就不参与）。区间里只有默认提示时不算数，
+                            // 否则每次关掉开关都会刷一堆没意义的警告。
+                            let meaningful = !preserved.trim().is_empty()
+                                && preserved.trim() != CUSTOM_REGION_HINT.trim();
+                            if meaningful {
+                                warnings.push(format!(
+                                    "{}: 新产物里没有保留区间（custom_regions 关了？），\
+                                     区间内的手写内容未被保留",
+                                    display
+                                ));
+                            }
+                        }
+                    }
+                }
+                RegionOutcome::Broken => {
+                    warnings.push(format!(
+                        "{}: 保留区间标记不完整（只剩一个 / 顺序颠倒 / 重复），\
+                         已整文件重新生成，区间内的手写内容可能已丢失",
+                        display
+                    ));
+                }
+                RegionOutcome::None => {}
+            }
+        }
+
+        let final_src = spliced.as_deref().unwrap_or(content);
+        let bytes = opts.encode(final_src);
+
         if path.exists() {
             let old = std::fs::read(path)?;
-            if old == *content {
+            if old == bytes {
                 files.push(ExportFile { path: display, status: FileStatus::Unchanged });
             } else {
-                std::fs::write(path, content)?;
+                std::fs::write(path, &bytes)?;
                 files.push(ExportFile { path: display, status: FileStatus::Modified });
             }
         } else {
-            std::fs::write(path, content)?;
+            std::fs::write(path, &bytes)?;
             files.push(ExportFile { path: display, status: FileStatus::Added });
         }
     }
@@ -182,7 +344,7 @@ pub fn sync_export_dir(
 
     remove_empty_dirs(output_dir);
 
-    Ok(ExportResult { files })
+    Ok(ExportResult { files, warnings })
 }
 
 fn normalize_path(path: &std::path::Path) -> String {
@@ -448,5 +610,227 @@ mod tests {
         ];
         assert_eq!(field_legend(&entries), "id=物品 ID, desc=描述");
         assert_eq!(field_legend(&[]), "");
+    }
+
+    // ─── 业务扩展保留区间 ───────────────────────────────────────────────
+    //
+    // 这套逻辑写错的后果是**静默吃掉用户手写的代码**，所以边界要逐个钉住。
+
+    fn region_block(body: &str, indent: &str) -> String {
+        format!(
+            "{i}// {b}\n{body}\n{i}// {e}\n",
+            i = indent,
+            b = CUSTOM_REGION_BEGIN,
+            e = CUSTOM_REGION_END,
+            body = body,
+        )
+    }
+
+    #[test]
+    fn extract_finds_region_between_markers() {
+        let old = format!("head\n{}tail", region_block("    public int biz() { return 42; }", "    "));
+        match extract_custom_region(&old) {
+            RegionOutcome::Found(p) => assert_eq!(p, "    public int biz() { return 42; }"),
+            other => panic!("应取到区间，实际 {:?}", other),
+        }
+    }
+
+    #[test]
+    fn extract_treats_no_markers_as_none() {
+        // 首次生成、或用户把标记整个删了——都无从判断哪些是手写的，静默当普通文件
+        assert_eq!(extract_custom_region("public class A {\n}\n"), RegionOutcome::None);
+    }
+
+    #[test]
+    fn extract_reports_broken_markers() {
+        let begin = format!("// {}", CUSTOM_REGION_BEGIN);
+        let end = format!("// {}", CUSTOM_REGION_END);
+        assert_eq!(extract_custom_region(&format!("a\n{begin}\nbiz()\n")), RegionOutcome::Broken);
+        assert_eq!(extract_custom_region(&format!("a\nbiz()\n{end}\n")), RegionOutcome::Broken);
+        assert_eq!(extract_custom_region(&format!("{end}\nbiz()\n{begin}\n")), RegionOutcome::Broken);
+        // 重复：多一个标记就说明有东西不对，宁可报 Broken 让用户看一眼，也不猜他想保留哪段
+        let dup = format!("{begin}\n{begin}\nbiz()\n{end}\n");
+        assert_eq!(extract_custom_region(&dup), RegionOutcome::Broken);
+    }
+
+    #[test]
+    fn extract_handles_crlf_and_indent() {
+        // CRLF 文件里标记行尾部带 \r，靠 trim 吃掉；标记允许前导空白（Java 是缩进在类体里的）
+        let old = region_block("    // 注释\n    public int biz() { return 1; }", "    ")
+            .replace('\n', "\r\n");
+        match extract_custom_region(&old) {
+            RegionOutcome::Found(p) => {
+                assert!(p.contains("public int biz()"), "got {:?}", p);
+                assert!(!p.contains('\r'), "取出的内容不该带 \\r：{:?}", p);
+            }
+            other => panic!("应取到区间，实际 {:?}", other),
+        }
+    }
+
+    #[test]
+    fn extract_keeps_multiline_and_blank_lines() {
+        let old = region_block("\n    // 一段\n\n    // 两段", "    ");
+        match extract_custom_region(&old) {
+            RegionOutcome::Found(p) => assert_eq!(p, "\n    // 一段\n\n    // 两段"),
+            other => panic!("实际 {:?}", other),
+        }
+    }
+
+    #[test]
+    fn splice_replaces_hint_with_preserved() {
+        // 注意 {} 后面要跟换行：真实生成器用 writeln!，标记行才不会被下一句粘住
+        let new = format!("class A {{\n{}\n}}\n", custom_region("    "));
+        let out = splice_custom_region(&new, "    public int biz() { return 42; }").unwrap();
+        assert!(out.contains("public int biz()"), "got:\n{}", out);
+        assert!(!out.contains(CUSTOM_REGION_HINT), "提示行应被替换掉，got:\n{}", out);
+        // 标记本身要留着，下次才还能定位
+        assert_eq!(out.matches(CUSTOM_REGION_BEGIN).count(), 1);
+        assert_eq!(out.matches(CUSTOM_REGION_END).count(), 1);
+    }
+
+    #[test]
+    fn splice_with_empty_preserved_drops_the_hint() {
+        // 用户主动清空区间：那就真的空着，别把提示塞回去
+        let new = format!("{}\n\n", custom_region("    "));
+        let out = splice_custom_region(&new, "").unwrap();
+        assert!(!out.contains(CUSTOM_REGION_HINT), "got:\n{}", out);
+    }
+
+    #[test]
+    fn splice_returns_none_when_new_has_no_markers() {
+        assert!(splice_custom_region("class A {\n}\n", "biz()").is_none());
+    }
+
+    #[test]
+    fn region_roundtrip_is_byte_identical() {
+        // 另一条底线：用户没动过区间时，重新生成 → 拼接 → 结果必须与上次产物完全相同，
+        // 否则每次导出都在重写文件（「不变」统计从此失真）
+        let gen = || format!("class A {{\n    int x;\n\n{}\n}}\n", custom_region("    "));
+        let first = gen();
+        let preserved = match extract_custom_region(&first) {
+            RegionOutcome::Found(p) => p,
+            other => panic!("实际 {:?}", other),
+        };
+        assert_eq!(splice_custom_region(&gen(), &preserved).unwrap(), first);
+    }
+
+    // ─── sync_export_dir ────────────────────────────────────────────────
+
+    fn tmp_dir(label: &str) -> std::path::PathBuf {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        static COUNTER: AtomicUsize = AtomicUsize::new(0);
+        let n = COUNTER.fetch_add(1, Ordering::SeqCst);
+        let d = std::env::temp_dir().join(format!("tbl_region_{}_{}_{}", label, std::process::id(), n));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    fn lf_opts() -> ExportOptions {
+        ExportOptions { line_ending: LineEnding::Lf, encoding: "utf-8".to_string() }
+    }
+
+    fn gen_src(field: &str) -> String {
+        format!("class A {{\n    int {field};\n\n{}\n}}\n", custom_region("    "))
+    }
+
+    const USER_CODE: &str = "    public int biz() { return 42; }";
+
+    fn inject_user_code(file: &std::path::Path) {
+        let s = std::fs::read_to_string(file).unwrap()
+            .replace(&format!("    {}\n", CUSTOM_REGION_HINT), &format!("{USER_CODE}\n"));
+        std::fs::write(file, s).unwrap();
+    }
+
+    #[test]
+    fn sync_preserves_user_code_in_region() {
+        let dir = tmp_dir("preserve");
+        let file = dir.join("A.java");
+        let opts = lf_opts();
+
+        sync_export_dir(&dir, "java", vec![(file.clone(), gen_src("x"))], &opts).unwrap();
+        inject_user_code(&file);
+
+        // 重新生成：生成部分变了，区间内容要原样留下
+        let r = sync_export_dir(&dir, "java", vec![(file.clone(), gen_src("y"))], &opts).unwrap();
+        let out = std::fs::read_to_string(&file).unwrap();
+        assert!(out.contains(USER_CODE), "手写代码被吃掉了:\n{}", out);
+        assert!(out.contains("int y;"), "生成部分应照常更新:\n{}", out);
+        assert!(!out.contains("int x;"), "旧字段应被换掉:\n{}", out);
+        assert_eq!(r.modified(), 1);
+        assert!(r.warnings.is_empty(), "不该有警告: {:?}", r.warnings);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn sync_reports_unchanged_when_nothing_moved() {
+        // 用户没动过区间时重复导出必须报「不变」，否则每次导出都在重写文件
+        let dir = tmp_dir("unchanged");
+        let file = dir.join("A.java");
+        let opts = lf_opts();
+
+        sync_export_dir(&dir, "java", vec![(file.clone(), gen_src("x"))], &opts).unwrap();
+        let r = sync_export_dir(&dir, "java", vec![(file.clone(), gen_src("x"))], &opts).unwrap();
+        assert_eq!(r.unchanged(), 1, "应报不变: {:?}", r.files);
+        assert!(r.warnings.is_empty());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn sync_warns_when_region_cannot_be_placed() {
+        // 关掉 custom_regions 后新产物里没有标记 —— 手写内容会丢，必须警告
+        let dir = tmp_dir("warn_nowhere");
+        let file = dir.join("A.java");
+        let opts = lf_opts();
+
+        sync_export_dir(&dir, "java", vec![(file.clone(), gen_src("x"))], &opts).unwrap();
+        inject_user_code(&file);
+
+        let r = sync_export_dir(&dir, "java",
+            vec![(file.clone(), "class A {\n    int x;\n}\n".to_string())], &opts).unwrap();
+        assert_eq!(r.warnings.len(), 1, "应有一条警告: {:?}", r.warnings);
+        assert!(r.warnings[0].contains("未被保留"), "got {:?}", r.warnings);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn sync_does_not_warn_when_region_holds_only_the_hint() {
+        // 区间里只有默认提示就没丢东西，别每次关开关都刷警告
+        let dir = tmp_dir("no_noise");
+        let file = dir.join("A.java");
+        let opts = lf_opts();
+        sync_export_dir(&dir, "java", vec![(file.clone(), gen_src("x"))], &opts).unwrap();
+
+        let r = sync_export_dir(&dir, "java",
+            vec![(file.clone(), "class A {\n    int x;\n}\n".to_string())], &opts).unwrap();
+        assert!(r.warnings.is_empty(), "不该有噪音警告: {:?}", r.warnings);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn sync_warns_on_broken_markers_and_regenerates() {
+        let dir = tmp_dir("broken");
+        let file = dir.join("A.java");
+        let opts = lf_opts();
+        sync_export_dir(&dir, "java", vec![(file.clone(), gen_src("x"))], &opts).unwrap();
+        inject_user_code(&file);
+
+        // 手滑删掉 END
+        let broken = std::fs::read_to_string(&file).unwrap()
+            .replace(&format!("    // {}\n", CUSTOM_REGION_END), "");
+        std::fs::write(&file, broken).unwrap();
+
+        let r = sync_export_dir(&dir, "java", vec![(file.clone(), gen_src("x"))], &opts).unwrap();
+        assert_eq!(r.warnings.len(), 1, "应有一条警告: {:?}", r.warnings);
+        assert!(r.warnings[0].contains("标记不完整"), "got {:?}", r.warnings);
+        // 整文件重新生成 → 标记回来了
+        let out = std::fs::read_to_string(&file).unwrap();
+        assert!(out.contains(CUSTOM_REGION_END), "标记应被重新生成:\n{}", out);
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

@@ -32,6 +32,11 @@ fn print_export_result_cli(label: &str, result: &ExportResult) {
             FileStatus::Unchanged => {}
         }
     }
+    // 「保留区间被写坏 / 没能搬过去」这类会让手写代码丢失的情况，必须说出来。
+    // 只收集不显示等于没有——@11 §3.4
+    for w in &result.warnings {
+        eprintln!("  [警告] {}", w);
+    }
 }
 
 pub fn print_validate_summary_cli(summary: &ValidationSummary) {

@@ -464,25 +464,25 @@ pub fn export_all_typescript(project: &Project, side: TypeScriptSide) -> Result<
             if table.deleted { continue; }
             let src = export_table_ts(table, side);
             let file_path = output_dir.join(format!("{}.ts", &table.name));
-            collected.push((file_path, opts.encode(&src)));
+            collected.push((file_path, src.clone()));
         }
 
         for constant in &group.constants {
             if constant.deleted { continue; }
             let src = export_constant_ts(constant, sep, side);
             let file_path = output_dir.join(format!("{}.ts", &constant.name));
-            collected.push((file_path, opts.encode(&src)));
+            collected.push((file_path, src.clone()));
         }
 
         for enum_def in &group.enums {
             if enum_def.deleted { continue; }
             let src = export_enum_ts(enum_def);
             let file_path = output_dir.join(format!("{}.ts", &enum_def.name));
-            collected.push((file_path, opts.encode(&src)));
+            collected.push((file_path, src.clone()));
         }
     }
 
-    super::sync_export_dir(&output_dir, "ts", collected)
+    super::sync_export_dir(&output_dir, "ts", collected, &opts)
 }
 
 #[cfg(test)]

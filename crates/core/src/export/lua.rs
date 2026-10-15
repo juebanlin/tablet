@@ -348,25 +348,25 @@ pub fn export_all_lua(project: &Project) -> Result<super::ExportResult> {
             if table.deleted { continue; }
             let lua = export_table_lua(table, sep);
             let file_path = output_dir.join(format!("{}.lua", &table.name));
-            collected.push((file_path, opts.encode(&lua)));
+            collected.push((file_path, lua.clone()));
         }
 
         for constant in &group.constants {
             if constant.deleted { continue; }
             let lua = export_constant_lua(constant, sep);
             let file_path = output_dir.join(format!("{}.lua", &constant.name));
-            collected.push((file_path, opts.encode(&lua)));
+            collected.push((file_path, lua.clone()));
         }
 
         for enum_def in &group.enums {
             if enum_def.deleted { continue; }
             let lua = export_enum_lua(enum_def);
             let file_path = output_dir.join(format!("{}.lua", &enum_def.name));
-            collected.push((file_path, opts.encode(&lua)));
+            collected.push((file_path, lua.clone()));
         }
     }
 
-    super::sync_export_dir(&output_dir, "lua", collected)
+    super::sync_export_dir(&output_dir, "lua", collected, &opts)
 }
 
 #[cfg(test)]

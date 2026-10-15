@@ -2,7 +2,7 @@
 
 import { Theme } from "../theme.slint";
 import { DialogChrome } from "dialog_chrome.slint";
-import { Button, LineEdit, ScrollView, ComboBox } from "std-widgets.slint";
+import { Button, LineEdit, ScrollView, ComboBox, CheckBox } from "std-widgets.slint";
 
 // Tab segmented bar：身份 / 分隔符 / 导出设置
 component TabBar inherits Rectangle {
@@ -168,21 +168,28 @@ export component ProjectSettingsDialog inherits Rectangle {
     in-out property <string> ps-export-server-data-output;
     in-out property <string> ps-export-java-package;
     in-out property <string> ps-export-java-code-output;
+    in-out property <bool> ps-export-java-lombok;
+    in-out property <bool> ps-export-java-custom-regions;
     in-out property <string> ps-export-go-package;
     in-out property <string> ps-export-go-code-output;
+    in-out property <bool> ps-export-go-custom-regions;
     in-out property <string> ps-export-cpp-namespace;
     in-out property <string> ps-export-cpp-code-output;
     in-out property <int> ps-export-cpp-json-lib-index;
+    in-out property <bool> ps-export-cpp-custom-regions;
     in-out property <string> ps-export-csharp-dotnet-namespace;
     in-out property <string> ps-export-csharp-dotnet-code-output;
+    in-out property <bool> ps-export-csharp-dotnet-custom-regions;
     in-out property <string> ps-export-typescript-server-code-output;
     in-out property <string> ps-export-lua-output;
     in-out property <string> ps-export-gdscript-output;
     in-out property <string> ps-export-typescript-client-output;
     in-out property <string> ps-export-csharp-unity-namespace;
     in-out property <string> ps-export-csharp-unity-code-output;
+    in-out property <bool> ps-export-csharp-unity-custom-regions;
     in-out property <string> ps-export-csharp-godot-namespace;
     in-out property <string> ps-export-csharp-godot-code-output;
+    in-out property <bool> ps-export-csharp-godot-custom-regions;
 
     callback tab-changed(int);
     callback id-edited(string);
@@ -495,6 +502,26 @@ export component ProjectSettingsDialog inherits Rectangle {
                             edited(s) => { root.export-field-edited("java_code_output", s); }
                         }
                     }
+                    HorizontalLayout {
+                        spacing: Theme.sp-3;
+                        alignment: start;
+                        Text { text: "  lombok:"; width: 140px; vertical-alignment: center; color: Theme.text-primary; }
+                        CheckBox {
+                            text: "@Getter 代替手写 getter";
+                            checked <=> root.ps-export-java-lombok;
+                            toggled => { root.export-field-edited("java_lombok", root.ps-export-java-lombok ? "true" : "false"); }
+                        }
+                    }
+                    HorizontalLayout {
+                        spacing: Theme.sp-3;
+                        alignment: start;
+                        Text { text: "  custom_regions:"; width: 140px; vertical-alignment: center; color: Theme.text-primary; }
+                        CheckBox {
+                            text: "产物带业务扩展保留区间";
+                            checked <=> root.ps-export-java-custom-regions;
+                            toggled => { root.export-field-edited("java_custom_regions", root.ps-export-java-custom-regions ? "true" : "false"); }
+                        }
+                    }
 
                     Text { text: "Go"; color: Theme.text-secondary; font-size: Theme.fs-tiny; }
                     HorizontalLayout {
@@ -515,6 +542,16 @@ export component ProjectSettingsDialog inherits Rectangle {
                             text <=> root.ps-export-go-code-output;
                             width: 300px;
                             edited(s) => { root.export-field-edited("go_code_output", s); }
+                        }
+                    }
+                    HorizontalLayout {
+                        spacing: Theme.sp-3;
+                        alignment: start;
+                        Text { text: "  custom_regions:"; width: 140px; vertical-alignment: center; color: Theme.text-primary; }
+                        CheckBox {
+                            text: "产物带业务扩展保留区间";
+                            checked <=> root.ps-export-go-custom-regions;
+                            toggled => { root.export-field-edited("go_custom_regions", root.ps-export-go-custom-regions ? "true" : "false"); }
                         }
                     }
 
@@ -550,6 +587,16 @@ export component ProjectSettingsDialog inherits Rectangle {
                             selected(s) => { root.export-field-edited("cpp_json_lib", s); }
                         }
                     }
+                    HorizontalLayout {
+                        spacing: Theme.sp-3;
+                        alignment: start;
+                        Text { text: "  custom_regions:"; width: 140px; vertical-alignment: center; color: Theme.text-primary; }
+                        CheckBox {
+                            text: "产物带业务扩展保留区间";
+                            checked <=> root.ps-export-cpp-custom-regions;
+                            toggled => { root.export-field-edited("cpp_custom_regions", root.ps-export-cpp-custom-regions ? "true" : "false"); }
+                        }
+                    }
 
                     Text { text: "C# (.NET)"; color: Theme.text-secondary; font-size: Theme.fs-tiny; }
                     HorizontalLayout {
@@ -570,6 +617,16 @@ export component ProjectSettingsDialog inherits Rectangle {
                             text <=> root.ps-export-csharp-dotnet-code-output;
                             width: 300px;
                             edited(s) => { root.export-field-edited("csharp_dotnet_code_output", s); }
+                        }
+                    }
+                    HorizontalLayout {
+                        spacing: Theme.sp-3;
+                        alignment: start;
+                        Text { text: "  custom_regions:"; width: 140px; vertical-alignment: center; color: Theme.text-primary; }
+                        CheckBox {
+                            text: "产物带业务扩展保留区间";
+                            checked <=> root.ps-export-csharp-dotnet-custom-regions;
+                            toggled => { root.export-field-edited("csdn_custom_regions", root.ps-export-csharp-dotnet-custom-regions ? "true" : "false"); }
                         }
                     }
 
@@ -647,6 +704,16 @@ export component ProjectSettingsDialog inherits Rectangle {
                             edited(s) => { root.export-field-edited("csharp_unity_code_output", s); }
                         }
                     }
+                    HorizontalLayout {
+                        spacing: Theme.sp-3;
+                        alignment: start;
+                        Text { text: "  custom_regions:"; width: 140px; vertical-alignment: center; color: Theme.text-primary; }
+                        CheckBox {
+                            text: "产物带业务扩展保留区间";
+                            checked <=> root.ps-export-csharp-unity-custom-regions;
+                            toggled => { root.export-field-edited("csu_custom_regions", root.ps-export-csharp-unity-custom-regions ? "true" : "false"); }
+                        }
+                    }
 
                     Text { text: "C# (Godot)"; color: Theme.text-secondary; font-size: Theme.fs-tiny; }
                     HorizontalLayout {
@@ -667,6 +734,16 @@ export component ProjectSettingsDialog inherits Rectangle {
                             text <=> root.ps-export-csharp-godot-code-output;
                             width: 300px;
                             edited(s) => { root.export-field-edited("csharp_godot_code_output", s); }
+                        }
+                    }
+                    HorizontalLayout {
+                        spacing: Theme.sp-3;
+                        alignment: start;
+                        Text { text: "  custom_regions:"; width: 140px; vertical-alignment: center; color: Theme.text-primary; }
+                        CheckBox {
+                            text: "产物带业务扩展保留区间";
+                            checked <=> root.ps-export-csharp-godot-custom-regions;
+                            toggled => { root.export-field-edited("csg_custom_regions", root.ps-export-csharp-godot-custom-regions ? "true" : "false"); }
                         }
                     }
 

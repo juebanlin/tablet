@@ -78,6 +78,140 @@ find_tool() {
     return 0
 }
 
+# find_mvn — 找一个能执行的 maven 启动器
+#
+# 只认 maven 自己声明的入口，不扫盘找安装目录：
+#   1. $MVN（显式指定）
+#   2. PATH 上的 mvn
+#   3. $MAVEN_HOME/bin/mvn、$M2_HOME/bin/mvn
+#
+# 注意取的是**不带扩展名的那个**：Maven 同时装 `mvn`（sh 脚本）和 `mvn.cmd`，
+# 而 Git Bash 不能直接执行 .cmd（这正是 cmd 下 mvn 正常、Bash 下 `command -v mvn`
+# 找不到的同一类问题）。所以优先 sh 版，只有它不存在时才退回 .cmd。
+find_mvn() {
+    if [ -n "${MVN:-}" ] && [ -x "$MVN" ]; then printf '%s\n' "$MVN"; return 0; fi
+
+    local found
+    found="$(command -v mvn 2>/dev/null || true)"
+    if [ -n "$found" ]; then printf '%s\n' "$found"; return 0; fi
+
+    # MAVEN_HOME 在 Windows 上是 `D:\...` 形式，直接拼 `$home/bin/mvn` 会得到
+    # 混合分隔符的怪路径。MSYS 恰好吃得下，但别依赖这个——统一转成 /d/...
+    local home
+    for home in "${MAVEN_HOME:-}" "${M2_HOME:-}"; do
+        [ -n "$home" ] || continue
+        home="$(to_msys_path "$home")"
+        if [ -x "$home/bin/mvn" ]; then printf '%s\n' "$home/bin/mvn"; return 0; fi
+        if [ -x "$home/bin/mvn.cmd" ]; then printf '%s\n' "$home/bin/mvn.cmd"; return 0; fi
+    done
+    return 0
+}
+
+# maven_local_repository — 问 maven 本地仓库在哪
+#
+# 本地仓库位置是**可配置**的（settings.xml 的 <localRepository>、全局 settings、
+# -Dmaven.repo.local），`~/.m2/repository` 只是默认值。与其手搓 sed 去猜配置，
+# 不如直接问 maven 本人——它会把所有配置层级算完再给出权威答案。
+#
+# 代价：trampoline 一个 JVM，冷启 ~7s、暖缓存 ~1.5s（本机实测）。
+# 所以只在 maven 够得着时才走这条路，够不着由调用方回落到解析 settings.xml。
+maven_local_repository() {
+    local mvn
+    mvn="$(find_mvn)"
+    [ -n "$mvn" ] || return 0
+    "$mvn" -q help:evaluate -Dexpression=settings.localRepository -DforceStdout 2>/dev/null \
+        | tr -d '\r' | grep -v '^[[:space:]]*$' | tail -1
+}
+
+# find_lombok_jar — 找一个可用的 lombok.jar（Java 产物开了 @Getter 时编译要用）
+#
+# 顺序：LOMBOK_JAR 覆盖 → maven 问出来的本地仓库 → 解析 settings.xml 兜底
+#      → 默认 ~/.m2/repository → gradle 缓存。取版本号最高的那个。
+# 找不到返回空串，调用方据此 SKIP。
+#
+# gradle 缓存的坐标写法不同（点号分隔），单独列。
+#
+# ⚠️ 版本与 JDK 强相关：Lombok 直接摸 javac 内部 API，1.18.30 在 JDK 25 上会
+# ExceptionInInitializerError。JDK 25 需要 >= 1.18.40。判定用 lombok_usable() 真编译探测。
+find_lombok_jar() {
+    # 覆盖值存在就用它；指向不存在的文件时**继续自动查找**，而不是直接返回空——
+    # 否则报出来的 SKIP 会说「请设 LOMBOK_JAR」，而调用方明明已经设了（同 find_tool）
+    if [ -n "${LOMBOK_JAR:-}" ] && [ -f "$LOMBOK_JAR" ]; then
+        printf '%s\n' "$LOMBOK_JAR"
+        return 0
+    fi
+
+    local repos=() roots=() repo root jar custom
+    custom="$(maven_local_repository)"
+    [ -n "$custom" ] && repos+=("$(to_msys_path "$custom")")
+
+    # maven 够不着（不在 PATH、也没设 MVN/MAVEN_HOME/M2_HOME）时退而解析 settings.xml
+    if [ ${#repos[@]} -eq 0 ] && [ -f "$HOME/.m2/settings.xml" ]; then
+        custom="$(sed -n 's:.*<localRepository>\([^<]*\)</localRepository>.*:\1:p' \
+                  "$HOME/.m2/settings.xml" | head -1)"
+        [ -n "$custom" ] && repos+=("$(to_msys_path "$custom")")
+    fi
+
+    repos+=("$HOME/.m2/repository")
+    for repo in "${repos[@]}"; do roots+=("$repo/org/projectlombok/lombok"); done
+    roots+=("$HOME/.gradle/caches/modules-2/files-2.1/org.projectlombok/lombok")
+
+    for root in "${roots[@]}"; do
+        [ -d "$root" ] || continue
+        jar="$(find "$root" -name 'lombok-*.jar' \
+                ! -name '*-sources.jar' ! -name '*-javadoc.jar' 2>/dev/null \
+               | sort -V | tail -1)"
+        if [ -n "$jar" ]; then printf '%s\n' "$jar"; return 0; fi
+    done
+
+    return 0
+}
+
+# to_msys_path — Windows 路径（D:\a\b 或 D:/a/b）转成 MSYS 形式（/d/a/b）
+#
+# 必须转：`D:/...` 塞进 `-cp "src:D:/jar"` 这种**冒号分隔**的列表里会被 MSYS 拆错，
+# jar 悄悄没进 classpath，症状是「程序包 lombok 不存在」。
+to_msys_path() {
+    local p="$1"
+    p="$(printf '%s' "$p" | tr '\\' '/')"
+    if command -v cygpath >/dev/null 2>&1; then
+        printf '%s\n' "$(cygpath -u "$p" 2>/dev/null || printf '%s' "$p")"
+    else
+        printf '%s\n' "$p"
+    fi
+}
+
+# lombok_usable <jar> — 这个 jar 在当前 JDK 上真的能用吗？
+#
+# 用真编译探测，不去匹配编译错误文本。匹配文本太脆：Lombok 的 deprecation 警告里
+# 也含 `lombok.permit.Permit`，会把真正的编译错误误判成「jar 与 JDK 不匹配」，
+# 于是真 bug 被 SKIP 吞掉。
+#
+# 顺带把「javac 静默忽略注解处理器」也探掉了：只给 -cp 时 javac 在 JDK 23+ 不会跑
+# 处理器，编译 exit 0 但产物里没有任何 getter —— 所以这里额外用 javap 确认
+# Lombok 真的生成了 getValue()，而不只是「编译没报错」。
+lombok_usable() {
+    local jar="$1" probe
+    [ -f "$jar" ] || return 1
+    probe="$(mktemp -d)"
+    mkdir -p "$probe/src/p"
+    cat > "$probe/src/p/Probe.java" <<'PROBE_EOF'
+package p;
+import lombok.Getter;
+@Getter
+public class Probe { private int value; }
+PROBE_EOF
+    local rc=1
+    if javac -processorpath "$jar" -cp "$jar" -d "$probe/out" \
+             "$probe/src/p/Probe.java" >/dev/null 2>&1; then
+        if javap -p -cp "$probe/out" p.Probe 2>/dev/null | grep -q "getValue()"; then
+            rc=0
+        fi
+    fi
+    rm -rf "$probe"
+    return $rc
+}
+
 # 颜色
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -181,6 +315,15 @@ assert_stderr_contains() {
         _pass "stderr contains '$pattern'"
     else
         _fail "stderr does not contain '$pattern'\nstderr: $LAST_STDERR"
+    fi
+}
+
+assert_stderr_not_contains() {
+    local pattern="$1"
+    if echo "$LAST_STDERR" | grep -q "$pattern"; then
+        _fail "stderr should not contain '$pattern'\nstderr: $LAST_STDERR"
+    else
+        _pass "stderr not contains '$pattern'"
     fi
 }
 

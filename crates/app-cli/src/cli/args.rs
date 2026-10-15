@@ -470,6 +470,10 @@ pub enum UtilAction {
         /// Go code_output 路径（--lang go 时用于构造 import path）
         #[arg(long, default_value = "gen/server/go")]
         code_output: String,
+        /// Java 产物按 Lombok 的 @Getter 取值（--lang java）。
+        /// 默认与导出的 export.server.java.lombok 一致（开）；关掉时布尔字段用 getXxx()。
+        #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
+        lombok: bool,
     },
 }
 

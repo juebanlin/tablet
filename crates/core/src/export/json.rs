@@ -147,7 +147,7 @@ pub fn export_all_json(project: &Project) -> Result<super::ExportResult> {
             wrapper.insert("data".to_string(), data);
             let file_path = output_dir.join(format!("{}.json", &table.name));
             let content = serde_json::to_string_pretty(&Value::Object(wrapper))?;
-            collected.push((file_path, opts.encode(&content)));
+            collected.push((file_path, content.clone()));
         }
 
         for constant in &group.constants {
@@ -161,11 +161,11 @@ pub fn export_all_json(project: &Project) -> Result<super::ExportResult> {
             wrapper.insert("data".to_string(), data);
             let file_path = output_dir.join(format!("{}.json", &constant.name));
             let content = serde_json::to_string_pretty(&Value::Object(wrapper))?;
-            collected.push((file_path, opts.encode(&content)));
+            collected.push((file_path, content.clone()));
         }
     }
 
-    super::sync_export_dir(&output_dir, "json", collected)
+    super::sync_export_dir(&output_dir, "json", collected, &opts)
 }
 
 pub fn export_json_filtered(project: &Project, filter: &super::DataFilter) -> Result<super::ExportResult> {
@@ -206,7 +206,7 @@ pub fn export_json_filtered(project: &Project, filter: &super::DataFilter) -> Re
             wrapper.insert("data".to_string(), data);
             let file_path = output_dir.join(format!("{}.json", &table.name));
             let content = serde_json::to_string_pretty(&Value::Object(wrapper))?;
-            collected.push((file_path, opts.encode(&content)));
+            collected.push((file_path, content.clone()));
         }
 
         for constant in &group.constants {
@@ -221,9 +221,9 @@ pub fn export_json_filtered(project: &Project, filter: &super::DataFilter) -> Re
             wrapper.insert("data".to_string(), data);
             let file_path = output_dir.join(format!("{}.json", &constant.name));
             let content = serde_json::to_string_pretty(&Value::Object(wrapper))?;
-            collected.push((file_path, opts.encode(&content)));
+            collected.push((file_path, content.clone()));
         }
     }
 
-    super::sync_export_dir(&output_dir, "json", collected)
+    super::sync_export_dir(&output_dir, "json", collected, &opts)
 }

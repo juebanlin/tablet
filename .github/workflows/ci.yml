@@ -69,8 +69,18 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y nlohmann-json3-dev lua5.4
 
+      # Java 产物默认用 Lombok 的 @Getter（export.server.java.lombok=true），
+      # e2e 的 lombok=true 分支要 lombok.jar 才能编译。Lombok 与 JDK 严格绑定：
+      # 版本太旧会在处理器初始化时崩（本机 JDK 25 + 1.18.30 即如此），随 JDK 一起升。
+      - name: download lombok
+        run: |
+          curl -fsSL -o /tmp/lombok.jar \
+            https://repo1.maven.org/maven2/org/projectlombok/lombok/1.18.48/lombok-1.18.48.jar
+
       # 11_e2e 覆盖 java / go / csharp / cpp / lua / typescript 六种产物的
       # 「编译 + 跑起来读数据」。run_all.sh 默认按 dev profile 编（CLAUDE.md），
       # 缺工具链的用例 SKIP 而不是假装通过。
       - name: codegen roundtrip
+        env:
+          LOMBOK_JAR: /tmp/lombok.jar
         run: ./tests/run_all.sh 11_e2e

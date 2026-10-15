@@ -262,7 +262,7 @@ fn cs_parse_expr(raw_var: &str, t: &TblType, sep: &str, enum_names: &HashSet<Str
     }
 }
 
-fn gen_table_class(table: &Table, ns: &str, runtime: CSharpRuntime, enum_names: &HashSet<String>) -> String {
+fn gen_table_class(table: &Table, ns: &str, runtime: CSharpRuntime, enum_names: &HashSet<String>, custom_regions: bool) -> String {
     let mut s = String::new();
     let cls = format!("{}Tpl", table.name);
 
@@ -320,12 +320,16 @@ fn gen_table_class(table: &Table, ns: &str, runtime: CSharpRuntime, enum_names: 
     }
     writeln!(s, "            return obj;").unwrap();
     writeln!(s, "        }}").unwrap();
+    if custom_regions {
+        writeln!(s).unwrap();
+        writeln!(s, "{}", super::custom_region("        ")).unwrap();
+    }
     writeln!(s, "    }}").unwrap();
     writeln!(s, "}}").unwrap();
     s
 }
 
-fn gen_constant_class(constant: &Constant, ns: &str, runtime: CSharpRuntime, enum_names: &HashSet<String>) -> String {
+fn gen_constant_class(constant: &Constant, ns: &str, runtime: CSharpRuntime, enum_names: &HashSet<String>, custom_regions: bool) -> String {
     let mut s = String::new();
     let cls = format!("{}Tpl", constant.name);
 
@@ -375,12 +379,16 @@ fn gen_constant_class(constant: &Constant, ns: &str, runtime: CSharpRuntime, enu
     }
     writeln!(s, "            return obj;").unwrap();
     writeln!(s, "        }}").unwrap();
+    if custom_regions {
+        writeln!(s).unwrap();
+        writeln!(s, "{}", super::custom_region("        ")).unwrap();
+    }
     writeln!(s, "    }}").unwrap();
     writeln!(s, "}}").unwrap();
     s
 }
 
-fn gen_enum_file(enum_def: &EnumDef, ns: &str) -> String {
+fn gen_enum_file(enum_def: &EnumDef, ns: &str, custom_regions: bool) -> String {
     let mut s = String::new();
     let type_name = format!("{}Enum", enum_def.name);
 
@@ -410,6 +418,10 @@ fn gen_enum_file(enum_def: &EnumDef, ns: &str) -> String {
     }
     writeln!(s, "            _ => \"\",").unwrap();
     writeln!(s, "        }};").unwrap();
+    if custom_regions {
+        writeln!(s).unwrap();
+        writeln!(s, "{}", super::custom_region("        ")).unwrap();
+    }
     writeln!(s, "    }}").unwrap();
     writeln!(s, "}}").unwrap();
     s
@@ -430,28 +442,28 @@ pub fn export_all_csharp(project: &Project, runtime: CSharpRuntime) -> Result<su
     super::check_project_key_collisions(project)?;
     let export_cfg = &project.config.export;
 
-    // 配置定位：按 runtime 取对应 section，提取 namespace 和 code_output
-    let (code_output, ns) = match runtime {
+    // 配置定位：按 runtime 取对应 section，提取 namespace / code_output / 保留区间开关
+    let (code_output, ns, custom_regions) = match runtime {
         CSharpRuntime::Dotnet => {
             let cfg = export_cfg.server.as_ref()
                 .and_then(|s| s.csharp_dotnet.as_ref());
             let output = cfg.and_then(|c| c.code_output.as_deref()).unwrap_or(runtime.default_code_output());
             let namespace = cfg.and_then(|c| c.namespace.as_deref()).unwrap_or(runtime.default_namespace());
-            (output, namespace)
+            (output, namespace, cfg.and_then(|c| c.custom_regions).unwrap_or(false))
         }
         CSharpRuntime::Unity => {
             let cfg = export_cfg.client.as_ref()
                 .and_then(|c| c.csharp_unity.as_ref());
             let output = cfg.and_then(|c| c.code_output.as_deref()).unwrap_or(runtime.default_code_output());
             let namespace = cfg.and_then(|c| c.namespace.as_deref()).unwrap_or(runtime.default_namespace());
-            (output, namespace)
+            (output, namespace, cfg.and_then(|c| c.custom_regions).unwrap_or(false))
         }
         CSharpRuntime::Godot => {
             let cfg = export_cfg.client.as_ref()
                 .and_then(|c| c.csharp_godot.as_ref());
             let output = cfg.and_then(|c| c.code_output.as_deref()).unwrap_or(runtime.default_code_output());
             let namespace = cfg.and_then(|c| c.namespace.as_deref()).unwrap_or(runtime.default_namespace());
-            (output, namespace)
+            (output, namespace, cfg.and_then(|c| c.custom_regions).unwrap_or(false))
         }
     };
 
@@ -464,7 +476,8 @@ pub fn export_all_csharp(project: &Project, runtime: CSharpRuntime) -> Result<su
     let opts = super::ExportOptions { line_ending, encoding };
 
     let output_dir = project.export_root().join(code_output);
-    let mut collected: Vec<(std::path::PathBuf, Vec<u8>)> = Vec::new();
+    // 收的是未编码的源码：保留区间要在 sync_export_dir 里拼接，到那儿再编码
+    let mut collected: Vec<(std::path::PathBuf, String)> = Vec::new();
 
     // C# 的静态构造器是惰性的：不碰类型就不会跑，而注册代码正写在各 *Tpl 的静态构造器里。
     // Loader 必须先逐个强制跑一遍，否则 TblRegistry 是空的、静默不加载任何表。
@@ -482,7 +495,7 @@ pub fn export_all_csharp(project: &Project, runtime: CSharpRuntime) -> Result<su
         .replace("{{NAMESPACE}}", ns)
         .replace("{{TOUCH_LIST}}", &touch_list);
     let mut collect = |dir: &std::path::Path, name: &str, content: &str| {
-        collected.push((dir.join(name), opts.encode(content)));
+        collected.push((dir.join(name), content.to_string()));
     };
 
     collect(&output_dir, "Tbl.cs", &render(TPL_TBL));
@@ -498,23 +511,23 @@ pub fn export_all_csharp(project: &Project, runtime: CSharpRuntime) -> Result<su
     for group in &project.groups {
         for table in &group.tables {
             if table.deleted { continue; }
-            let content = gen_table_class(table, ns, runtime, &enum_names);
+            let content = gen_table_class(table, ns, runtime, &enum_names, custom_regions);
             collect(&output_dir, &format!("{}Tpl.cs", table.name), &content);
         }
         for constant in &group.constants {
             if constant.deleted { continue; }
-            let content = gen_constant_class(constant, ns, runtime, &enum_names);
+            let content = gen_constant_class(constant, ns, runtime, &enum_names, custom_regions);
             collect(&output_dir, &format!("{}Tpl.cs", constant.name), &content);
         }
         for enum_def in &group.enums {
             if enum_def.deleted { continue; }
-            let content = gen_enum_file(enum_def, ns);
+            let content = gen_enum_file(enum_def, ns, custom_regions);
             collect(&output_dir, &format!("{}Enum.cs", enum_def.name), &content);
         }
     }
 
     let _ = runtime;
-    super::sync_export_dir(&output_dir, "cs", collected)
+    super::sync_export_dir(&output_dir, "cs", collected, &opts)
 }
 
 #[cfg(test)]
@@ -598,7 +611,7 @@ mod tests {
             field("stack_max", "堆叠上限", "int"),
             field("zero", "", "int"),
         ]);
-        let out = gen_table_class(&t, "Game.Config", CSharpRuntime::Dotnet, &no_enums());
+        let out = gen_table_class(&t, "Game.Config", CSharpRuntime::Dotnet, &no_enums(), false);
         assert!(out.contains("        /// <summary>堆叠上限</summary>\n        public int StackMax = 0;"),
             "got:\n{}", out);
         // 属性 PascalCase，但查表 key 用 .tbl 源名
@@ -621,7 +634,7 @@ mod tests {
             dirty: false, deleted: false, original_entries: Vec::new(), saved: true,
             display_field: None,
         };
-        let out = gen_enum_file(&e, "Game.Config");
+        let out = gen_enum_file(&e, "Game.Config", false);
         assert!(out.contains("namespace Game.Config"));
         assert!(out.contains("public enum HeroTypeEnum : int"));
         assert!(out.contains("Warrior = 1,"));

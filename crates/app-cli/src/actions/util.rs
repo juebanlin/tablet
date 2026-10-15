@@ -218,6 +218,7 @@ pub fn run_gen_test(
     output_dir: &Path,
     package: &str,
     code_output: &str,
+    lombok: bool,
 ) -> Result<()> {
     let text = std::fs::read_to_string(schema_path)?;
     let schema = parse_tblschema(&text)?;
@@ -225,7 +226,7 @@ pub fn run_gen_test(
 
     match lang {
         "java" => {
-            tablet_core::test_util::generate_test_main_from_schema(output_dir, &schema, package, format);
+            tablet_core::test_util::generate_test_main_from_schema(output_dir, &schema, package, format, lombok);
         }
         "go" => {
             tablet_core::test_util::generate_test_main_go_from_schema(output_dir, &schema, package, code_output, format);

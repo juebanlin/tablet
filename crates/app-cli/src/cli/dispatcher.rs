@@ -151,8 +151,8 @@ fn run(cli: Cli) -> Result<i32> {
                     print!("{}", out);
                     Ok(0)
                 }
-                UtilAction::GenTest { lang, format, schema, output, package, code_output } => {
-                    crate::actions::util::run_gen_test(lang, format, schema, output, package, code_output)?;
+                UtilAction::GenTest { lang, format, schema, output, package, code_output, lombok } => {
+                    crate::actions::util::run_gen_test(lang, format, schema, output, package, code_output, *lombok)?;
                     println!("已生成测试代码: {}", output.display());
                     Ok(0)
                 }

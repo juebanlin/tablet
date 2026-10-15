@@ -228,6 +228,8 @@ Project 列表由启动扫描 `projects/` 目录得出，**不需要**在 `table
 |------|------|--------|
 | package | Java 包名 | — |
 | code_output | Java 模板类输出目录 | — |
+| lombok | 用 Lombok 的 `@Getter` 代替逐字段手写 getter（只写注解，不打包 jar） | `true` |
+| custom_regions | 产物带业务扩展保留区间，重新导出时留住区间内的手写代码（区间外一律覆盖） | `false` |
 
 ### 4.7 [export.server.go]
 
@@ -235,6 +237,7 @@ Project 列表由启动扫描 `projects/` 目录得出，**不需要**在 `table
 |------|------|--------|
 | package | Go package | — |
 | code_output | Go 代码输出目录 | — |
+| custom_regions | 产物带业务扩展保留区间，重新导出时留住区间内的手写代码（区间外一律覆盖） | `false` |
 
 ### 4.8 [export.client.lua]
 
@@ -1207,15 +1210,22 @@ tablet-cli --fmt json list-templates
 | `export.server.code_output` / `export.server.java.code_output` | `[export.server.java] code_output`（兼容历史命名） |
 | `export.server.go.package` | `[export.server.go] package` |
 | `export.server.go.code_output` | `[export.server.go] code_output` |
+| `export.server.go.custom_regions` | `[export.server.go] custom_regions` |
 | `export.server.cpp.namespace` | `[export.server.cpp] namespace` |
 | `export.server.cpp.code_output` | `[export.server.cpp] code_output` |
 | `export.server.cpp.json_lib` | `[export.server.cpp] json_lib`（`nlohmann`；`rapidjson` 未实现，选了会导出报错） |
+| `export.server.cpp.custom_regions` | `[export.server.cpp] custom_regions` |
+| `export.server.java.lombok` | `[export.server.java] lombok`（只接受 `true` / `false`，默认 `true`） |
+| `export.server.java.custom_regions` | `[export.server.java] custom_regions` |
 | `export.server.csharp_dotnet.namespace` | `[export.server.csharp_dotnet] namespace` |
 | `export.server.csharp_dotnet.code_output` | `[export.server.csharp_dotnet] code_output` |
+| `export.server.csharp_dotnet.custom_regions` | `[export.server.csharp_dotnet] custom_regions` |
 | `export.client.csharp_unity.namespace` | `[export.client.csharp_unity] namespace` |
 | `export.client.csharp_unity.code_output` | `[export.client.csharp_unity] code_output` |
+| `export.client.csharp_unity.custom_regions` | `[export.client.csharp_unity] custom_regions` |
 | `export.client.csharp_godot.namespace` | `[export.client.csharp_godot] namespace` |
 | `export.client.csharp_godot.code_output` | `[export.client.csharp_godot] code_output` |
+| `export.client.csharp_godot.custom_regions` | `[export.client.csharp_godot] custom_regions` |
 | `export.client.lua.output` / `export.client.output` | `[export.client.lua] output`（兼容历史命名） |
 
 废弃键：`export.server.lang`（§4.6 拆分了 java/go 后不再使用），命中后只 warning 不写入。

@@ -66,6 +66,7 @@ impl ExportSummary {
                     "modified": r.modified(),
                     "deleted": r.deleted(),
                     "unchanged": r.unchanged(),
+                    "warnings": r.warnings,
                 }),
                 FormatOutcome::Err(msg) => serde_json::json!({
                     "format": label,

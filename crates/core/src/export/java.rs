@@ -70,7 +70,7 @@ fn field_type_ann(tbl_type: &str, src_name: &str, java_name: &str) -> String {
     }
 }
 
-fn gen_table_tpl(table: &Table, pkg: &str, group: &str, enum_names: &HashSet<String>) -> String {
+fn gen_table_tpl(table: &Table, pkg: &str, group: &str, enum_names: &HashSet<String>, lombok: bool, custom_regions: bool) -> String {
     let mut s = String::new();
     writeln!(s, "package {}.tpl;", pkg).unwrap();
     writeln!(s).unwrap();
@@ -86,8 +86,14 @@ fn gen_table_tpl(table: &Table, pkg: &str, group: &str, enum_names: &HashSet<Str
     if fields.iter().any(|f| needs_tuple_import(&f.tbl_type)) {
         writeln!(s, "import {}.types.*;", pkg).unwrap();
     }
+    if lombok {
+        writeln!(s, "import lombok.Getter;").unwrap();
+    }
     writeln!(s).unwrap();
     writeln!(s, "@TblSource(group = \"{}\", name = \"{}\", mode = \"table\")", group, table.name).unwrap();
+    if lombok {
+        writeln!(s, "@Getter").unwrap();
+    }
     writeln!(s, "public class {}Tpl implements ITpl {{", table.name).unwrap();
 
     for f in &fields {
@@ -101,23 +107,32 @@ fn gen_table_tpl(table: &Table, pkg: &str, group: &str, enum_names: &HashSet<Str
     }
     writeln!(s).unwrap();
 
+    // getId() 必须显式写：ITpl 接口声明了它，TplHolder 注册表也在调（@TplHolder）。
+    // Lombok 见到同名方法会跳过，不会生成重复的。
     let index_field = to_camel_case("id");
     writeln!(s, "    @Override").unwrap();
     writeln!(s, "    public int getId() {{ return {}; }}", index_field).unwrap();
-    writeln!(s).unwrap();
 
-    for f in &fields {
-        if f.name == "id" { continue; }
-        let jtype = java_field_type(&f.tbl_type, enum_names);
-        let camel = to_camel_case(&f.name);
-        let pascal = to_pascal_case(&f.name);
-        writeln!(s, "    public {} get{}() {{ return {}; }}", jtype, pascal, camel).unwrap();
+    // 其余 getter 交给 Lombok。注意 boolean 字段它生成的是 isXxx() 而不是 getXxx()。
+    if !lombok {
+        writeln!(s).unwrap();
+        for f in &fields {
+            if f.name == "id" { continue; }
+            let jtype = java_field_type(&f.tbl_type, enum_names);
+            let camel = to_camel_case(&f.name);
+            let pascal = to_pascal_case(&f.name);
+            writeln!(s, "    public {} get{}() {{ return {}; }}", jtype, pascal, camel).unwrap();
+        }
+    }
+    if custom_regions {
+        writeln!(s).unwrap();
+        writeln!(s, "{}", super::custom_region("    ")).unwrap();
     }
     writeln!(s, "}}").unwrap();
     s
 }
 
-fn gen_constant_tpl(constant: &Constant, pkg: &str, group: &str, enum_names: &HashSet<String>) -> String {
+fn gen_constant_tpl(constant: &Constant, pkg: &str, group: &str, enum_names: &HashSet<String>, lombok: bool, custom_regions: bool) -> String {
     let mut s = String::new();
     writeln!(s, "package {}.tpl;", pkg).unwrap();
     writeln!(s).unwrap();
@@ -133,8 +148,14 @@ fn gen_constant_tpl(constant: &Constant, pkg: &str, group: &str, enum_names: &Ha
     if entries.iter().any(|e| needs_tuple_import(&e.tbl_type)) {
         writeln!(s, "import {}.types.*;", pkg).unwrap();
     }
+    if lombok {
+        writeln!(s, "import lombok.Getter;").unwrap();
+    }
     writeln!(s).unwrap();
     writeln!(s, "@TblSource(group = \"{}\", name = \"{}\", mode = \"constant\")", group, constant.name).unwrap();
+    if lombok {
+        writeln!(s, "@Getter").unwrap();
+    }
     writeln!(s, "public class {}Tpl implements IConstTpl {{", constant.name).unwrap();
 
     for e in &entries {
@@ -148,11 +169,18 @@ fn gen_constant_tpl(constant: &Constant, pkg: &str, group: &str, enum_names: &Ha
     }
     writeln!(s).unwrap();
 
-    for e in &entries {
-        let jtype = java_field_type(&e.tbl_type, enum_names);
-        let camel = to_camel_case(&e.name);
-        let pascal = to_pascal_case(&e.name);
-        writeln!(s, "    public {} get{}() {{ return {}; }}", jtype, pascal, camel).unwrap();
+    // IConstTpl 是空接口，没有强制；getter 纯粹给业务代码用，所以整块可以交给 Lombok
+    if !lombok {
+        for e in &entries {
+            let jtype = java_field_type(&e.tbl_type, enum_names);
+            let camel = to_camel_case(&e.name);
+            let pascal = to_pascal_case(&e.name);
+            writeln!(s, "    public {} get{}() {{ return {}; }}", jtype, pascal, camel).unwrap();
+        }
+    }
+    if custom_regions {
+        writeln!(s).unwrap();
+        writeln!(s, "{}", super::custom_region("    ")).unwrap();
     }
     writeln!(s, "}}").unwrap();
     s
@@ -175,7 +203,7 @@ fn escape_java_str(s: &str) -> String {
     out
 }
 
-fn gen_enum_class(enum_def: &EnumDef, pkg: &str, group: &str) -> String {
+fn gen_enum_class(enum_def: &EnumDef, pkg: &str, group: &str, custom_regions: bool) -> String {
     let mut s = String::new();
     writeln!(s, "package {}.tpl;", pkg).unwrap();
     writeln!(s).unwrap();
@@ -215,6 +243,11 @@ fn gen_enum_class(enum_def: &EnumDef, pkg: &str, group: &str) -> String {
     writeln!(s, "        for ({}Enum e : values()) if (e.id == id) return e;", enum_def.name).unwrap();
     writeln!(s, "        return null;").unwrap();
     writeln!(s, "    }}").unwrap();
+    // Java 的 enum 是完整类，业务判断函数（IsDefenseBuilding() 之类）直接放这里
+    if custom_regions {
+        writeln!(s).unwrap();
+        writeln!(s, "{}", super::custom_region("    ")).unwrap();
+    }
     writeln!(s, "}}").unwrap();
     s
 }
@@ -232,6 +265,10 @@ pub fn export_all_java(project: &Project) -> Result<super::ExportResult> {
     let pkg = java
         .and_then(|j| j.package.as_deref())
         .unwrap_or("com.game.config");
+    // 缺省开：字段 getter 交给 Lombok 的 @Getter
+    let lombok = java.and_then(|j| j.lombok).unwrap_or(true);
+    // 缺省关：不配就与没有本特性时逐字节一致
+    let custom_regions = java.and_then(|j| j.custom_regions).unwrap_or(false);
 
     let line_ending = LineEnding::from_config(
         export_cfg.line_ending.map(|l| l.as_str())
@@ -246,11 +283,12 @@ pub fn export_all_java(project: &Project) -> Result<super::ExportResult> {
     let types_dir = output_dir.join("types");
     let tpl_dir = output_dir.join("tpl");
 
-    let mut collected: Vec<(std::path::PathBuf, Vec<u8>)> = Vec::new();
+    // 收的是未编码的源码：保留区间要在 sync_export_dir 里拼接，到那儿再编码
+    let mut collected: Vec<(std::path::PathBuf, String)> = Vec::new();
 
     let mut collect = |dir: &std::path::Path, name: &str, content: &str| {
         let path = dir.join(name);
-        collected.push((path, opts.encode(content)));
+        collected.push((path, content.to_string()));
     };
 
     let render = |tpl: &str| tpl.replace("{{PACKAGE}}", pkg);
@@ -287,7 +325,7 @@ pub fn export_all_java(project: &Project) -> Result<super::ExportResult> {
     for group in &project.groups {
         for table in &group.tables {
             if table.deleted { continue; }
-            let content = gen_table_tpl(table, pkg, &group.name, &enum_names);
+            let content = gen_table_tpl(table, pkg, &group.name, &enum_names, lombok, custom_regions);
             let filename = format!("{}Tpl.java", &table.name);
             collect(&tpl_dir, &filename, &content);
             writeln!(register_lines, "        map.put(\"{}\", {}.tpl.{}Tpl.class);",
@@ -296,7 +334,7 @@ pub fn export_all_java(project: &Project) -> Result<super::ExportResult> {
 
         for constant in &group.constants {
             if constant.deleted { continue; }
-            let content = gen_constant_tpl(constant, pkg, &group.name, &enum_names);
+            let content = gen_constant_tpl(constant, pkg, &group.name, &enum_names, lombok, custom_regions);
             let filename = format!("{}Tpl.java", &constant.name);
             collect(&tpl_dir, &filename, &content);
             writeln!(register_lines, "        map.put(\"{}\", {}.tpl.{}Tpl.class);",
@@ -305,7 +343,7 @@ pub fn export_all_java(project: &Project) -> Result<super::ExportResult> {
 
         for enum_def in &group.enums {
             if enum_def.deleted { continue; }
-            let content = gen_enum_class(enum_def, pkg, &group.name);
+            let content = gen_enum_class(enum_def, pkg, &group.name, custom_regions);
             let filename = format!("{}Enum.java", &enum_def.name);
             collect(&tpl_dir, &filename, &content);
         }
@@ -317,7 +355,7 @@ pub fn export_all_java(project: &Project) -> Result<super::ExportResult> {
     let holder_content = render(TPL_HOLDER);
     collect(&output_dir, "TplHolder.java", &holder_content);
 
-    super::sync_export_dir(&output_dir, "java", collected)
+    super::sync_export_dir(&output_dir, "java", collected, &opts)
 }
 
 #[cfg(test)]
@@ -349,7 +387,7 @@ mod tests {
             dirty: false, deleted: false, original_entries: Vec::new(), saved: true,
             display_field: None,
         };
-        let out = gen_enum_class(&e, "com.game.config", "hero");
+        let out = gen_enum_class(&e, "com.game.config", "hero", false);
         assert!(out.contains("public int getId() { return id; }"), "got:\n{}", out);
         // desc 也要有 getter：只补 getId 会留下 id 双入口、desc 单入口的不对称
         assert!(out.contains("public String getDesc() { return desc; }"), "got:\n{}", out);
@@ -372,7 +410,7 @@ mod tests {
             dirty: false, deleted: false, original_entries: Vec::new(), saved: true,
             display_field: None,
         };
-        let out = gen_enum_class(&e, "com.game.config", "hero");
+        let out = gen_enum_class(&e, "com.game.config", "hero", false);
         // 注释里不能有裸换行，也不能出现会闭合 /** */ 的 */
         assert!(out.contains("/** 他说\"你好\"\\ 结束 * / 换行 第二行 */"), "got:\n{}", out);
         // 字面量里引号/反斜杠/换行都要转义
@@ -384,11 +422,62 @@ mod tests {
         let t = super::super::test_fixtures::table("Item", vec![
             super::super::test_fixtures::field("stack_max", "堆叠上限", "int"),
         ]);
-        let out = gen_table_tpl(&t, "com.game.config", "item", &no_enums());
+        let out = gen_table_tpl(&t, "com.game.config", "item", &no_enums(), false, false);
         assert!(out.contains("/** 堆叠上限 */"), "got:\n{}", out);
         // 数据文件 key 是源名 snake_case，Java 字段是 camelCase，反射加载器取不到，
         // 所以源名与字段名不一致时注解要带上 name（@01.8.1）
         assert!(out.contains(r#"@TblFieldType(value = "int", name = "stack_max")"#), "got:\n{}", out);
+    }
+
+    fn sample_table() -> Table {
+        super::super::test_fixtures::table("Item", vec![
+            super::super::test_fixtures::field("stack_max", "堆叠上限", "int"),
+            super::super::test_fixtures::field("debug_mode", "调试开关", "bool"),
+        ])
+    }
+
+    #[test]
+    fn lombok_on_emits_annotation_and_no_explicit_getters() {
+        let out = gen_table_tpl(&sample_table(), "com.game.config", "item", &no_enums(), true, false);
+        assert!(out.contains("import lombok.Getter;"), "got:\n{}", out);
+        assert!(out.contains("@Getter\npublic class ItemTpl"), "got:\n{}", out);
+        // 显式 getter 全部让位给 Lombok
+        assert!(!out.contains("public int getStackMax()"), "got:\n{}", out);
+        assert!(!out.contains("public boolean getDebugMode()"), "got:\n{}", out);
+    }
+
+    #[test]
+    fn lombok_on_keeps_get_id_override() {
+        // ITpl 声明了 int getId()，TplHolder 注册表也在调；Lombok 见同名方法会跳过，
+        // 所以这一行必须留着，且不能因为开了 Lombok 就消失
+        let out = gen_table_tpl(&sample_table(), "com.game.config", "item", &no_enums(), true, false);
+        assert!(out.contains("@Override\n    public int getId() { return id; }"), "got:\n{}", out);
+        // 也不能出现第二份（Lombok 那边不会重复生成，但生成器自己别写两遍）
+        assert_eq!(out.matches("public int getId()").count(), 1, "got:\n{}", out);
+    }
+
+    #[test]
+    fn lombok_off_keeps_explicit_getters_and_no_import() {
+        let out = gen_table_tpl(&sample_table(), "com.game.config", "item", &no_enums(), false, false);
+        assert!(!out.contains("lombok"), "got:\n{}", out);
+        assert!(out.contains("public int getStackMax() { return stackMax; }"), "got:\n{}", out);
+        // 关闭时常量/布尔字段仍是 getXxx()，与开启 Lombok 后的 isXxx() 不同——这是有意的，
+        // 差异写在 @11.3.4
+        assert!(out.contains("public boolean getDebugMode() { return debugMode; }"), "got:\n{}", out);
+    }
+
+    #[test]
+    fn constant_lombok_toggle_matches_table() {
+        let c = super::super::test_fixtures::constant("GameConst", vec![
+            super::super::test_fixtures::entry("version", "版本号", "str"),
+        ]);
+        let on = gen_constant_tpl(&c, "com.game.config", "global", &no_enums(), true, false);
+        assert!(on.contains("@Getter\npublic class GameConstTpl"), "got:\n{}", on);
+        assert!(!on.contains("public String getVersion()"), "got:\n{}", on);
+
+        let off = gen_constant_tpl(&c, "com.game.config", "global", &no_enums(), false, false);
+        assert!(!off.contains("lombok"), "got:\n{}", off);
+        assert!(off.contains("public String getVersion() { return version; }"), "got:\n{}", off);
     }
 
     #[test]

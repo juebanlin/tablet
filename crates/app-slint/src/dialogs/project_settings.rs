@@ -222,11 +222,21 @@ pub fn push(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
     ui_h.set_ps_export_java_code_output(
         export.server.as_ref().and_then(|s| s.java.as_ref()).and_then(|j| j.code_output.as_ref()).cloned().unwrap_or_default().into()
     );
+    // 缺省开：与 export/java.rs 里的 unwrap_or(true) 保持同一口径
+    ui_h.set_ps_export_java_lombok(
+        export.server.as_ref().and_then(|s| s.java.as_ref()).and_then(|j| j.lombok).unwrap_or(true)
+    );
+    ui_h.set_ps_export_java_custom_regions(
+        export.server.as_ref().and_then(|s| s.java.as_ref()).and_then(|x| x.custom_regions).unwrap_or(false)
+    );
     ui_h.set_ps_export_go_package(
         export.server.as_ref().and_then(|s| s.go.as_ref()).and_then(|g| g.package.as_ref()).cloned().unwrap_or_default().into()
     );
     ui_h.set_ps_export_go_code_output(
         export.server.as_ref().and_then(|s| s.go.as_ref()).and_then(|g| g.code_output.as_ref()).cloned().unwrap_or_default().into()
+    );
+    ui_h.set_ps_export_go_custom_regions(
+        export.server.as_ref().and_then(|s| s.go.as_ref()).and_then(|x| x.custom_regions).unwrap_or(false)
     );
     ui_h.set_ps_export_cpp_namespace(
         export.server.as_ref().and_then(|s| s.cpp.as_ref()).and_then(|c| c.namespace.as_ref()).cloned().unwrap_or_default().into()
@@ -234,11 +244,17 @@ pub fn push(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
     ui_h.set_ps_export_cpp_code_output(
         export.server.as_ref().and_then(|s| s.cpp.as_ref()).and_then(|c| c.code_output.as_ref()).cloned().unwrap_or_default().into()
     );
+    ui_h.set_ps_export_cpp_custom_regions(
+        export.server.as_ref().and_then(|s| s.cpp.as_ref()).and_then(|x| x.custom_regions).unwrap_or(false)
+    );
     ui_h.set_ps_export_csharp_dotnet_namespace(
         export.server.as_ref().and_then(|s| s.csharp_dotnet.as_ref()).and_then(|c| c.namespace.as_ref()).cloned().unwrap_or_default().into()
     );
     ui_h.set_ps_export_csharp_dotnet_code_output(
         export.server.as_ref().and_then(|s| s.csharp_dotnet.as_ref()).and_then(|c| c.code_output.as_ref()).cloned().unwrap_or_default().into()
+    );
+    ui_h.set_ps_export_csharp_dotnet_custom_regions(
+        export.server.as_ref().and_then(|s| s.csharp_dotnet.as_ref()).and_then(|x| x.custom_regions).unwrap_or(false)
     );
     ui_h.set_ps_export_typescript_server_code_output(
         export.server.as_ref().and_then(|s| s.typescript.as_ref()).and_then(|t| t.output.as_ref()).cloned().unwrap_or_default().into()
@@ -258,11 +274,17 @@ pub fn push(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
     ui_h.set_ps_export_csharp_unity_code_output(
         export.client.as_ref().and_then(|c| c.csharp_unity.as_ref()).and_then(|u| u.code_output.as_ref()).cloned().unwrap_or_default().into()
     );
+    ui_h.set_ps_export_csharp_unity_custom_regions(
+        export.client.as_ref().and_then(|c| c.csharp_unity.as_ref()).and_then(|x| x.custom_regions).unwrap_or(false)
+    );
     ui_h.set_ps_export_csharp_godot_namespace(
         export.client.as_ref().and_then(|c| c.csharp_godot.as_ref()).and_then(|g| g.namespace.as_ref()).cloned().unwrap_or_default().into()
     );
     ui_h.set_ps_export_csharp_godot_code_output(
         export.client.as_ref().and_then(|c| c.csharp_godot.as_ref()).and_then(|g| g.code_output.as_ref()).cloned().unwrap_or_default().into()
+    );
+    ui_h.set_ps_export_csharp_godot_custom_regions(
+        export.client.as_ref().and_then(|c| c.csharp_godot.as_ref()).and_then(|x| x.custom_regions).unwrap_or(false)
     );
 }
 
@@ -356,6 +378,97 @@ fn apply_export_field(export: &mut tablet_core::model::ExportConfig, key: &str, 
                 }
                 if let Some(ref mut java) = server.java {
                     java.code_output = if value.is_empty() { None } else { Some(value.to_string()) };
+                }
+            }
+        }
+        "java_lombok" => {
+            if export.server.is_none() {
+                export.server = Some(Default::default());
+            }
+            if let Some(ref mut server) = export.server {
+                if server.java.is_none() {
+                    server.java = Some(Default::default());
+                }
+                if let Some(ref mut java) = server.java {
+                    java.lombok = Some(value == "true");
+                }
+            }
+        }
+        "java_custom_regions" => {
+            if export.server.is_none() {
+                export.server = Some(Default::default());
+            }
+            if let Some(ref mut s) = export.server {
+                if s.java.is_none() {
+                    s.java = Some(Default::default());
+                }
+                if let Some(ref mut f) = s.java {
+                    f.custom_regions = Some(value == "true");
+                }
+            }
+        }
+        "go_custom_regions" => {
+            if export.server.is_none() {
+                export.server = Some(Default::default());
+            }
+            if let Some(ref mut s) = export.server {
+                if s.go.is_none() {
+                    s.go = Some(Default::default());
+                }
+                if let Some(ref mut f) = s.go {
+                    f.custom_regions = Some(value == "true");
+                }
+            }
+        }
+        "cpp_custom_regions" => {
+            if export.server.is_none() {
+                export.server = Some(Default::default());
+            }
+            if let Some(ref mut s) = export.server {
+                if s.cpp.is_none() {
+                    s.cpp = Some(Default::default());
+                }
+                if let Some(ref mut f) = s.cpp {
+                    f.custom_regions = Some(value == "true");
+                }
+            }
+        }
+        "csharp_dotnet_custom_regions" => {
+            if export.server.is_none() {
+                export.server = Some(Default::default());
+            }
+            if let Some(ref mut s) = export.server {
+                if s.csharp_dotnet.is_none() {
+                    s.csharp_dotnet = Some(Default::default());
+                }
+                if let Some(ref mut f) = s.csharp_dotnet {
+                    f.custom_regions = Some(value == "true");
+                }
+            }
+        }
+        "csharp_unity_custom_regions" => {
+            if export.client.is_none() {
+                export.client = Some(Default::default());
+            }
+            if let Some(ref mut s) = export.client {
+                if s.csharp_unity.is_none() {
+                    s.csharp_unity = Some(Default::default());
+                }
+                if let Some(ref mut f) = s.csharp_unity {
+                    f.custom_regions = Some(value == "true");
+                }
+            }
+        }
+        "csharp_godot_custom_regions" => {
+            if export.client.is_none() {
+                export.client = Some(Default::default());
+            }
+            if let Some(ref mut s) = export.client {
+                if s.csharp_godot.is_none() {
+                    s.csharp_godot = Some(Default::default());
+                }
+                if let Some(ref mut f) = s.csharp_godot {
+                    f.custom_regions = Some(value == "true");
                 }
             }
         }

@@ -2197,6 +2197,9 @@ impl ProjectEngine {
                 FileStatus::Unchanged => {}
             }
         }
+        for w in &result.warnings {
+            self.ui_log(format!("  [警告] {}", w));
+        }
     }
 }
 

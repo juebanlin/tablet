@@ -186,17 +186,30 @@ pub fn push(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
     ui_h.set_gs_export_java_code_output(
         gs.export.server.as_ref().and_then(|s| s.java.as_ref()).and_then(|j| j.code_output.as_ref()).cloned().unwrap_or_default().into()
     );
+    // 缺省开：与 export/java.rs 里的 unwrap_or(true) 保持同一口径
+    ui_h.set_gs_export_java_lombok(
+        gs.export.server.as_ref().and_then(|s| s.java.as_ref()).and_then(|j| j.lombok).unwrap_or(true)
+    );
+    ui_h.set_gs_export_java_custom_regions(
+        gs.export.server.as_ref().and_then(|s| s.java.as_ref()).and_then(|x| x.custom_regions).unwrap_or(false)
+    );
     ui_h.set_gs_export_go_package(
         gs.export.server.as_ref().and_then(|s| s.go.as_ref()).and_then(|g| g.package.as_ref()).cloned().unwrap_or_default().into()
     );
     ui_h.set_gs_export_go_code_output(
         gs.export.server.as_ref().and_then(|s| s.go.as_ref()).and_then(|g| g.code_output.as_ref()).cloned().unwrap_or_default().into()
     );
+    ui_h.set_gs_export_go_custom_regions(
+        gs.export.server.as_ref().and_then(|s| s.go.as_ref()).and_then(|x| x.custom_regions).unwrap_or(false)
+    );
     ui_h.set_gs_export_cpp_namespace(
         gs.export.server.as_ref().and_then(|s| s.cpp.as_ref()).and_then(|c| c.namespace.as_ref()).cloned().unwrap_or_default().into()
     );
     ui_h.set_gs_export_cpp_code_output(
         gs.export.server.as_ref().and_then(|s| s.cpp.as_ref()).and_then(|c| c.code_output.as_ref()).cloned().unwrap_or_default().into()
+    );
+    ui_h.set_gs_export_cpp_custom_regions(
+        gs.export.server.as_ref().and_then(|s| s.cpp.as_ref()).and_then(|x| x.custom_regions).unwrap_or(false)
     );
     let cpp_json_lib = gs.export.server.as_ref().and_then(|s| s.cpp.as_ref()).and_then(|c| c.json_lib).unwrap_or(tablet_core::enums::CppJsonLib::default());
     let cpp_json_lib_idx = tablet_core::enums::CppJsonLib::all().iter().position(|&l| l == cpp_json_lib).unwrap_or(0) as i32;
@@ -207,6 +220,9 @@ pub fn push(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
     );
     ui_h.set_gs_export_csharp_dotnet_code_output(
         gs.export.server.as_ref().and_then(|s| s.csharp_dotnet.as_ref()).and_then(|c| c.code_output.as_ref()).cloned().unwrap_or_default().into()
+    );
+    ui_h.set_gs_export_csharp_dotnet_custom_regions(
+        gs.export.server.as_ref().and_then(|s| s.csharp_dotnet.as_ref()).and_then(|x| x.custom_regions).unwrap_or(false)
     );
     ui_h.set_gs_export_typescript_server_code_output(
         gs.export.server.as_ref().and_then(|s| s.typescript.as_ref()).and_then(|t| t.output.as_ref()).cloned().unwrap_or_default().into()
@@ -228,11 +244,17 @@ pub fn push(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
     ui_h.set_gs_export_csharp_unity_code_output(
         gs.export.client.as_ref().and_then(|c| c.csharp_unity.as_ref()).and_then(|u| u.code_output.as_ref()).cloned().unwrap_or_default().into()
     );
+    ui_h.set_gs_export_csharp_unity_custom_regions(
+        gs.export.client.as_ref().and_then(|c| c.csharp_unity.as_ref()).and_then(|x| x.custom_regions).unwrap_or(false)
+    );
     ui_h.set_gs_export_csharp_godot_namespace(
         gs.export.client.as_ref().and_then(|c| c.csharp_godot.as_ref()).and_then(|g| g.namespace.as_ref()).cloned().unwrap_or_default().into()
     );
     ui_h.set_gs_export_csharp_godot_code_output(
         gs.export.client.as_ref().and_then(|c| c.csharp_godot.as_ref()).and_then(|g| g.code_output.as_ref()).cloned().unwrap_or_default().into()
+    );
+    ui_h.set_gs_export_csharp_godot_custom_regions(
+        gs.export.client.as_ref().and_then(|c| c.csharp_godot.as_ref()).and_then(|x| x.custom_regions).unwrap_or(false)
     );
 }
 
@@ -447,6 +469,69 @@ pub fn wire(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
                         gs.export.server.as_mut().unwrap().java = Some(tablet_core::model::JavaExport::default());
                     }
                     gs.export.server.as_mut().unwrap().java.as_mut().unwrap().code_output = Some(value.to_string());
+                }
+                "java_lombok" => {
+                    if gs.export.server.is_none() {
+                        gs.export.server = Some(tablet_core::model::ServerExport::default());
+                    }
+                    if gs.export.server.as_mut().unwrap().java.is_none() {
+                        gs.export.server.as_mut().unwrap().java = Some(tablet_core::model::JavaExport::default());
+                    }
+                    gs.export.server.as_mut().unwrap().java.as_mut().unwrap().lombok = Some(value == "true");
+                }
+                "java_custom_regions" => {
+                    if gs.export.server.is_none() {
+                        gs.export.server = Some(tablet_core::model::ServerExport::default());
+                    }
+                    if gs.export.server.as_mut().unwrap().java.is_none() {
+                        gs.export.server.as_mut().unwrap().java = Some(tablet_core::model::JavaExport::default());
+                    }
+                    gs.export.server.as_mut().unwrap().java.as_mut().unwrap().custom_regions = Some(value == "true");
+                }
+                "go_custom_regions" => {
+                    if gs.export.server.is_none() {
+                        gs.export.server = Some(tablet_core::model::ServerExport::default());
+                    }
+                    if gs.export.server.as_mut().unwrap().go.is_none() {
+                        gs.export.server.as_mut().unwrap().go = Some(tablet_core::model::GoExport::default());
+                    }
+                    gs.export.server.as_mut().unwrap().go.as_mut().unwrap().custom_regions = Some(value == "true");
+                }
+                "cpp_custom_regions" => {
+                    if gs.export.server.is_none() {
+                        gs.export.server = Some(tablet_core::model::ServerExport::default());
+                    }
+                    if gs.export.server.as_mut().unwrap().cpp.is_none() {
+                        gs.export.server.as_mut().unwrap().cpp = Some(tablet_core::model::CppExport::default());
+                    }
+                    gs.export.server.as_mut().unwrap().cpp.as_mut().unwrap().custom_regions = Some(value == "true");
+                }
+                "csharp_dotnet_custom_regions" => {
+                    if gs.export.server.is_none() {
+                        gs.export.server = Some(tablet_core::model::ServerExport::default());
+                    }
+                    if gs.export.server.as_mut().unwrap().csharp_dotnet.is_none() {
+                        gs.export.server.as_mut().unwrap().csharp_dotnet = Some(tablet_core::model::DotNetExport::default());
+                    }
+                    gs.export.server.as_mut().unwrap().csharp_dotnet.as_mut().unwrap().custom_regions = Some(value == "true");
+                }
+                "csharp_unity_custom_regions" => {
+                    if gs.export.client.is_none() {
+                        gs.export.client = Some(tablet_core::model::ClientConfig::default());
+                    }
+                    if gs.export.client.as_mut().unwrap().csharp_unity.is_none() {
+                        gs.export.client.as_mut().unwrap().csharp_unity = Some(tablet_core::model::UnityCSharpExport::default());
+                    }
+                    gs.export.client.as_mut().unwrap().csharp_unity.as_mut().unwrap().custom_regions = Some(value == "true");
+                }
+                "csharp_godot_custom_regions" => {
+                    if gs.export.client.is_none() {
+                        gs.export.client = Some(tablet_core::model::ClientConfig::default());
+                    }
+                    if gs.export.client.as_mut().unwrap().csharp_godot.is_none() {
+                        gs.export.client.as_mut().unwrap().csharp_godot = Some(tablet_core::model::GodotCSharpExport::default());
+                    }
+                    gs.export.client.as_mut().unwrap().csharp_godot.as_mut().unwrap().custom_regions = Some(value == "true");
                 }
                 "go_package" => {
                     if gs.export.server.is_none() {

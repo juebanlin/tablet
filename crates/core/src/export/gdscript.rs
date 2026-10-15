@@ -364,25 +364,25 @@ pub fn export_all_gdscript(project: &Project) -> Result<super::ExportResult> {
             if table.deleted { continue; }
             let gd_src = export_table_gd(table, sep);
             let file_path = output_dir.join(format!("{}.gd", &table.name));
-            collected.push((file_path, opts.encode(&gd_src)));
+            collected.push((file_path, gd_src.clone()));
         }
 
         for constant in &group.constants {
             if constant.deleted { continue; }
             let gd_src = export_constant_gd(constant, sep);
             let file_path = output_dir.join(format!("{}.gd", &constant.name));
-            collected.push((file_path, opts.encode(&gd_src)));
+            collected.push((file_path, gd_src.clone()));
         }
 
         for enum_def in &group.enums {
             if enum_def.deleted { continue; }
             let gd_src = export_enum_gd(enum_def);
             let file_path = output_dir.join(format!("{}.gd", &enum_def.name));
-            collected.push((file_path, opts.encode(&gd_src)));
+            collected.push((file_path, gd_src.clone()));
         }
     }
 
-    super::sync_export_dir(&output_dir, "gd", collected)
+    super::sync_export_dir(&output_dir, "gd", collected, &opts)
 }
 
 #[cfg(test)]

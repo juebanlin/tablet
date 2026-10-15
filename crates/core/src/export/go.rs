@@ -257,15 +257,17 @@ pub fn export_all_go(project: &Project) -> Result<super::ExportResult> {
     );
     let encoding = export_cfg.encoding.map(|e| e.as_str())
         .unwrap_or("utf-8").to_string();
+    let custom_regions = go.and_then(|g| g.custom_regions).unwrap_or(false);
     let opts = super::ExportOptions { line_ending, encoding };
 
     let output_dir = project.export_root().join(code_output).join(pkg);
-    let mut collected: Vec<(std::path::PathBuf, Vec<u8>)> = Vec::new();
+    // 收的是未编码的源码：保留区间要在 sync_export_dir 里拼接，到那儿再编码
+    let mut collected: Vec<(std::path::PathBuf, String)> = Vec::new();
 
     let render = |tpl: &str| tpl.replace("{{PACKAGE}}", pkg);
     let mut collect = |dir: &std::path::Path, name: &str, content: &str| {
         let path = dir.join(name);
-        collected.push((path, opts.encode(content)));
+        collected.push((path, content.to_string()));
     };
 
     collect(&output_dir, "loader.go", &render(TPL_LOADER));
@@ -290,27 +292,27 @@ pub fn export_all_go(project: &Project) -> Result<super::ExportResult> {
     for group in &project.groups {
         for table in &group.tables {
             if table.deleted { continue; }
-            let content = gen_table_tpl(table, pkg, &group.name, &enum_names);
+            let content = gen_table_tpl(table, pkg, &group.name, &enum_names, custom_regions);
             let filename = format!("{}_tpl.go", to_snake_case(&table.name));
             collect(&output_dir, &filename, &content);
         }
 
         for constant in &group.constants {
             if constant.deleted { continue; }
-            let content = gen_constant_tpl(constant, pkg, &group.name, &enum_names);
+            let content = gen_constant_tpl(constant, pkg, &group.name, &enum_names, custom_regions);
             let filename = format!("{}_tpl.go", to_snake_case(&constant.name));
             collect(&output_dir, &filename, &content);
         }
 
         for enum_def in &group.enums {
             if enum_def.deleted { continue; }
-            let content = gen_enum_file(enum_def, pkg);
+            let content = gen_enum_file(enum_def, pkg, custom_regions);
             let filename = format!("{}_enum.go", to_snake_case(&enum_def.name));
             collect(&output_dir, &filename, &content);
         }
     }
 
-    super::sync_export_dir(&output_dir, "go", collected)
+    super::sync_export_dir(&output_dir, "go", collected, &opts)
 }
 
 const GEN_PARSE_STR: &str = r#"package {{PACKAGE}}
@@ -319,7 +321,7 @@ const GEN_PARSE_STR: &str = r#"package {{PACKAGE}}
 func parseStr(raw string) string { return raw }
 "#;
 
-fn gen_table_tpl(table: &Table, pkg: &str, _group: &str, enum_names: &HashSet<String>) -> String {
+fn gen_table_tpl(table: &Table, pkg: &str, _group: &str, enum_names: &HashSet<String>, custom_regions: bool) -> String {
     let mut s = String::new();
     let cls = format!("{}Tpl", table.name);
     let key = table.name.clone();
@@ -383,10 +385,16 @@ fn gen_table_tpl(table: &Table, pkg: &str, _group: &str, enum_names: &HashSet<St
     writeln!(s).unwrap();
     writeln!(s, "func GetAll{}() map[int32]*{} {{ return {}_data }}", table.name, cls, table.name).unwrap();
 
+    // 保留区间落在**文件末尾**而不是 struct 体里：Go 的方法必须是文件作用域的
+    // `func (x *ItemTpl) ...`，塞进 struct 体只能放字段，业务扩展函数就没地方写了
+    if custom_regions {
+        writeln!(s).unwrap();
+        writeln!(s, "{}", super::custom_region("")).unwrap();
+    }
     s
 }
 
-fn gen_constant_tpl(constant: &Constant, pkg: &str, _group: &str, enum_names: &HashSet<String>) -> String {
+fn gen_constant_tpl(constant: &Constant, pkg: &str, _group: &str, enum_names: &HashSet<String>, custom_regions: bool) -> String {
     let mut s = String::new();
     let cls = format!("{}Tpl", constant.name);
     let key = constant.name.clone();
@@ -443,10 +451,16 @@ fn gen_constant_tpl(constant: &Constant, pkg: &str, _group: &str, enum_names: &H
     // accessor function
     writeln!(s, "func Get{}() *{} {{ return {}_data }}", constant.name, cls, constant.name).unwrap();
 
+    // 保留区间落在**文件末尾**而不是 struct 体里：Go 的方法必须是文件作用域的
+    // `func (x *ItemTpl) ...`，塞进 struct 体只能放字段，业务扩展函数就没地方写了
+    if custom_regions {
+        writeln!(s).unwrap();
+        writeln!(s, "{}", super::custom_region("")).unwrap();
+    }
     s
 }
 
-fn gen_enum_file(enum_def: &EnumDef, pkg: &str) -> String {
+fn gen_enum_file(enum_def: &EnumDef, pkg: &str, custom_regions: bool) -> String {
     let mut s = String::new();
     let type_name = format!("{}Enum", enum_def.name);
 
@@ -510,6 +524,12 @@ fn gen_enum_file(enum_def: &EnumDef, pkg: &str) -> String {
     writeln!(s, "\treturn v, ok").unwrap();
     writeln!(s, "}}").unwrap();
 
+    // 保留区间落在**文件末尾**而不是 struct 体里：Go 的方法必须是文件作用域的
+    // `func (x *ItemTpl) ...`，塞进 struct 体只能放字段，业务扩展函数就没地方写了
+    if custom_regions {
+        writeln!(s).unwrap();
+        writeln!(s, "{}", super::custom_region("")).unwrap();
+    }
     s
 }
 
@@ -557,7 +577,7 @@ mod tests {
             field("stack_max", "堆叠上限", "int"),
             field("items", "", "List<@Item>"),
         ]);
-        let out = gen_table_tpl(&t, "config", "item", &HashSet::new());
+        let out = gen_table_tpl(&t, "config", "item", &HashSet::new(), false);
         assert!(out.contains("StackMax int32 // 堆叠上限"), "got:\n{}", out);
         assert!(out.contains("Items []int32 // List<@Item>"), "got:\n{}", out);
         // 查表 key 用 .tbl 源名，不是 camelCase（数据文件同规则，@01.8.1）

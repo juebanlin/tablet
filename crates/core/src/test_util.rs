@@ -47,9 +47,9 @@ pub fn generate_test_config(config_dir: &Path, opts: &TestGenOptions) {
 }
 
 /// 使用内置 schema 生成 TestMain.java
-pub fn generate_test_main(workdir: &Path, opts: &TestGenOptions, pkg: &str, format: &str) {
+pub fn generate_test_main(workdir: &Path, opts: &TestGenOptions, pkg: &str, format: &str, lombok: bool) {
     let schema = builtin_schema(opts);
-    generate_test_main_from_schema(workdir, &schema, pkg, format);
+    generate_test_main_from_schema(workdir, &schema, pkg, format, lombok);
 }
 
 /// 使用内置 schema 生成 Go 测试 main.go + go.mod
@@ -69,8 +69,8 @@ pub fn generate_from_schema(config_dir: &Path, schema: &TblSchema, opts: &TestGe
 }
 
 /// 根据 schema 生成 TestMain.java
-pub fn generate_test_main_from_schema(workdir: &Path, schema: &TblSchema, pkg: &str, format: &str) {
-    let content = build_test_main(schema, pkg, format);
+pub fn generate_test_main_from_schema(workdir: &Path, schema: &TblSchema, pkg: &str, format: &str, lombok: bool) {
+    let content = build_test_main(schema, pkg, format, lombok);
     let _ = std::fs::write(workdir.join("TestMain.java"), &content);
 }
 
@@ -329,7 +329,20 @@ fn java_ref_element_assert(field: &str, tbl_type: &str) -> Option<String> {
     ))
 }
 
-fn build_test_main(schema: &TblSchema, pkg: &str, format: &str) -> String {
+/// 生成的 TestMain 要按导出侧的实际 getter 名取值，否则编译不过。
+///
+/// 开了 Lombok（@11.3.4）后，原始 `boolean` 字段由 Lombok 按 JavaBeans 惯例生成 **`isXxx()`**；
+/// 其余仍是 `getXxx()`。判定复用 `TblType::java_decl()`——它已经是 Java 类型的唯一出口，
+/// 别在这里另写一份映射。注意 `List<bool>` 之类内层会装箱成 `Boolean`，仍是 `getXxx()`。
+fn java_getter_call(obj: &str, field: &str, tbl_type: &str, lombok: bool) -> String {
+    let is_primitive_bool = TblType::parse(tbl_type)
+        .map(|t| t.java_decl() == "boolean")
+        .unwrap_or(false);
+    let prefix = if lombok && is_primitive_bool { "is" } else { "get" };
+    format!("{}.{}{}()", obj, prefix, to_pascal(field))
+}
+
+fn build_test_main(schema: &TblSchema, pkg: &str, format: &str, lombok: bool) -> String {
     let mut s = String::new();
     writeln!(s, "import {}.*;", pkg).unwrap();
     writeln!(s, "import {}.tpl.*;", pkg).unwrap();
@@ -366,7 +379,7 @@ fn build_test_main(schema: &TblSchema, pkg: &str, format: &str) -> String {
                 let mut arg_parts = vec!["h.getId()".to_string()];
                 for f in &server_fields {
                     fmt_parts.push(format!("{}={}", to_camel(&f.name), java_format_spec(&f.tbl_type)));
-                    arg_parts.push(format!("h.get{}()", to_pascal(&f.name)));
+                    arg_parts.push(java_getter_call("h", &f.name, &f.tbl_type, lombok));
                 }
 
                 writeln!(s, "            System.out.printf(\"{}%n\",", fmt_parts.join(" ")).unwrap();
@@ -391,7 +404,7 @@ fn build_test_main(schema: &TblSchema, pkg: &str, format: &str) -> String {
                     let mut arg_parts = Vec::new();
                     for f in &server_entries {
                         fmt_parts.push(format!("{}={}", to_camel(&f.name), java_format_spec(&f.tbl_type)));
-                        arg_parts.push(format!("gc.get{}()", to_pascal(&f.name)));
+                        arg_parts.push(java_getter_call("gc", &f.name, &f.tbl_type, lombok));
                     }
 
                     writeln!(s, "        System.out.printf(\"{}%n\",", fmt_parts.join(" ")).unwrap();

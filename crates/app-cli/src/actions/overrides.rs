@@ -105,6 +105,36 @@ pub fn apply_overrides(engine: &mut ProjectEngine, overrides: &[String]) -> Over
                 ensure_export_server_cpp(&mut project.config);
                 project.config.export.server.as_mut().unwrap().cpp.as_mut().unwrap().json_lib = Some(value.parse().unwrap_or_default());
             }
+            "export.server.java.lombok" => {
+                ensure_export_server_java(&mut project.config);
+                project.config.export.server.as_mut().unwrap().java.as_mut().unwrap().lombok =
+                    Some(parse_bool_warn(&mut out, key, value));
+            }
+
+            "export.server.java.custom_regions" => {
+                ensure_export_server_java(&mut project.config);
+                project.config.export.server.as_mut().unwrap().java.as_mut().unwrap().custom_regions = Some(parse_bool_warn(&mut out, key, value));
+            }
+            "export.server.go.custom_regions" => {
+                ensure_export_server_go(&mut project.config);
+                project.config.export.server.as_mut().unwrap().go.as_mut().unwrap().custom_regions = Some(parse_bool_warn(&mut out, key, value));
+            }
+            "export.server.cpp.custom_regions" => {
+                ensure_export_server_cpp(&mut project.config);
+                project.config.export.server.as_mut().unwrap().cpp.as_mut().unwrap().custom_regions = Some(parse_bool_warn(&mut out, key, value));
+            }
+            "export.server.csharp_dotnet.custom_regions" => {
+                ensure_export_server_csharp_dotnet(&mut project.config);
+                project.config.export.server.as_mut().unwrap().csharp_dotnet.as_mut().unwrap().custom_regions = Some(parse_bool_warn(&mut out, key, value));
+            }
+            "export.client.csharp_unity.custom_regions" => {
+                ensure_export_client_csharp_unity(&mut project.config);
+                project.config.export.client.as_mut().unwrap().csharp_unity.as_mut().unwrap().custom_regions = Some(parse_bool_warn(&mut out, key, value));
+            }
+            "export.client.csharp_godot.custom_regions" => {
+                ensure_export_client_csharp_godot(&mut project.config);
+                project.config.export.client.as_mut().unwrap().csharp_godot.as_mut().unwrap().custom_regions = Some(parse_bool_warn(&mut out, key, value));
+            }
             "export.server.csharp_dotnet.namespace" => {
                 ensure_export_server_csharp_dotnet(&mut project.config);
                 project.config.export.server.as_mut().unwrap().csharp_dotnet.as_mut().unwrap().namespace = Some(value.to_string());
@@ -179,7 +209,7 @@ fn ensure_export_server_java(config: &mut ProjectConfig) {
     ensure_export_server(config);
     if config.export.server.as_ref().unwrap().java.is_none() {
         config.export.server.as_mut().unwrap().java = Some(JavaExport {
-            package: None, code_output: None,
+            package: None, code_output: None, lombok: None, custom_regions: None,
         });
     }
 }
@@ -188,7 +218,7 @@ fn ensure_export_server_go(config: &mut ProjectConfig) {
     ensure_export_server(config);
     if config.export.server.as_ref().unwrap().go.is_none() {
         config.export.server.as_mut().unwrap().go = Some(GoExport {
-            package: None, code_output: None,
+            package: None, code_output: None, custom_regions: None,
         });
     }
 }
@@ -197,7 +227,7 @@ fn ensure_export_server_cpp(config: &mut ProjectConfig) {
     ensure_export_server(config);
     if config.export.server.as_ref().unwrap().cpp.is_none() {
         config.export.server.as_mut().unwrap().cpp = Some(CppExport {
-            namespace: None, code_output: None, json_lib: None,
+            namespace: None, code_output: None, json_lib: None, custom_regions: None,
         });
     }
 }
@@ -206,7 +236,7 @@ fn ensure_export_server_csharp_dotnet(config: &mut ProjectConfig) {
     ensure_export_server(config);
     if config.export.server.as_ref().unwrap().csharp_dotnet.is_none() {
         config.export.server.as_mut().unwrap().csharp_dotnet = Some(DotNetExport {
-            namespace: None, code_output: None,
+            namespace: None, code_output: None, custom_regions: None,
         });
     }
 }
@@ -224,7 +254,7 @@ fn ensure_export_client_csharp_unity(config: &mut ProjectConfig) {
     ensure_export_client(config);
     if config.export.client.as_ref().unwrap().csharp_unity.is_none() {
         config.export.client.as_mut().unwrap().csharp_unity = Some(UnityCSharpExport {
-            namespace: None, code_output: None,
+            namespace: None, code_output: None, custom_regions: None,
         });
     }
 }
@@ -233,7 +263,7 @@ fn ensure_export_client_csharp_godot(config: &mut ProjectConfig) {
     ensure_export_client(config);
     if config.export.client.as_ref().unwrap().csharp_godot.is_none() {
         config.export.client.as_mut().unwrap().csharp_godot = Some(GodotCSharpExport {
-            namespace: None, code_output: None,
+            namespace: None, code_output: None, custom_regions: None,
         });
     }
 }
@@ -260,5 +290,18 @@ fn ensure_export_server_typescript(config: &mut ProjectConfig) {
     if config.export.server.as_ref().unwrap().typescript.is_none() {
         config.export.server.as_mut().unwrap().typescript =
             Some(tablet_core::model::ServerTypeScriptExport::default());
+    }
+}
+
+/// `key=value` 里的布尔值。值不合法**告警**而不是静默退回默认——那等于悄悄改了生成产物。
+fn parse_bool_warn(out: &mut OverrideOutcome, key: &str, value: &str) -> bool {
+    match value.parse::<bool>() {
+        Ok(v) => v,
+        Err(_) => {
+            out.warnings.push(OverrideWarning::Invalid(
+                format!("{} 只接受 true / false，收到 '{}'", key, value),
+            ));
+            false
+        }
     }
 }

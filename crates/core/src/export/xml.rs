@@ -141,18 +141,18 @@ pub fn export_all_xml(project: &Project) -> Result<super::ExportResult> {
             if table.deleted { continue; }
             let xml = export_table_xml(table, &strategy, sep);
             let file_path = output_dir.join(format!("{}.xml", &table.name));
-            collected.push((file_path, opts.encode(&xml)));
+            collected.push((file_path, xml.clone()));
         }
 
         for constant in &group.constants {
             if constant.deleted { continue; }
             let xml = export_constant_xml(constant, &strategy, sep);
             let file_path = output_dir.join(format!("{}.xml", &constant.name));
-            collected.push((file_path, opts.encode(&xml)));
+            collected.push((file_path, xml.clone()));
         }
     }
 
-    super::sync_export_dir(&output_dir, "xml", collected)
+    super::sync_export_dir(&output_dir, "xml", collected, &opts)
 }
 
 pub fn export_xml_filtered(project: &Project, filter: &super::DataFilter) -> Result<super::ExportResult> {
@@ -186,7 +186,7 @@ pub fn export_xml_filtered(project: &Project, filter: &super::DataFilter) -> Res
             if !filter.matches_node(&table.name) { continue; }
             let xml = export_table_xml(table, &strategy, sep);
             let file_path = output_dir.join(format!("{}.xml", &table.name));
-            collected.push((file_path, opts.encode(&xml)));
+            collected.push((file_path, xml.clone()));
         }
 
         for constant in &group.constants {
@@ -194,9 +194,9 @@ pub fn export_xml_filtered(project: &Project, filter: &super::DataFilter) -> Res
             if !filter.matches_node(&constant.name) { continue; }
             let xml = export_constant_xml(constant, &strategy, sep);
             let file_path = output_dir.join(format!("{}.xml", &constant.name));
-            collected.push((file_path, opts.encode(&xml)));
+            collected.push((file_path, xml.clone()));
         }
     }
 
-    super::sync_export_dir(&output_dir, "xml", collected)
+    super::sync_export_dir(&output_dir, "xml", collected, &opts)
 }

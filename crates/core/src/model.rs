@@ -175,10 +175,29 @@ impl Default for ServerExport {
     }
 }
 
+/// Java 服务端导出
+///
+/// `deny_unknown_fields`：`[export.server.java]` 下拼错的键要直接报错，不能被 serde 静默吞掉
+/// （与 ServerTypeScriptExport 同样的理由，见 @11.3.1 A3 那次事故）。
 #[derive(Debug, Clone, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct JavaExport {
     pub package: Option<String>,
     pub code_output: Option<String>,
+    /// 用 Lombok 的 `@Getter` 代替逐字段手写 getter，默认开。
+    ///
+    /// 导出侧只写注解，不打包也不附带 lombok.jar —— 消费方自己加编译期依赖。
+    /// 代价与坑（不打包 jar、`boolean` 字段变 `isXxx()`、JDK 23+ 要显式开注解处理）见 @11.3.4。
+    #[serde(default)]
+    pub lombok: Option<bool>,
+
+    /// 产物里带上「业务扩展保留区间」：类型末尾一对 `// <TBL-CUSTOM-*> ` 标记，
+    /// 重新导出时把标记**之间**的手写代码原样搬过去（区间外一律重新生成）。
+    ///
+    /// 默认 **false**——不配这个键时产物与没有本特性时逐字节一致。
+    /// 契约与边界情况见 @02 与 @11.3.4。
+    #[serde(default)]
+    pub custom_regions: Option<bool>,
 }
 
 impl Default for JavaExport {
@@ -186,6 +205,8 @@ impl Default for JavaExport {
         Self {
             package: Some("com.game.config".to_string()),
             code_output: Some("gen/server/java".to_string()),
+            lombok: Some(true),
+            custom_regions: Some(false),
         }
     }
 }
@@ -194,6 +215,14 @@ impl Default for JavaExport {
 pub struct GoExport {
     pub package: Option<String>,
     pub code_output: Option<String>,
+
+    /// 产物里带上「业务扩展保留区间」：类型末尾一对 `// <TBL-CUSTOM-*> ` 标记，
+    /// 重新导出时把标记**之间**的手写代码原样搬过去（区间外一律重新生成）。
+    ///
+    /// 默认 **false**——不配这个键时产物与没有本特性时逐字节一致。
+    /// 契约与边界情况见 @02 与 @11.3.4。
+    #[serde(default)]
+    pub custom_regions: Option<bool>,
 }
 
 impl Default for GoExport {
@@ -201,6 +230,7 @@ impl Default for GoExport {
         Self {
             package: Some("config".to_string()),
             code_output: Some("gen/server/go".to_string()),
+            custom_regions: Some(false),
         }
     }
 }
@@ -211,6 +241,14 @@ pub struct CppExport {
     pub code_output: Option<String>,
     #[serde(default)]
     pub json_lib: Option<crate::enums::CppJsonLib>,
+
+    /// 产物里带上「业务扩展保留区间」：类型末尾一对 `// <TBL-CUSTOM-*> ` 标记，
+    /// 重新导出时把标记**之间**的手写代码原样搬过去（区间外一律重新生成）。
+    ///
+    /// 默认 **false**——不配这个键时产物与没有本特性时逐字节一致。
+    /// 契约与边界情况见 @02 与 @11.3.4。
+    #[serde(default)]
+    pub custom_regions: Option<bool>,
 }
 
 impl Default for CppExport {
@@ -219,6 +257,7 @@ impl Default for CppExport {
             namespace: Some("game::config".to_string()),
             code_output: Some("gen/server/cpp".to_string()),
             json_lib: Some(crate::enums::CppJsonLib::Nlohmann),
+            custom_regions: Some(false),
         }
     }
 }
@@ -228,6 +267,14 @@ impl Default for CppExport {
 pub struct DotNetExport {
     pub namespace: Option<String>,
     pub code_output: Option<String>,
+
+    /// 产物里带上「业务扩展保留区间」：类型末尾一对 `// <TBL-CUSTOM-*> ` 标记，
+    /// 重新导出时把标记**之间**的手写代码原样搬过去（区间外一律重新生成）。
+    ///
+    /// 默认 **false**——不配这个键时产物与没有本特性时逐字节一致。
+    /// 契约与边界情况见 @02 与 @11.3.4。
+    #[serde(default)]
+    pub custom_regions: Option<bool>,
 }
 
 impl Default for DotNetExport {
@@ -235,6 +282,7 @@ impl Default for DotNetExport {
         Self {
             namespace: Some("Game.Config.Server".to_string()),
             code_output: Some("gen/server/csharp".to_string()),
+            custom_regions: Some(false),
         }
     }
 }
@@ -244,6 +292,14 @@ impl Default for DotNetExport {
 pub struct UnityCSharpExport {
     pub namespace: Option<String>,
     pub code_output: Option<String>,
+
+    /// 产物里带上「业务扩展保留区间」：类型末尾一对 `// <TBL-CUSTOM-*> ` 标记，
+    /// 重新导出时把标记**之间**的手写代码原样搬过去（区间外一律重新生成）。
+    ///
+    /// 默认 **false**——不配这个键时产物与没有本特性时逐字节一致。
+    /// 契约与边界情况见 @02 与 @11.3.4。
+    #[serde(default)]
+    pub custom_regions: Option<bool>,
 }
 
 impl Default for UnityCSharpExport {
@@ -251,6 +307,7 @@ impl Default for UnityCSharpExport {
         Self {
             namespace: Some("Game.Config.Client".to_string()),
             code_output: Some("gen/client/csharp_unity".to_string()),
+            custom_regions: Some(false),
         }
     }
 }
@@ -260,6 +317,14 @@ impl Default for UnityCSharpExport {
 pub struct GodotCSharpExport {
     pub namespace: Option<String>,
     pub code_output: Option<String>,
+
+    /// 产物里带上「业务扩展保留区间」：类型末尾一对 `// <TBL-CUSTOM-*> ` 标记，
+    /// 重新导出时把标记**之间**的手写代码原样搬过去（区间外一律重新生成）。
+    ///
+    /// 默认 **false**——不配这个键时产物与没有本特性时逐字节一致。
+    /// 契约与边界情况见 @02 与 @11.3.4。
+    #[serde(default)]
+    pub custom_regions: Option<bool>,
 }
 
 impl Default for GodotCSharpExport {
@@ -267,6 +332,7 @@ impl Default for GodotCSharpExport {
         Self {
             namespace: Some("Game.Config.Client".to_string()),
             code_output: Some("gen/client/csharp_godot".to_string()),
+            custom_regions: Some(false),
         }
     }
 }

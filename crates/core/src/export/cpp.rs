@@ -213,7 +213,7 @@ fn cpp_parse_expr(raw_var: &str, t: &TblType, sep: &str, enum_names: &HashSet<St
     }
 }
 
-fn gen_table_header(table: &Table, ns: &str, enum_names: &HashSet<String>) -> String {
+fn gen_table_header(table: &Table, ns: &str, enum_names: &HashSet<String>, custom_regions: bool) -> String {
     let mut s = String::new();
     let cls = format!("{}Tpl", table.name);
 
@@ -253,6 +253,10 @@ fn gen_table_header(table: &Table, ns: &str, enum_names: &HashSet<String>) -> St
     writeln!(s).unwrap();
     writeln!(s, "    static const {}* Get(int32_t id);", cls).unwrap();
     writeln!(s, "    static const std::unordered_map<int32_t, {}>& All();", cls).unwrap();
+    if custom_regions {
+        writeln!(s).unwrap();
+        writeln!(s, "{}", super::custom_region("    ")).unwrap();
+    }
     writeln!(s, "}};").unwrap();
     writeln!(s).unwrap();
 
@@ -313,7 +317,7 @@ fn gen_table_header(table: &Table, ns: &str, enum_names: &HashSet<String>) -> St
     s
 }
 
-fn gen_constant_header(constant: &Constant, ns: &str, enum_names: &HashSet<String>) -> String {
+fn gen_constant_header(constant: &Constant, ns: &str, enum_names: &HashSet<String>, custom_regions: bool) -> String {
     let mut s = String::new();
     let cls = format!("{}Tpl", constant.name);
 
@@ -350,6 +354,10 @@ fn gen_constant_header(constant: &Constant, ns: &str, enum_names: &HashSet<Strin
     }
     writeln!(s).unwrap();
     writeln!(s, "    static const {}& Get();", cls).unwrap();
+    if custom_regions {
+        writeln!(s).unwrap();
+        writeln!(s, "{}", super::custom_region("    ")).unwrap();
+    }
     writeln!(s, "}};").unwrap();
     writeln!(s).unwrap();
 
@@ -394,7 +402,7 @@ fn gen_constant_header(constant: &Constant, ns: &str, enum_names: &HashSet<Strin
     s
 }
 
-fn gen_enum_header(enum_def: &EnumDef, ns: &str) -> String {
+fn gen_enum_header(enum_def: &EnumDef, ns: &str, custom_regions: bool) -> String {
     let mut s = String::new();
     let type_name = format!("{}Enum", enum_def.name);
 
@@ -446,6 +454,14 @@ fn gen_enum_header(enum_def: &EnumDef, ns: &str) -> String {
     }
     writeln!(s, "    return std::nullopt;").unwrap();
     writeln!(s, "}}").unwrap();
+
+    // enum class 的体里只能放枚举项，装不了方法，所以业务判断函数（IsDefenseBuilding()
+    // 之类）只能作为自由 inline 函数放在这儿——它的落点是 namespace 内、文件末尾，
+    // 不是类型体内
+    if custom_regions {
+        writeln!(s).unwrap();
+        writeln!(s, "{}", super::custom_region("")).unwrap();
+    }
     writeln!(s).unwrap();
 
     writeln!(s, "}}  // namespace {}", ns).unwrap();
@@ -505,14 +521,16 @@ pub fn export_all_cpp(project: &Project) -> Result<super::ExportResult> {
     );
     let encoding = export_cfg.encoding.map(|e| e.as_str())
         .unwrap_or("utf-8").to_string();
+    let custom_regions = cpp.and_then(|c| c.custom_regions).unwrap_or(false);
     let opts = super::ExportOptions { line_ending, encoding };
 
     let output_dir = project.export_root().join(code_output);
-    let mut collected: Vec<(std::path::PathBuf, Vec<u8>)> = Vec::new();
+    // 收的是未编码的源码：保留区间要在 sync_export_dir 里拼接，到那儿再编码
+    let mut collected: Vec<(std::path::PathBuf, String)> = Vec::new();
 
     let render = |tpl: &str| tpl.replace("{{NAMESPACE}}", ns);
     let mut collect = |dir: &std::path::Path, name: &str, content: &str| {
-        collected.push((dir.join(name), opts.encode(content)));
+        collected.push((dir.join(name), content.to_string()));
     };
 
     collect(&output_dir, "tbl.h", &render(TPL_TBL_H));
@@ -531,19 +549,19 @@ pub fn export_all_cpp(project: &Project) -> Result<super::ExportResult> {
     for group in &project.groups {
         for table in &group.tables {
             if table.deleted { continue; }
-            let content = gen_table_header(table, ns, &enum_names);
+            let content = gen_table_header(table, ns, &enum_names, custom_regions);
             collect(&output_dir, &format!("{}Tpl.h", table.name), &content);
             all_tables.push(table.name.clone());
         }
         for constant in &group.constants {
             if constant.deleted { continue; }
-            let content = gen_constant_header(constant, ns, &enum_names);
+            let content = gen_constant_header(constant, ns, &enum_names, custom_regions);
             collect(&output_dir, &format!("{}Tpl.h", constant.name), &content);
             all_constants.push(constant.name.clone());
         }
         for enum_def in &group.enums {
             if enum_def.deleted { continue; }
-            let content = gen_enum_header(enum_def, ns);
+            let content = gen_enum_header(enum_def, ns, custom_regions);
             collect(&output_dir, &format!("{}Enum.h", enum_def.name), &content);
             all_enums.push(enum_def.name.clone());
         }
@@ -558,7 +576,7 @@ pub fn export_all_cpp(project: &Project) -> Result<super::ExportResult> {
         collect(&output_dir, "Example.h", &content);
     }
 
-    super::sync_export_dir(&output_dir, "h", collected)
+    super::sync_export_dir(&output_dir, "h", collected, &opts)
 }
 
 #[cfg(test)]
@@ -595,10 +613,10 @@ mod tests {
         use super::super::test_fixtures::{field, table};
         // 只有基础/引用字段 → sep 用不到，要显式 (void) 掉，否则 -Wunused-parameter
         let plain = table("Plain", vec![field("a", "", "int"), field("b", "", "@Hero")]);
-        assert!(gen_table_header(&plain, "ns", &no_enums()).contains("(void)sep;"));
+        assert!(gen_table_header(&plain, "ns", &no_enums(), false).contains("(void)sep;"));
         // 有复合类型字段 → sep 真用到了，不能加 (void)
         let complex = table("Cplx", vec![field("a", "", "List<int>")]);
-        let out = gen_table_header(&complex, "ns", &no_enums());
+        let out = gen_table_header(&complex, "ns", &no_enums(), false);
         assert!(!out.contains("(void)sep;"), "got:\n{}", out);
         assert!(out.contains("sep.list"), "got:\n{}", out);
     }
@@ -607,9 +625,9 @@ mod tests {
     fn unused_sep_in_constant_is_explicitly_consumed() {
         use super::super::test_fixtures::{constant, entry};
         let c = constant("C", vec![entry("a", "", "int")]);
-        assert!(gen_constant_header(&c, "ns", &no_enums()).contains("(void)sep;"));
+        assert!(gen_constant_header(&c, "ns", &no_enums(), false).contains("(void)sep;"));
         let c2 = constant("C2", vec![entry("a", "", "List<int>")]);
-        assert!(!gen_constant_header(&c2, "ns", &no_enums()).contains("(void)sep;"));
+        assert!(!gen_constant_header(&c2, "ns", &no_enums(), false).contains("(void)sep;"));
     }
 
     #[test]
@@ -619,7 +637,7 @@ mod tests {
             field("stack_max", "堆叠上限", "int"),
             field("items", "", "List<@Item>"),
         ]);
-        let out = gen_table_header(&t, "game::config", &no_enums());
+        let out = gen_table_header(&t, "game::config", &no_enums(), false);
         assert!(out.contains("int32_t stackMax = 0;  // 堆叠上限"), "got:\n{}", out);
         assert!(out.contains("std::vector<int32_t> items = {};  // List<@Item>"), "got:\n{}", out);
         // 字段名 camelCase，但查表 key 用 .tbl 源名
@@ -680,7 +698,7 @@ mod tests {
             original_entries: Vec::new(), saved: true,
             display_field: None,
         };
-        let out = gen_enum_header(&e, "game::config");
+        let out = gen_enum_header(&e, "game::config", false);
         assert!(out.contains("namespace game::config"));
         assert!(out.contains("enum class HeroTypeEnum : int32_t"));
         assert!(out.contains("Warrior = 1,"));
