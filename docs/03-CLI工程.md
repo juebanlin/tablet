@@ -255,7 +255,7 @@ Project 列表由启动扫描 `projects/` 目录得出，**不需要**在 `table
 | 新建空项目（GUI 对话框 / `tablet-cli new-project`） | 拷贝 `engine.default_separators` 给新项目 schema |
 | 从模板/文件新建项目 | 继承 source schema 的 `separators`，与 toml 无关 |
 | 已加载项目运行期校验/导出/示例值 | 用 `Project.config.separators`（来自该项目 schema） |
-| 项目设置对话框改分隔符 | 写回项目 `.tblschema`，触发该项目 `revalidate_all`；与 toml 无关 |
+| 项目设置对话框改分隔符 | 写回项目 `.tblschema`；**关闭对话框时**统一触发该项目 `revalidate_all`（不是每次按键，见 @04.6.7）；与 toml 无关 |
 
 `[separators]` 共 25 项 leaf（list / set / tuple2/3/4 / map.kv / map.entry / list_tuple{2,3,4}.{tuple,list} / map_tuple{2,3,4}.{kv,tuple,entry} / map_list.{kv,item,entry}）— 这套清单是**唯一真值源**，定义在 `crates/core/src/export/sep_meta.rs::sep_kv_pairs`，JSON `_sep` / XML `sep_*` attr / Go `SepConfig` / Java `SepConfig` 全部由此派生：
 
@@ -263,7 +263,7 @@ Project 列表由启动扫描 `projects/` 目录得出，**不需要**在 `table
 - 生成代码（Go `templates/go/sep.go` / Java `templates/java/SepConfig.java`）：**保持 25 字段全量** —— 项目级共享一份 SepConfig 类，不同表用不同范式，按字段范式查 `SepConfig.listTuple2List` 等成员，不能裁剪。
 - 消费端 `SepConfig.fillDefaults()`（Go）/ `getAny(..., default)`（Java）给缺失 key 兜底，所以数据文件省略 leaf 安全。
 
-加新分隔符时，需要同步：(1) `SeparatorsSection` + serde rename；(2) `types.rs::SepKey` 枚举（加 variant + 4 个 match：`as_directive_key` / `as_export_key` / `get` / `set`，加进 `SepKey::ALL`）；(3) `Paradigm::sep_keys` 把新 leaf 接到对应范式；(4) Go / Java 模板里的 SepConfig 字段及对应 fromMap / fromXMLAttrs 加载；(5) 项目设置对话框 `project_settings.slint` 的 sep-\* property 与 SepRow。`sep_meta.rs` 的 invariant 测试 + `match` 编译期穷尽性锁死 (1)(2)(3) 一致性——漏改会编译失败或测试失败。
+加新分隔符时，需要同步：(1) `SeparatorsSection` + serde rename；(2) `types.rs::SepKey` 枚举（加 variant + 4 个 match：`as_directive_key` / `as_export_key` / `get` / `set`，加进 `SepKey::ALL`）；(3) `Paradigm::sep_keys` 把新 leaf 接到对应范式；(4) Go / Java 模板里的 SepConfig 字段及对应 fromMap / fromXMLAttrs 加载；(5) 项目设置对话框 `project_settings.slint` 的 `ps-sep-*` property（值 + `-modified` 成对）与 `SepRow`；后端 `push_sep()` 里的成对推送（@02.26.4）。`sep_meta.rs` 的 invariant 测试 + `match` 编译期穷尽性锁死 (1)(2)(3) 一致性——漏改会编译失败或测试失败。
 
 ### 4.10 [ui]
 
