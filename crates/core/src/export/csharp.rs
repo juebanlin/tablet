@@ -19,7 +19,7 @@ use std::fmt::Write;
 use anyhow::Result;
 use crate::model::*;
 use crate::types::*;
-use super::{to_camel_case, to_pascal_case, LineEnding};
+use super::{to_pascal_case, LineEnding};
 
 const TPL_TBL: &str = include_str!("../../templates/csharp/Tbl.cs");
 const TPL_LOADER_DOTNET: &str = include_str!("../../templates/csharp/Loader.dotnet.cs");
@@ -281,6 +281,9 @@ fn gen_table_class(table: &Table, ns: &str, runtime: CSharpRuntime, enum_names: 
         let typ = cs_field_type(&f.tbl_type, enum_names);
         let name = to_pascal_case(&f.name);
         let default = cs_field_default(&f.tbl_type, enum_names);
+        if !f.desc.is_empty() {
+            writeln!(s, "        /// <summary>{}</summary>", escape_xml(&super::comment_line(&f.desc))).unwrap();
+        }
         writeln!(s, "        public {} {} = {};", typ, name, default).unwrap();
     }
     writeln!(s).unwrap();
@@ -302,15 +305,16 @@ fn gen_table_class(table: &Table, ns: &str, runtime: CSharpRuntime, enum_names: 
     writeln!(s, "            var obj = new {}();", cls).unwrap();
     writeln!(s, "            string Get(string k) => row.TryGetValue(k, out var v) ? v : string.Empty;").unwrap();
     for f in &fields {
-        let camel = to_camel_case(&f.name);
+        // 数据文件 key 用源名；C# 属性名仍走 PascalCase
+        let key = f.name.clone();
         let pascal = to_pascal_case(&f.name);
         match TblType::parse(&f.tbl_type) {
             Some(t) => {
                 writeln!(s, "            {{ var raw = Get(\"{}\"); if (!string.IsNullOrEmpty(raw)) obj.{} = {}; }}",
-                    camel, pascal, cs_parse_expr("raw", &t, "sep", enum_names)).unwrap();
+                    key, pascal, cs_parse_expr("raw", &t, "sep", enum_names)).unwrap();
             }
             None => {
-                writeln!(s, "            obj.{} = Get(\"{}\");", pascal, camel).unwrap();
+                writeln!(s, "            obj.{} = Get(\"{}\");", pascal, key).unwrap();
             }
         }
     }
@@ -340,6 +344,9 @@ fn gen_constant_class(constant: &Constant, ns: &str, runtime: CSharpRuntime, enu
         let typ = cs_field_type(&e.tbl_type, enum_names);
         let name = to_pascal_case(&e.name);
         let default = cs_field_default(&e.tbl_type, enum_names);
+        if !e.desc.is_empty() {
+            writeln!(s, "        /// <summary>{}</summary>", escape_xml(&super::comment_line(&e.desc))).unwrap();
+        }
         writeln!(s, "        public {} {} = {};", typ, name, default).unwrap();
     }
     writeln!(s).unwrap();
@@ -354,15 +361,15 @@ fn gen_constant_class(constant: &Constant, ns: &str, runtime: CSharpRuntime, enu
     writeln!(s, "            var obj = new {}();", cls).unwrap();
     writeln!(s, "            string Get(string k) => row.TryGetValue(k, out var v) ? v : string.Empty;").unwrap();
     for e in &entries {
-        let camel = to_camel_case(&e.name);
+        let key = e.name.clone();
         let pascal = to_pascal_case(&e.name);
         match TblType::parse(&e.tbl_type) {
             Some(t) => {
                 writeln!(s, "            {{ var raw = Get(\"{}\"); if (!string.IsNullOrEmpty(raw)) obj.{} = {}; }}",
-                    camel, pascal, cs_parse_expr("raw", &t, "sep", enum_names)).unwrap();
+                    key, pascal, cs_parse_expr("raw", &t, "sep", enum_names)).unwrap();
             }
             None => {
-                writeln!(s, "            obj.{} = Get(\"{}\");", pascal, camel).unwrap();
+                writeln!(s, "            obj.{} = Get(\"{}\");", pascal, key).unwrap();
             }
         }
     }
@@ -389,7 +396,7 @@ fn gen_enum_file(enum_def: &EnumDef, ns: &str) -> String {
     writeln!(s, "    {{").unwrap();
     for e in &valid {
         let id = e.id.parse::<i64>().unwrap_or(0);
-        writeln!(s, "        /// <summary>{}</summary>", escape_xml(&e.desc)).unwrap();
+        writeln!(s, "        /// <summary>{}</summary>", escape_xml(&super::comment_line(&e.desc))).unwrap();
         writeln!(s, "        {} = {},", e.name, id).unwrap();
     }
     writeln!(s, "    }}").unwrap();
@@ -409,7 +416,9 @@ fn gen_enum_file(enum_def: &EnumDef, ns: &str) -> String {
 }
 
 fn escape_cs(s: &str) -> String {
+    // 与 TS/Lua/GD 的转义对齐：desc 会进 GetDesc() 的 switch，裸换行会破坏生成文件
     s.replace('\\', "\\\\").replace('"', "\\\"")
+        .replace('\n', "\\n").replace('\r', "\\r").replace('\t', "\\t")
 }
 
 fn escape_xml(s: &str) -> String {
@@ -417,6 +426,8 @@ fn escape_xml(s: &str) -> String {
 }
 
 pub fn export_all_csharp(project: &Project, runtime: CSharpRuntime) -> Result<super::ExportResult> {
+    // C# 属性名走 PascalCase，先挡掉转换后撞名（见 check_key_collision）
+    super::check_project_key_collisions(project)?;
     let export_cfg = &project.config.export;
 
     // 配置定位：按 runtime 取对应 section，提取 namespace 和 code_output
@@ -455,7 +466,21 @@ pub fn export_all_csharp(project: &Project, runtime: CSharpRuntime) -> Result<su
     let output_dir = project.export_root().join(code_output);
     let mut collected: Vec<(std::path::PathBuf, Vec<u8>)> = Vec::new();
 
-    let render = |tpl: &str| tpl.replace("{{NAMESPACE}}", ns);
+    // C# 的静态构造器是惰性的：不碰类型就不会跑，而注册代码正写在各 *Tpl 的静态构造器里。
+    // Loader 必须先逐个强制跑一遍，否则 TblRegistry 是空的、静默不加载任何表。
+    let mut touch_list = String::new();
+    for group in &project.groups {
+        for name in group.tables.iter().filter(|t| !t.deleted).map(|t| &t.name)
+            .chain(group.constants.iter().filter(|c| !c.deleted).map(|c| &c.name))
+        {
+            writeln!(touch_list, "            RuntimeHelpers.RunClassConstructor(typeof({}Tpl).TypeHandle);", name).unwrap();
+        }
+    }
+    let touch_list = touch_list.trim_end().to_string();
+
+    let render = |tpl: &str| tpl
+        .replace("{{NAMESPACE}}", ns)
+        .replace("{{TOUCH_LIST}}", &touch_list);
     let mut collect = |dir: &std::path::Path, name: &str, content: &str| {
         collected.push((dir.join(name), opts.encode(content)));
     };
@@ -567,6 +592,24 @@ mod tests {
     }
 
     #[test]
+    fn table_field_carries_summary_comment() {
+        use super::super::test_fixtures::{field, table};
+        let t = table("Item", vec![
+            field("stack_max", "堆叠上限", "int"),
+            field("zero", "", "int"),
+        ]);
+        let out = gen_table_class(&t, "Game.Config", CSharpRuntime::Dotnet, &no_enums());
+        assert!(out.contains("        /// <summary>堆叠上限</summary>\n        public int StackMax = 0;"),
+            "got:\n{}", out);
+        // 属性 PascalCase，但查表 key 用 .tbl 源名
+        assert!(out.contains(r#"Get("stack_max")"#), "got:\n{}", out);
+        assert!(!out.contains(r#"Get("stackMax")"#), "got:\n{}", out);
+        // 没 desc 的字段不写空 summary
+        assert!(out.contains("        public int Zero = 0;"), "got:\n{}", out);
+        assert!(!out.contains("/// <summary></summary>"), "got:\n{}", out);
+    }
+
+    #[test]
     fn enum_gen() {
         let e = EnumDef {
             name: "HeroType".to_string(),
@@ -585,6 +628,22 @@ mod tests {
         assert!(out.contains("Mage = 2,"));
         assert!(out.contains("HeroTypeEnumExt"));
         assert!(out.contains("\"战士\""));
+    }
+
+    #[test]
+    fn every_loader_template_registers_tables_eagerly() {
+        // C# 的静态构造器是惰性的：注册代码写在各 *Tpl 的静态构造器里，Loader 不主动
+        // 跑一遍就会拿到空 TblRegistry、静默一张表都不加载（Get 全返回 null）。
+        // 三个 runtime 的模板都必须在 LoadAll 里强制注册——新加 runtime 时别忘。
+        for (name, tpl) in [
+            ("dotnet", TPL_LOADER_DOTNET),
+            ("unity", TPL_LOADER_UNITY),
+            ("godot", TPL_LOADER_GODOT),
+        ] {
+            assert!(tpl.contains("EnsureTablesRegistered();"), "{} 的 LoadAll 没调强制注册", name);
+            assert!(tpl.contains("{{TOUCH_LIST}}"), "{} 缺 {{{{TOUCH_LIST}}}} 占位", name);
+            assert!(tpl.contains("using System.Runtime.CompilerServices;"), "{} 缺 RuntimeHelpers 的 using", name);
+        }
     }
 
     #[test]

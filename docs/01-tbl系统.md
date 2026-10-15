@@ -426,15 +426,57 @@ Lua 端全部展开为 table 字面量，不降级为 string。
 | 组名（目录名） | 允许中英文/数字/下划线 `[a-zA-Z0-9_一-鿿]`；不重名（忽略大小写） | "组名只能包含中英文数字下划线" / "组名重复" |
 | 枚举条目名 | UPPER_SNAKE_CASE：大写字母开头，只含 `[A-Z0-9_]`；同枚举内不重名；不能是关键字 | "不是合法枚举条目名" / "枚举条目名重复" / "是语言关键字" |
 
-字段名生成时各语言自动转换：
-- Java → camelCase（`max_level → maxLevel`）
-- Go → PascalCase（`max_level → MaxLevel`）
-- Lua → 保持原样
+#### 三种名 → 各后端的写法
 
-枚举条目名各语言**直接使用原 name**，无需转换：
-- Java：`HeroTypeEnum.WARRIOR`
-- Go：`HeroTypeEnum_WARRIOR`
-- Lua：`HeroType.WARRIOR`
+源里怎么写是单一真相源，导出时按**目标语言的惯用大小写**转换：
+
+| 源里的名字（规则见上表） | Java | Go | C++ | C# | TypeScript | Lua / GDScript |
+|--------------------------|------|----|-----|----|-----------|----------------|
+| Table 字段名（snake_case） | camelCase | PascalCase | camelCase | PascalCase | camelCase | 原样 snake_case |
+| Constant name（snake_case） | camelCase | PascalCase | camelCase | PascalCase | camelCase | 原样 snake_case |
+| Enum 条目名（UPPER_SNAKE_CASE） | 原样 | 原样 | 原样 | 原样 | 原样 | 原样 |
+
+例：`stack_max` → Java `stackMax` / Go `StackMax` / C++ `stackMax` / C# `StackMax` / TS `stackMax` / Lua `stack_max`。
+
+**但「怎么拿到这个字段」仍然用源名。** 数据文件（JSON / XML）的 key 是 `.tbl` 里的源字段名，各后端 gen 出来的查表语句也用它：
+
+```
+.tbl          JSON / XML        生成的代码
+stack_max  →  stack_max     →   Go:  row["stack_max"]  →  obj.StackMax
+                                Java: @TblFieldType(value = "int", name = "stack_max")
+```
+
+全链路同名，`stack_max` 在 `.tbl` / 数据文件 / 七个后端的产物里 grep 一次全中。Java 是唯一例外——它走反射、按字段名取不到，所以源名与字段名不一致时要在 `@TblFieldType` 上带 `name`（@02.12）。
+
+- **Constant name 跟字段名同一套规则**，不是 SCREAMING_SNAKE_CASE——它生成出来就是个属性（`GameConst.maxLevel` / `getMaxLevel()` / `GameConst["maxLevel"]`），按属性惯例走。
+- **Lua / GDScript 保持源名**，因为 snake_case 正是 Lua 系语言的变量/表键惯例（`string.format`、`table.insert`、Godot 的 `queue_free()`）。
+- **枚举条目名全语言原样透传**（Java `HeroTypeEnum.WARRIOR` / Go `HeroTypeEnum_WARRIOR` / C# `HeroTypeEnum.WARRIOR` / Lua `HeroType.WARRIOR`）：它同时是跨端协议词汇，服务端日志里的 `WARRIOR` 要在各端代码里都 grep 得到。代价是 C# 枚举成员不符合 PascalCase 惯例、Go 不符合 MixedCaps 惯例（ReSharper `InconsistentNaming`、staticcheck ST1003 会提示）——这是**有意取舍**，别"顺手修"。
+
+#### 转换后的撞名
+
+字段名规则只约束字符集，**不禁止结尾下划线和连续下划线**（`is_valid_identifier` 只查 `[a-z][a-z0-9_]*`）。而 `to_camel_case` 的规则是「`_` 后的字符变大写、`_` 后的空位吞掉」，于是：
+
+| 源字段名 | 转换后 | 冲突 |
+|----------|--------|------|
+| `stack` | `stack` | ← 两者撞成同一个键 |
+| `stack_` | `stack` | |
+| `stack_max` | `stackMax` | ← 两者撞成同一个键 |
+| `stack__max` | `stackMax` | |
+
+camelCase 撞名等价于 PascalCase 撞名（源名必以小写字母开头，两者只差首字母大小写），所以**五个做转换的后端（Java / Go / C++ / C# / TypeScript）共用同一条规则**。Lua / GDScript 原样透传，源名在同表内本就要求不重复，不受影响。
+
+这条规则在**两个地方**生效，覆盖编辑期与导出期：
+
+| 位置 | 行为 |
+|------|------|
+| **验证层**（`ValidationCode::NameCollision`） | 表字段与常量条目都在此检查。**既然是验证错误，就会和其它 schema 错误一样阻止保存**（@02）——策划在 GUI 里改到一半就会看到 |
+| **导出层** | 五个做转换的后端在入口再扫一遍全项目；撞了直接报错，该格式一个文件都不生成 |
+
+两层都用 `key_collision_message()` 出同一条文案（「X 和 Y 转换后都是 Z」），避免措辞漂移。导出层保留是因为 CLI / 测试等入口可能不经过验证层。
+
+> ⚠️ **CI 里别指望靠导出报错兜底**：`tablet-cli export` 的退出码恒为 0，单格式失败只 eprintln（@03.8.3）。要卡流水线请用 `tablet-cli validate`（通过 → 0，任一错误 → 1）。
+>
+> ⚠️ **注意名字不允许「`_` 后接数字」也不是解法**：`stage_1` 这类命名本身完全合法，只在同表内**同时存在** `stage_1` 和 `stage1` 时才会撞。所以这里用的是「有条件的检查」而不是「无条件禁名字」。
 
 > Group 名仅在工具内部使用（树形导航 + 配置目录名），**不出现在生成代码、import 路径、数据文件路径里**——所以允许中文。详见 @02.3「目录扁平化」。
 
@@ -486,7 +528,7 @@ Lua 端全部展开为 table 字面量，不降级为 string。
 | Table 数据格 — `str` 类型（独立列或嵌套） | ✅ | `str` = 简单标识符，不能含特殊字符（见 §7.1 str vs txt） |
 | Constant value 列 — `txt` 类型 | ❌ 放开 | 自由文本 |
 | Constant value 列 — `str` / 非 str 类型 | ✅ | 同数据格规则 |
-| Constant name 列 | ✅ | name 生成成代码端常量名（`MAX_LEVEL`），ASCII identifier 约束 |
+| Constant name 列 | ✅ | name 生成成代码端属性名（`max_level` → Java `maxLevel` / Go `MaxLevel`，见 @8.1），ASCII identifier 约束 |
 | Constant desc 列 | ❌ 不验证 | 注释 / tooltip，不进代码 |
 | Constant export 列 | ❌ 不验证 | 取值固定 `cs/c/s/-`，schema 层兜底 |
 | Enum id 列 | ✅ | 必须是正整数 |

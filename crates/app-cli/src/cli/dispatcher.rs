@@ -45,6 +45,29 @@ fn run(cli: Cli) -> Result<i32> {
             return Ok(0);
         }
         Command::Project(pa) => return dispatch_project(&cli, pa),
+        // sep show 只要给了显式来源（--defaults / --config / --schema）就与项目无关，
+        // 不该被「先加载 Project」那步挡住——@03.8.8 明确写了「可带项目上下文也可独立使用」。
+        // 只有光秃秃的 `sep show`（读当前项目生效值）才需要项目。
+        Command::Sep(sa) => {
+            // SepAction 目前只有 Show 一个变体，直接解构（不加 if let，避免 irrefutable 警告）
+            let SepAction::Show { defaults, config, schema } = &sa.action;
+            {
+                if *defaults || config.is_some() || schema.is_some() {
+                    let summary = crate::actions::sep::run_sep_show(
+                        *defaults,
+                        None, // 显式来源就不牵扯项目
+                        config.as_deref(),
+                        schema.as_deref(),
+                    )?;
+                    if cli.is_json() {
+                        println!("{}", serde_json::to_string_pretty(&summary).unwrap_or_default());
+                    } else {
+                        output::print_sep_show_cli(&summary);
+                    }
+                    return Ok(0);
+                }
+            }
+        }
         Command::Util(ua) => {
             return match &ua.action {
                 UtilAction::ParseTbl { file } => {
@@ -338,8 +361,15 @@ fn run(cli: Cli) -> Result<i32> {
         Command::Sep(ref sa) => {
             match &sa.action {
                 SepAction::Show { defaults, config, schema } => {
+                    // 走到这里说明没给显式来源 → 展示**当前项目**的生效值。
+                    // 「当前项目」= `--project` 指定的，否则 last_project（跟其它命令同一套）。
+                    let project_id = engine.active_project_id().unwrap_or_default().to_string();
                     let summary = crate::actions::sep::run_sep_show(
                         *defaults,
+                        Some(crate::actions::sep::ProjectSep {
+                            id: &project_id,
+                            separators: &engine.project().schema.separators,
+                        }),
                         config.as_deref(),
                         schema.as_deref(),
                     )?;

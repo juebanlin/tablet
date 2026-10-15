@@ -78,6 +78,9 @@ pub enum ValidationCode {
     FieldNameInvalid,
     FieldNameKeyword,
     FieldNameDuplicate,
+    /// 转换后键名撞车（表字段 / 常量条目共用）：`stack_` 与 `stack` 转出来都是 `stack`，
+    /// 生成到 Java/Go/C++/C#/TS 时会变成两个同名成员。规则见 @01.8.1。
+    NameCollision,
     TypeInvalid,
     TypeRefMissing,
     TypeRefIsConstant,
@@ -611,6 +614,8 @@ pub fn validate_table_schema_with_refs(
     }
 
     let mut seen_names = std::collections::HashSet::new();
+    // 转换后键名（camelCase）→ 首次出现的源名，用于查「大小写转换后才撞」的情况
+    let mut seen_keys: std::collections::HashMap<String, String> = std::collections::HashMap::new();
     for (col, field) in fields.iter().enumerate() {
         if let Some((code, msg)) = validate_field_name(&field.name) {
             errors.push(
@@ -627,6 +632,21 @@ pub fn validate_table_schema_with_refs(
                     Some(TableHeaderRow::Field),
                 ).with_field(&field.name)
             );
+        }
+        // 源名各不相同但转换后同名（`stack_`→`stack`、`stack__max`→`stackMax`）：
+        // 生成到各语言会出现重复成员，提前在验证层挡下（详见 @01.8.1）
+        if !field.name.is_empty() {
+            let key = crate::export::to_camel_case(&field.name);
+            if let Some(prev) = seen_keys.insert(key.clone(), field.name.clone()) {
+                errors.push(
+                    ValidationError::schema(
+                        ValidationCode::NameCollision,
+                        crate::export::key_collision_message("字段名", &field.name, &prev, &key),
+                        col,
+                        Some(TableHeaderRow::Field),
+                    ).with_field(&field.name)
+                );
+            }
         }
         if TblType::parse(&field.tbl_type).is_none() {
             errors.push(
@@ -673,6 +693,7 @@ pub fn validate_constant_schema(constant: &Constant, _sep: &SeparatorsSection, a
     let mut errors = Vec::new();
 
     let mut seen_names = std::collections::HashSet::new();
+    let mut seen_keys: std::collections::HashMap<String, String> = std::collections::HashMap::new();
     for entry in &constant.entries {
         if entry.name.is_empty() { continue; }
 
@@ -687,6 +708,18 @@ pub fn validate_constant_schema(constant: &Constant, _sep: &SeparatorsSection, a
                 ValidationError::schema(
                     ValidationCode::DuplicateName,
                     format!("常量名 \"{}\" 重复", entry.name),
+                    ConstantCol::Name.col(),
+                    None,
+                ).with_field(&entry.name)
+            );
+        }
+        // 同表字段：常量名也做大小写转换，转换后同名同样会生成出重复成员
+        let key = crate::export::to_camel_case(&entry.name);
+        if let Some(prev) = seen_keys.insert(key.clone(), entry.name.clone()) {
+            errors.push(
+                ValidationError::schema(
+                    ValidationCode::NameCollision,
+                    crate::export::key_collision_message("常量名", &entry.name, &prev, &key),
                     ConstantCol::Name.col(),
                     None,
                 ).with_field(&entry.name)
@@ -833,6 +866,58 @@ mod tests {
             fmt_ver: crate::tbl::TblVersion::V3,
             display_field: None,
         }
+    }
+
+    fn mk_constant(name: &str, entries: &[&str]) -> Constant {
+        Constant {
+            name: name.to_string(),
+            path: PathBuf::from(name),
+            entries: entries.iter().map(|n| ConstEntry {
+                name: n.to_string(),
+                tbl_type: "int".to_string(),
+                value: "1".to_string(),
+                export: Export::ClientServer,
+                desc: String::new(),
+            }).collect(),
+            dirty: false,
+            deleted: false,
+            original_entries: vec![],
+            saved: true,
+        }
+    }
+
+    fn collision_hits(errs: &[ValidationError]) -> Vec<&ValidationError> {
+        errs.iter().filter(|e| e.code == ValidationCode::NameCollision).collect()
+    }
+
+    #[test]
+    fn transformed_name_collision_is_reported() {
+        // `stack_` 与 `stack` 源名不同，但转换后都是 `stack` → 生成代码会出现重复字段
+        let t = mk_table("T", &[("id", "int"), ("stack", "int"), ("stack_", "int")], &[]);
+        let errs = validate_table_schema(&t, &SeparatorsSection::default());
+        let hits = collision_hits(&errs);
+        assert_eq!(hits.len(), 1, "应报 1 条撞名: {:?}", errs.iter().map(|e| &e.message).collect::<Vec<_>>());
+        assert_eq!(hits[0].field, "stack_");
+        assert!(hits[0].message.contains("stack"), "got: {}", hits[0].message);
+    }
+
+    #[test]
+    fn distinct_transformed_names_do_not_collide() {
+        // `_` 后接字母、无结尾下划线也无连续下划线 → 转换后互不相同，不该误报
+        let t = mk_table("T",
+            &[("id", "int"), ("stage_1", "int"), ("stage1b", "int"), ("max_level", "int")], &[]);
+        let errs = validate_table_schema(&t, &SeparatorsSection::default());
+        assert!(collision_hits(&errs).is_empty(),
+            "不该误报: {:?}", errs.iter().map(|e| &e.message).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn constant_transformed_name_collision_is_reported() {
+        let c = mk_constant("C", &["max_level", "max__level"]);
+        let errs = validate_constant_schema(&c, &SeparatorsSection::default(), true);
+        let hits = collision_hits(&errs);
+        assert_eq!(hits.len(), 1, "应报 1 条撞名: {:?}", errs.iter().map(|e| &e.message).collect::<Vec<_>>());
+        assert_eq!(hits[0].field, "max__level");
     }
 
     #[test]

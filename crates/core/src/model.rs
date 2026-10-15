@@ -318,32 +318,33 @@ impl Default for GdScriptExport {
     }
 }
 
+// 注意：两个 TS 导出段都开了 deny_unknown_fields。产物统一为 ESM 源码后，
+// 老配置里残留的 `module_kind = "..."` 会在加载时直接报错，而不是被静默忽略
+// ——见 docs/11 §3.1 A3。
 #[derive(Debug, Clone, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct ServerTypeScriptExport {
     pub output: Option<String>,
-    pub module_kind: Option<crate::enums::ModuleKind>,
 }
 
 impl Default for ServerTypeScriptExport {
     fn default() -> Self {
         Self {
             output: Some("gen/server/typescript".to_string()),
-            module_kind: Some(crate::enums::ModuleKind::default()),
         }
     }
 }
 
 #[derive(Debug, Clone, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct ClientTypeScriptExport {
     pub output: Option<String>,
-    pub module_kind: Option<crate::enums::ModuleKind>,
 }
 
 impl Default for ClientTypeScriptExport {
     fn default() -> Self {
         Self {
             output: Some("gen/client/typescript".to_string()),
-            module_kind: Some(crate::enums::ModuleKind::default()),
         }
     }
 }

@@ -3,7 +3,7 @@ use std::collections::HashSet;
 use anyhow::Result;
 use crate::model::*;
 use crate::types::*;
-use super::{to_camel_case, to_pascal_case, LineEnding};
+use super::{to_camel_case, to_pascal_case, comment_block, LineEnding};
 
 const TPL_ITPL: &str = include_str!("../../templates/java/ITpl.java");
 const TPL_ICONST: &str = include_str!("../../templates/java/IConstTpl.java");
@@ -57,6 +57,19 @@ fn needs_tuple_import(tbl_type_str: &str) -> bool {
 
 // PLACEHOLDER_JAVA_RS_PART2
 
+/// 拼 `@TblFieldType(...)` 的实参。
+///
+/// 数据文件的 key 是 .tbl 源字段名（snake_case），反射加载器按 `field.getName()`（camelCase）
+/// 取不到，所以源名与 Java 字段名不一致时要把源名带上；一致的（`id` / `name` 这种）省掉，
+/// 让大多数行保持原样。规则见 @01.8.1。
+fn field_type_ann(tbl_type: &str, src_name: &str, java_name: &str) -> String {
+    if src_name == java_name {
+        format!("\"{}\"", tbl_type)
+    } else {
+        format!("value = \"{}\", name = \"{}\"", tbl_type, src_name)
+    }
+}
+
 fn gen_table_tpl(table: &Table, pkg: &str, group: &str, enum_names: &HashSet<String>) -> String {
     let mut s = String::new();
     writeln!(s, "package {}.tpl;", pkg).unwrap();
@@ -81,9 +94,9 @@ fn gen_table_tpl(table: &Table, pkg: &str, group: &str, enum_names: &HashSet<Str
         let jtype = java_field_type(&f.tbl_type, enum_names);
         let name = to_camel_case(&f.name);
         if !f.desc.is_empty() {
-            writeln!(s, "    /** {} */", f.desc).unwrap();
+            writeln!(s, "    /** {} */", comment_block(&f.desc)).unwrap();
         }
-        writeln!(s, "    @TblFieldType(\"{}\")", f.tbl_type).unwrap();
+        writeln!(s, "    @TblFieldType({})", field_type_ann(&f.tbl_type, &f.name, &name)).unwrap();
         writeln!(s, "    private {} {};", jtype, name).unwrap();
     }
     writeln!(s).unwrap();
@@ -128,9 +141,9 @@ fn gen_constant_tpl(constant: &Constant, pkg: &str, group: &str, enum_names: &Ha
         let jtype = java_field_type(&e.tbl_type, enum_names);
         let name = to_camel_case(&e.name);
         if !e.desc.is_empty() {
-            writeln!(s, "    /** {} */", e.desc).unwrap();
+            writeln!(s, "    /** {} */", comment_block(&e.desc)).unwrap();
         }
-        writeln!(s, "    @TblFieldType(\"{}\")", e.tbl_type).unwrap();
+        writeln!(s, "    @TblFieldType({})", field_type_ann(&e.tbl_type, &e.name, &to_camel_case(&e.name))).unwrap();
         writeln!(s, "    private {} {};", jtype, name).unwrap();
     }
     writeln!(s).unwrap();
@@ -143,6 +156,23 @@ fn gen_constant_tpl(constant: &Constant, pkg: &str, group: &str, enum_names: &Ha
     }
     writeln!(s, "}}").unwrap();
     s
+}
+
+/// Java 字符串字面量转义：desc 会作为枚举构造参数写进源码，
+/// 含 `"` `\` 或换行会直接破坏生成的 .java。
+fn escape_java_str(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for ch in s.chars() {
+        match ch {
+            '\\' => out.push_str("\\\\"),
+            '"' => out.push_str("\\\""),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            _ => out.push(ch),
+        }
+    }
+    out
 }
 
 fn gen_enum_class(enum_def: &EnumDef, pkg: &str, group: &str) -> String {
@@ -160,9 +190,12 @@ fn gen_enum_class(enum_def: &EnumDef, pkg: &str, group: &str) -> String {
     writeln!(s, "public enum {}Enum {{", enum_def.name).unwrap();
 
     for (i, e) in valid.iter().enumerate() {
-        writeln!(s, "    /** {} */", e.desc).unwrap();
+        writeln!(s, "    /** {} */", comment_block(&e.desc)).unwrap();
         let sep = if i + 1 == valid.len() { ";" } else { "," };
-        writeln!(s, "    {}({}, \"{}\"){}", e.name, e.id, e.desc, sep).unwrap();
+        // desc 是作为构造参数写进源码的字符串字面量，含 " \ 换行 会破坏生成文件；
+        // id 同理按整数写出（其他后端也都这么兜底）
+        let id = e.id.parse::<i64>().unwrap_or(0);
+        writeln!(s, "    {}({}, \"{}\"){}", e.name, id, escape_java_str(&e.desc), sep).unwrap();
     }
     writeln!(s).unwrap();
 
@@ -174,6 +207,10 @@ fn gen_enum_class(enum_def: &EnumDef, pkg: &str, group: &str) -> String {
     writeln!(s, "        this.desc = desc;").unwrap();
     writeln!(s, "    }}").unwrap();
     writeln!(s).unwrap();
+    // getter 与 Tpl 类保持同一风格；枚举不实现 ITpl，这里只是给业务提供统一取 id / desc 的入口
+    writeln!(s, "    public int getId() {{ return id; }}").unwrap();
+    writeln!(s, "    public String getDesc() {{ return desc; }}").unwrap();
+    writeln!(s).unwrap();
     writeln!(s, "    public static {}Enum fromId(int id) {{", enum_def.name).unwrap();
     writeln!(s, "        for ({}Enum e : values()) if (e.id == id) return e;", enum_def.name).unwrap();
     writeln!(s, "        return null;").unwrap();
@@ -183,6 +220,8 @@ fn gen_enum_class(enum_def: &EnumDef, pkg: &str, group: &str) -> String {
 }
 
 pub fn export_all_java(project: &Project) -> Result<super::ExportResult> {
+    // Java 字段名走 camelCase，先挡掉转换后撞名（见 check_key_collision）
+    super::check_project_key_collisions(project)?;
     let export_cfg = &project.config.export;
     let server = export_cfg.server.as_ref();
     let java = server.and_then(|s| s.java.as_ref());
@@ -296,6 +335,69 @@ mod tests {
         assert_eq!(java_field_type("Set<@Hero>", &no_enums()), "Set<Integer>");
         assert_eq!(java_field_type("Map<int,@Hero>", &no_enums()), "Map<Integer,Integer>");
         assert_eq!(java_field_type("Tuple2<@Hero,int>", &no_enums()), "Tuple2<Integer,Integer>");
+    }
+
+    #[test]
+    fn enum_has_get_id() {
+        // 枚举不实现 ITpl，getId() 只为与 Tpl 类的取值风格一致；fromId 是反射加载要用，不能动
+        let e = EnumDef {
+            name: "HeroType".to_string(),
+            path: std::path::PathBuf::new(),
+            entries: vec![
+                EnumEntry { id: "1".to_string(), name: "Warrior".to_string(), desc: "战士".to_string() },
+            ],
+            dirty: false, deleted: false, original_entries: Vec::new(), saved: true,
+            display_field: None,
+        };
+        let out = gen_enum_class(&e, "com.game.config", "hero");
+        assert!(out.contains("public int getId() { return id; }"), "got:\n{}", out);
+        // desc 也要有 getter：只补 getId 会留下 id 双入口、desc 单入口的不对称
+        assert!(out.contains("public String getDesc() { return desc; }"), "got:\n{}", out);
+        assert!(out.contains("public static HeroTypeEnum fromId(int id)"), "got:\n{}", out);
+    }
+
+    #[test]
+    fn enum_desc_is_escaped_in_literal_and_comment() {
+        // desc 既进 Javadoc 又进构造参数；引号/反斜杠/换行/注释终止符都不能漏出去
+        let e = EnumDef {
+            name: "HeroType".to_string(),
+            path: std::path::PathBuf::new(),
+            entries: vec![
+                EnumEntry {
+                    id: "1".to_string(),
+                    name: "Warrior".to_string(),
+                    desc: "他说\"你好\"\\ 结束 */ 换行\n第二行".to_string(),
+                },
+            ],
+            dirty: false, deleted: false, original_entries: Vec::new(), saved: true,
+            display_field: None,
+        };
+        let out = gen_enum_class(&e, "com.game.config", "hero");
+        // 注释里不能有裸换行，也不能出现会闭合 /** */ 的 */
+        assert!(out.contains("/** 他说\"你好\"\\ 结束 * / 换行 第二行 */"), "got:\n{}", out);
+        // 字面量里引号/反斜杠/换行都要转义
+        assert!(out.contains(r#"Warrior(1, "他说\"你好\"\\ 结束 */ 换行\n第二行");"#), "got:\n{}", out);
+    }
+
+    #[test]
+    fn table_field_carries_javadoc() {
+        let t = super::super::test_fixtures::table("Item", vec![
+            super::super::test_fixtures::field("stack_max", "堆叠上限", "int"),
+        ]);
+        let out = gen_table_tpl(&t, "com.game.config", "item", &no_enums());
+        assert!(out.contains("/** 堆叠上限 */"), "got:\n{}", out);
+        // 数据文件 key 是源名 snake_case，Java 字段是 camelCase，反射加载器取不到，
+        // 所以源名与字段名不一致时注解要带上 name（@01.8.1）
+        assert!(out.contains(r#"@TblFieldType(value = "int", name = "stack_max")"#), "got:\n{}", out);
+    }
+
+    #[test]
+    fn annotation_name_only_when_source_differs_from_field() {
+        // `id` 两边同名 → 注解保持短形式，别把每行都写长
+        assert_eq!(field_type_ann("int", "id", "id"), r#""int""#);
+        // 源名 snake_case ≠ Java 字段 camelCase → 带上源名当查表 key
+        assert_eq!(field_type_ann("int", "stack_max", "stackMax"),
+            r#"value = "int", name = "stack_max""#);
     }
 
     #[test]

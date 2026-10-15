@@ -110,6 +110,14 @@ fn cpp_field_type(tbl_type_str: &str, enum_names: &HashSet<String>) -> String {
 }
 
 /// raw 字符串变量名 → C++ 表达式（结果是该字段的目标类型）。`sep` 是 `SepConfig` 变量名。
+/// 该字段解析时用不用得到分隔符配置：Base / Ref 直接取值，只有复合范式才要拆串。
+fn type_needs_sep(tbl_type: &str) -> bool {
+    match TblType::parse(tbl_type) {
+        Some(t) => !matches!(t.paradigm, Paradigm::Base | Paradigm::Ref),
+        None => false,
+    }
+}
+
 fn cpp_parse_expr(raw_var: &str, t: &TblType, sep: &str, enum_names: &HashSet<String>) -> String {
     let p = &t.params;
     match &t.paradigm {
@@ -239,7 +247,8 @@ fn gen_table_header(table: &Table, ns: &str, enum_names: &HashSet<String>) -> St
             }
             _ => "{}".to_string(),
         };
-        writeln!(s, "    {} {} = {};", typ, name, default).unwrap();
+        writeln!(s, "    {} {} = {};  // {}", typ, name, default,
+            super::field_comment(&f.desc, &f.tbl_type)).unwrap();
     }
     writeln!(s).unwrap();
     writeln!(s, "    static const {}* Get(int32_t id);", cls).unwrap();
@@ -265,9 +274,14 @@ fn gen_table_header(table: &Table, ns: &str, enum_names: &HashSet<String>) -> St
     writeln!(s, "inline {} parse_{}(const std::unordered_map<std::string, std::string>& row, const SepConfig& sep) {{", cls, table.name).unwrap();
     writeln!(s, "    {} obj;", cls).unwrap();
     writeln!(s, "    auto get = [&](const char* k) -> std::string {{ auto it = row.find(k); return it == row.end() ? std::string() : it->second; }};").unwrap();
+    // 表里没有需要拆串的字段时 sep 一次都用不上，显式吃掉它，否则 -Wunused-parameter 会报
+    if !fields.iter().any(|f| type_needs_sep(&f.tbl_type)) {
+        writeln!(s, "    (void)sep;  // 本表无复合类型字段，用不到分隔符").unwrap();
+    }
     for f in &fields {
         let camel = to_camel_case(&f.name);
-        let key = camel.clone();
+        // 数据文件 key 用源名（数据导出同规则）
+        let key = f.name.clone();
         match TblType::parse(&f.tbl_type) {
             Some(t) => {
                 writeln!(s, "    {{ auto raw = get(\"{}\"); if (!raw.empty()) obj.{} = {}; }}",
@@ -331,7 +345,8 @@ fn gen_constant_header(constant: &Constant, ns: &str, enum_names: &HashSet<Strin
             }
             _ => "{}".to_string(),
         };
-        writeln!(s, "    {} {} = {};", typ, name, default).unwrap();
+        writeln!(s, "    {} {} = {};  // {}", typ, name, default,
+            super::field_comment(&e.desc, &e.tbl_type)).unwrap();
     }
     writeln!(s).unwrap();
     writeln!(s, "    static const {}& Get();", cls).unwrap();
@@ -345,9 +360,14 @@ fn gen_constant_header(constant: &Constant, ns: &str, enum_names: &HashSet<Strin
     writeln!(s, "inline {} parse_{}(const std::unordered_map<std::string, std::string>& row, const SepConfig& sep) {{", cls, constant.name).unwrap();
     writeln!(s, "    {} obj;", cls).unwrap();
     writeln!(s, "    auto get = [&](const char* k) -> std::string {{ auto it = row.find(k); return it == row.end() ? std::string() : it->second; }};").unwrap();
+    // 常量集同理：没有复合类型字段就把 sep 显式吃掉
+    if !entries.iter().any(|e| type_needs_sep(&e.tbl_type)) {
+        writeln!(s, "    (void)sep;  // 本常量集无复合类型字段，用不到分隔符").unwrap();
+    }
     for e in &entries {
         let camel = to_camel_case(&e.name);
-        let key = camel.clone();
+        // 数据文件 key 用源名（数据导出同规则）
+        let key = e.name.clone();
         match TblType::parse(&e.tbl_type) {
             Some(t) => {
                 writeln!(s, "    {{ auto raw = get(\"{}\"); if (!raw.empty()) obj.{} = {}; }}",
@@ -386,6 +406,7 @@ fn gen_enum_header(enum_def: &EnumDef, ns: &str) -> String {
     writeln!(s, "#pragma once").unwrap();
     writeln!(s).unwrap();
     writeln!(s, "#include \"tbl.h\"").unwrap();
+    writeln!(s, "#include <optional>").unwrap();
     writeln!(s).unwrap();
     writeln!(s, "namespace {} {{", ns).unwrap();
     writeln!(s).unwrap();
@@ -393,7 +414,7 @@ fn gen_enum_header(enum_def: &EnumDef, ns: &str) -> String {
     writeln!(s, "enum class {} : int32_t {{", type_name).unwrap();
     for e in &valid {
         let id = e.id.parse::<i64>().unwrap_or(0);
-        writeln!(s, "    {} = {},  // {}", e.name, id, e.desc).unwrap();
+        writeln!(s, "    {} = {},  // {}", e.name, id, super::comment_line(&e.desc)).unwrap();
     }
     writeln!(s, "}};").unwrap();
     writeln!(s).unwrap();
@@ -405,6 +426,25 @@ fn gen_enum_header(enum_def: &EnumDef, ns: &str) -> String {
     }
     writeln!(s, "    }}").unwrap();
     writeln!(s, "    return \"\";").unwrap();
+    writeln!(s, "}}").unwrap();
+    writeln!(s).unwrap();
+
+    // enum class 没有反射，值→名 / 名→值 都得查表；对齐 Go 的 String() / ParseXxx
+    writeln!(s, "inline const char* {}_name({} v) {{", type_name, type_name).unwrap();
+    writeln!(s, "    switch (v) {{").unwrap();
+    for e in &valid {
+        writeln!(s, "        case {}::{}: return \"{}\";", type_name, e.name, e.name).unwrap();
+    }
+    writeln!(s, "    }}").unwrap();
+    writeln!(s, "    return \"\";").unwrap();
+    writeln!(s, "}}").unwrap();
+    writeln!(s).unwrap();
+
+    writeln!(s, "inline std::optional<{}> Parse{}(std::string_view name) {{", type_name, type_name).unwrap();
+    for e in &valid {
+        writeln!(s, "    if (name == \"{}\") return {}::{};", e.name, type_name, e.name).unwrap();
+    }
+    writeln!(s, "    return std::nullopt;").unwrap();
     writeln!(s, "}}").unwrap();
     writeln!(s).unwrap();
 
@@ -439,6 +479,8 @@ fn gen_all_header(ns: &str, table_names: &[String], constant_names: &[String], e
 }
 
 pub fn export_all_cpp(project: &Project) -> Result<super::ExportResult> {
+    // C++ 字段名走 camelCase，先挡掉转换后撞名（见 check_key_collision）
+    super::check_project_key_collisions(project)?;
     let export_cfg = &project.config.export;
     let server = export_cfg.server.as_ref();
     let cpp = server.and_then(|s| s.cpp.as_ref());
@@ -549,6 +591,43 @@ mod tests {
     }
 
     #[test]
+    fn unused_sep_is_explicitly_consumed() {
+        use super::super::test_fixtures::{field, table};
+        // 只有基础/引用字段 → sep 用不到，要显式 (void) 掉，否则 -Wunused-parameter
+        let plain = table("Plain", vec![field("a", "", "int"), field("b", "", "@Hero")]);
+        assert!(gen_table_header(&plain, "ns", &no_enums()).contains("(void)sep;"));
+        // 有复合类型字段 → sep 真用到了，不能加 (void)
+        let complex = table("Cplx", vec![field("a", "", "List<int>")]);
+        let out = gen_table_header(&complex, "ns", &no_enums());
+        assert!(!out.contains("(void)sep;"), "got:\n{}", out);
+        assert!(out.contains("sep.list"), "got:\n{}", out);
+    }
+
+    #[test]
+    fn unused_sep_in_constant_is_explicitly_consumed() {
+        use super::super::test_fixtures::{constant, entry};
+        let c = constant("C", vec![entry("a", "", "int")]);
+        assert!(gen_constant_header(&c, "ns", &no_enums()).contains("(void)sep;"));
+        let c2 = constant("C2", vec![entry("a", "", "List<int>")]);
+        assert!(!gen_constant_header(&c2, "ns", &no_enums()).contains("(void)sep;"));
+    }
+
+    #[test]
+    fn struct_field_comments_use_desc_then_fall_back_to_type() {
+        use super::super::test_fixtures::{field, table};
+        let t = table("Item", vec![
+            field("stack_max", "堆叠上限", "int"),
+            field("items", "", "List<@Item>"),
+        ]);
+        let out = gen_table_header(&t, "game::config", &no_enums());
+        assert!(out.contains("int32_t stackMax = 0;  // 堆叠上限"), "got:\n{}", out);
+        assert!(out.contains("std::vector<int32_t> items = {};  // List<@Item>"), "got:\n{}", out);
+        // 字段名 camelCase，但查表 key 用 .tbl 源名
+        assert!(out.contains(r#"get("stack_max")"#), "got:\n{}", out);
+        assert!(!out.contains(r#"get("stackMax")"#), "got:\n{}", out);
+    }
+
+    #[test]
     fn ref_to_enum_uses_enum_type() {
         let mut e = HashSet::new();
         e.insert("HeroType".to_string());
@@ -607,6 +686,13 @@ mod tests {
         assert!(out.contains("Warrior = 1,"));
         assert!(out.contains("Mage = 2,"));
         assert!(out.contains("HeroTypeEnum_desc"));
+        // enum class 无反射：值→名 / 名→值 都要生成查表，对齐 Go 的 String() / ParseXxx
+        assert!(out.contains("inline const char* HeroTypeEnum_name(HeroTypeEnum v)"), "got:\n{}", out);
+        assert!(out.contains("case HeroTypeEnum::Warrior: return \"Warrior\";"), "got:\n{}", out);
+        assert!(out.contains("inline std::optional<HeroTypeEnum> ParseHeroTypeEnum(std::string_view name)"), "got:\n{}", out);
+        assert!(out.contains("if (name == \"Mage\") return HeroTypeEnum::Mage;"), "got:\n{}", out);
+        assert!(out.contains("return std::nullopt;"), "got:\n{}", out);
+        assert!(out.contains("#include <optional>"), "got:\n{}", out);
         assert!(out.contains("return \"战士\""));
     }
 }

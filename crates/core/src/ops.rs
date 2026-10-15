@@ -9,7 +9,7 @@ use crate::validate::*;
 ///   N = 1 desc / 2 export / 3 type / 4 field（与 UI 表头从上到下一致）
 /// - Constant/Enum 表头：`[验证] group/node 表头X列:[field] -> message`
 /// - 数据行：`[验证] group/node X<row>:[value] -> message`，value 过长截断为 `xxx...`
-fn format_validation_log(group: &str, node: &str, err: &ValidationError) -> String {
+pub fn format_validation_log(group: &str, node: &str, err: &ValidationError) -> String {
     if err.is_schema() {
         let col = col_letter(err.col);
         let field = if err.field.is_empty() { "?".to_string() } else { err.field.clone() };
@@ -1244,8 +1244,12 @@ impl ProjectEngine {
 
     // --- PLACEHOLDER_SAVE ---
 
-    pub fn validate(&self) -> Vec<String> {
-        let mut errors = Vec::new();
+    /// 结构化校验结果：`(group, node, 错误)`。
+    ///
+    /// 与 [`validate`](Self::validate) 跑同一套校验，只是不预先拼成字符串——
+    /// CLI 要拿 `header_row` / `field` / `message` 做定位与过滤，拼字符串的版本拿不到。
+    pub fn validate_errors(&self) -> Vec<(String, String, ValidationError)> {
+        let mut out = Vec::new();
         let sep = &self.project().schema.separators;
         let refs = RefIndex::build(&self.project().groups);
         let allow_ref = self.global_config.ui.as_ref()
@@ -1254,23 +1258,30 @@ impl ProjectEngine {
             for table in &group.tables {
                 if table.deleted { continue; }
                 for err in validate_table(table, sep, Some(&refs)) {
-                    errors.push(format_validation_log(&group.name, &table.name, &err));
+                    out.push((group.name.clone(), table.name.clone(), err));
                 }
             }
             for constant in &group.constants {
                 if constant.deleted { continue; }
                 for err in validate_constant(constant, sep, allow_ref, Some(&refs)) {
-                    errors.push(format_validation_log(&group.name, &constant.name, &err));
+                    out.push((group.name.clone(), constant.name.clone(), err));
                 }
             }
             for enum_def in &group.enums {
                 if enum_def.deleted { continue; }
                 for err in validate_enum(enum_def) {
-                    errors.push(format_validation_log(&group.name, &enum_def.name, &err));
+                    out.push((group.name.clone(), enum_def.name.clone(), err));
                 }
             }
         }
-        errors
+        out
+    }
+
+    /// 校验并渲染成 GUI 日志同款文本（`format_validation_log`）。
+    pub fn validate(&self) -> Vec<String> {
+        self.validate_errors().iter()
+            .map(|(group, node, err)| format_validation_log(group, node, err))
+            .collect()
     }
 
     pub fn revalidate(&mut self, group: &str, name: &str) {

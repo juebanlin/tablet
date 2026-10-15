@@ -289,7 +289,7 @@ fn value_to_ts(raw: &str, tbl_type_str: &str, sep: &SeparatorsSection) -> String
     }
 }
 
-pub fn export_table_ts(table: &Table, side: TypeScriptSide, module_kind: crate::enums::ModuleKind) -> String {
+pub fn export_table_ts(table: &Table, side: TypeScriptSide) -> String {
     let fields = &table.schema.fields;
     let export_cols: Vec<(usize, &FieldDef)> = fields.iter().enumerate()
         .filter(|(_, f)| export_visible(&f.export, side))
@@ -298,33 +298,26 @@ pub fn export_table_ts(table: &Table, side: TypeScriptSide, module_kind: crate::
     let index_col = fields.iter().position(|f| f.name == "id").unwrap_or(0);
 
     let mut s = String::new();
-    writeln!(s, "// 使用：import {{ {}, {}Tpl }} from './{}'", table.name, table.name, table.name).unwrap();
+    writeln!(s, "// 使用：import {{ {}, {}Tpl }} from './{}'",
+        table.name, table.name, table.name).unwrap();
+    // 内联产物没有加载器 API，遍历写法是最容易卡住的一条，直接写在文件头
+    writeln!(s, "// 遍历：Object.values({})", table.name).unwrap();
 
     let iface_name = format!("{}Tpl", table.name);
 
-    match module_kind {
-        crate::enums::ModuleKind::Esm => {
-            writeln!(s, "export interface {} {{", iface_name).unwrap();
-        }
-        crate::enums::ModuleKind::CommonJs => {
-            writeln!(s, "interface {} {{", iface_name).unwrap();
-        }
-    }
+    writeln!(s, "export interface {} {{", iface_name).unwrap();
 
     for &(_, field) in &export_cols {
-        writeln!(s, "    {}: {};", field.name, ts_field_type(&field.tbl_type)).unwrap();
+        if !field.desc.is_empty() {
+            writeln!(s, "    /** {} */", super::comment_block(&field.desc)).unwrap();
+        }
+        // JS/TS 生态的属性名惯例是 camelCase（也跟 JSON 数据文件的 key 对齐）
+        writeln!(s, "    {}: {};", super::to_camel_case(&field.name), ts_field_type(&field.tbl_type)).unwrap();
     }
     writeln!(s, "}}").unwrap();
     writeln!(s).unwrap();
 
-    match module_kind {
-        crate::enums::ModuleKind::Esm => {
-            writeln!(s, "export const {}: Record<number, {}> = {{", table.name, iface_name).unwrap();
-        }
-        crate::enums::ModuleKind::CommonJs => {
-            writeln!(s, "const {}: Record<number, {}> = {{", table.name, iface_name).unwrap();
-        }
-    }
+    writeln!(s, "export const {}: Record<number, {}> = {{", table.name, iface_name).unwrap();
 
     let sep = &SeparatorsSection::default();
     for record in &table.records {
@@ -341,17 +334,13 @@ pub fn export_table_ts(table: &Table, side: TypeScriptSide, module_kind: crate::
                 value_to_ts(raw, &field.tbl_type, sep)
             };
             if !fields_str.is_empty() { fields_str.push_str(", "); }
-            write!(fields_str, "{}: {}", field.name, val).unwrap();
+            write!(fields_str, "{}: {}", super::to_camel_case(&field.name), val).unwrap();
         }
 
         writeln!(s, "    {}: {{ {} }},", index_val, fields_str).unwrap();
     }
 
     writeln!(s, "}};").unwrap();
-
-    if module_kind == crate::enums::ModuleKind::CommonJs {
-        writeln!(s, "module.exports.{} = {};", table.name, table.name).unwrap();
-    }
 
     s
 }
@@ -380,18 +369,10 @@ fn default_for_field(tbl_type_str: &str) -> String {
     }
 }
 
-pub fn export_constant_ts(constant: &Constant, sep: &SeparatorsSection, side: TypeScriptSide, module_kind: crate::enums::ModuleKind) -> String {
+pub fn export_constant_ts(constant: &Constant, sep: &SeparatorsSection, side: TypeScriptSide) -> String {
     let mut s = String::new();
     writeln!(s, "// 使用：import {{ {} }} from './{}'", constant.name, constant.name).unwrap();
-
-    match module_kind {
-        crate::enums::ModuleKind::Esm => {
-            writeln!(s, "export const {} = {{", constant.name).unwrap();
-        }
-        crate::enums::ModuleKind::CommonJs => {
-            writeln!(s, "const {} = {{", constant.name).unwrap();
-        }
-    }
+    writeln!(s, "export const {} = {{", constant.name).unwrap();
 
     for entry in &constant.entries {
         if !export_visible(&entry.export, side) { continue; }
@@ -399,97 +380,71 @@ pub fn export_constant_ts(constant: &Constant, sep: &SeparatorsSection, side: Ty
         if entry.value.is_empty() { continue; }
 
         let val = value_to_ts(&entry.value, &entry.tbl_type, sep);
-        writeln!(s, "    {}: {},", entry.name, val).unwrap();
+        // 常量导出的是纯值字面量（没有 interface 声明位），说明只能跟在值后面
+        let comment = if entry.desc.is_empty() { String::new() } else { format!(" // {}", super::comment_line(&entry.desc)) };
+        // 常量也是按属性访问（Xxx.maxLevel），跟字段名同一套大小写规则
+        writeln!(s, "    {}: {},{}", super::to_camel_case(&entry.name), val, comment).unwrap();
     }
 
-    match module_kind {
-        crate::enums::ModuleKind::Esm => {
-            writeln!(s, "}} as const;").unwrap();
-        }
-        crate::enums::ModuleKind::CommonJs => {
-            writeln!(s, "}};").unwrap();
-            writeln!(s, "module.exports.{} = {};", constant.name, constant.name).unwrap();
-        }
-    }
+    writeln!(s, "}} as const;").unwrap();
 
     s
 }
 
-pub fn export_enum_ts(enum_def: &EnumDef, module_kind: crate::enums::ModuleKind) -> String {
+pub fn export_enum_ts(enum_def: &EnumDef) -> String {
     let mut s = String::new();
-    writeln!(s, "// 使用：import {{ {}Enum, {}EnumDesc }} from './{}'", enum_def.name, enum_def.name, enum_def.name).unwrap();
+    writeln!(s, "// 使用：import {{ {}Enum, {}EnumDesc, {}EnumNames }} from './{}'",
+        enum_def.name, enum_def.name, enum_def.name, enum_def.name).unwrap();
     let valid: Vec<&EnumEntry> = enum_def.entries.iter()
         .filter(|e| !e.id.is_empty() && !e.name.is_empty())
         .collect();
 
     let enum_name = format!("{}Enum", enum_def.name);
 
-    match module_kind {
-        crate::enums::ModuleKind::Esm => {
-            writeln!(s, "export enum {} {{", enum_name).unwrap();
-        }
-        crate::enums::ModuleKind::CommonJs => {
-            writeln!(s, "const {} = {{", enum_name).unwrap();
-        }
-    }
-
+    writeln!(s, "export enum {} {{", enum_name).unwrap();
     for e in &valid {
         let id = e.id.parse::<i64>().unwrap_or(0);
-        match module_kind {
-            crate::enums::ModuleKind::Esm => {
-                writeln!(s, "    /** {} */", e.desc).unwrap();
-                writeln!(s, "    {} = {},", e.name, id).unwrap();
-            }
-            crate::enums::ModuleKind::CommonJs => {
-                writeln!(s, "    {}: {}, // {}", e.name, id, e.desc).unwrap();
-            }
-        }
+        writeln!(s, "    /** {} */", super::comment_block(&e.desc)).unwrap();
+        writeln!(s, "    {} = {},", e.name, id).unwrap();
     }
     writeln!(s, "}}").unwrap();
 
-    if module_kind == crate::enums::ModuleKind::CommonJs {
-        writeln!(s, "module.exports.{} = {};", enum_name, enum_name).unwrap();
+    writeln!(s).unwrap();
+
+    writeln!(s, "export const {}Desc: Record<{}, string> = {{", enum_name, enum_name).unwrap();
+    for e in &valid {
+        writeln!(s, "    [{}.{}]: \"{}\",", enum_name, e.name, ts_escape(&e.desc)).unwrap();
     }
+    writeln!(s, "}};").unwrap();
 
     writeln!(s).unwrap();
 
-    match module_kind {
-        crate::enums::ModuleKind::Esm => {
-            writeln!(s, "export const {}Desc: Record<{}, string> = {{", enum_name, enum_name).unwrap();
-            for e in &valid {
-                writeln!(s, "    [{}.{}]: \"{}\",", enum_name, e.name, ts_escape(&e.desc)).unwrap();
-            }
-            writeln!(s, "}};").unwrap();
-        }
-        crate::enums::ModuleKind::CommonJs => {
-            writeln!(s, "const {}Desc = {{", enum_name).unwrap();
-            for e in &valid {
-                writeln!(s, "    [{}[\"{}\"]]: \"{}\",", enum_name, e.name, ts_escape(&e.desc)).unwrap();
-            }
-            writeln!(s, "}};").unwrap();
-            writeln!(s, "module.exports.{}Desc = {}Desc;", enum_name, enum_name).unwrap();
-        }
+    // 值→名反查表。各语言自带的反查能力参差——TS 数值 enum 有原生反向映射但取出来是
+    // string，Lua / GDScript 干脆没有——统一给一张 XxxEnumNames（与 Lua / GD 的 names
+    // 表口径一致），业务代码跨后端不用换写法。
+    writeln!(s, "export const {}Names: Record<{}, string> = {{", enum_name, enum_name).unwrap();
+    for e in &valid {
+        writeln!(s, "    [{}.{}]: \"{}\",", enum_name, e.name, e.name).unwrap();
     }
+    writeln!(s, "}};").unwrap();
     s
 }
 
 pub fn export_all_typescript(project: &Project, side: TypeScriptSide) -> Result<super::ExportResult> {
+    // TS 属性名走 camelCase，先挡掉转换后撞名（见 check_key_collision）
+    super::check_project_key_collisions(project)?;
     let export_cfg = &project.config.export;
 
     // 按 side 取对应段；fall-back 串：side 段 → 父段（client/server）→ 顶层 export → 默认
-    let (output, module_kind) = match side {
-        TypeScriptSide::Client => {
-            let ts = export_cfg.client.as_ref().and_then(|c| c.typescript.as_ref());
-            let output = ts.and_then(|t| t.output.as_deref()).unwrap_or(side.default_output());
-            let module_kind = ts.and_then(|t| t.module_kind).unwrap_or(crate::enums::ModuleKind::default());
-            (output, module_kind)
-        }
-        TypeScriptSide::Server => {
-            let ts = export_cfg.server.as_ref().and_then(|s| s.typescript.as_ref());
-            let output = ts.and_then(|t| t.output.as_deref()).unwrap_or(side.default_output());
-            let module_kind = ts.and_then(|t| t.module_kind).unwrap_or(crate::enums::ModuleKind::default());
-            (output, module_kind)
-        }
+    let output = match side {
+        TypeScriptSide::Client => export_cfg.client.as_ref()
+            .and_then(|c| c.typescript.as_ref())
+            .and_then(|t| t.output.as_deref())
+            .unwrap_or(side.default_output()),
+        TypeScriptSide::Server => export_cfg.server.as_ref()
+            .and_then(|s| s.typescript.as_ref())
+            .and_then(|t| t.output.as_deref())
+            .unwrap_or(side.default_output()),
     };
 
     let line_ending = LineEnding::from_config(
@@ -507,21 +462,21 @@ pub fn export_all_typescript(project: &Project, side: TypeScriptSide) -> Result<
     for group in &project.groups {
         for table in &group.tables {
             if table.deleted { continue; }
-            let src = export_table_ts(table, side, module_kind);
+            let src = export_table_ts(table, side);
             let file_path = output_dir.join(format!("{}.ts", &table.name));
             collected.push((file_path, opts.encode(&src)));
         }
 
         for constant in &group.constants {
             if constant.deleted { continue; }
-            let src = export_constant_ts(constant, sep, side, module_kind);
+            let src = export_constant_ts(constant, sep, side);
             let file_path = output_dir.join(format!("{}.ts", &constant.name));
             collected.push((file_path, opts.encode(&src)));
         }
 
         for enum_def in &group.enums {
             if enum_def.deleted { continue; }
-            let src = export_enum_ts(enum_def, module_kind);
+            let src = export_enum_ts(enum_def);
             let file_path = output_dir.join(format!("{}.ts", &enum_def.name));
             collected.push((file_path, opts.encode(&src)));
         }
@@ -535,6 +490,34 @@ mod tests {
     use super::*;
 
     fn sep() -> SeparatorsSection { SeparatorsSection::default() }
+
+    #[test]
+    fn interface_field_carries_desc_comment() {
+        use super::super::test_fixtures::{field, table};
+        let t = table("Item", vec![field("stack_max", "堆叠上限", "int")]);
+        let out = export_table_ts(&t, TypeScriptSide::Client);
+        assert!(out.contains("    /** 堆叠上限 */\n    stackMax: number;"), "got:\n{}", out);
+    }
+
+    #[test]
+    fn table_key_is_camel_case_in_interface_and_data() {
+        // 键名转换必须两边同时发生，interface 和 data 字面量对不上就会静默取到 undefined
+        use super::super::test_fixtures::{field, table};
+        let mut t = table("Item", vec![field("stack_max", "堆叠上限", "int")]);
+        t.records.push(vec!["1".to_string()]);
+        let out = export_table_ts(&t, TypeScriptSide::Client);
+        assert!(out.contains("    stackMax: number;"), "interface 未转 camelCase:\n{}", out);
+        assert!(out.contains("stackMax: 1"), "data 字面量未转 camelCase:\n{}", out);
+        assert!(!out.contains("stack_max"), "不该残留源名 snake_case:\n{}", out);
+    }
+
+    #[test]
+    fn constant_entry_carries_trailing_comment() {
+        use super::super::test_fixtures::{constant, entry};
+        let c = constant("GameConst", vec![entry("max_level", "最大等级", "int")]);
+        let out = export_constant_ts(&c, &sep(), TypeScriptSide::Client);
+        assert!(out.contains("    maxLevel: 1, // 最大等级"), "got:\n{}", out);
+    }
 
     #[test]
     fn base_types() {
@@ -628,11 +611,87 @@ mod tests {
             original_entries: Vec::new(), saved: true,
             display_field: None,
         };
-        let out = export_enum_ts(&e, crate::enums::ModuleKind::Esm);
+        let out = export_enum_ts(&e);
         assert!(out.contains("export enum HeroTypeEnum {"));
         assert!(out.contains("Warrior = 1,"));
         assert!(out.contains("Mage = 2,"));
         assert!(out.contains("export const HeroTypeEnumDesc: Record<HeroTypeEnum, string>"));
         assert!(out.contains("[HeroTypeEnum.Warrior]: \"战士\","));
+    }
+
+    #[test]
+    fn enum_names_table_is_generated() {
+        // 值→名反查表。TS 数值 enum 的原生反向映射取出来是 string，Lua / GD 则完全没有；
+        // 统一给一张 Names，七个后端写法一致
+        let e = EnumDef {
+            name: "HeroType".to_string(),
+            path: std::path::PathBuf::new(),
+            entries: vec![
+                EnumEntry { id: "1".to_string(), name: "Warrior".to_string(), desc: "战士".to_string() },
+            ],
+            dirty: false, deleted: false, original_entries: Vec::new(), saved: true,
+            display_field: None,
+        };
+
+        let out = export_enum_ts(&e);
+        assert!(out.contains("export const HeroTypeEnumNames: Record<HeroTypeEnum, string>"), "got:\n{}", out);
+        assert!(out.contains("[HeroTypeEnum.Warrior]: \"Warrior\","), "got:\n{}", out);
+    }
+
+    #[test]
+    fn table_header_shows_iteration_idiom() {
+        use super::super::test_fixtures::{field, table};
+        let t = table("Item", vec![field("id", "物品 ID", "int")]);
+        let out = export_table_ts(&t, TypeScriptSide::Client);
+        assert!(out.contains("// 遍历：Object.values(Item)"), "got:\n{}", out);
+    }
+
+    #[test]
+    fn header_usage_comment_uses_esm() {
+        use super::super::test_fixtures::{constant, entry, field, table};
+
+        let t = table("Item", vec![field("id", "物品 ID", "int")]);
+        let out = export_table_ts(&t, TypeScriptSide::Client);
+        assert!(out.contains("// 使用：import { Item, ItemTpl } from './Item'"), "got:\n{}", out);
+
+        let c = constant("GameConst", vec![entry("max_level", "最大等级", "int")]);
+        let out = export_constant_ts(&c, &sep(), TypeScriptSide::Client);
+        assert!(out.contains("// 使用：import { GameConst } from './GameConst'"), "got:\n{}", out);
+
+        let e = EnumDef {
+            name: "HeroType".to_string(),
+            path: std::path::PathBuf::new(),
+            entries: vec![EnumEntry { id: "1".to_string(), name: "Warrior".to_string(), desc: "战士".to_string() }],
+            dirty: false, deleted: false, original_entries: Vec::new(), saved: true,
+            display_field: None,
+        };
+        let out = export_enum_ts(&e);
+        assert!(out.contains("// 使用：import { HeroTypeEnum, HeroTypeEnumDesc, HeroTypeEnumNames } from './HeroType'"), "got:\n{}", out);
+    }
+
+    #[test]
+    fn no_commonjs_artifacts_anywhere() {
+        // module_kind 废弃后产物只有 ESM 一种形态，任何文件都不该再出现
+        // require / module.exports（@11.3.1 A3）
+        use super::super::test_fixtures::{constant, entry, field, table};
+
+        let t = table("Item", vec![field("id", "物品 ID", "int")]);
+        let c = constant("GameConst", vec![entry("max_level", "最大等级", "int")]);
+        let e = EnumDef {
+            name: "HeroType".to_string(),
+            path: std::path::PathBuf::new(),
+            entries: vec![EnumEntry { id: "1".to_string(), name: "Warrior".to_string(), desc: "战士".to_string() }],
+            dirty: false, deleted: false, original_entries: Vec::new(), saved: true,
+            display_field: None,
+        };
+
+        for src in [
+            export_table_ts(&t, TypeScriptSide::Client),
+            export_constant_ts(&c, &sep(), TypeScriptSide::Client),
+            export_enum_ts(&e),
+        ] {
+            assert!(!src.contains("module.exports"), "残留 CJS 产物:\n{}", src);
+            assert!(!src.contains("require("), "残留 require 调用:\n{}", src);
+        }
     }
 }

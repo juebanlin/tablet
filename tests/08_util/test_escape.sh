@@ -20,26 +20,40 @@ setup_empty_workspace
 TBL_FILE="$WORK_DIR/projects/esc/config/hero/HeroBase.tbl"
 
 # ── 构造包含复杂字符串的数据行 ──
-# HeroBase 字段（standard 模板）：
-#   id | name | type | quality | hp | mp | atk | def | crit | skills | attrs | desc
-#   int|str|@HeroType|@ItemQuality|int|int|int|int|float|List<int>|Map<str,int>|str
+# HeroBase 字段（standard 模板，13 个）：
+#   id     int          name   str          hp     int      mp     int
+#   atk    float        def    float        kind   @HeroType
+#   quality @ItemQuality skills List<int>   attrs  Map<str,int>
+#   leader @HeroBase    items  List<@Item>  desc   txt
 #
-# 在 name（str）和 desc（str）字段存复杂内容：
-# - name: 含 pipe 和 tab
-# - desc: 含 JSON、HTML、多行
+# 复杂内容只能放在 **txt** 字段（这里用 desc）：
+# `str` 按 @01.7.1 是「简单标识符」，不允许 | \n \t，放进去会被校验拦下。
+# 这里曾经把含 pipe/tab 的内容塞进 name（str）——那不正当地「通过」了很多年，
+# 只因为追加的行根本没被解析（见下）。
+#
+# 注意：**.tbl 是 v3 段式格式**（`[id]` 段 + `  key:value` 行），不是 v2 的管道行。
+# 这里曾经写成一行 `9999|...|...`，模板迁移到 v3 后那行根本不被解析，
+# 于是整条测试「看着在测转义、实际什么也没测」。
 
-# 用 printf 直接构造字面量：\n \t \| 是字面两字符
-# HeroBase 列（standard 模板）：
-#   id | name | hp | mp | atk | def | kind | quality | skills | attrs | desc
-#   int|str|int|int|float|float|@HeroType|@ItemQuality|List<int>|Map<str,int>|str
-# 参考 tblschema/HeroType 枚举 id=1..4，ItemQuality id=1..5
-
-HERO_NAME='Hero\|X\tY'
+HERO_NAME='HeroX'
 HERO_DESC='<div class="a\|b">{"name":"英雄","level":10,"tags":["强","快"]}</div>\nLine2\tCol'
 
-# 直接追加到 .tbl（保持文件里是 escaped 状态）
-# 11 列: id|name|hp|mp|atk|def|kind|quality|skills|attrs|desc
-printf '9999|%s|100|50|20.0|10.0|1|1|1;2;3|k1:1;k2:2|%s\n' "$HERO_NAME" "$HERO_DESC" >> "$TBL_FILE"
+# 用 printf 逐字段写：%s 不做转义处理，\n \t \| 保持「反斜杠+字符」两字符进文件
+{
+    printf '\n[9999]\n'
+    printf '  name:%s\n'  "$HERO_NAME"
+    printf '  hp:100\n'
+    printf '  mp:50\n'
+    printf '  atk:20.0\n'
+    printf '  def:10.0\n'
+    printf '  kind:1\n'
+    printf '  quality:1\n'
+    printf '  skills:1;2;3\n'
+    printf '  attrs:k1:1;k2:2\n'
+    printf '  leader:1001\n'
+    printf '  items:2001\n'
+    printf '  desc:%s\n'  "$HERO_DESC"
+} >> "$TBL_FILE"
 
 # ── 1. parse-tbl：解析成功 ──
 run_cli_raw util parse-tbl "$TBL_FILE"
@@ -50,8 +64,8 @@ assert_contains "HeroBase"
 run_cli validate --group hero --node HeroBase
 assert_exit 0
 
-# ── 3. .tbl 文件里保持 escaped 状态（Hero\|X 而非 Hero|X）──
-if grep -q 'Hero\\|X' "$TBL_FILE"; then
+# ── 3. .tbl 文件里保持 escaped 状态（a\|b 而非 a|b）──
+if grep -qF 'a\|b' "$TBL_FILE"; then
     _pass ".tbl 文件保持 escaped 状态"
 else
     _fail ".tbl 文件里未保留转义序列"
@@ -65,10 +79,17 @@ JSON_FILE=$(find "$WORK_DIR/projects/esc/gen" -name "HeroBase.json" | head -1)
 assert_file_exists "$JSON_FILE"
 
 # JSON 中 pipe 应该是原始 | 字符（JSON 不需要转义 pipe）
-if grep -q 'Hero|X' "$JSON_FILE"; then
-    _pass "JSON 中 name 含原始 pipe"
+if grep -qF 'a|b' "$JSON_FILE"; then
+    _pass "JSON 中 desc 含原始 pipe"
 else
-    _fail "JSON 中未找到 'Hero|X'"
+    _fail "JSON 中未找到 'a|b'"
+fi
+
+# 追加的那一行真的进了导出结果（曾经因为列数/格式不对整行被丢掉）
+if grep -qF '"HeroX"' "$JSON_FILE"; then
+    _pass "追加的行进了 JSON"
+else
+    _fail "追加的行没进 JSON（.tbl 格式或列数不对）"
 fi
 
 # JSON 中 desc 应含真换行（导出到磁盘的 JSON 里是 \n 字面）

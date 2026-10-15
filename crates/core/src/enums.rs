@@ -600,60 +600,7 @@ impl ProjectSort {
     }
 }
 
-/// TypeScript 模块类型
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum ModuleKind {
-    /// ES Module (export/import) - 现代标准（默认）
-    #[serde(rename = "esm")]
-    Esm,
-    /// CommonJS (module.exports/require) - Node.js 传统格式
-    #[serde(rename = "commonjs")]
-    CommonJs,
-}
-
-impl Default for ModuleKind {
-    fn default() -> Self {
-        Self::Esm
-    }
-}
-
-impl fmt::Display for ModuleKind {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Esm => write!(f, "esm"),
-            Self::CommonJs => write!(f, "commonjs"),
-        }
-    }
-}
-
-impl FromStr for ModuleKind {
-    type Err = String;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s.trim().to_lowercase().as_str() {
-            "esm" | "es" | "module" => Ok(Self::Esm),
-            "commonjs" | "cjs" | "common" => Ok(Self::CommonJs),
-            _ => Err(format!("Unknown module kind: {}", s)),
-        }
-    }
-}
-
-impl ModuleKind {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            Self::Esm => "esm",
-            Self::CommonJs => "commonjs",
-        }
-    }
-
-    /// 返回所有模块类型选项
-    pub fn all() -> &'static [Self] {
-        &[Self::Esm, Self::CommonJs]
-    }
-
-    /// 返回所有模块类型选项的字符串表示
-    pub fn all_str() -> Vec<&'static str> {
-        Self::all().iter().map(|e| e.as_str()).collect()
-    }
-}
+// ModuleKind（TypeScript 的 esm / commonjs 二选一）已废弃：
+// 产物只出 ESM 源码形态。Node 侧消费方自行决定模块格式——
+// Node 22.12+ 可直接 require ESM，其余用 tsconfig 的 module 选项编译即可。
+// 详见 docs/11 §3.1 A3。

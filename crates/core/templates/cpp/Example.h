@@ -10,7 +10,9 @@
 //       const auto& all = {{NAMESPACE}}::{{FIRST_TABLE}}Tpl::All(); // 全表
 //       printf("rows=%zu\n", all.size());
 //       auto gc = {{NAMESPACE}}::GameConstTpl::Get();   // 常量单例（若项目有常量）
-//       auto t  = {{NAMESPACE}}::HeroTypeEnum_desc(HeroTypeEnum::WARRIOR); // 枚举描述（若项目有枚举）
+//       auto t  = {{NAMESPACE}}::HeroTypeEnum_desc(HeroTypeEnum::WARRIOR); // 枚举→描述（若项目有枚举）
+//       auto n  = {{NAMESPACE}}::HeroTypeEnum_name(HeroTypeEnum::WARRIOR); // 枚举→名（"WARRIOR"，未命中空串）
+//       auto v  = {{NAMESPACE}}::ParseHeroTypeEnum("WARRIOR");             // 名→枚举（std::optional，未命中 nullopt）
 //   }
 //
 // 或直接调用 demo()（业务接入时通常复制 main 里几行，而非调用本函数）。

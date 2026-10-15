@@ -118,7 +118,8 @@ Group 名仅在工具内部使用，不进生成代码路径，因此允许中�
 - **ui**：直接用全局，Project 级不允许覆盖（UI 偏好是用户级，不应按项目切换）
 - **separators**：用 Project 自身 schema 的 `# @sep` 行（优先级最高）；仅在「新建空项目」时从全局拷贝初值（@01.7.4 / §4.9）
 
-最终合并：`GlobalConfig` + `ProjectConfig.raw` (project.toml) + `schema.separators` → `ProjectConfig.config`（业务逻辑使用）。
+最终装配：`GlobalConfig` + `ProjectConfig.raw` (project.toml) → `ProjectConfig.config`（业务逻辑使用）；
+**separators 不参与这层装配**，它只有 `schema.separators` 一个来源（见上一行）。
 
 ### 4.1 完整示例
 
@@ -398,11 +399,12 @@ tablet-cli [全局选项] <命令>
 
 | 参数 | 作用 |
 |------|------|
-| `--config <tablet.toml>` | 从全局配置文件读取分隔符 |
-| `--schema <.tblschema>` | 从 schema 文件读取分隔符（优先级高于 config） |
+| `--config <tablet.toml>` | 从**指定的** tablet.toml 读取 `[separators]` |
+| `--schema <.tblschema>` | 从**指定的** schema 文件读取 `# @sep`（优先级高于 config） |
 | `--sep <KEY=VALUE>` | 手动指定单个分隔符（最高优先级，可多次） |
 
-合并优先级：`--sep` > `--schema` > `--config` > 内置默认值
+优先级（从低到高）：内置默认值 → `--config` → `--schema` → `--sep`。
+这是**显式参数之间**的优先级，与项目上下文无关（`util` 子命令不接受 `-w`/`--project`）。
 
 ## 8. 子命令
 
@@ -755,9 +757,26 @@ tablet-cli --fmt json validate --group hero
 输出示例（失败时 exit 1）：
 ```
 发现 3 个验证错误:
-  [slg-test] hero/HeroBase C6:[abc] -> 不是合法的 int 值
-  [slg-test] hero/HeroBase D12:[] -> 必填字段不能为空
-  [slg-test] hero/HeroSkill B3:[99999] -> 引用 id 不存在于 HeroBase
+  [验证] hero/HeroBase C6:[abc] -> 不是合法的 int 值
+  [验证] hero/HeroBase D12:[] -> 必填字段不能为空
+  [验证] hero/HeroSkill B3:[99999] -> 引用 id 不存在于 HeroBase
+```
+
+每行就是 `tablet_core::ops::format_validation_log` 的输出——**与 GUI 日志同一套渲染**，含定位（数据格是 `C6` 这种列字母+行号，表头层是「表头第 4 行 G 列」）、单元格原值与消息。表头层错误不要看 `row` 字段，那是 `SCHEMA_ROW` 哨兵值。
+
+`--fmt json` 输出的是对象数组，字段为 `project_id` / `group` / `node` / `row` / `col` / `message` / `display`（`display` 即上面那行文本）：
+
+```json
+{
+  "errors": [
+    {
+      "project_id": "col", "group": "item", "node": "Item",
+      "row": 0, "col": 5,
+      "message": "不是合法int, 示例: 1",
+      "display": "[验证] item/Item F1:[abc] -> 不是合法int, 示例: 1"
+    }
+  ]
+}
 ```
 
 退出码：通过 → 0；任一错误 → 1。
@@ -868,53 +887,68 @@ tablet-cli util gen-test --lang java --format json \
 
 ### 8.8 sep — 分隔符查询
 
-展示全部 25 个分隔符键的生效值及来源。可带项目上下文也可独立使用。
+展示全部 25 个分隔符键的生效值及来源。
 
 | 参数 | 说明 |
 |------|------|
-| `--defaults` | 仅展示内置默认值（不读任何文件） |
-| `--config <path>` | 从指定 tablet.toml 读取 `[separators]` |
-| `--schema <path>` | 从指定 .tblschema 读取 `# @sep` |
+| （无） | 展示**当前项目**的生效值，来源是该项目的 `project.tblschema`（@01.7.4） |
+| `--defaults` | 仅展示内置默认值（不读任何文件、不牵扯项目） |
+| `--config <path>` | 读**指定** tablet.toml 的 `[separators]`（是「指定文件」，不是全局配置） |
+| `--schema <path>` | 读**指定** .tblschema 的 `# @sep` |
 
-合并优先级（从低到高）：内置默认 → tablet.toml `[separators]` → .tblschema `# @sep`
+给了 `--defaults` / `--config` / `--schema` 中任意一个就与项目无关；只有裸 `sep show` 需要项目上下文。
+「当前项目」跟其它命令同一套解析：`--project <id>` 优先，否则 last_project。
+
+**取值规则：每个 leaf 独立回退**——25 个键各自从高优先级往低找，取第一个「写过」该键的来源；都没写就回退到内置默认。
+优先级（高 → 低）：`--schema` 文件 > `--config` 文件 > 当前项目的 schema > 内置默认。
+
+`SeparatorsSection` 的 25 个字段**每个都带 serde 默认值**，所以「没写」在类型层面等价于「等于内置默认」——
+这也是 `# @sep` / `[separators]` 都只写偏离默认值的 leaf、`serialize_tblschema` 只输出非默认 leaf 的原因（@01.7.4）。
+于是 `--config` / `--schema` 只写关心的键即可，未写的自动回退。
+
+每行行尾的 `[来源]` 标出该键的值最终来自哪一层：`默认` / `项目` / `config` / `schema`。
 
 ```bash
-# 展示当前项目合并后的生效分隔符
+# 展示当前项目的生效分隔符（表头会写明是哪个项目）
 tablet-cli sep show
+
+# 多项目工作区里指定项目
+tablet-cli --project slg-test sep show
 
 # 仅展示内置默认值
 tablet-cli sep show --defaults
 
-# 展示指定 config 合并后的值
+# 读取指定 config 文件（只写关心的键即可，未写的回退默认）
 tablet-cli sep show --config D:/work/game-config/tablet.toml
 
-# 展示指定 schema 合并后的值
+# 读取指定 schema 文件
 tablet-cli sep show --schema D:/work/game-config/projects/slg-test/project.tblschema
 
-# 同时指定（schema 优先级高于 config）
+# 同时指定：同一 leaf 两边都写了的话 schema 赢，只写一边的按那一边
 tablet-cli sep show --config tablet.toml --schema project.tblschema
 
 # JSON 输出
 tablet-cli --fmt json sep show
 ```
 
-输出示例（标注来源）：
+输出示例（多项目工作区里展示项目 `pa` 的生效值；`pa` 的 schema 里写了 `# @sep List = ~`）：
 ```
-分隔符配置（合并后生效值）:
-  list                = ;         [默认]
-  set                 = ;         [默认]
-  tuple2              = ,         [默认]
-  tuple3              = ,         [默认]
-  tuple4              = ,         [默认]
-  map.kv              = :         [默认]
-  map.entry           = ;         [默认]
-  list_tuple2.tuple   = ,         [默认]
-  list_tuple2.list    = |         [schema]
-  map_tuple2.kv       = =         [config]
-  map_tuple2.tuple    = ,         [默认]
-  map_tuple2.entry    = ;         [默认]
+分隔符配置（项目 pa）:
+  List                  = ~         [项目]
+  Set                   = ;         [默认]
+  Tuple2                = ,         [默认]
+  Tuple3                = ,         [默认]
+  Tuple4                = ,         [默认]
+  Map.kv                = :         [默认]
+  Map.entry             = ;         [默认]
+  List_Tuple2.tuple     = ,         [默认]
+  List_Tuple2.list      = ;         [默认]
+  Map_Tuple2.kv         = :         [默认]
+  Map_List.item         = ,         [默认]
   ...（全 25 键）
 ```
+
+键名就是 schema 里 `# @sep` 的写法（`List` / `Map.kv` / `List_Tuple2.tuple` …），全套键名见 @01.7.4。
 
 ---
 

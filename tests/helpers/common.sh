@@ -25,13 +25,57 @@ _ensure_cli() {
     fi
     # 检查是否有 --build 参数（单独执行模式）
     if [[ "${1:-}" == "--build" ]] || [ -z "$CLI" ]; then
-        local bin="$PROJECT_ROOT/target/release/tablet-cli"
+        # 走 dev profile——日常跑测试用 debug 构建快得多（CLAUDE.md「构建」节）
+        local bin="$PROJECT_ROOT/target/debug/tablet-cli"
         if [ ! -f "$bin" ]; then
-            echo "编译 tablet-cli (release)..."
-            cargo build -p tablet-cli --release --manifest-path "$PROJECT_ROOT/Cargo.toml" >/dev/null 2>&1
+            echo "编译 tablet-cli (debug)..."
+            cargo build -p tablet-cli --manifest-path "$PROJECT_ROOT/Cargo.toml" >/dev/null 2>&1
         fi
         CLI="$bin"
     fi
+}
+
+# ─── 外部工具发现 ─────────────────────────────────────────────────────────
+
+# find_tool <覆盖用环境变量名> <候选名(空格分隔)> [额外搜索目录...]
+#
+# 比裸 `command -v` 多两件事，都是 Windows + MSYS 上真会踩的坑：
+# 1. 同名**目录**会挡住同名 .exe —— MSYS bash 沿 PATH 撞到一个叫 `lua` 的目录就不再找
+#    `lua.exe` 了。LuaRocks 的 `C:\Program Files (x86)\Lua\5.1\lua` 正是这种。
+#    所以候选名一律连 `<name>.exe` 一起试。
+# 2. 装了但没进 PATH —— 允许传额外目录兜底。
+#
+# 找到返回绝对路径，找不到返回空串（调用方据此 SKIP）。
+find_tool() {
+    local env_name="$1" names="$2"
+    shift 2
+
+    local override="${!env_name:-}"
+    if [ -n "$override" ]; then
+        if [ -x "$override" ]; then printf '%s\n' "$override"; return 0; fi
+        local resolved
+        resolved="$(command -v "$override" 2>/dev/null || true)"
+        if [ -n "$resolved" ]; then printf '%s\n' "$resolved"; return 0; fi
+    fi
+
+    local name cand dir
+    for name in $names; do
+        for cand in "$name" "$name.exe"; do
+            local found
+            found="$(command -v "$cand" 2>/dev/null || true)"
+            if [ -n "$found" ] && [ -f "$found" ]; then printf '%s\n' "$found"; return 0; fi
+        done
+    done
+
+    for dir in "$@"; do
+        for name in $names; do
+            for cand in "$name" "$name.exe"; do
+                if [ -x "$dir/$cand" ]; then printf '%s\n' "$dir/$cand"; return 0; fi
+            done
+        done
+    done
+
+    return 0
 }
 
 # 颜色

@@ -39,8 +39,9 @@ pub fn print_validate_summary_cli(summary: &ValidationSummary) {
         println!("验证通过，无错误");
     } else {
         println!("发现 {} 个验证错误:", summary.error_count());
-        for (project_id, group, name, row, col) in &summary.errors {
-            println!("  [{}] {}/{} [{},{}]", project_id, group, name, row, col);
+        // display 已含定位（表头层会渲染成「表头第 N 行 F 列」）与消息，直接整行打印
+        for issue in &summary.errors {
+            println!("  {}", issue.display);
         }
     }
 }
@@ -119,7 +120,11 @@ pub fn print_project_info_cli(s: &ProjectInfoSummary) {
 }
 
 pub fn print_sep_show_cli(s: &crate::actions::sep::SepShowSummary) {
-    println!("分隔符配置（合并后生效值）:");
+    // 多项目工作区里必须说清看的是哪个项目，否则「生效值」无从谈起
+    match &s.project {
+        Some(id) => println!("分隔符配置（项目 {}）:", id),
+        None => println!("分隔符配置:"),
+    }
     for e in &s.entries {
         println!("  {:<22}= {:<10}[{}]", e.key, e.value, e.source);
     }

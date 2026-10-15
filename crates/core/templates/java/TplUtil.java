@@ -111,12 +111,16 @@ public class TplUtil {
                 TblFieldType ann = field.getAnnotation(TblFieldType.class);
                 if (ann == null) continue;
 
-                classFields.add(field.getName());
-                String raw = map.get(field.getName());
+                // 数据文件的 key 是 .tbl 源字段名（snake_case），字段名是 camelCase，
+                // 两者不一致时注解里的 name 才是真 key；一致时注解留空、回退到字段名
+                String key = ann.name().isEmpty() ? field.getName() : ann.name();
+
+                classFields.add(key);
+                String raw = map.get(key);
 
                 // 验证：配置类字段在数据源中缺失
                 if (raw == null && mismatchHandler != null) {
-                    mismatchHandler.onClassFieldMissing(tableName, clazz.getSimpleName(), field.getName(), ann.value());
+                    mismatchHandler.onClassFieldMissing(tableName, clazz.getSimpleName(), key, ann.value());
                 }
 
                 if (field.getType().isEnum() && ann.value().startsWith("@")) {

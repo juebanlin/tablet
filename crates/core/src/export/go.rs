@@ -3,7 +3,7 @@ use std::collections::HashSet;
 use anyhow::Result;
 use crate::model::*;
 use crate::types::*;
-use super::{to_camel_case, to_pascal_case, LineEnding};
+use super::{to_pascal_case, LineEnding};
 
 const TPL_LOADER: &str = include_str!("../../templates/go/loader.go");
 const TPL_PARSER: &str = include_str!("../../templates/go/parser.go");
@@ -32,11 +32,6 @@ fn to_snake_case(s: &str) -> String {
 // 字段在 Go 中的导出名（PascalCase）
 fn go_field_name(name: &str) -> String {
     to_pascal_case(name)
-}
-
-// 数据文件中的字段 key（与 Java 一致：camelCase）
-fn data_key(name: &str) -> String {
-    to_camel_case(name)
 }
 
 fn go_type_for(tbl_type_str: &str, enum_names: &HashSet<String>) -> String {
@@ -243,6 +238,8 @@ fn parse_expr_for(raw_var: &str, t: &TblType, sep_var: &str, enum_names: &HashSe
 // PLACEHOLDER_GO_GEN_TPL
 
 pub fn export_all_go(project: &Project) -> Result<super::ExportResult> {
+    // Go 字段名走 PascalCase，先挡掉转换后撞名（见 check_key_collision）
+    super::check_project_key_collisions(project)?;
     let export_cfg = &project.config.export;
     let server = export_cfg.server.as_ref();
     let go = server.and_then(|s| s.go.as_ref());
@@ -337,7 +334,8 @@ fn gen_table_tpl(table: &Table, pkg: &str, _group: &str, enum_names: &HashSet<St
     // struct
     writeln!(s, "type {} struct {{", cls).unwrap();
     for f in &fields {
-        writeln!(s, "\t{} {} // {}", go_field_name(&f.name), go_type_for(&f.tbl_type, enum_names), f.tbl_type).unwrap();
+        writeln!(s, "\t{} {} // {}", go_field_name(&f.name), go_type_for(&f.tbl_type, enum_names),
+            super::field_comment(&f.desc, &f.tbl_type)).unwrap();
     }
     writeln!(s, "}}").unwrap();
     writeln!(s).unwrap();
@@ -350,7 +348,7 @@ fn gen_table_tpl(table: &Table, pkg: &str, _group: &str, enum_names: &HashSet<St
     writeln!(s, "func parse{}(row map[string]string, sep SepConfig) *{} {{", table.name, cls).unwrap();
     writeln!(s, "\tobj := &{}{{}}", cls).unwrap();
     for f in &fields {
-        let key_name = data_key(&f.name);
+        let key_name = &f.name;
         let go_field = go_field_name(&f.name);
         match TblType::parse(&f.tbl_type) {
             Some(t) => {
@@ -403,7 +401,8 @@ fn gen_constant_tpl(constant: &Constant, pkg: &str, _group: &str, enum_names: &H
     // struct
     writeln!(s, "type {} struct {{", cls).unwrap();
     for e in &entries {
-        writeln!(s, "\t{} {} // {}", go_field_name(&e.name), go_type_for(&e.tbl_type, enum_names), e.tbl_type).unwrap();
+        writeln!(s, "\t{} {} // {}", go_field_name(&e.name), go_type_for(&e.tbl_type, enum_names),
+            super::field_comment(&e.desc, &e.tbl_type)).unwrap();
     }
     writeln!(s, "}}").unwrap();
     writeln!(s).unwrap();
@@ -416,7 +415,7 @@ fn gen_constant_tpl(constant: &Constant, pkg: &str, _group: &str, enum_names: &H
     writeln!(s, "func parse{}(row map[string]string, sep SepConfig) *{} {{", constant.name, cls).unwrap();
     writeln!(s, "\tobj := &{}{{}}", cls).unwrap();
     for e in &entries {
-        let key_name = data_key(&e.name);
+        let key_name = &e.name;
         let go_field = go_field_name(&e.name);
         match TblType::parse(&e.tbl_type) {
             Some(t) => {
@@ -469,7 +468,7 @@ fn gen_enum_file(enum_def: &EnumDef, pkg: &str) -> String {
     for e in &valid {
         let pad = " ".repeat(max_name_len - e.name.len());
         writeln!(s, "\t{}_{}{} {} = {} // {}",
-            type_name, e.name, pad, type_name, e.id, e.desc).unwrap();
+            type_name, e.name, pad, type_name, e.id, super::comment_line(&e.desc)).unwrap();
     }
     writeln!(s, ")").unwrap();
     writeln!(s).unwrap();
@@ -523,7 +522,9 @@ fn lowercase_first(s: &str) -> String {
 }
 
 fn escape_go_str(s: &str) -> String {
+    // 换行/制表符也要转义：Go 的 "..." 字面量不容许裸换行（desc 会进枚举 Desc 表）
     s.replace('\\', "\\\\").replace('"', "\\\"")
+        .replace('\n', "\\n").replace('\r', "\\r").replace('\t', "\\t")
 }
 
 #[cfg(test)]
@@ -547,5 +548,20 @@ mod tests {
         let expr = parse_expr("raw", &t, "sep");
         assert!(expr.contains("[]int32"), "got {}", expr);
         assert!(expr.contains("parseListInt32"), "got {}", expr);
+    }
+
+    #[test]
+    fn struct_field_comments_use_desc_then_fall_back_to_type() {
+        use super::super::test_fixtures::{field, table};
+        let t = table("Item", vec![
+            field("stack_max", "堆叠上限", "int"),
+            field("items", "", "List<@Item>"),
+        ]);
+        let out = gen_table_tpl(&t, "config", "item", &HashSet::new());
+        assert!(out.contains("StackMax int32 // 堆叠上限"), "got:\n{}", out);
+        assert!(out.contains("Items []int32 // List<@Item>"), "got:\n{}", out);
+        // 查表 key 用 .tbl 源名，不是 camelCase（数据文件同规则，@01.8.1）
+        assert!(out.contains(r#"row["stack_max"]"#), "got:\n{}", out);
+        assert!(!out.contains(r#"row["stackMax"]"#), "got:\n{}", out);
     }
 }

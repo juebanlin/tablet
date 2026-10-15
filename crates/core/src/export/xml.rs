@@ -3,7 +3,7 @@ use std::fmt::Write;
 use anyhow::Result;
 use crate::model::*;
 use crate::types::{SepKey, SeparatorsSection};
-use super::{EmptyStrategy, LineEnding, to_camel_case};
+use super::{EmptyStrategy, LineEnding};
 use super::sep_meta::{collect_used_sep_keys_constant, collect_used_sep_keys_table};
 
 fn xml_escape(s: &str) -> String {
@@ -49,7 +49,8 @@ pub fn export_table_xml(table: &Table, strategy: &EmptyStrategy, sep: &Separator
         writeln!(s, "  <item>").unwrap();
         for &(col, field) in &export_cols {
             let raw = record.get(col).map(|v| v.as_str()).unwrap_or("");
-            let key = to_camel_case(&field.name);
+            // 数据文件 key 直接用 .tbl 源名（@01.8.1）
+            let key = field.name.clone();
 
             if raw.is_empty() {
                 match strategy {
@@ -78,7 +79,7 @@ pub fn export_constant_xml(constant: &Constant, strategy: &EmptyStrategy, sep: &
         if !is_server_export(&entry.export) { continue; }
         if entry.name.is_empty() { continue; }
 
-        let key = to_camel_case(&entry.name);
+        let key = entry.name.clone();
 
         if entry.value.is_empty() {
             match strategy {
@@ -92,6 +93,23 @@ pub fn export_constant_xml(constant: &Constant, strategy: &EmptyStrategy, sep: &
 
     writeln!(s, "</const>").unwrap();
     s
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn data_key_is_the_source_field_name() {
+        // 同 json.rs：XML 的节点名也用 .tbl 源名（@01.8.1）
+        use super::super::test_fixtures::{field, table};
+        let mut t = table("Item", vec![field("id", "物品 ID", "int"), field("stack_max", "堆叠上限", "int")]);
+        t.records.push(vec!["1".to_string(), "99".to_string()]);
+
+        let out = export_table_xml(&t, &EmptyStrategy::Empty, &SeparatorsSection::default());
+        assert!(out.contains("<stack_max>99</stack_max>"), "节点名应是源名: {}", out);
+        assert!(!out.contains("stackMax"), "不该出现 camelCase: {}", out);
+    }
 }
 
 pub fn export_all_xml(project: &Project) -> Result<super::ExportResult> {

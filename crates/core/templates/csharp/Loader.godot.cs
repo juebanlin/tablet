@@ -8,6 +8,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Runtime.CompilerServices;
 using Godot;
 
 namespace {{NAMESPACE}}
@@ -16,9 +17,19 @@ namespace {{NAMESPACE}}
     {
         public static void LoadAll(string dataDir)
         {
+            EnsureTablesRegistered();
             using var dir = DirAccess.Open(dataDir);
             if (dir == null) throw new System.IO.DirectoryNotFoundException("data dir not found: " + dataDir);
             ScanDir(dataDir, "");
+        }
+
+        /// <summary>
+        /// 强制触发各 *Tpl 的静态构造器，把 TblRegistry 填好。
+        /// C# 的静态构造器是惰性的，不先跑一遍就会拿到空注册表、静默不加载任何表。
+        /// </summary>
+        static void EnsureTablesRegistered()
+        {
+{{TOUCH_LIST}}
         }
 
         static void ScanDir(string root, string sub)

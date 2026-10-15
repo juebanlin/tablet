@@ -1,0 +1,76 @@
+name: ci
+# 触发: 所有分支的 push + PR。发版仍走 release.yml（tag）。
+on:
+  push:
+    branches: ['**']
+  pull_request:
+
+jobs:
+  rust:
+    name: cargo test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      # app-slint 是 workspace 成员，cargo test --workspace 要链接它，缺这些会挂在链接期
+      - name: install linux gui deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libgl1-mesa-dev libfontconfig1-dev \
+            libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev \
+            libxkbcommon-dev
+
+      - name: cargo test --workspace
+        run: cargo test --workspace
+
+  codegen-smoke:
+    # 生成的代码必须真的能编译、能跑起来读数据。
+    #
+    # 只断言生成器吐出的字符串是不够的 —— 「C# Loader 因为静态构造器惰性而静默不加载
+    # 任何表」就是这么漏出去的：所有字符串级测试都是绿的，产物却完全不可用。
+    # 详见 docs/11 §3.3。
+    name: codegen smoke
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: setup java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: setup go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.22.x'
+
+      - name: setup dotnet
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      # TypeScript 产物此前没有任何 e2e 覆盖；tsc 走 npm 全局装
+      - name: setup node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22.x'
+
+      - name: install tsc
+        run: npm install -g typescript
+
+      - name: install c++ / lua deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y nlohmann-json3-dev lua5.4
+
+      # 11_e2e 覆盖 java / go / csharp / cpp / lua / typescript 六种产物的
+      # 「编译 + 跑起来读数据」。run_all.sh 默认按 dev profile 编（CLAUDE.md），
+      # 缺工具链的用例 SKIP 而不是假装通过。
+      - name: codegen roundtrip
+        run: ./tests/run_all.sh 11_e2e

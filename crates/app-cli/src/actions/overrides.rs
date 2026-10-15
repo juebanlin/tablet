@@ -3,8 +3,6 @@
 //! 直接在 `ProjectEngine` 持有的 `Project.config` 上做就地修改。
 //! 未知 / 废弃 key 通过 [`OverrideWarning`] 收集起来交给调用方决定怎么报告。
 
-use std::str::FromStr;
-
 use tablet_core::model::{
     ClientConfig, CppExport, DotNetExport, GodotCSharpExport, GoExport, JavaExport,
     JsonExport, LuaExport, ProjectConfig, ServerExport, UnityCSharpExport, XmlExport,
@@ -139,37 +137,16 @@ pub fn apply_overrides(engine: &mut ProjectEngine, overrides: &[String]) -> Over
                 ensure_export_client_typescript(&mut project.config);
                 project.config.export.client.as_mut().unwrap().typescript.as_mut().unwrap().output = Some(value.to_string());
             }
-            "export.client.typescript.module_kind" => {
-                ensure_export_client_typescript(&mut project.config);
-                match tablet_core::enums::ModuleKind::from_str(value) {
-                    Ok(kind) => {
-                        project.config.export.client.as_mut().unwrap().typescript.as_mut().unwrap().module_kind = Some(kind);
-                    }
-                    Err(_) => {
-                        out.warnings.push(OverrideWarning::Invalid(format!(
-                            "export.client.typescript.module_kind: invalid value '{}', expected 'esm' or 'commonjs'",
-                            value
-                        )));
-                    }
-                }
+            "export.client.typescript.module_kind" | "export.server.typescript.module_kind" => {
+                out.warnings.push(OverrideWarning::Deprecated {
+                    key: key.to_string(),
+                    hint: "module_kind 已废弃，TypeScript 产物统一为 ESM；\
+                           需要 CommonJS 请在消费侧用 tsconfig 的 module 选项编译",
+                });
             }
             "export.server.typescript.output" => {
                 ensure_export_server_typescript(&mut project.config);
                 project.config.export.server.as_mut().unwrap().typescript.as_mut().unwrap().output = Some(value.to_string());
-            }
-            "export.server.typescript.module_kind" => {
-                ensure_export_server_typescript(&mut project.config);
-                match tablet_core::enums::ModuleKind::from_str(value) {
-                    Ok(kind) => {
-                        project.config.export.server.as_mut().unwrap().typescript.as_mut().unwrap().module_kind = Some(kind);
-                    }
-                    Err(_) => {
-                        out.warnings.push(OverrideWarning::Invalid(format!(
-                            "export.server.typescript.module_kind: invalid value '{}', expected 'esm' or 'commonjs'",
-                            value
-                        )));
-                    }
-                }
             }
             other => out.warnings.push(OverrideWarning::Unknown(other.to_string())),
         }

@@ -128,7 +128,7 @@ fn load_specific_project_impl(
     );
 
     // 解析项目级配置（仅 [export] 段）
-    let config = parse_project_config(proj_text.as_deref(), global_config);
+    let config = parse_project_config(proj_text.as_deref(), global_config)?;
 
     // 分隔符始终来自 schema，不从 toml 读取
     // （project.toml 中的 [separators] 段会被忽略）
@@ -163,35 +163,36 @@ fn load_specific_project_impl(
 /// - [separators] 分隔符以 project.tblschema 的 # @sep 为准
 ///
 /// 项目级配置加载策略：
-/// - 如果 project.toml 缺失或解析失败，从全局配置拷贝完整初始值
-/// - 如果 project.toml 存在但某些字段缺失/无效，用全局配置对应字段修复
-/// - 这是加载时的一次性修复，后续内存中配置保持独立，不再继承
-fn parse_project_config(project_text: Option<&str>, global: &GlobalConfig) -> ProjectConfig {
+/// - project.toml 缺失 / 无 `[export]` 段 → 从全局配置拷贝完整初始值
+/// - project.toml 存在但**字段缺失** → 用全局配置对应字段补齐（这是设计内的，不是错误）
+/// - project.toml 里写了**不认识或不合法的键** → 直接报错
+///
+/// 最后一条是刻意的：老版本删除过的配置键（如 TypeScript 的 `module_kind`）留下来时
+/// 必须吵，不能静默回退。这个函数以前是 `.unwrap_or(global_export)`——那不只是忽略
+/// 一个坏键，而是**整个项目配置被换成工作区默认值**（连 output 目录都跟着变），
+/// 排查起来毫无线索。
+fn parse_project_config(project_text: Option<&str>, global: &GlobalConfig) -> Result<ProjectConfig> {
     let global_export = global.export.clone().unwrap_or_default();
 
     let Some(text) = project_text else {
         // 无 project.toml，从全局拷贝
-        return ProjectConfig {
+        return Ok(ProjectConfig {
             export: global_export,
-        };
+        });
     };
 
     // 只取 [export] 段，其它段忽略
-    let proj_val: toml::Value = match toml::from_str(text) {
-        Ok(v) => v,
-        Err(_) => return ProjectConfig {
-            export: global_export,
-        },
-    };
+    let proj_val: toml::Value = toml::from_str(text)
+        .map_err(|e| anyhow::anyhow!("{} 不是合法 TOML: {}", PROJECT_TOML_FILE, e))?;
 
     let proj_export_val = match proj_val.get("export") {
         Some(v) => v.clone(),
-        None => return ProjectConfig {
+        None => return Ok(ProjectConfig {
             export: global_export,
-        },
+        }),
     };
 
-    // 将全局 export 序列化为 toml::Value，作为修复基准
+    // 将全局 export 序列化为 toml::Value，作为补齐基准
     let global_export_val = toml::Value::try_from(&global_export)
         .unwrap_or(toml::Value::Table(toml::map::Map::new()));
 
@@ -199,11 +200,16 @@ fn parse_project_config(project_text: Option<&str>, global: &GlobalConfig) -> Pr
     let mut merged = global_export_val;
     deep_merge_toml(&mut merged, proj_export_val);
 
-    // 反序列化为 ExportConfig，如果失败则回退到全局配置
+    // 缺失字段上面已经补齐了；合并后仍然解析不出来，就只能是项目里写了
+    // 不认识的键或非法值——报错，不静默回退
     let export = merged.try_into::<crate::model::ExportConfig>()
-        .unwrap_or(global_export);
+        .map_err(|e| anyhow::anyhow!(
+            "{} 的 [export] 段不合法: {}（字段缺失会用工作区配置补齐，\
+             但拼错的键和已废弃的键不会被忽略）",
+            PROJECT_TOML_FILE, e
+        ))?;
 
-    ProjectConfig { export }
+    Ok(ProjectConfig { export })
 }
 
 /// 深度合并 toml::Value（overlay 覆盖 base）。
@@ -999,5 +1005,44 @@ mod tests {
                   "[export.client.csharp_unity]", "[export.client.csharp_godot]"] {
             assert!(txt.contains(h), "缺少 {}", h);
         }
+    }
+
+    #[test]
+    fn unknown_export_key_is_an_error_not_a_silent_fallback() {
+        // 已废弃的键（module_kind）留在 project.toml 里必须报错。
+        // 以前这里是 .unwrap_or(global_export)——整个项目配置被换成工作区默认值，
+        // 连 output 目录都跟着变，且没有任何提示。
+        let global = GlobalConfig::default();
+        let text = "[export.client.typescript]\noutput = \"gen/x\"\nmodule_kind = \"commonjs\"\n";
+        let err = parse_project_config(Some(text), &global)
+            .expect_err("废弃键必须报错");
+        let msg = format!("{:#}", err);
+        assert!(msg.contains("module_kind"), "错误信息要点出键名，实际: {}", msg);
+        assert!(msg.contains(PROJECT_TOML_FILE), "错误信息要点出文件，实际: {}", msg);
+    }
+
+    #[test]
+    fn missing_export_fields_are_repaired_from_global_not_errored() {
+        // 只写了部分字段是正常的（字段缺失由工作区配置补齐），不该报错
+        let global = GlobalConfig::default();
+        let text = "[export.client.typescript]\noutput = \"gen/x\"\n";
+        let cfg = parse_project_config(Some(text), &global).expect("部分字段应能加载");
+        let ts = cfg.export.client.as_ref().and_then(|c| c.typescript.as_ref()).expect("client.typescript");
+        assert_eq!(ts.output.as_deref(), Some("gen/x"));
+    }
+
+    #[test]
+    fn absent_export_section_copies_global() {
+        let global = GlobalConfig::default();
+        let cfg = parse_project_config(Some("[ui]\n"), &global).expect("无 export 段应能加载");
+        assert_eq!(cfg.export, global.export.unwrap_or_default());
+    }
+
+    #[test]
+    fn malformed_toml_is_an_error() {
+        let global = GlobalConfig::default();
+        let err = parse_project_config(Some("this is not = = toml"), &global)
+            .expect_err("非法 TOML 必须报错");
+        assert!(format!("{:#}", err).contains(PROJECT_TOML_FILE));
     }
 }

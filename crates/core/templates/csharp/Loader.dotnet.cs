@@ -8,6 +8,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Runtime.CompilerServices;
 using System.Text.Json;
 
 namespace {{NAMESPACE}}
@@ -16,6 +17,7 @@ namespace {{NAMESPACE}}
     {
         public static void LoadAll(string dataDir)
         {
+            EnsureTablesRegistered();
             if (!Directory.Exists(dataDir))
                 throw new DirectoryNotFoundException("data dir not found: " + dataDir);
             foreach (var path in Directory.EnumerateFiles(dataDir, "*.json", SearchOption.AllDirectories))
@@ -26,6 +28,18 @@ namespace {{NAMESPACE}}
                     key = key.Substring(0, key.Length - 5);
                 LoadOne(path, key);
             }
+        }
+
+        /// <summary>
+        /// 强制触发各 *Tpl 的静态构造器，把 TblRegistry 填好。
+        ///
+        /// C# 的静态构造器是惰性的——不碰类型就不会跑。而注册代码写在各 *Tpl 的静态构造器里，
+        /// 所以不先跑一遍，下面的加载循环会拿到空注册表、**静默一张表都不加载**，
+        /// 之后 Get(id) 全部返回 null。
+        /// </summary>
+        static void EnsureTablesRegistered()
+        {
+{{TOUCH_LIST}}
         }
 
         static void LoadOne(string path, string key)

@@ -230,6 +230,12 @@ pub fn export_table_lua(table: &Table, sep: &SeparatorsSection) -> String {
 
     let mut s = String::new();
     writeln!(s, "-- 使用：local {} = require(\"<导出路径>/{}\")  -- 返回 {{id = ...}} 表", table.name, table.name).unwrap();
+    writeln!(s, "-- 遍历：for _, v in pairs({}) do ... end", table.name).unwrap();
+    let legend = super::field_legend(&export_cols.iter()
+        .map(|(_, f)| (f.name.clone(), f.desc.clone())).collect::<Vec<_>>());
+    if !legend.is_empty() {
+        writeln!(s, "-- 字段：{}", legend).unwrap();
+    }
     writeln!(s, "local {} = {{", table.name).unwrap();
 
     for record in &table.records {
@@ -256,6 +262,12 @@ pub fn export_table_lua(table: &Table, sep: &SeparatorsSection) -> String {
 pub fn export_constant_lua(constant: &Constant, sep: &SeparatorsSection) -> String {
     let mut s = String::new();
     writeln!(s, "-- 使用：local {} = require(\"<导出路径>/{}\")", constant.name, constant.name).unwrap();
+    let legend = super::field_legend(&constant.entries.iter()
+        .filter(|e| is_client_export(&e.export) && !e.name.is_empty())
+        .map(|e| (e.name.clone(), e.desc.clone())).collect::<Vec<_>>());
+    if !legend.is_empty() {
+        writeln!(s, "-- 字段：{}", legend).unwrap();
+    }
     writeln!(s, "local {} = {{", constant.name).unwrap();
 
     for entry in &constant.entries {
@@ -286,7 +298,7 @@ pub fn export_enum_lua(enum_def: &EnumDef) -> String {
     for e in &valid {
         let pad = " ".repeat(max_name_len - e.name.len());
         let id = e.id.parse::<i64>().unwrap_or(0);
-        writeln!(s, "    {}{} = {},  -- {}", e.name, pad, id, e.desc).unwrap();
+        writeln!(s, "    {}{} = {},  -- {}", e.name, pad, id, super::comment_line(&e.desc)).unwrap();
     }
     writeln!(s).unwrap();
 
@@ -294,6 +306,15 @@ pub fn export_enum_lua(enum_def: &EnumDef) -> String {
     for e in &valid {
         let id = e.id.parse::<i64>().unwrap_or(0);
         writeln!(s, "        [{}] = \"{}\",", id, lua_escape(&e.desc)).unwrap();
+    }
+    writeln!(s, "    }},").unwrap();
+    writeln!(s).unwrap();
+
+    // 值→名反查表：与 desc 并列。取到服务端传来的 int 后要显示/打日志时用 names[id]
+    writeln!(s, "    names = {{").unwrap();
+    for e in &valid {
+        let id = e.id.parse::<i64>().unwrap_or(0);
+        writeln!(s, "        [{}] = \"{}\",", id, e.name).unwrap();
     }
     writeln!(s, "    }},").unwrap();
     writeln!(s, "}}").unwrap();
@@ -346,4 +367,59 @@ pub fn export_all_lua(project: &Project) -> Result<super::ExportResult> {
     }
 
     super::sync_export_dir(&output_dir, "lua", collected)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sep() -> SeparatorsSection { SeparatorsSection::default() }
+
+    #[test]
+    fn table_carries_field_legend() {
+        // Lua 导出的是纯数据字面量，没有字段声明位，字段说明只能放文件头
+        use super::super::test_fixtures::{field, table};
+        let t = table("Item", vec![
+            field("stack_max", "堆叠上限", "int"),
+            field("silent", "", "int"),
+        ]);
+        let out = export_table_lua(&t, &sep());
+        assert!(out.contains("-- 字段：stack_max=堆叠上限"), "got:\n{}", out);
+        assert!(!out.contains("silent="), "无 desc 的字段不该进图例:\n{}", out);
+    }
+
+    #[test]
+    fn enum_carries_reverse_name_table() {
+        // 值→名：拿到服务端传来的 int 后要显示 / 打日志时用 names[id]
+        let e = EnumDef {
+            name: "HeroType".to_string(),
+            path: std::path::PathBuf::new(),
+            entries: vec![
+                EnumEntry { id: "1".to_string(), name: "WARRIOR".to_string(), desc: "战士".to_string() },
+            ],
+            dirty: false, deleted: false, original_entries: Vec::new(), saved: true,
+            display_field: None,
+        };
+        let out = export_enum_lua(&e);
+        assert!(out.contains("names = {"), "got:\n{}", out);
+        assert!(out.contains("[1] = \"WARRIOR\","), "got:\n{}", out);
+        // 与既有的 desc 表并列，两张都在
+        assert!(out.contains("[1] = \"战士\","), "got:\n{}", out);
+    }
+
+    #[test]
+    fn table_header_shows_iteration_idiom() {
+        use super::super::test_fixtures::{field, table};
+        let t = table("Item", vec![field("id", "物品 ID", "int")]);
+        let out = export_table_lua(&t, &sep());
+        assert!(out.contains("-- 遍历：for _, v in pairs(Item) do ... end"), "got:\n{}", out);
+    }
+
+    #[test]
+    fn constant_carries_field_legend() {
+        use super::super::test_fixtures::{constant, entry};
+        let c = constant("GameConst", vec![entry("max_level", "最大等级", "int")]);
+        let out = export_constant_lua(&c, &sep());
+        assert!(out.contains("-- 字段：max_level=最大等级"), "got:\n{}", out);
+    }
 }

@@ -13,7 +13,7 @@
 - 🗂️ **导出配置细化**：
   - TypeScript 拆分为 ServerTypeScriptExport / ClientTypeScriptExport，支持 ESM/CommonJS 模块格式
   - C# 拆分为 DotNetExport / UnityCSharpExport / GodotCSharpExport，针对不同运行时优化
-- 📦 **导出配置枚举化**：类型安全的枚举替换字符串字面量（CppJsonLib / ModuleKind 等）
+- 📦 **导出配置枚举化**：类型安全的枚举替换字符串字面量（如 CppJsonLib）
 - 🧹 **代码清理**：移除单项目模式兼容代码，统一多项目架构
 - 🔧 **日志系统升级**：分级日志 + ICU4X 日志过滤优化
 

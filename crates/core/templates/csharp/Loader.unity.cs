@@ -10,6 +10,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Runtime.CompilerServices;
 using Newtonsoft.Json.Linq;
 using UnityEngine;
 
@@ -17,8 +18,18 @@ namespace {{NAMESPACE}}
 {
     public static class Loader
     {
+        /// <summary>
+        /// 强制触发各 *Tpl 的静态构造器，把 TblRegistry 填好。
+        /// C# 的静态构造器是惰性的，不先跑一遍就会拿到空注册表、静默不加载任何表。
+        /// </summary>
+        static void EnsureTablesRegistered()
+        {
+{{TOUCH_LIST}}
+        }
+
         public static void LoadAll(string resourcesSubdir)
         {
+            EnsureTablesRegistered();
             // 一次性加载该子目录下所有 TextAsset；Unity 不支持运行时枚举 Resources，
             // 调用方需在编辑期保证 .json 文件名 stem 与表/常量名一致。
             var assets = Resources.LoadAll<TextAsset>(resourcesSubdir);

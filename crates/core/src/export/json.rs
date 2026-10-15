@@ -2,7 +2,7 @@ use anyhow::Result;
 use serde_json::{Value, Map, json};
 use crate::model::*;
 use crate::types::*;
-use super::{EmptyStrategy, LineEnding, to_camel_case, parse_base_value};
+use super::{EmptyStrategy, LineEnding, parse_base_value};
 use super::sep_meta::{collect_used_sep_keys_constant, collect_used_sep_keys_table};
 
 fn value_to_json(raw: &str, tbl_type: &TblType) -> Value {
@@ -45,7 +45,8 @@ pub fn export_table(table: &Table, strategy: &EmptyStrategy) -> Value {
         let mut obj = Map::new();
         for &(col, field) in &export_cols {
             let raw = record.get(col).map(|s| s.as_str()).unwrap_or("");
-            let key = to_camel_case(&field.name);
+            // 数据文件 key 直接用 .tbl 源名（@01.8.1）：全链路可 grep，且与各后端生成代码里的查表 key 一致
+            let key = field.name.clone();
             let tbl_type = TblType::parse(&field.tbl_type);
 
             if raw.is_empty() {
@@ -72,7 +73,7 @@ pub fn export_constant(constant: &Constant, strategy: &EmptyStrategy) -> Value {
         if !is_server_export(&entry.export) { continue; }
         if entry.name.is_empty() { continue; }
 
-        let key = to_camel_case(&entry.name);
+        let key = entry.name.clone();
         let tbl_type = TblType::parse(&entry.tbl_type);
 
         if entry.value.is_empty() {
@@ -90,6 +91,25 @@ pub fn export_constant(constant: &Constant, strategy: &EmptyStrategy) -> Value {
     Value::Object(obj)
 }
 
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn data_key_is_the_source_field_name() {
+        // 数据文件的 key 直接用 .tbl 源名（snake_case），不再转 camelCase——
+        // 这样 .tbl / 数据文件 / 各后端 gen 出来的查表 key 全链路同名（@01.8.1）
+        use super::super::test_fixtures::{field, table};
+        let mut t = table("Item", vec![field("id", "物品 ID", "int"), field("stack_max", "堆叠上限", "int")]);
+        t.records.push(vec!["1".to_string(), "99".to_string()]);
+
+        let v = export_table(&t, &EmptyStrategy::Null);
+        let row = &v[0];
+        assert!(row.get("stack_max").is_some(), "key 应是源名: {}", v);
+        assert!(row.get("stackMax").is_none(), "不该出现 camelCase key: {}", v);
+    }
+}
 
 pub fn export_all_json(project: &Project) -> Result<super::ExportResult> {
     let export_cfg = &project.config.export;
