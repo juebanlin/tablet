@@ -778,14 +778,30 @@ impl ProjectEngine {
         Ok(project_id)
     }
 
-    /// 旧接口：默认按 schema.meta.has_preset 决定是否灌入预设数据。
-    /// 新代码请直接调 `create_project_in_memory_with(schema, with_preset)`。
-    pub fn create_project_in_memory(
+    /// 从 schema 落地一个新 Project：内存态建好（L2）→ 过验证闸门 → 立刻保存（L1）。
+    ///
+    /// **「立即落盘」不是另一种实现，它就是 L2 加一次保存。** 和界面从模板 / 文件
+    /// 新建走的是同一条 `create_project_in_memory_with`，差别只在界面停在内存态等
+    /// 用户点保存（@02.26.3 那条分界）。
+    ///
+    /// 闸门（`validate_project`）不过就**整个撤回**并把错误原样返回——不留一个落不了盘
+    /// 的空壳在 `projects` / `available_projects` 里，也让调用方能如实报出来。
+    pub fn create_project_from_schema(
         &mut self,
         schema: crate::tblschema::TblSchema,
     ) -> Result<String, String> {
         let with_preset = schema.meta.has_preset;
-        self.create_project_in_memory_with(schema, with_preset)
+        let id = self.create_project_in_memory_with(schema, with_preset)?;
+
+        let errs = self.validate_project(&id);
+        if !errs.is_empty() {
+            self.close_project(&id);
+            self.available_projects.retain(|a| a.id != id);
+            return Err(format!("schema 校验未通过，未创建项目:\n{}", errs.join("\n")));
+        }
+
+        self.save_project(&id);
+        Ok(id)
     }
 
     /// 内存深拷贝克隆：把 source_project_id 的当前状态（含未保存改动）整体复制为新 project，
@@ -2897,6 +2913,45 @@ package = \"com.user.kept\"
 
         engine.find_table_mut("hero", "HeroBase").unwrap().display_field = None;
         assert!(!engine.find_project(&pid).unwrap().schema_changed(), "改回默认 → 回到干净");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ── 从 schema 落地项目：L2 + 闸门 + L1 ────────────────────────────
+
+    fn schema_from(text: &str) -> crate::tblschema::TblSchema {
+        crate::tblschema::parse_tblschema(text).expect("parse schema")
+    }
+
+    #[test]
+    fn create_project_from_schema_lands_on_disk_and_gates_on_validation() {
+        let dir = unique_tmp("cps");
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut engine = ProjectEngine::new_workspace(
+            dir.clone(), GlobalConfig::default(), Vec::new(), Vec::new(), None);
+
+        // ① 正常：schema → 项目立刻出现在盘上
+        let id = engine.create_project_from_schema(schema_from(
+            "#!tblschema v1\n# @meta id: p1\n\n[hero/HeroBase] table\nid | int | cs | ID\nname | str | cs | 名称\n"
+        )).expect("创建");
+        assert_eq!(id, "p1");
+        let root = dir.join("projects").join("p1");
+        assert!(root.join(crate::project::PROJECT_SCHEMA_FILE).is_file(), "tblschema 应落盘");
+        assert!(root.join("config").join("hero").join("HeroBase.tbl").is_file(), ".tbl 应落盘");
+        assert!(engine.find_project("p1").is_some(), "应注册进 projects");
+        assert!(engine.available_projects.iter().any(|a| a.id == "p1"), "应注册进 available");
+        assert!(!engine.is_project_dirty("p1"), "刚落地应当是干净的");
+
+        // ② 闸门：悬空 @引用 → 拒绝创建，且**什么都不留**
+        let err = engine.create_project_from_schema(schema_from(
+            "#!tblschema v1\n# @meta id: badref\n\n[hero/HeroBase] table\nid | int | cs | ID\nleader | @Missing | cs | 关联\n"
+        )).expect_err("悬空引用应被闸门拦下");
+        assert!(err.contains("校验未通过"), "{}", err);
+        assert!(err.contains("Missing"), "错误里应当有具体项: {}", err);
+        assert!(!dir.join("projects").join("badref").exists(), "不该建目录");
+        assert!(engine.find_project("badref").is_none(), "不该留在 projects 里");
+        assert!(!engine.available_projects.iter().any(|a| a.id == "badref"),
+            "不该留在 available 里——否则树上会挂一个永远建不出来的空壳");
 
         let _ = std::fs::remove_dir_all(&dir);
     }

@@ -92,11 +92,14 @@ pub enum ProjectAction {
         #[arg(long)]
         id: Option<String>,
     },
-    /// 从模板创建 Project
+    /// 从模板或 .tblschema 文件创建 Project
     New {
-        /// 模板 id（来自 list-templates）
-        #[arg(long)]
-        template: String,
+        /// 模板 id（来自 list-templates）；与 --from-file 二选一
+        #[arg(long, conflicts_with = "from_file")]
+        template: Option<String>,
+        /// 直接从一个 .tblschema 文件建项目；与 --template 二选一
+        #[arg(long, value_name = "PATH", conflicts_with = "template")]
+        from_file: Option<PathBuf>,
         /// Project id（[a-z0-9_-]{1,32}）
         #[arg(long)]
         id: String,

@@ -22,7 +22,7 @@ use crate::actions::{
     export::{run_export, ExportFormats},
     list_projects::list_projects,
     list_templates::list_templates,
-    new_project::run_new_project,
+    new_project::{run_new_project, NewProjectSource},
     overrides::apply_overrides,
     project_clone::run_project_clone,
     project_delete::run_project_delete,
@@ -408,10 +408,13 @@ fn dispatch_project(cli: &Cli, pa: &ProjectArgs) -> Result<i32> {
             }
             Ok(0)
         }
-        ProjectAction::New { template, id, name, switch_after } => {
-            let outcome = run_new_project(
-                &cli.workdir, template, id, name.as_deref(), *switch_after,
-            )?;
+        ProjectAction::New { template, from_file, id, name, switch_after } => {
+            let source = match (template.as_deref(), from_file.as_deref()) {
+                (Some(t), None) => NewProjectSource::Template(t),
+                (None, Some(p)) => NewProjectSource::SchemaFile(p),
+                _ => anyhow::bail!("需要恰好指定 --template 或 --from-file 之一"),
+            };
+            let outcome = run_new_project(&cli.workdir, source, id, name.as_deref(), *switch_after)?;
             output::print_new_project_outcome_cli(&outcome.project_root);
             Ok(0)
         }
