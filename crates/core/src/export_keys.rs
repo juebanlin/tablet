@@ -13,8 +13,7 @@
 //! 却没有哪个字段是「改过」的。所以 `modified` 先比「设没设」再比值，`revert` 直接复制
 //! `Option`。见 @02.26 那套「脏是算出来的」。
 
-use std::str::FromStr;
-
+use crate::config_leaf::{bool_str, opt_string, set_bool, set_enum};
 use crate::model::ExportConfig;
 
 /// 导出配置里一个可编辑的叶子。`as_str()` 就是 UI / `--set` / 测试共同认的那个 key。
@@ -581,42 +580,6 @@ fn unity(c: &ExportConfig) -> Option<&crate::model::UnityCSharpExport> {
 }
 fn godot(c: &ExportConfig) -> Option<&crate::model::GodotCSharpExport> {
     c.client.as_ref().and_then(|c| c.csharp_godot.as_ref())
-}
-
-fn bool_str(b: bool) -> String {
-    if b { "true".to_string() } else { "false".to_string() }
-}
-
-/// 空串 = 不设（`None`），语义是「不覆盖，用全局的值」。
-fn opt_string(v: &str) -> Option<String> {
-    if v.is_empty() { None } else { Some(v.to_string()) }
-}
-
-/// 枚举叶子：解析失败**保持原样**并返回 false（今天的行为就是这样，别改成清空）。
-fn set_enum<T: FromStr>(slot: &mut Option<T>, v: &str) -> bool {
-    match T::from_str(v.trim()) {
-        Ok(e) => {
-            *slot = Some(e);
-            true
-        }
-        Err(_) => false,
-    }
-}
-
-/// 布尔叶子：只认 `true` / `false`（大小写不敏感），别的一律拒绝。
-/// 这里比原来严 —— 原来是 `Some(value == "true")`，随便什么串都会静默变成 false。
-fn set_bool(slot: &mut Option<bool>, v: &str) -> bool {
-    match v.trim().to_ascii_lowercase().as_str() {
-        "true" => {
-            *slot = Some(true);
-            true
-        }
-        "false" => {
-            *slot = Some(false);
-            true
-        }
-        _ => false,
-    }
 }
 
 /// 把 `live` 这个 `Option` 裁剪成 `orig` 的形状，再对两者都有的那层动手。
