@@ -3,25 +3,29 @@ import { Theme } from "../theme.slint";
 import { DialogChrome } from "dialog_chrome.slint";
 import { ScrollView } from "std-widgets.slint";
 
+// 一个可执行的操作。code 是 tablet_core::excel_sync::SyncOp 的双射编码——
+// 面板回传的是**操作本身**，不是它在列表里的下标（下标会随文件变化而指向别处）。
+export struct EsOp { code: int, label: string }
+
 export struct EsRow {
     group: string, node: string,
-    checked: bool,
     lrows: int, lcols: int,
     left_only: bool,
-    right_sheet: string, right_xlsx: string,
     rrows: int, rcols: int,
-    matched: int,
     right_only: bool,
     blocked: bool, blocked_reason: string,
-    hdr_match: bool, tbl_more_cols: bool, xlsx_more_cols: bool,
-    hdr_mismatch: bool, has_diff: bool,
+    desc_diff: bool,
+    // 这一行能做哪些操作，由 core 的 plan 决定。**按钮只渲染这个列表**，
+    // 不再由 .slint 自己写可见性谓词——那正是以前「显示什么」与「做什么」两套规则
+    // 手工对齐的地方。
+    ops: [EsOp],
 }
 
 export component ExcelSyncDialog inherits Rectangle {
     in property <bool> open: false;
     in property <[EsRow]> rows;
     callback close(); callback refresh();
-    callback action(int, int);
+    callback action(string, string, int);
 
     width: 100%; height: 100%; visible: root.open;
 
@@ -49,7 +53,7 @@ export component ExcelSyncDialog inherits Rectangle {
                         }
                         Rectangle { width: 1px; background: Theme.border-light; }
                         Rectangle { width: 180px;
-                            Text { text: "Excel(行x列 | 匹配+差异)"; font-size: Theme.fs-tiny; color: Theme.text-secondary; vertical-alignment: center; }
+                            Text { text: "Excel(行x列)"; font-size: Theme.fs-tiny; color: Theme.text-secondary; vertical-alignment: center; }
                         }
                     }
                 }
@@ -57,15 +61,18 @@ export component ExcelSyncDialog inherits Rectangle {
                     VerticalLayout { spacing: 1px;
                         for row[i] in root.rows : Rectangle { height: Theme.row-h;
                             HorizontalLayout { spacing: 0;
-                                // checkbox + group/node
+                                // group/node
                                 Rectangle { width: 200px; HorizontalLayout { padding-left: 4px; spacing: 4px;
                                     Rectangle { width: 16px; height: 16px;
-                                        background: row.checked ? Theme.bg-row-selected : Theme.bg-panel;
+                                        background: Theme.bg-panel;
                                         border-color: Theme.border-light; border-width: 1px;
-                                        Text { text: " "; font-size: Theme.fs-tiny; vertical-alignment: center; horizontal-alignment: center; }
                                     }
                                     Text { text: row.group + "/" + row.node;
                                         font-size: Theme.fs-small; color: Theme.text-primary; vertical-alignment: center; }
+                                    // desc 有差异时点一下
+                                    if row.desc_diff : Rectangle { width: 10px; height: 10px; border-radius: 5px;
+                                        background: Theme.mark-modified;
+                                    }
                                 }}
                                 // tablet row/col
                                 Rectangle { width: 100px;
@@ -74,80 +81,33 @@ export component ExcelSyncDialog inherits Rectangle {
                                     }
                                     if !row.left_only : Text { x: 4px;
                                         text: (row.lrows) + "行 " + (row.lcols) + "列";
-                                        font-size: Theme.fs-tiny; vertical-alignment: center;
-                                        color: row.has_diff ? Theme.mark-modified : Theme.text-disabled;
+                                        font-size: Theme.fs-tiny; vertical-alignment: center; color: Theme.text-disabled;
                                     }
                                 }
-                                // separator
                                 Rectangle { width: 1px; background: Theme.border-light; }
-                                // ACTIONS — only show buttons that match the scenario
+                                // 操作：只渲染 plan 给出的那个列表
                                 Rectangle { width: 180px;
                                     HorizontalLayout { spacing: 2px; padding-left: 4px;
-                                        // 数据→ ←数据: 表头完全匹配 or tablet多列（补列场景）时可用
-                                        if row.has_diff && (row.hdr_match || row.tbl_more_cols) : Rectangle {
-                                            border-width: 1px; border-radius: 2px; width: 42px; height: 18px;
+                                        for op in row.ops : Rectangle {
+                                            border-width: 1px; border-radius: 2px; width: 52px; height: 18px;
                                             background: transparent; border-color: Theme.border-light;
-                                            Text { text: "数据" + Icons.arrow-right; font-size: Theme.fs-tiny; color: Theme.text-primary; vertical-alignment: center; horizontal-alignment: center; }
-                                            TouchArea { clicked => { root.action(i, 1); } }
-                                        }
-                                        if row.has_diff && (row.hdr_match || row.tbl_more_cols) : Rectangle {
-                                            border-width: 1px; border-radius: 2px; width: 42px; height: 18px;
-                                            background: transparent; border-color: Theme.border-light;
-                                            Text { text: Icons.arrow-left + "数据"; font-size: Theme.fs-tiny; color: Theme.text-primary; vertical-alignment: center; horizontal-alignment: center; }
-                                            TouchArea { clicked => { root.action(i, 2); } }
-                                        }
-                                        // 补列→ tablet has more columns
-                                        if row.tbl_more_cols : Rectangle {
-                                            border-width: 1px; border-radius: 2px; width: 42px; height: 18px;
-                                            background: transparent; border-color: Theme.border-light;
-                                            Text { text: "补列" + Icons.arrow-right; font-size: Theme.fs-tiny; color: Theme.text-primary; vertical-alignment: center; horizontal-alignment: center; }
-                                            TouchArea { clicked => { root.action(i, 3); } }
-                                        }
-                                        // 强制→: 不匹配 or xlsx 多列（删列残留）
-                                        if row.hdr_mismatch || row.xlsx_more_cols : Rectangle {
-                                            border-width: 1px; border-radius: 2px; width: 46px; height: 18px;
-                                            background: transparent; border-color: Theme.border-light;
-                                            Text { text: "强制" + Icons.arrow-right; font-size: Theme.fs-tiny; color: Theme.text-primary; vertical-alignment: center; horizontal-alignment: center; }
-                                            TouchArea { clicked => { root.action(i, 5); } }
-                                        }
-                                        // 强制→/← mismatch
-                                        if row.hdr_mismatch : Rectangle {
-                                            border-width: 1px; border-radius: 2px; width: 46px; height: 18px;
-                                            background: transparent; border-color: Theme.border-light;
-                                            Text { text: "强制" + Icons.arrow-right; font-size: Theme.fs-tiny; color: Theme.text-primary; vertical-alignment: center; horizontal-alignment: center; }
-                                            TouchArea { clicked => { root.action(i, 5); } }
-                                        }
-                                        // `←强制` removed — mismatch is tablet→xlsx only. xlsx→tablet handle via import or manual.
-                                        // 创建→ left only
-                                        if row.left_only : Rectangle {
-                                            border-width: 1px; border-radius: 2px; width: 46px; height: 18px;
-                                            background: transparent; border-color: Theme.border-light;
-                                            Text { text: "创建" + Icons.arrow-right; font-size: Theme.fs-tiny; color: Theme.text-primary; vertical-alignment: center; horizontal-alignment: center; }
-                                            TouchArea { clicked => { root.action(i, 7); } }
-                                        }
-                                        // ←导入 right only, valid
-                                        if row.right_only && !row.blocked : Rectangle {
-                                            border-width: 1px; border-radius: 2px; width: 46px; height: 18px;
-                                            background: transparent; border-color: Theme.border-light;
-                                            Text { text: Icons.arrow-left + "导入"; font-size: Theme.fs-tiny; color: Theme.text-primary; vertical-alignment: center; horizontal-alignment: center; }
-                                            TouchArea { clicked => { root.action(i, 8); } }
+                                            Text { text: op.label; font-size: Theme.fs-tiny; color: Theme.text-primary; vertical-alignment: center; horizontal-alignment: center; }
+                                            TouchArea { clicked => { root.action(row.group, row.node, op.code); } }
                                         }
                                         if row.blocked : Rectangle { width: 28px; height: 18px;
                                             Text { text: Icons.block; font-size: Theme.fs-tiny; color: Theme.text-error; vertical-alignment: center; horizontal-alignment: center; }
                                         }
                                     }
                                 }
-                                // separator
                                 Rectangle { width: 1px; background: Theme.border-light; }
-                                // right: row/col | matched+diff
+                                // xlsx row/col
                                 Rectangle { width: 180px;
                                     if row.right_only : Text { x: 4px;
                                         text: "(新 sheet)"; font-size: Theme.fs-tiny; color: Theme.text-info; vertical-alignment: center;
                                     }
                                     if !row.right_only : Text { x: 4px;
-                                        text: (row.rrows) + "行 " + (row.rcols) + "列 | " + (row.matched) + "匹配";
-                                        font-size: Theme.fs-tiny; vertical-alignment: center;
-                                        color: row.has_diff ? Theme.mark-modified : Theme.text-disabled;
+                                        text: (row.rrows) + "行 " + (row.rcols) + "列";
+                                        font-size: Theme.fs-tiny; vertical-alignment: center; color: Theme.text-disabled;
                                     }
                                     if row.blocked : Text { x: 4px;
                                         text: row.blocked-reason;

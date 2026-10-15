@@ -103,7 +103,7 @@ pub fn wire(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
     ui.on_excel_sync_clicked(move || {
         super::excel_sync::open(&s);
         if let Some(u) = ui_h2.upgrade() {
-            super::excel_sync::push(&u, &s);
+            super::excel_sync::push(&u, &s, true);
         }
     });
 

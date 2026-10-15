@@ -35,7 +35,7 @@ import { ProjectSettingsDialog } from "dialogs/project_settings.slint";
 import { GlobalSettingsDialog } from "dialogs/global_settings.slint";
 import { InputDialog } from "dialogs/input_dialog.slint";
 import { ConfirmDialog } from "dialogs/confirm_dialog.slint";
-import { ExcelSyncDialog, EsRow } from "dialogs/excel_sync_dialog.slint";
+import { ExcelSyncDialog, EsRow, EsOp } from "dialogs/excel_sync_dialog.slint";
 
 export { TreeNode, HeaderCell, DataCell, DataRow, CellKind, RefItem, TsParamSlot, RefRow, RefHeader, SchemaItem, CtxMenuItem, TemplateItem }
 
@@ -94,7 +94,7 @@ export component AppWindow inherits Window {
     in property <[EsRow]> es-rows;
     callback es-close();
     callback es-refresh();
-    callback es-action(int, int);
+    callback es-action(string, string, int);
 
     // ── MenuBar 回调 ────────────────────────────────────────
     /// 「关于」菜单 → 「检查更新」点击触发；Rust 端用 open::that 跳 GitHub 仓库。
@@ -1187,7 +1187,7 @@ export component AppWindow inherits Window {
         rows: root.es-rows;
         refresh => { root.es-refresh(); }
         close => { root.es-close(); }
-        action(row, act) => { root.es-action(row, act); }
+        action(group, node, code) => { root.es-action(group, node, code); }
     }
 
     // ContextMenu 必须放在最顶层（z 在所有 dialog 之上），点击 item 触发 ctx-menu-action
