@@ -117,6 +117,13 @@ pub fn push(path: &Path, group: &Group, pair: &PairPlan, scope: PushScope) -> Re
         upgrade_legacy_layout(ws);
     }
 
+    // 补列是**插入**，不是往那几个位置上写：策划经常在 schema 列后面放自己的测试列 /
+    // 公式列，直接写会盖掉它们。先把位置腾出来（1-based，在该列之前插），后面的列
+    // 连同各自的样式一起往右推。
+    if scope == PushScope::WithTabletColumns && cm.tablet_only > 0 {
+        ws.insert_new_column_by_index(cm.matched_prefix as u32 + 1, cm.tablet_only as u32);
+    }
+
     for (i, f) in fields.iter().enumerate() {
         if let Some(c) = cm.xlsx_col(i, scope) {
             write_header(ws, c, f);
@@ -147,34 +154,34 @@ pub fn push(path: &Path, group: &Group, pair: &PairPlan, scope: PushScope) -> Re
     Ok(format!("已同步 {} → {}（{}）", pair.node, path.display(), what))
 }
 
-/// 从零造一份：4 行表头（与 `excel.rs::write_table` 同款样式）+ 数据，冻结前 4 行。
+/// 从零造一份：**纯数据文本**——4 行表头 + 数据，此外什么也不加。
 ///
-/// **不加 sheet protection**：列名靠约定而非锁死。这条流后续用 umya 原地编辑，而
-/// umya 不认识 `<protectedRanges>`（「放开某片区域可编辑」那个元素）、会静默丢掉，
-/// 却保留整表保护开关——结果是把文件变成整张只读，策划连数据都改不了。
+/// 不加样式、不加冻结、不加保护。理由：**样式是 Excel 侧的东西**（@06 §7）。初次生成
+/// 不预设任何格式，之后策划在这个文件上做的一切（底色 / 边框 / 列宽 / 行高）由 `push`
+/// 的定点写入原样留存——写数据不碰样式。
+///
+/// 工作表保护尤其不能加：这条流用 umya 原地编辑，而 umya 不认识 `<protectedRanges>`
+/// （「放开某片区域可编辑」那个元素）、会把它静默丢掉，却保留整表保护开关——结果是把
+/// 文件变成整张只读，策划连数据都改不了。
 fn write_fresh_xlsx(path: &Path, group: &Group) -> Result<()> {
-    use rust_xlsxwriter::{Format, FormatBorder, Workbook};
+    use rust_xlsxwriter::Workbook;
     let mut wb = Workbook::new();
-    let hdr = Format::new().set_bold().set_background_color("#E0E0E0").set_border(FormatBorder::Thin);
-    let bdy = Format::new().set_border(FormatBorder::Thin);
-
     for table in &group.tables {
         if table.deleted { continue; }
         let ws = wb.add_worksheet();
         ws.set_name(sanitize_sheet_name(&table.name))?;
         for (i, f) in table.schema.fields.iter().enumerate() {
             let c = i as u16;
-            ws.write_string_with_format(HDR_DESC - 1, c, &f.desc, &hdr)?;
-            ws.write_string_with_format(HDR_EXPORT - 1, c, f.export.display(), &hdr)?;
-            ws.write_string_with_format(HDR_TYPE - 1, c, &f.tbl_type, &hdr)?;
-            ws.write_string_with_format(HDR_NAME - 1, c, &f.name, &hdr)?;
+            ws.write_string(HDR_DESC - 1, c, &f.desc)?;
+            ws.write_string(HDR_EXPORT - 1, c, f.export.display())?;
+            ws.write_string(HDR_TYPE - 1, c, &f.tbl_type)?;
+            ws.write_string(HDR_NAME - 1, c, &f.name)?;
         }
         for (r, row) in table.records.iter().enumerate() {
             for (c, val) in row.iter().enumerate() {
-                ws.write_string_with_format(r as u32 + DATA_START - 1, c as u16, val, &bdy)?;
+                ws.write_string(r as u32 + DATA_START - 1, c as u16, val)?;
             }
         }
-        ws.set_freeze_panes(DATA_START, 0)?;
     }
     std::fs::write(path, wb.save_to_buffer()?)?;
     Ok(())
@@ -356,17 +363,101 @@ mod tests {
                    "没被同步的 sheet 必须是原始字节直通，不该被重新序列化");
     }
 
+    /// **初次生成必须是纯数据文本**：不加样式、不加冻结、不加保护。
+    ///
+    /// 样式是 Excel 侧的东西——不预设任何格式，策划之后做的一切由推送原样留存。
+    #[test]
+    fn fresh_file_carries_no_styling_at_all() {
+        let mut g = group(data());
+        let tmp = TempXlsx::new();
+        execute(tmp.path(), &mut g, "HeroBase", &SyncOp::CreateFile).unwrap();
+
+        let styles = String::from_utf8(zip_entry(tmp.path(), "xl/styles.xml")).unwrap();
+        for (what, needle) in [
+            ("加粗", "<b/>"),
+            ("边框", "style=\"thin\""),
+            ("填充", "patternType=\"solid\""),
+        ] {
+            assert!(!styles.contains(needle), "初次生成的产物不该带{what}：styles.xml 里有 {needle}");
+        }
+
+        let sheet = String::from_utf8(zip_entry(tmp.path(), "xl/worksheets/sheet1.xml")).unwrap();
+        assert!(!sheet.contains("<pane"), "初次生成的产物不该冻结窗格");
+        assert!(!sheet.contains("sheetProtection"), "初次生成的产物不该带工作表保护");
+        assert!(!sheet.contains(" s=\""), "初次生成的产物不该有样式引用");
+
+        // 但结构要在：4 行表头 + 数据
+        let s = &read_xlsx_sheets(tmp.path(), Some(&g)).unwrap()[0];
+        assert_eq!(s.columns.len(), 2);
+        assert!(s.has_desc_row());
+        assert_eq!(s.rows.len(), 2);
+    }
+
+    /// **框架契约**：umya 的读 → 写往返必须原样保住单元格样式。
+    ///
+    /// 这条曾经是坏的：3.0.1 会把边框定义清空（`<left style="thin"><color auto="1"/></left>`
+    /// 变成 `<left/>`），连带让「只有边框」的格子连 `s` 属性都掉光——策划看到的
+    /// 现象就是「同步一次，边框全没了」。3.1.1 修好了。
+    ///
+    /// 钉在这里：以后升/降 umya 一旦回归，这条立刻红，而不是等策划撞上。
+    /// 注意它**不经过我们的代码**，纯粹是库的往返行为。
+    #[test]
+    fn umya_round_trip_keeps_all_cell_styles() {
+        use rust_xlsxwriter::{Format, FormatAlign, FormatBorder, Workbook};
+        let tmp = TempXlsx::new();
+        let mut wb = Workbook::new();
+        let ws = wb.add_worksheet();
+        ws.set_name("S").unwrap();
+        let fmts = [
+            Format::new().set_bold(),
+            Format::new().set_font_color("#FF0000"),
+            Format::new().set_background_color("#FFFF00"),
+            Format::new().set_border(FormatBorder::Thin),
+            Format::new().set_num_format("0.00"),
+            Format::new().set_align(FormatAlign::Center),
+            Format::new().set_text_wrap(),
+        ];
+        for (i, f) in fmts.iter().enumerate() {
+            ws.write_string_with_format(0, i as u16, "x", f).unwrap();
+        }
+        std::fs::write(tmp.path(), wb.save_to_buffer().unwrap()).unwrap();
+
+        let features = |path: &Path| -> Vec<(&'static str, bool)> {
+            let x = String::from_utf8(zip_entry(path, "xl/styles.xml")).unwrap();
+            vec![
+                ("加粗", x.contains("<b/>")),
+                ("字体颜色", x.contains("FFFF0000")),
+                ("填充", x.contains("FFFF00")),
+                ("边框", x.contains("style=\"thin\"")),
+                ("数字格式", x.contains("0.00")),
+                ("对齐", x.contains("horizontal=\"center\"")),
+                ("自动换行", x.contains("wrapText")),
+            ]
+        };
+        let before = features(tmp.path());
+
+        let book = umya_spreadsheet::reader::xlsx::read(tmp.path()).unwrap();
+        umya_spreadsheet::writer::xlsx::write(&book, tmp.path()).unwrap();
+
+        let after = features(tmp.path());
+        for ((name, was), (_, now)) in before.iter().zip(after.iter()) {
+            assert!(was, "夹具本身没写进 {name}");
+            assert!(now, "umya 往返丢掉了「{name}」——查 umya 版本（3.0.1 会丢边框，3.1.1 已修）");
+        }
+    }
+
     #[test]
     fn push_preserves_other_sheets_and_cell_styles() {
         let mut g = group(data());
         let tmp = TempXlsx::new();
         write_two_sheet_book(tmp.path(), &drifted());
 
-        // 给数据格刷个底色——推送不该把它抹掉
+        // 策划刷底色 + 加边框——推送两样都不该碰
         {
             let mut book = umya_spreadsheet::reader::xlsx::read(tmp.path()).unwrap();
             let ws = book.sheet_by_name_mut("HeroBase").unwrap();
             ws.style_mut((1, DATA_START)).set_background_color("#FF0000");
+            ws.style_mut((2, DATA_START)).borders_mut().bottom_mut().set_border_style("thin");
             umya_spreadsheet::writer::xlsx::write(&book, tmp.path()).unwrap();
         }
 
@@ -380,20 +471,42 @@ mod tests {
         assert_eq!(ws.value((1, HDR_NAME)), "id");
         assert!(ws.style((1, DATA_START)).background_color().is_some(),
                 "数据格的底色被推送抹掉了");
+
+        // 边框直接查 XML：umya 3.0.1 会把边框**定义**清空（`<left style="thin">` → `<left/>`），
+        // 连带让「只有边框」的格子连 `s` 引用都掉光。这两条一起断才算数。
+        let styles = String::from_utf8(zip_entry(tmp.path(), "xl/styles.xml")).unwrap();
+        assert!(styles.contains("style=\"thin\""), "边框定义被推送抹掉了");
+        let sheet = String::from_utf8(zip_entry(tmp.path(), "xl/worksheets/sheet1.xml")).unwrap();
+        let at = sheet.find(&format!("r=\"B{DATA_START}\"")).expect("找不到那个数据格");
+        let tag = &sheet[at..sheet[at..].find('>').map_or(sheet.len(), |e| at + e)];
+        assert!(tag.contains("s=\""), "数据格丢了样式引用（umya 清空边框后连 s 一起掉）: <c {tag}>");
     }
 
     /// 强制→ 是**就地**重写：清掉多余的列与数据行，但不动别的东西。
+    ///
+    /// 「强制→」只在**真冲突**时给。判据见 plan::classify——xlsx 单纯是超集时
+    /// 多出来的列一律不碰（列只能从 tbl 侧加），tablet 新加列且不与策划的列重名时
+    /// 走的是「补列→」（插入）。
     #[test]
     fn whole_table_push_trims_in_place() {
+        // tablet: id,name,atk ／ xlsx: id,name2,atk —— 第 2 列对不上、tail 里 atk 重名
         let mut g = group(data());
+        g.tables[0].schema.fields.push(crate::model::FieldDef {
+            name: "atk".into(), desc: "攻击".into(),
+            tbl_type: "int".into(), export: crate::model::Export::ClientServer,
+        });
+        for r in &mut g.tables[0].records { r.push("9".into()); }
         let tmp = TempXlsx::new();
-        write_two_sheet_book(tmp.path(), &data());
+        write_two_sheet_book(tmp.path(), &drifted());
 
-        // 装备：多一列、多两行
+        // 装备：改名第 2 列、加第 3 列 atk、多两行残留
         {
             let mut book = umya_spreadsheet::reader::xlsx::read(tmp.path()).unwrap();
             let ws = book.sheet_by_name_mut("HeroBase").unwrap();
-            ws.cell_mut((3, HDR_NAME)).set_value("策划加的列");
+            ws.cell_mut((2, HDR_NAME)).set_value("name2");
+            ws.cell_mut((3, HDR_DESC)).set_value("攻击");
+            ws.cell_mut((3, HDR_NAME)).set_value("atk");
+            ws.cell_mut((3, DATA_START)).set_value("7");
             for r in 0..2u32 {
                 ws.cell_mut((1, DATA_START + 2 + r)).set_value("残留行");
             }
@@ -404,12 +517,56 @@ mod tests {
         execute(tmp.path(), &mut g, "HeroBase", &op).unwrap();
 
         let s = &read_xlsx_sheets(tmp.path(), Some(&g)).unwrap()[0];
-        assert_eq!(s.columns.len(), 2, "多余列应被清掉");
+        assert_eq!(s.columns.len(), 3, "多余列应被清掉");
+        assert_eq!(s.columns[1].name.as_deref(), Some("name"), "留下的是 tablet 的列名");
+        assert_eq!(s.columns[2].name.as_deref(), Some("atk"));
         assert_eq!(s.rows.len(), 2, "多余数据行应被清掉");
-        assert_eq!(s.rows[1].cells, vec!["2", "bob"]);
+        assert_eq!(s.rows[1].cells, vec!["2", "bob", "9"]);
 
         let book = umya_spreadsheet::reader::xlsx::read(tmp.path()).unwrap();
         assert!(book.sheet_by_name("策划备注").is_ok(), "强制→ 不该重建整个工作簿");
+    }
+
+    /// **「补列→」是插入，不是覆盖。** 策划经常在 schema 列后面放自己的测试列 / 公式列，
+    /// 直接往那个位置写会把它们盖掉——这条钉的就是「策划的列活下来」。
+    #[test]
+    fn add_columns_inserts_and_keeps_designer_columns() {
+        let mut g = group(data());
+        g.tables[0].schema.fields.push(crate::model::FieldDef {
+            name: "atk".into(), desc: "攻击".into(),
+            tbl_type: "int".into(), export: crate::model::Export::ClientServer,
+        });
+        for (i, r) in g.tables[0].records.iter_mut().enumerate() {
+            r.push(if i == 0 { "7".into() } else { "8".into() });
+        }
+        let tmp = TempXlsx::new();
+        write_two_sheet_book(tmp.path(), &drifted());
+
+        // 策划在自己的第 3 列放了个公式列
+        {
+            let mut book = umya_spreadsheet::reader::xlsx::read(tmp.path()).unwrap();
+            let ws = book.sheet_by_name_mut("HeroBase").unwrap();
+            ws.cell_mut((3, HDR_DESC)).set_value("策划的");
+            ws.cell_mut((3, HDR_EXPORT)).set_value("不导出");
+            ws.cell_mut((3, HDR_TYPE)).set_value("str");
+            ws.cell_mut((3, HDR_NAME)).set_value("公式");
+            ws.cell_mut((3, DATA_START)).set_value("=A5");
+            ws.cell_mut((3, DATA_START + 1)).set_value("=A6");
+            umya_spreadsheet::writer::xlsx::write(&book, tmp.path()).unwrap();
+        }
+
+        let op = op(tmp.path(), &g, "HeroBase",
+                    SyncOp::Push { scope: PushScope::WithTabletColumns });
+        execute(tmp.path(), &mut g, "HeroBase", &op).unwrap();
+
+        let s = &read_xlsx_sheets(tmp.path(), Some(&g)).unwrap()[0];
+        assert_eq!(s.columns.len(), 4, "tablet 的 atk 插进来，策划的列还在");
+        assert_eq!(s.columns[2].name.as_deref(), Some("atk"), "新列插在匹配前缀之后");
+        assert_eq!(s.columns[3].name.as_deref(), Some("公式"), "策划的列被推到右边，没被盖掉");
+        assert_eq!(s.columns[3].desc.as_deref(), Some("策划的"));
+        assert_eq!(s.rows[0].cells[3], "=A5", "策划的公式值也活着");
+        assert_eq!(s.rows[0].cells[2], "7", "tablet 的值落在新列上");
+        assert_eq!(s.rows[1].cells[2], "8");
     }
 
     #[test]
@@ -442,7 +599,6 @@ mod tests {
         assert_eq!(s.rows.len(), 2, "升级不能吃掉原有数据");
         assert_eq!(s.rows[0].cells, vec!["1", "alice"]);
     }
-
     /// 回读同时带走 desc 与数据；**空 = 清空**。
     #[test]
     fn pull_takes_desc_and_clears_empty_cells() {
@@ -468,7 +624,6 @@ mod tests {
         assert_eq!(t.records[1], vec!["2", "bob"]);
         assert!(t.dirty, "回读后必须置上未保存标记，否则改动写不进 .tbl");
     }
-
     /// 回读只覆盖 xlsx 有的那几列，tablet 独有的列原样保留。
     #[test]
     fn pull_keeps_tablet_only_columns() {
@@ -526,6 +681,7 @@ mod tests {
         assert!(s.has_desc_row());
         assert_eq!(s.rows.len(), 2);
     }
+
 
     /// **黑盒的封闭性。** 「怎么对齐列」只该发生在 `plan` 里；执行器一旦自己重算，
     /// 就又有了两份规则，改一份忘一份——那正是这次重构要拆掉的东西。

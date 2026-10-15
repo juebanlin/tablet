@@ -215,7 +215,7 @@ fn pair_of(left: &SheetVo, right: Option<&SheetVo>) -> PairPlan {
 
     let has_diff = rows_differ(&left.rows, &right.rows, n) || desc_diff;
 
-    let (ops, blocked_reason) = match classify(&cm) {
+    let (ops, blocked_reason) = match classify(&left.columns, &right.columns, &cm) {
         Some(ops) => (ops, None),
         None => (Vec::new(), Some("表头不符合规范".to_string())),
     };
@@ -234,28 +234,40 @@ fn pair_of(left: &SheetVo, right: Option<&SheetVo>) -> PairPlan {
 
 /// 由列对齐结果决定「本来能做哪些操作」，`None` = 这一行不可操作。
 ///
+/// 两个前提（都是策划的实际习惯决定的）：
+/// 1. **列只能从 tbl 侧（schema）添加**。xlsx 里多出来的列是策划自己的测试列 / 公式列，
+///    一律不碰——既不删也不收进 schema。
+/// 2. **「补列→」是插入**：tablet 新加的字段插在匹配前缀之后，策划的列往右推，不被盖掉。
+///
 /// 注意这里**没有**「首列必须叫 id」那条判断：改名会让 `matched_prefix == 0`，
 /// 已经在下面被挡掉了，那条判断只会让首列不叫 id 的表被无端封死。
-fn classify(cm: &ColumnMatch) -> Option<Vec<SyncOp>> {
+fn classify(tablet: &[ColumnVo], xlsx: &[ColumnVo], cm: &ColumnMatch) -> Option<Vec<SyncOp>> {
     if cm.matched_prefix == 0 {
         return None;
     }
-    Some(if cm.tablet_only == 0 && cm.xlsx_only == 0 {
-        vec![
-            SyncOp::Push { scope: PushScope::MatchedOnly },
-            SyncOp::Pull,
-        ]
-    } else if cm.tablet_only > 0 && cm.xlsx_only == 0 {
-        vec![
-            SyncOp::Push { scope: PushScope::MatchedOnly },
-            SyncOp::Pull,
-            SyncOp::Push { scope: PushScope::WithTabletColumns },
-        ]
-    } else {
-        // 两侧各有独有列，或只有 xlsx 多列（策划的公式列 / 删列残留）：
-        // 结构对不上，只能整表重写
-        vec![SyncOp::Push { scope: PushScope::WholeTable }]
-    })
+
+    if cm.tablet_only > 0 {
+        // 前缀之后 tablet 的某个列名**又出现在 xlsx 的前缀之后** → 这不是「新加了一列」，
+        // 而是中途对不上（多半是列名被改过）。这时插进去会把同一列弄出两份，只能整表重写。
+        let tail_overlap = tablet[cm.matched_prefix..].iter().any(|t| {
+            xlsx[cm.matched_prefix..].iter().any(|x| x.name == t.name)
+        });
+        return Some(if tail_overlap {
+            vec![SyncOp::Push { scope: PushScope::WholeTable }]
+        } else {
+            vec![
+                SyncOp::Push { scope: PushScope::MatchedOnly },
+                SyncOp::Pull,
+                SyncOp::Push { scope: PushScope::WithTabletColumns },
+            ]
+        });
+    }
+
+    // tablet 的列全都按顺序匹配上了 → xlsx 后面多的东西是策划自己的，不碰
+    Some(vec![
+        SyncOp::Push { scope: PushScope::MatchedOnly },
+        SyncOp::Pull,
+    ])
 }
 
 /// 数据与 desc 都没差异时，`Push{MatchedOnly}` / `Pull` 没有意义，撤掉。
@@ -363,19 +375,50 @@ mod tests {
         assert!(p.ops.contains(&SyncOp::Push { scope: PushScope::WithTabletColumns }));
     }
 
+    /// tablet 新加了一列、xlsx 那边是策划自己的列 → 给「补列→」（插入语义）。
     #[test]
-    fn both_sides_extra_columns_offer_force_only() {
-        // tablet: id,name ／ xlsx: id,bonus（各有一个对方没有的）
-        let p = ops_of(Some(xlsx(&[("id", "编号"), ("bonus", "额外")],
-                                 &[vec!["1", "x"]])), data());
+    fn tablet_extra_columns_against_designer_columns_offer_insert() {
+        let mut g = group(data());
+        g.tables[0].schema.fields.push(crate::model::FieldDef {
+            name: "atk".into(), desc: "攻击".into(),
+            tbl_type: "int".into(), export: crate::model::Export::ClientServer,
+        });
+        let sheets = vec![xlsx(&[("id", "编号"), ("name", "名字"), ("公式", "策划的")],
+                              &[vec!["1", "alice", "=A1"]])];
+        let p = &plan_group(&g, Some(&sheets)).pairs[0];
+        assert_eq!(p.ops, vec![
+            SyncOp::Push { scope: PushScope::MatchedOnly },
+            SyncOp::Pull,
+            SyncOp::Push { scope: PushScope::WithTabletColumns },
+        ], "策划的列挡在中间，但 tablet 的 atk 是**新**的（不与它重名）→ 插进去");
+    }
+
+    /// 前缀之后两边**有重名**（tablet 的某个列名又出现在 xlsx 的前缀之后）→ 中途对不上，
+    /// 多半是列名被改过。插进去会把同一列弄出两份，只能整表重写。
+    #[test]
+    fn overlapping_tail_columns_offer_force_only() {
+        // tablet: id,name,atk ／ xlsx: id,name2,atk  → 第 2 列对不上，tail 里 atk 重名
+        let mut g = group(data());
+        g.tables[0].schema.fields.push(crate::model::FieldDef {
+            name: "atk".into(), desc: "攻击".into(),
+            tbl_type: "int".into(), export: crate::model::Export::ClientServer,
+        });
+        let sheets = vec![xlsx(&[("id", "编号"), ("name2", "名字"), ("atk", "攻击")],
+                              &[vec!["1", "alice", "9"]])];
+        let p = &plan_group(&g, Some(&sheets)).pairs[0];
         assert_eq!(p.ops, vec![SyncOp::Push { scope: PushScope::WholeTable }]);
     }
 
+    /// xlsx 单纯是超集（tablet 的列全匹配上了）→ 多出来的列是策划自己的，不碰。
     #[test]
-    fn xlsx_extra_columns_offer_force_only() {
-        let p = ops_of(Some(xlsx(&[("id", "编号"), ("name", "名字"), ("note", "备注")],
-                                 &[vec!["1", "alice", "x"]])), data());
-        assert_eq!(p.ops, vec![SyncOp::Push { scope: PushScope::WholeTable }]);
+    fn xlsx_extra_columns_are_left_alone() {
+        let p = ops_of(Some(xlsx(&[("id", "编号"), ("name", "名字"), ("公式", "策划的")],
+                                 &[vec!["1", "alice", "=A1"]])), data());
+        assert_eq!(p.ops, vec![
+            SyncOp::Push { scope: PushScope::MatchedOnly },
+            SyncOp::Pull,
+        ]);
+        assert!(p.blocked_reason.is_none());
     }
 
     #[test]
