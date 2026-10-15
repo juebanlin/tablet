@@ -266,22 +266,27 @@ fn save_project_files(project: &mut Project) -> (usize, usize, Vec<String>) {
             }
         }
     }
-    // 项目首次落盘时写一份全量 [export] 默认的 project.toml（无注释，serde 生成）。
-    // 已存在则不覆盖（用户改过 / 手写过都保留）。
-    let project_toml_path = project.project_root.join(crate::project::PROJECT_TOML_FILE);
-    if !project_toml_path.exists() {
-        match crate::project::default_project_toml_text() {
-            Ok(t) => match std::fs::write(&project_toml_path, t) {
-                Ok(()) => count += 1,
+    // `project.toml` 是**可选的 `[export]` 覆盖段**：只在用户真的改过 export 时才写。
+    // 没改过就不该有文件——export 继续从工作区 `tablet.toml` 继承，改全局能传播。
+    // 写的内容是项目**当前的** `config.export`（曾经这里写的是 `ExportConfig::default()`，
+    // 于是"新建项目首次保存"会把从全局拷来的配置静默重置掉，@02.26.3）。
+    if project.toml_changed() {
+        let path = project.project_root.join(crate::project::PROJECT_TOML_FILE);
+        match crate::project::project_toml_text(&project.config.export) {
+            Ok(txt) => match std::fs::write(&path, txt) {
+                Ok(()) => {
+                    project.original_export = project.config.export.clone();
+                    count += 1;
+                }
                 Err(e) => eprintln!(
                     "warn: write project.toml failed: {} ({})",
-                    project_toml_path.display(),
+                    path.display(),
                     e
                 ),
             },
             Err(e) => eprintln!(
                 "warn: 生成 project.toml 内容失败: {} ({})",
-                project_toml_path.display(),
+                path.display(),
                 e
             ),
         }
@@ -773,6 +778,7 @@ impl ProjectEngine {
         let config = ProjectConfig {
             export: self.global_config.export.clone().unwrap_or_default(),
         };
+        let config_export = config.export.clone();
 
         let mut new_project = Project {
             workdir: self.workdir.clone(),
@@ -782,6 +788,8 @@ impl ProjectEngine {
             // 还没落盘 → 「盘上」是空的
             original_meta: crate::tblschema::SchemaMetadata::default(),
             original_separators: Default::default(),
+            // 盘上没有 project.toml，而加载缺省时 export 是从全局继承的 → 现值就是"盘上值"
+            original_export: config_export,
             groups: Vec::new(),
             state: crate::model::ProjectState::Pending,
         };
@@ -850,6 +858,7 @@ impl ProjectEngine {
         // 克隆体的「盘上」是空的，不能继承源项目盘上的那份
         new_project.original_meta = crate::tblschema::SchemaMetadata::default();
         new_project.original_separators = Default::default();
+        new_project.original_export = new_project.config.export.clone();
         new_project.state = crate::model::ProjectState::Pending;
 
         let new_data_dir = new_project.data_dir();
@@ -2420,6 +2429,7 @@ mod project_toml_template_tests {
         schema.meta.id = id.to_string();
         schema.meta.name = id.to_string();
         let config = ProjectConfig::default();
+        let original_export = config.export.clone();
         Project {
             workdir,
             project_root,
@@ -2427,51 +2437,77 @@ mod project_toml_template_tests {
             schema,
             original_meta: crate::tblschema::SchemaMetadata::default(),
             original_separators: Default::default(),
+            original_export,
             groups: Vec::new(),
             state: crate::model::ProjectState::Pending,
         }
     }
 
     #[test]
-    fn save_project_files_writes_project_toml_on_first_save() {
-        let dir = unique_tmp("first_save");
+    fn project_toml_is_only_written_when_export_actually_changed() {
+        // `project.toml` 是**可选的 [export] 覆盖段**：没改过就不该有文件，
+        // export 继续从工作区 tablet.toml 继承（@02.26.3）。
+        let dir = unique_tmp("toml_optional");
         std::fs::create_dir_all(&dir).unwrap();
         let project_root = dir.join("projects").join("p1");
         let mut project = make_project(dir.clone(), project_root.clone(), "p1");
-        let (_count, _del, _w) = save_project_files(&mut project);
-
         let toml_path = project_root.join(crate::project::PROJECT_TOML_FILE);
-        assert!(toml_path.exists(), "project.toml 应当被写入: {}", toml_path.display());
+
+        save_project_files(&mut project);
+        assert!(!toml_path.exists(), "没改过 export 就不该生成覆盖文件");
+        assert!(project_root.join(crate::project::PROJECT_SCHEMA_FILE).exists(),
+            "但 tblschema 首次落盘还是要写");
+
+        // 改 export（模拟「项目设置」）→ 保存才写入
+        project.config.export.json.as_mut().unwrap().empty_as = Some(crate::enums::JsonEmptyAs::Omit);
+        assert!(project.toml_changed(), "改了 export → 该写 project.toml");
+        save_project_files(&mut project);
+
         let txt = std::fs::read_to_string(&toml_path).unwrap();
-        // 关键 export 段都在
-        assert!(txt.contains("[export.server.cpp]"), "缺少 [export.server.cpp]");
-        assert!(txt.contains("[export.client.csharp_unity]"), "缺少 [export.client.csharp_unity]");
-        // 不该写工作区段（banner 注释里允许字面量出现，这里只看真段头）
+        assert!(txt.lines().any(|l| l.trim() == "[export.json]"), "缺 [export.json]: {}", txt);
         assert!(!txt.lines().any(|l| l.trim() == "[project]"), "项目级 toml 不应有 [project] 段");
         assert!(!txt.lines().any(|l| l.trim() == "[ui]"), "项目级 toml 不应有 [ui] 段（工作区级）");
-        assert!(!txt.lines().any(|l| l.trim() == "[separators]"), "项目级 toml 不应有 [separators] 段");
-        // 模板本身合法 toml
-        let _: GlobalConfig = toml::from_str(&txt).expect("生成的模板必须能解析");
+        assert!(!project.toml_changed(), "落盘后应当回到「没改过」");
+
+        // 没改过再存一次，不该重写
+        let before = std::fs::read_to_string(&toml_path).unwrap();
+        save_project_files(&mut project);
+        assert_eq!(std::fs::read_to_string(&toml_path).unwrap(), before, "没改过不该重写");
+
+        // 重载：写出去的必须是**项目当前的**配置，不是默认值。
+        // 曾经这里写的是 `ExportConfig::default()`，于是"新建项目首次保存"会把
+        // 从全局拷来的配置静默重置成全默认。
+        std::fs::write(dir.join(crate::CONFIG_FILE), "").unwrap();
+        let loaded = crate::project::load_specific_project(&dir, "p1").expect("reload");
+        assert_eq!(
+            loaded.config.export.json.as_ref().unwrap().empty_as,
+            Some(crate::enums::JsonEmptyAs::Omit),
+            "重载后 export 应当还是写出去的那份"
+        );
+        assert!(!loaded.toml_changed(), "刚加载的项目不该显示 export 改过");
 
         let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
-    fn save_project_files_does_not_overwrite_existing_project_toml() {
+    fn saving_does_not_touch_an_unchanged_project_toml() {
+        // 只要没在「项目设置」里动 export，保存就不碰 project.toml。
         let dir = unique_tmp("preserve");
         let project_root = dir.join("projects").join("p1");
         std::fs::create_dir_all(&project_root).unwrap();
         let toml_path = project_root.join(crate::project::PROJECT_TOML_FILE);
-        let custom = "[export.server.java]\npackage = \"com.user.kept\"\n";
+        let custom = "# 手写注释
+[export.server.java]
+package = \"com.user.kept\"
+";
         std::fs::write(&toml_path, custom).unwrap();
 
         let mut project = make_project(dir.clone(), project_root.clone(), "p1");
-        // root 已存在 → 不该再触发 state=Pending 写盘逻辑会重新建一遍 dir，但写 project.toml 该跳过
         project.state = crate::model::ProjectState::Loaded;
         let _ = save_project_files(&mut project);
 
-        let after = std::fs::read_to_string(&toml_path).unwrap();
-        assert_eq!(after, custom, "已有 project.toml 不应被覆盖");
+        assert_eq!(std::fs::read_to_string(&toml_path).unwrap(), custom,
+            "没改过 export 时保存不该碰这个文件");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

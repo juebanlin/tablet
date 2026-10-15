@@ -54,17 +54,21 @@ pub fn write_default_global_config(workdir: &Path) -> Result<()> {
     write_global_config(workdir, &GlobalConfig::default())
 }
 
-/// 项目级 `project.toml` 首次落盘内容：全量 `[export]` 默认、无注释。
+/// 把项目的 `[export]` 配置序列化成 `project.toml` 的内容（无注释、整写）。
+///
 /// 用单字段包装让 serde 把 `export` 输出为顶层 `[export]` 表（子段带规范前缀），
-/// 可被项目配置解析器（`parse_project_config`）读取。已存在则不覆盖。
-pub fn default_project_toml_text() -> Result<String> {
+/// 可被项目配置解析器（`parse_project_config`）读取。
+///
+/// `project.toml` 是**可选的覆盖段**：没有这个文件时 `config.export` 从工作区
+/// `tablet.toml` 继承；文件只在用户真的在「项目设置」里改过 export 时才生成。
+/// 所以这里序列化的是项目**当前的**配置，不是默认值——写默认值会让"新建项目
+/// 首次保存"把从全局拷来的配置静默重置掉（@02.26.3）。
+pub fn project_toml_text(export: &ExportConfig) -> Result<String> {
     #[derive(serde::Serialize)]
-    struct ExportRoot {
-        export: ExportConfig,
+    struct ExportRoot<'a> {
+        export: &'a ExportConfig,
     }
-    Ok(toml::to_string(&ExportRoot {
-        export: ExportConfig::default(),
-    })?)
+    Ok(toml::to_string(&ExportRoot { export })?)
 }
 
 /// 加载 Project（默认走 last_project 或扫描第一个）。
@@ -144,13 +148,15 @@ fn load_specific_project_impl(
     // 被引用展示列（@10）：.tbl 不含该信息，从 project.tblschema 段回填到节点。
     crate::tblschema::apply_display_to_groups(&mut groups, &schema);
 
+    // 刚从盘上读进来，盘上的就是它自己
+    let original_export = config.export.clone();
     Ok(Project {
         workdir: workdir.to_path_buf(),
         project_root: project_root.to_path_buf(),
         config,
-        // 刚从盘上读进来，盘上的就是它自己
         original_meta: schema.meta.clone(),
         original_separators: schema.separators.clone(),
+        original_export,
         schema,
         groups,
         state: crate::model::ProjectState::Loaded,
@@ -991,9 +997,9 @@ mod tests {
     }
 
     #[test]
-    fn default_project_toml_text_is_comment_free_export_only() {
-        // 项目级默认 toml 仅含 [export] 段、无注释——[ui]/[project]/[separators] 都是工作区级。
-        let txt = default_project_toml_text().expect("text");
+    fn project_toml_text_is_comment_free_export_only() {
+        // 项目级 toml 仅含 [export] 段、无注释——[ui]/[project]/[separators] 都是工作区级。
+        let txt = project_toml_text(&ExportConfig::default()).expect("text");
         let _: GlobalConfig = toml::from_str(&txt)
             .expect("project.toml default must parse as GlobalConfig");
         assert!(!txt.lines().any(|l| l.trim_start().starts_with('#')), "project.toml 不应带注释");

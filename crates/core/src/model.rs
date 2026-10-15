@@ -46,6 +46,9 @@ pub struct Project {
     /// 见 [`Project::schema_changed`]。
     pub original_meta: SchemaMetadata,
     pub original_separators: crate::types::SeparatorsSection,
+    /// 上次落盘时的 `[export]`（住在 `project.toml`，与 `project.tblschema` 是两个文件）。
+    /// 语义同上：只在 load / save 两个点写。
+    pub original_export: ExportConfig,
     pub groups: Vec<Group>,
     /// 项目状态：Loaded（已落盘）或 Pending（待保存）。
     /// save 时 Pending 项目会先 create_dir_all，然后切换为 Loaded。
@@ -101,7 +104,19 @@ impl Project {
         self.state.is_pending()
             || self.schema.meta != self.original_meta
             || self.schema.separators != self.original_separators
+            || self.toml_changed()
             || self.groups.iter().any(|g| g.is_dirty())
+    }
+
+    /// `project.toml` 现在写盘会和盘上不一样吗。
+    ///
+    /// 这个文件里只有 `[export]`，与 `schema_changed()` 管的是**两个不同的文件**，
+    /// 所以要分开问：改 export 不该顺手重写 `project.tblschema`，反之亦然。
+    ///
+    /// `project.toml` 是**可选的覆盖段**——没改过就不该有文件，让 export 继续从
+    /// 工作区 `tablet.toml` 继承（@02.26.3）。
+    pub fn toml_changed(&self) -> bool {
+        self.config.export != self.original_export
     }
 }
 
