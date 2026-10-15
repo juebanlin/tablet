@@ -110,14 +110,14 @@ pub fn build_tree_nodes(state: &mut AppState) -> Vec<TreeNode> {
         // 项目根节点 marker 聚合
         let project_obj = state.engine.find_project(pid);
         let root_pending = project_obj.map(|p| p.state.is_pending()).unwrap_or(false);
-        let own_changed = project_obj.map(|p| p.schema_changed()).unwrap_or(false);
         let mut all_deleted_self = false;
         let mut all_deleted = true;
-        // 项目级"新建未落盘"算 has_new；项目级 schema 变了（且 root 已落盘 → 仅 meta/结构改）算 has_dirty。
-        // 这两条让空项目（无 group）也能正确显示 🟢/🟡。
-        // 注意 own_changed 已经含了子节点的结构变化（`Group::schema_changed` 聚合上来），
-        // 下面那轮 OR 的是"只改了数据"的部分——两者合起来就是 `Project::is_dirty()`。
-        let mut has_dirty = own_changed && !root_pending;
+        // 脏直接问实体自己（`Project::is_dirty` = 自己的 meta/separators + `[export]` +
+        // 结构变化 + 只改了数据），**不在这里手工拼一遍**——以前拼的时候漏了
+        // `toml_changed()`，于是"只改了 export 保存"不亮 🟡（@02.26.3）。
+        // 之后往 `Project::is_dirty` 里加东西，这里自动跟上。
+        let has_dirty = project_obj.is_some_and(|p| p.is_dirty());
+        // 新建是另一回事：`!saved` / `is_new` 不是脏，🟢 与 🟡 是两种标记
         let mut has_new = root_pending;
         for g in &groups {
             if !g.tables.is_empty() || !g.constants.is_empty() || !g.enums.is_empty() {
@@ -126,17 +126,14 @@ pub fn build_tree_nodes(state: &mut AppState) -> Vec<TreeNode> {
             if g.is_new { has_new = true; }
             for t in &g.tables {
                 if !t.deleted { all_deleted = false; }
-                if t.dirty && !t.deleted { has_dirty = true; }
                 if !t.saved && !t.deleted { has_new = true; }
             }
             for c in &g.constants {
                 if !c.deleted { all_deleted = false; }
-                if c.dirty && !c.deleted { has_dirty = true; }
                 if !c.saved && !c.deleted { has_new = true; }
             }
             for e in &g.enums {
                 if !e.deleted { all_deleted = false; }
-                if e.dirty && !e.deleted { has_dirty = true; }
                 if !e.saved && !e.deleted { has_new = true; }
             }
         }
@@ -178,9 +175,8 @@ pub fn build_tree_nodes(state: &mut AppState) -> Vec<TreeNode> {
                 && group.tables.iter().all(|t| t.deleted)
                 && group.constants.iter().all(|c| c.deleted)
                 && group.enums.iter().all(|e| e.deleted);
-            let has_dirty = group.tables.iter().any(|t| t.dirty && !t.deleted)
-                || group.constants.iter().any(|c| c.dirty && !c.deleted)
-                || group.enums.iter().any(|e| e.dirty && !e.deleted);
+            // 同上：问 Group 自己（自己的名字 + 任一子节点），不手工拼
+            let has_dirty = group.is_dirty();
             let group_deleted = all_deleted && !group.is_new;
             let group_is_new = group.is_new;
             let group_dirty = has_dirty && !group_is_new && !group_deleted;

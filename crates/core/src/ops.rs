@@ -2940,6 +2940,27 @@ package = \"com.user.kept\"
     }
 
     #[test]
+    fn changing_export_makes_the_project_dirty_but_not_the_schema() {
+        // `project.toml` 与 `project.tblschema` 是两个文件，所以要分开问。
+        // 曾经 UI 树手工拼聚合、只问 `schema_changed()`，于是"只改了 export 保存"
+        // 不亮 🟡——树现在直接问 `Project::is_dirty()`。
+        let (dir, mut engine) = engine_with_saved_node("export_dirty", "hero", "HeroBase");
+        let pid = engine.active_project_id().unwrap().to_string();
+        assert!(!engine.find_project(&pid).unwrap().is_dirty(), "起点应当干净");
+
+        engine.find_project_mut(&pid).unwrap().config.export
+            .json.as_mut().unwrap().empty_as = Some(crate::enums::JsonEmptyAs::Omit);
+
+        let p = engine.find_project(&pid).unwrap();
+        assert!(p.toml_changed(), "export 变了 → project.toml 要写");
+        assert!(p.is_dirty(), "项目该亮 🟡");
+        assert!(!p.schema_changed(), "但 project.tblschema 一个字都不用动");
+        assert!(engine.is_project_dirty(&pid), "关项目前的「有未保存改动」也应当为真");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn deleting_a_saved_node_is_a_schema_change() {
         // 被删掉的段要从 project.tblschema 里消失，所以删除也是 schema 变更。
         // 而"新建了又没保存就删掉"的节点盘上从来没有过，不该算。
