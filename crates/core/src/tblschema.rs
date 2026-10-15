@@ -511,6 +511,7 @@ pub fn apply_schema_to_project(
                 let dir = config_dir.join(&sec.group);
                 groups.push(Group {
                     name: sec.group.clone(),
+                    original_name: sec.group.clone(),
                     dir,
                     tables: Vec::new(),
                     constants: Vec::new(),
@@ -561,6 +562,7 @@ pub fn apply_schema_to_project(
                     let path = group.dir.join(format!("{}.tbl", sec.name));
                     group.tables.push(Table {
                         name: sec.name.clone(),
+                        original_name: sec.name.clone(),
                         path,
                         schema: TableSchema { fields: fields.clone() },
                         records,
@@ -600,6 +602,7 @@ pub fn apply_schema_to_project(
                     let snap = entries.clone();
                     group.constants.push(Constant {
                         name: sec.name.clone(),
+                        original_name: sec.name.clone(),
                         path,
                         entries,
                         dirty: true,
@@ -633,6 +636,7 @@ pub fn apply_schema_to_project(
                     let snap = entries.clone();
                     group.enums.push(EnumDef {
                         name: sec.name.clone(),
+                        original_name: sec.name.clone(),
                         path,
                         entries,
                         dirty: true,
@@ -1208,16 +1212,16 @@ id | int | cs | x
             ],
         };
         let mut groups = vec![Group {
-            name: "hero".into(), dir: std::path::PathBuf::new(),
+            name: "hero".into(), original_name: "hero".into(), dir: std::path::PathBuf::new(),
             tables: vec![Table {
-                name: "HeroBase".into(), path: std::path::PathBuf::new(),
+                name: "HeroBase".into(), original_name: "HeroBase".into(), path: std::path::PathBuf::new(),
                 schema: TableSchema { fields: vec![] }, records: vec![],
                 dirty: false, deleted: false, original_records: vec![], original_fields: vec![],
                 saved: true, fmt_ver: crate::tbl::DEFAULT_TBL_VERSION, display_field: None,
             }],
             constants: vec![],
             enums: vec![EnumDef {
-                name: "HeroType".into(), path: std::path::PathBuf::new(),
+                name: "HeroType".into(), original_name: "HeroType".into(), path: std::path::PathBuf::new(),
                 entries: vec![], dirty: false, deleted: false,
                 original_entries: vec![], saved: true, display_field: None,
             }],

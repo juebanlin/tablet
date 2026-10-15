@@ -23,6 +23,7 @@ pub fn table(name: &str, records: Vec<Vec<&str>>) -> Table {
     let f = fields();
     Table {
         name: name.to_string(),
+        original_name: name.to_string(),
         path: PathBuf::from(format!("{}.tbl", name)),
         schema: TableSchema { fields: f.clone() },
         records: records.iter().map(|r| r.iter().map(|s| s.to_string()).collect()).collect(),
@@ -39,6 +40,7 @@ pub fn table(name: &str, records: Vec<Vec<&str>>) -> Table {
 pub fn group(records: Vec<Vec<&str>>) -> Group {
     Group {
         name: "hero".into(),
+        original_name: "hero".into(),
         dir: PathBuf::from("hero"),
         tables: vec![table("HeroBase", records)],
         constants: vec![],

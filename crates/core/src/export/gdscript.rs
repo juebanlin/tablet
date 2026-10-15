@@ -485,6 +485,7 @@ mod tests {
     fn enum_carries_reverse_name_table() {
         let e = EnumDef {
             name: "HeroType".to_string(),
+            original_name: "HeroType".to_string(),
             path: std::path::PathBuf::new(),
             entries: vec![
                 EnumEntry { id: "1".to_string(), name: "WARRIOR".to_string(), desc: "战士".to_string() },
@@ -510,6 +511,7 @@ mod tests {
     fn enum_gen() {
         let e = EnumDef {
             name: "HeroType".to_string(),
+            original_name: "HeroType".to_string(),
             path: std::path::PathBuf::new(),
             entries: vec![
                 EnumEntry { id: "1".to_string(), name: "Warrior".to_string(), desc: "战士".to_string() },

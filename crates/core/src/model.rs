@@ -508,6 +508,9 @@ pub struct ProjectConfig {
 #[derive(Debug, Clone)]
 pub struct Group {
     pub name: String,
+    /// 上次落盘时的组名。改名不在改名那一刻动盘，只记在这里，save 时才搬目录。
+    /// 语义同 `Table::original_name`：**只在 load / save 两个点写**。
+    pub original_name: String,
     pub dir: PathBuf,
     pub tables: Vec<Table>,
     pub constants: Vec<Constant>,
@@ -518,6 +521,13 @@ pub struct Group {
 #[derive(Debug, Clone)]
 pub struct Table {
     pub name: String,
+    /// 上次落盘时的表名，`.tbl` 在盘上叫什么。
+    ///
+    /// **只在 load / save 两个点写，改名时不动**——这正是连续改名 A→B→C 仍然
+    /// 找得到 `A.tbl` 的原因；若记成「上一次改名前叫什么」，第二次改名就把 A
+    /// 覆盖掉，save 时会去找一个不存在的 `B.tbl`。
+    /// 与 `original_records` / `original_fields` 同源：都是「上次落盘时的样子」。
+    pub original_name: String,
     pub path: PathBuf,
     pub schema: TableSchema,
     pub records: Vec<Vec<String>>,
@@ -540,7 +550,10 @@ pub struct Table {
 impl Table {
     pub fn update_dirty(&mut self) {
         self.dirty = self.records != self.original_records
-            || self.schema.fields != self.original_fields;
+            || self.schema.fields != self.original_fields
+            // 改名也是一次未落盘的改动：盘上还是旧文件名，save 时才搬。
+            // 少了这条，改名后的节点在树上显示为「干净」。
+            || self.original_name != self.name;
     }
 }
 
@@ -566,6 +579,8 @@ pub struct FieldDef {
 #[derive(Debug, Clone)]
 pub struct Constant {
     pub name: String,
+    /// 上次落盘时的常量表名。语义同 `Table::original_name`。
+    pub original_name: String,
     pub path: PathBuf,
     pub entries: Vec<ConstEntry>,
     pub dirty: bool,
@@ -577,7 +592,8 @@ pub struct Constant {
 
 impl Constant {
     pub fn update_dirty(&mut self) {
-        self.dirty = self.entries != self.original_entries;
+        self.dirty = self.entries != self.original_entries
+            || self.original_name != self.name;
     }
 }
 
@@ -600,6 +616,8 @@ pub const ENUM_DEFAULT_DISPLAY_FIELD: &str = "name";
 #[derive(Debug, Clone)]
 pub struct EnumDef {
     pub name: String,
+    /// 上次落盘时的枚举名。语义同 `Table::original_name`。
+    pub original_name: String,
     pub path: PathBuf,
     pub entries: Vec<EnumEntry>,
     pub dirty: bool,
@@ -614,7 +632,8 @@ pub struct EnumDef {
 
 impl EnumDef {
     pub fn update_dirty(&mut self) {
-        self.dirty = self.entries != self.original_entries;
+        self.dirty = self.entries != self.original_entries
+            || self.original_name != self.name;
     }
 }
 

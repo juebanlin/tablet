@@ -393,6 +393,7 @@ mod tests {
         // 值→名：拿到服务端传来的 int 后要显示 / 打日志时用 names[id]
         let e = EnumDef {
             name: "HeroType".to_string(),
+            original_name: "HeroType".to_string(),
             path: std::path::PathBuf::new(),
             entries: vec![
                 EnumEntry { id: "1".to_string(), name: "WARRIOR".to_string(), desc: "战士".to_string() },

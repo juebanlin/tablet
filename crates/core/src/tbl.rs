@@ -81,7 +81,7 @@ impl TableCodec for V2Codec {
 
         let name = path.file_stem().unwrap_or_default().to_string_lossy().to_string();
         Ok(Table {
-            name, path: path.to_path_buf(),
+            original_name: name.clone(), name, path: path.to_path_buf(),
             schema: TableSchema { fields: field_defs.clone() },
             original_records: records.clone(), original_fields: field_defs,
             records, dirty: false, deleted: false, saved: true, fmt_ver: TblVersion::V2,
@@ -201,7 +201,7 @@ impl TableCodec for V3Codec {
 
         let name = path.file_stem().unwrap_or_default().to_string_lossy().to_string();
         Ok(Table {
-            name, path: path.to_path_buf(),
+            original_name: name.clone(), name, path: path.to_path_buf(),
             schema: TableSchema { fields: field_defs.clone() },
             original_records: records.clone(), original_fields: field_defs,
             records, dirty: false, deleted: false, saved: true, fmt_ver: TblVersion::V3,
@@ -341,7 +341,7 @@ fn parse_constant(path: &Path, data_lines: &[&str]) -> Result<TblFile> {
     }
     let name = path.file_stem().unwrap_or_default().to_string_lossy().to_string();
     Ok(TblFile::Constant(Constant {
-        name, path: path.to_path_buf(),
+        original_name: name.clone(), name, path: path.to_path_buf(),
         original_entries: entries.clone(), entries,
         dirty: false, deleted: false, saved: true,
     }))
@@ -360,7 +360,7 @@ fn parse_enum(path: &Path, data_lines: &[&str]) -> Result<TblFile> {
     }
     let name = path.file_stem().unwrap_or_default().to_string_lossy().to_string();
     Ok(TblFile::Enum(EnumDef {
-        name, path: path.to_path_buf(),
+        original_name: name.clone(), name, path: path.to_path_buf(),
         original_entries: entries.clone(), entries,
         dirty: false, deleted: false, saved: true,
         display_field: None,

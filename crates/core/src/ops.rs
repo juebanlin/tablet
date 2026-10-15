@@ -1,5 +1,5 @@
 ﻿use std::collections::HashSet;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use crate::model::*;
 use crate::tbl::DEFAULT_TBL_VERSION;
 use crate::validate::*;
@@ -64,19 +64,120 @@ fn sync_schema_from_groups(project: &mut Project) {
     project.schema_dirty = true;
 }
 
-/// 保存单个 Project 的所有 dirty / deleted 节点；返回 (保存数, 删除数)。
+/// 保存前把「改了名但还没落盘」的组目录 / `.tbl` 文件在盘上搬到位。
+///
+/// 改名是唯一一个曾经「保存前就碰文件系统」的操作（撤销也要它让路），所以现在
+/// 改名只写内存——`name` 变了、`original_name` 不动，搬文件推迟到这里。
+///
+/// 旧位置由「上次落盘时的名字」推出来，于是两种难缠的情况都自然成立：
+/// - **连续改名** A→B→C：`original_name` 始终是 `A`，盘上确实还是 `A.tbl`
+/// - **父子同时改名**：组记组的原名、节点记节点的原名，两级各推各的，拼起来就对了
+///
+/// 顺序是**先组后子**：组目录整个搬走时组内文件跟着走，叶子名没变的子节点到
+/// 这一步就已经到位了。
+///
+/// 搬不动的（文件被占用 / 没权限）就**把内存退回去**，宁可这次改名不生效，也不要
+/// 内存说叫 B、盘上还叫 A。退回去这件事通过返回值报到 UI 日志，不吞。
+fn apply_pending_renames(project: &mut Project) -> Vec<String> {
+    let mut warnings = Vec::new();
+    let data_dir = project.data_dir();
+    for group in &mut project.groups {
+        // ── 组目录 ──
+        if group.original_name != group.name {
+            let old_dir = data_dir.join(&group.original_name);
+            let new_dir = data_dir.join(&group.name);
+            // 未落过盘的组（is_new）盘上没有旧目录 → 直接认下新名
+            let moved = if old_dir.is_dir() {
+                match std::fs::rename(&old_dir, &new_dir) {
+                    Ok(()) => true,
+                    Err(e) => {
+                        warnings.push(format!(
+                            "重命名组 {} → {} 失败，保留原名: {}",
+                            group.original_name, group.name, e
+                        ));
+                        false
+                    }
+                }
+            } else {
+                true
+            };
+            if moved {
+                group.dir = new_dir;
+                group.original_name = group.name.clone();
+            } else {
+                // 组名退回旧值。**不跳过组内节点**——组改名失败不该连累节点自己的
+                // 改名，下面那一轮按退回后的 `group.dir` 继续走。
+                group.name = group.original_name.clone();
+                group.dir = old_dir;
+            }
+        }
+        // 组目录定下来后重算子节点 path：`dir` 变了，叶子名没变的也得跟着改
+        let dir = group.dir.clone();
+        for t in &mut group.tables { t.path = dir.join(format!("{}.tbl", t.name)); }
+        for c in &mut group.constants { c.path = dir.join(format!("{}.tbl", c.name)); }
+        for e in &mut group.enums { e.path = dir.join(format!("{}.tbl", e.name)); }
+
+        // ── 叶子文件 ──
+        for t in &mut group.tables {
+            if let Some(w) = rename_tbl_file(&dir, &mut t.name, &mut t.original_name, &mut t.path) {
+                warnings.push(w);
+            }
+        }
+        for c in &mut group.constants {
+            if let Some(w) = rename_tbl_file(&dir, &mut c.name, &mut c.original_name, &mut c.path) {
+                warnings.push(w);
+            }
+        }
+        for e in &mut group.enums {
+            if let Some(w) = rename_tbl_file(&dir, &mut e.name, &mut e.original_name, &mut e.path) {
+                warnings.push(w);
+            }
+        }
+    }
+    warnings
+}
+
+/// 把单个 `.tbl` 从 `original_name` 搬到 `name`（同一组目录内）。
+///
+/// `original_name == name` 时**什么也不做**——包括不重算 `path`：组目录刚刚搬过时
+/// 调用方已经按新目录重算好了，这里再算一次是多余的。
+/// 盘上没有旧文件（新节点）时只更新内存。
+/// 失败时把 `name` / `path` 退回旧值并返回一条警告。
+fn rename_tbl_file(
+    dir: &Path,
+    name: &mut String,
+    original_name: &mut String,
+    path: &mut PathBuf,
+) -> Option<String> {
+    if *original_name == *name { return None; }
+    let old_path = dir.join(format!("{}.tbl", original_name));
+    let new_path = dir.join(format!("{}.tbl", name));
+    if old_path.is_file() {
+        if let Err(e) = std::fs::rename(&old_path, &new_path) {
+            let w = format!("重命名 {} 失败，保留原名: {}", old_path.display(), e);
+            *name = original_name.clone();
+            *path = old_path;
+            return Some(w);
+        }
+    }
+    *original_name = name.clone();
+    *path = new_path;
+    None
+}
+
+/// 保存单个 Project 的所有 dirty / deleted 节点；返回 (保存数, 删除数, 警告)。
 /// 抽出来给 save_all（active 一份）和 save_all_projects（遍历）共用。
 ///
 /// 项目级落盘（root 目录创建 / .tblschema 写入）算 1 次保存动作，
 /// 让"空项目（仅 meta，无 group）"首次保存的日志为"已保存 1 个文件"而不是"无修改"。
-fn save_project_files(project: &mut Project) -> (usize, usize) {
+fn save_project_files(project: &mut Project) -> (usize, usize, Vec<String>) {
     let mut count = 0;
     let mut deleted = 0;
     // 第一步：克隆出来但未落盘的项目，先建 root 目录 + 让 schema 一并落地
     if project.state.is_pending() {
         if let Err(e) = std::fs::create_dir_all(&project.project_root) {
             eprintln!("warn: create project root failed: {} ({})", project.project_root.display(), e);
-            return (0, 0);
+            return (0, 0, Vec::new());
         }
         project.state = crate::model::ProjectState::Loaded;
         project.schema_dirty = true;
@@ -126,6 +227,8 @@ fn save_project_files(project: &mut Project) -> (usize, usize) {
             count += 1;
         }
     }
+    // 改名先落位（盘上搬完），再走下面的写入循环——两边都靠 original_name 对齐
+    let warnings = apply_pending_renames(project);
     for group in &mut project.groups {
         if group.is_new {
             let _ = std::fs::create_dir_all(&group.dir);
@@ -142,6 +245,8 @@ fn save_project_files(project: &mut Project) -> (usize, usize) {
                 if std::fs::write(&table.path, &content).is_ok() {
                     table.original_records = table.records.clone();
                     table.original_fields = table.schema.fields.clone();
+                    // 落盘后「盘上叫什么」才追上新名字
+                    table.original_name = table.name.clone();
                     table.dirty = false;
                     table.saved = true;
                     count += 1;
@@ -158,6 +263,7 @@ fn save_project_files(project: &mut Project) -> (usize, usize) {
                 let content = crate::tbl::serialize_constant(constant);
                 if std::fs::write(&constant.path, &content).is_ok() {
                     constant.original_entries = constant.entries.clone();
+                    constant.original_name = constant.name.clone();
                     constant.dirty = false;
                     constant.saved = true;
                     count += 1;
@@ -174,6 +280,7 @@ fn save_project_files(project: &mut Project) -> (usize, usize) {
                 let content = crate::tbl::serialize_enum(enum_def);
                 if std::fs::write(&enum_def.path, &content).is_ok() {
                     enum_def.original_entries = enum_def.entries.clone();
+                    enum_def.original_name = enum_def.name.clone();
                     enum_def.dirty = false;
                     enum_def.saved = true;
                     count += 1;
@@ -188,7 +295,7 @@ fn save_project_files(project: &mut Project) -> (usize, usize) {
         }
     }
     project.groups.retain(|g| !g.tables.is_empty() || !g.constants.is_empty() || !g.enums.is_empty());
-    (count, deleted)
+    (count, deleted, warnings)
 }
 
 pub struct ProjectEngine {
@@ -673,6 +780,7 @@ impl ProjectEngine {
         let new_data_dir = new_project.data_dir();
         for g in &mut new_project.groups {
             g.dir = new_data_dir.join(&g.name);
+            g.original_name = g.name.clone();
             g.is_new = true;
             for t in &mut g.tables {
                 t.path = g.dir.join(format!("{}.tbl", t.name));
@@ -680,16 +788,19 @@ impl ProjectEngine {
                 t.original_records.clear();
                 t.original_fields.clear();
                 t.saved = false;
+                t.original_name = t.name.clone();
             }
             for c in &mut g.constants {
                 c.path = g.dir.join(format!("{}.tbl", c.name));
                 c.dirty = true;
                 c.original_entries.clear(); c.saved = false;
+                c.original_name = c.name.clone();
             }
             for e in &mut g.enums {
                 e.path = g.dir.join(format!("{}.tbl", e.name));
                 e.dirty = true;
                 e.original_entries.clear(); e.saved = false;
+                e.original_name = e.name.clone();
             }
         }
         // 同步 schema.sections 与 groups（克隆下来的 sections 已经一致，但保险起见走一次）
@@ -1354,10 +1465,13 @@ impl ProjectEngine {
     /// 保存 active Project 的所有改动（右键"保存此 project"或单 Project 兼容路径）。
     /// 内部 revalidate_all 仅作用 active；存在验证错误就放弃保存并打日志。
     /// 全部关闭时（无 active）直接 no-op。
-    pub fn save_all(&mut self) {
+    ///
+    /// 返回**是否真的走完了落盘**。调用方如果对外声称"已保存/已改名"，
+    /// 必须看这个返回值——验证不过时这里只打日志、什么都不写。
+    pub fn save_all(&mut self) -> bool {
         if self.active_idx.is_none() {
             self.ui_log("没有打开的 Project，无需保存".to_string());
-            return;
+            return false;
         }
         self.revalidate_all();
         let pid = self.active_project_id().expect("active checked").to_string();
@@ -1368,14 +1482,16 @@ impl ProjectEngine {
             let errors = self.validate();
             for e in &errors { self.logs.push(e.clone()); }
             self.logs.push(format!("[保存失败] 共 {} 个验证错误", active_errs));
-            return;
+            return false;
         }
-        let (count, deleted) = save_project_files(self.project_mut());
+        let (count, deleted, warnings) = save_project_files(self.project_mut());
+        for w in warnings { self.warn_log(w); }
         if count > 0 || deleted > 0 {
             self.ui_log(format!("已保存 {} 个文件, 删除 {} 个", count, deleted));
         } else {
             self.ui_log("无修改需要保存".to_string());
         }
+        true
     }
 
     /// 保存全部 Project（工具栏"保存"默认走这里）。
@@ -1390,11 +1506,14 @@ impl ProjectEngine {
         }
         let mut total_count = 0;
         let mut total_deleted = 0;
+        let mut warnings = Vec::new();
         for project in &mut self.projects {
-            let (c, d) = save_project_files(project);
+            let (c, d, w) = save_project_files(project);
             total_count += c;
             total_deleted += d;
+            warnings.extend(w);
         }
+        for w in warnings { self.warn_log(w); }
         if total_count > 0 || total_deleted > 0 {
             self.ui_log(format!("已保存 {} 个文件, 删除 {} 个（{} 个 Project）",
                 total_count, total_deleted, self.projects.len()));
@@ -1609,6 +1728,8 @@ impl ProjectEngine {
                 t.path = new_path;
                 t.dirty = true;
                 t.original_records.clear(); t.original_fields.clear(); t.saved = false;
+                // 新节点盘上还不存在 → 原名就是新名（不是源节点在盘上的名字）
+                t.original_name = final_name.clone();
                 g.tables.push(t);
                 "Table"
             }
@@ -1617,6 +1738,7 @@ impl ProjectEngine {
                 c.path = new_path;
                 c.dirty = true;
                 c.original_entries.clear(); c.saved = false;
+                c.original_name = final_name.clone();
                 g.constants.push(c);
                 "Constant"
             }
@@ -1625,6 +1747,7 @@ impl ProjectEngine {
                 e.path = new_path;
                 e.dirty = true;
                 e.original_entries.clear(); e.saved = false;
+                e.original_name = final_name.clone();
                 g.enums.push(e);
                 "Enum"
             }
@@ -1666,22 +1789,26 @@ impl ProjectEngine {
         let new_dir = project.data_dir().join(&final_name);
         let mut new_group = snapshot;
         new_group.name = final_name.clone();
+        new_group.original_name = final_name.clone();
         new_group.dir = new_dir.clone();
         new_group.is_new = true;
         for t in &mut new_group.tables {
             t.path = new_dir.join(format!("{}.tbl", t.name));
             t.dirty = true;
             t.original_records.clear(); t.original_fields.clear(); t.saved = false;
+            t.original_name = t.name.clone();
         }
         for c in &mut new_group.constants {
             c.path = new_dir.join(format!("{}.tbl", c.name));
             c.dirty = true;
             c.original_entries.clear(); c.saved = false;
+            c.original_name = c.name.clone();
         }
         for e in &mut new_group.enums {
             e.path = new_dir.join(format!("{}.tbl", e.name));
             e.dirty = true;
             e.original_entries.clear(); e.saved = false;
+            e.original_name = e.name.clone();
         }
         let summary = format!(
             "T{}+C{}+E{}",
@@ -1718,6 +1845,7 @@ impl ProjectEngine {
                 let dir = project.data_dir().join(name);
                 project.groups.push(Group {
                     name: name.clone(),
+                    original_name: name.clone(),
                     dir,
                     tables: Vec::new(),
                     constants: Vec::new(),
@@ -1734,6 +1862,7 @@ impl ProjectEngine {
                         let path = g.dir.join(format!("{}.tbl", name));
                         g.tables.push(Table {
                             name: name.clone(),
+                            original_name: name.clone(),
                             path,
                             schema: TableSchema {
                                 fields: vec![FieldDef {
@@ -1770,6 +1899,7 @@ impl ProjectEngine {
                         let path = g.dir.join(format!("{}.tbl", name));
                         g.constants.push(Constant {
                             name: name.clone(),
+                            original_name: name.clone(),
                             path,
                             entries: Vec::new(),
                             dirty: true,
@@ -1791,6 +1921,7 @@ impl ProjectEngine {
                         let path = g.dir.join(format!("{}.tbl", name));
                         g.enums.push(EnumDef {
                             name: name.clone(),
+                            original_name: name.clone(),
                             path,
                             entries: Vec::new(),
                             dirty: true,
@@ -1813,10 +1944,11 @@ impl ProjectEngine {
                 let pid = project_id.clone();
                 if let Some(project) = self.find_project_mut(&pid) {
                     let config_dir = project.data_dir();
-                    let old_dir = config_dir.join(old_name);
                     let new_dir = config_dir.join(new_name);
-                    let _ = std::fs::rename(&old_dir, &new_dir);
                     if let Some(g) = project.groups.iter_mut().find(|g| g.name == *old_name) {
+                        // **只改内存**：盘上还是旧目录名，save 时才搬（见 apply_pending_renames）。
+                        // 以前这里立刻 `fs::rename`，于是「文件已经动了」与「schema 还没写」
+                        // 同时成立——树上那个 🟡 说不清究竟是什么没保存。
                         g.name = new_name.clone();
                         g.dir = new_dir.clone();
                         // 同步组下子节点的 path（每个 .tbl 都在 group dir 下）
@@ -1841,20 +1973,23 @@ impl ProjectEngine {
                 if old_name == new_name { return; }
                 if let Some(project) = self.find_project_mut(project_id) {
                     if let Some(g) = project.groups.iter_mut().find(|g| g.name == *group) {
-                        let old_path = g.dir.join(format!("{}.tbl", old_name));
                         let new_path = g.dir.join(format!("{}.tbl", new_name));
-                        let _ = std::fs::rename(&old_path, &new_path);
+                        // 同 RenameGroup：只改内存，落盘留给 save。
+                        // `original_name` 保持旧值 —— 它记的是「盘上叫什么」，save 才更新。
                         if let Some(t) = g.tables.iter_mut().find(|t| t.name == *old_name) {
                             t.name = new_name.clone();
                             t.path = new_path.clone();
+                            t.update_dirty();   // 改名是一次未落盘的改动 → 树上应显示 🟡
                         }
                         if let Some(c) = g.constants.iter_mut().find(|c| c.name == *old_name) {
                             c.name = new_name.clone();
                             c.path = new_path.clone();
+                            c.update_dirty();
                         }
                         if let Some(e) = g.enums.iter_mut().find(|e| e.name == *old_name) {
                             e.name = new_name.clone();
                             e.path = new_path;
+                            e.update_dirty();
                         }
                     }
                     sync_schema_from_groups(project);
@@ -1976,7 +2111,8 @@ impl ProjectEngine {
             self.ui_log(format!("Project 不存在: {}", project_id));
             return;
         };
-        let (count, deleted) = save_project_files(project);
+        let (count, deleted, warnings) = save_project_files(project);
+        for w in warnings { self.warn_log(w); }
         if count > 0 || deleted > 0 {
             self.ui_log(format!("[{}] 已保存 {} 个文件, 删除 {} 个", project_id, count, deleted));
         } else {
@@ -2241,7 +2377,7 @@ mod project_toml_template_tests {
         std::fs::create_dir_all(&dir).unwrap();
         let project_root = dir.join("projects").join("p1");
         let mut project = make_project(dir.clone(), project_root.clone(), "p1");
-        let (_count, _del) = save_project_files(&mut project);
+        let (_count, _del, _w) = save_project_files(&mut project);
 
         let toml_path = project_root.join(crate::project::PROJECT_TOML_FILE);
         assert!(toml_path.exists(), "project.toml 应当被写入: {}", toml_path.display());
@@ -2289,9 +2425,11 @@ mod project_toml_template_tests {
 
         project.groups.push(Group {
             name: "g".to_string(),
+            original_name: "g".to_string(),
             dir: gdir.clone(),
             tables: vec![Table {
                 name: "T".to_string(),
+                original_name: "T".to_string(),
                 path: gdir.join("T.tbl"),
                 schema: TableSchema { fields: vec![
                     FieldDef { name: "id".into(), desc: "ID".into(), tbl_type: "int".into(), export: Export::ClientServer },
@@ -2306,6 +2444,7 @@ mod project_toml_template_tests {
             constants: Vec::new(),
             enums: vec![EnumDef {
                 name: "E".to_string(),
+                original_name: "E".to_string(),
                 path: gdir.join("E.tbl"),
                 entries: vec![EnumEntry { id: "1".into(), name: "WAR".into(), desc: "战士".into() }],
                 dirty: true, deleted: false,
@@ -2355,6 +2494,195 @@ mod project_toml_template_tests {
         // 磁盘上不应有任何文件（目录都没建）
         assert!(!project_root.exists(), "旧目录不该被创建");
         assert!(!dir.join("projects").join("p2").exists(), "新目录不该被创建");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ── 重命名的「保存时才动盘」契约 ────────────────────────────────────
+    //
+    // 改名曾经是全程序唯一一个「保存前就碰文件系统」的操作：`.tbl` 立刻被
+    // `fs::rename`，而 `project.tblschema` 没跟着写。于是「文件已经动了」与
+    // 「还有东西没保存」同时成立，树上那个 🟡 说不清是什么没保存。
+    // 现在改名只写内存，搬文件推迟到 save（`apply_pending_renames`）。
+
+    fn id_field() -> FieldDef {
+        FieldDef { name: "id".into(), desc: "ID".into(), tbl_type: "int".into(), export: Export::ClientServer }
+    }
+
+    /// 造一份「已经落过盘」的项目：盘上有 `config/<group>/<node>.tbl`，
+    /// 内存里的 `original_name` / `saved` / `original_records` 都跟盘对得上
+    /// （等价于 load 完之后、什么都没改的状态）。
+    fn engine_with_saved_node(label: &str, group: &str, node: &str) -> (PathBuf, ProjectEngine) {
+        let dir = unique_tmp(label);
+        let project_root = dir.join("projects").join("p1");
+        let gdir = project_root.join("config").join(group);
+        std::fs::create_dir_all(&gdir).unwrap();
+        let path = gdir.join(format!("{}.tbl", node));
+
+        let mut project = make_project(dir.clone(), project_root, "p1");
+        project.state = crate::model::ProjectState::Loaded;
+        project.schema_dirty = false;
+        let table = Table {
+            name: node.to_string(),
+            original_name: node.to_string(),
+            path: path.clone(),
+            schema: TableSchema { fields: vec![id_field()] },
+            records: vec![vec!["1".into()]],
+            dirty: false, deleted: false,
+            original_records: vec![vec!["1".into()]],
+            original_fields: vec![id_field()],
+            saved: true,
+            fmt_ver: crate::tbl::DEFAULT_TBL_VERSION,
+            display_field: None,
+        };
+        std::fs::write(&path, crate::tbl::serialize_table(&table)).unwrap();
+        project.groups.push(Group {
+            name: group.to_string(),
+            original_name: group.to_string(),
+            dir: gdir,
+            tables: vec![table],
+            constants: vec![],
+            enums: vec![],
+            is_new: false,
+        });
+        (dir, ProjectEngine::new(project, GlobalConfig::default()))
+    }
+
+    fn config_dir(dir: &Path) -> PathBuf {
+        dir.join("projects").join("p1").join("config")
+    }
+
+    #[test]
+    fn rename_touches_no_file_until_save() {
+        let (dir, mut engine) = engine_with_saved_node("rename_defer", "hero", "HeroBase");
+        let pid = engine.active_project_id().unwrap().to_string();
+        let gdir = config_dir(&dir).join("hero");
+
+        engine.execute_action(&ProjectAction::RenameNode {
+            project_id: pid, group: "hero".into(),
+            old_name: "HeroBase".into(), new_name: "HeroMain".into(),
+        });
+
+        // 改名那一刻盘上一步都不许动 —— 这条就是「显示脏了但文件已经改了」的修复
+        assert!(gdir.join("HeroBase.tbl").is_file(), "改名不该立刻动盘");
+        assert!(!gdir.join("HeroMain.tbl").exists(), "新名不该提前出现");
+
+        // 内存里已经改了，且节点应当是脏的（树上的 🟡）
+        let t = engine.find_table("hero", "HeroMain").expect("内存里应已改名");
+        assert!(t.dirty, "改名是一次未落盘的改动，节点必须显示为脏");
+        assert_eq!(t.original_name, "HeroBase", "原名要留着，save 才找得到盘上的旧文件");
+
+        // 保存后才搬
+        assert!(engine.save_all(), "干净项目应当保存成功");
+        assert!(!gdir.join("HeroBase.tbl").exists(), "保存后旧文件应已搬走");
+        assert!(gdir.join("HeroMain.tbl").is_file(), "保存后新文件应就位");
+        assert_eq!(engine.find_table("hero", "HeroMain").unwrap().original_name, "HeroMain");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn chained_rename_still_finds_the_on_disk_file() {
+        // A→B→C：盘上自始至终只有 A.tbl。original_name 若记成「上一次的名字」，
+        // 第二次改名就把 A 覆盖成 B，save 会去找一个不存在的 B.tbl。
+        let (dir, mut engine) = engine_with_saved_node("rename_chain", "hero", "A");
+        let pid = engine.active_project_id().unwrap().to_string();
+        let gdir = config_dir(&dir).join("hero");
+        for (old, new) in [("A", "B"), ("B", "C")] {
+            engine.execute_action(&ProjectAction::RenameNode {
+                project_id: pid.clone(), group: "hero".into(),
+                old_name: old.into(), new_name: new.into(),
+            });
+        }
+
+        assert_eq!(engine.find_table("hero", "C").unwrap().original_name, "A",
+            "连续改名后，盘上的原名仍是 A");
+        assert!(engine.save_all());
+        assert!(gdir.join("C.tbl").is_file(), "最终应落在 C.tbl");
+        assert!(!gdir.join("A.tbl").exists() && !gdir.join("B.tbl").exists(),
+            "中间名不该留任何文件");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn group_and_node_renamed_together_both_land() {
+        // 父子同时改名：组记组的原名、节点记节点的原名，两级各推各的。
+        let (dir, mut engine) = engine_with_saved_node("rename_both", "hero", "HeroBase");
+        let pid = engine.active_project_id().unwrap().to_string();
+        engine.execute_action(&ProjectAction::RenameGroup {
+            project_id: pid.clone(), old_name: "hero".into(), new_name: "character".into(),
+        });
+        engine.execute_action(&ProjectAction::RenameNode {
+            project_id: pid, group: "character".into(),
+            old_name: "HeroBase".into(), new_name: "HeroMain".into(),
+        });
+
+        assert!(engine.save_all());
+        let config = config_dir(&dir);
+        assert!(!config.join("hero").exists(), "旧组目录应已搬走");
+        assert!(config.join("character").join("HeroMain.tbl").is_file(),
+            "组名与表名应当一起落地");
+        assert!(!config.join("character").join("HeroBase.tbl").exists());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn renaming_a_never_saved_table_just_writes_the_new_name() {
+        // 盘上没有旧文件的新表改名：不该去找 A.tbl，直接按新名写出来即可。
+        let dir = unique_tmp("rename_new");
+        let project_root = dir.join("projects").join("p1");
+        let gdir = project_root.join("config").join("hero");
+        let mut project = make_project(dir.clone(), project_root, "p1");
+        project.groups.push(Group {
+            name: "hero".into(), original_name: "hero".into(), dir: gdir.clone(),
+            tables: vec![Table {
+                name: "T".into(), original_name: "T".into(), path: gdir.join("T.tbl"),
+                schema: TableSchema { fields: vec![id_field()] },
+                records: vec![vec!["1".into()]],
+                dirty: true, deleted: false,
+                original_records: Vec::new(), original_fields: Vec::new(),
+                saved: false, fmt_ver: crate::tbl::DEFAULT_TBL_VERSION, display_field: None,
+            }],
+            constants: vec![], enums: vec![], is_new: true,
+        });
+        let mut engine = ProjectEngine::new(project, GlobalConfig::default());
+        let pid = engine.active_project_id().unwrap().to_string();
+        engine.execute_action(&ProjectAction::RenameNode {
+            project_id: pid, group: "hero".into(),
+            old_name: "T".into(), new_name: "T2".into(),
+        });
+
+        assert!(engine.save_all());
+        assert!(gdir.join("T2.tbl").is_file(), "新名应被写出来");
+        assert!(!gdir.join("T.tbl").exists(), "不该凭空造出旧名文件");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_failed_rename_keeps_the_old_name_instead_of_lying() {
+        // 目标名被一个同名**目录**占住 → `fs::rename` 必然失败（Windows / Linux 都是）。
+        // 这时唯一诚实的做法是把内存退回旧名（盘上确实还是旧名）并把警告报出来，
+        // 而不是留着「内存叫 HeroMain、盘上叫 HeroBase」的分叉。
+        let (dir, mut engine) = engine_with_saved_node("rename_fail", "hero", "HeroBase");
+        let pid = engine.active_project_id().unwrap().to_string();
+        let gdir = config_dir(&dir).join("hero");
+        std::fs::create_dir_all(gdir.join("HeroMain.tbl")).unwrap();
+
+        engine.execute_action(&ProjectAction::RenameNode {
+            project_id: pid, group: "hero".into(),
+            old_name: "HeroBase".into(), new_name: "HeroMain".into(),
+        });
+        assert!(engine.save_all(), "save 本身不失败，只是这一次改名没生效");
+
+        assert!(engine.find_table("hero", "HeroBase").is_some(),
+            "改名失败后内存应退回旧名，不能假装成功");
+        assert!(engine.find_table("hero", "HeroMain").is_none());
+        assert!(gdir.join("HeroBase.tbl").is_file(), "旧文件应原地未动");
+        assert!(engine.logs().iter().any(|l| l.contains("保留原名")),
+            "失败必须报到日志，不能吞: {:?}", engine.logs());
 
         let _ = std::fs::remove_dir_all(&dir);
     }

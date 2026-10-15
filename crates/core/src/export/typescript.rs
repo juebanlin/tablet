@@ -601,6 +601,7 @@ mod tests {
     fn enum_gen() {
         let e = EnumDef {
             name: "HeroType".to_string(),
+            original_name: "HeroType".to_string(),
             path: std::path::PathBuf::new(),
             entries: vec![
                 EnumEntry { id: "1".to_string(), name: "Warrior".to_string(), desc: "战士".to_string() },
@@ -625,6 +626,7 @@ mod tests {
         // 统一给一张 Names，七个后端写法一致
         let e = EnumDef {
             name: "HeroType".to_string(),
+            original_name: "HeroType".to_string(),
             path: std::path::PathBuf::new(),
             entries: vec![
                 EnumEntry { id: "1".to_string(), name: "Warrior".to_string(), desc: "战士".to_string() },
@@ -660,6 +662,7 @@ mod tests {
 
         let e = EnumDef {
             name: "HeroType".to_string(),
+            original_name: "HeroType".to_string(),
             path: std::path::PathBuf::new(),
             entries: vec![EnumEntry { id: "1".to_string(), name: "Warrior".to_string(), desc: "战士".to_string() }],
             dirty: false, deleted: false, original_entries: Vec::new(), saved: true,
@@ -679,6 +682,7 @@ mod tests {
         let c = constant("GameConst", vec![entry("max_level", "最大等级", "int")]);
         let e = EnumDef {
             name: "HeroType".to_string(),
+            original_name: "HeroType".to_string(),
             path: std::path::PathBuf::new(),
             entries: vec![EnumEntry { id: "1".to_string(), name: "Warrior".to_string(), desc: "战士".to_string() }],
             dirty: false, deleted: false, original_entries: Vec::new(), saved: true,

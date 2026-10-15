@@ -604,6 +604,9 @@ tablet-cli schema rename-group --old hero --new character
 tablet-cli schema rename-node --group hero --old HeroBase --new CharacterBase
 ```
 
+> `rename-group` / `rename-node` 的改名动作本身只写内存，**落盘由随后的自动保存完成**（见 @02.26.1）。
+> 项目存在验证错误时自动保存会中止，此时命令**报错退出**、盘上仍是原名——不会对外声称"已重命名"。
+
 #### `schema delete-group`
 
 ```bash

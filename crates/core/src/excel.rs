@@ -557,6 +557,7 @@ mod tests {
         ];
         Table {
             name: name.to_string(),
+            original_name: name.to_string(),
             path: PathBuf::from(format!("{}.tbl", name)),
             schema: TableSchema { fields: fields.clone() },
             records: vec![vec!["1".into(), "alice".into()]],
@@ -576,6 +577,7 @@ mod tests {
         }];
         Constant {
             name: name.into(),
+            original_name: name.into(),
             path: PathBuf::from(format!("{}.tbl", name)),
             entries: snap.clone(),
             dirty: false, deleted: false, original_entries: snap, saved: false,
@@ -585,7 +587,8 @@ mod tests {
     fn e(name: &str) -> EnumDef {
         EnumDef {
             name: name.into(),
-        path: PathBuf::from(format!("{}.tbl", name)),
+            original_name: name.into(),
+            path: PathBuf::from(format!("{}.tbl", name)),
             entries: vec![
                 EnumEntry { id: "1".into(), name: "RED".into(), desc: "红".into() },
             ],
@@ -597,6 +600,7 @@ mod tests {
     fn g(name: &str, table_names: &[&str]) -> Group {
         Group {
             name: name.into(),
+            original_name: name.into(),
             dir: PathBuf::from(name),
             tables: table_names.iter().map(|n| t(n)).collect(),
             constants: vec![],
@@ -608,6 +612,7 @@ mod tests {
     fn g_mixed() -> Group {
         Group {
             name: "hero".into(),
+            original_name: "hero".into(),
             dir: PathBuf::from("hero"),
             tables: vec![t("t1")],
             constants: vec![c("c1")],

@@ -380,6 +380,7 @@ mod tests {
         // 枚举不实现 ITpl，getId() 只为与 Tpl 类的取值风格一致；fromId 是反射加载要用，不能动
         let e = EnumDef {
             name: "HeroType".to_string(),
+            original_name: "HeroType".to_string(),
             path: std::path::PathBuf::new(),
             entries: vec![
                 EnumEntry { id: "1".to_string(), name: "Warrior".to_string(), desc: "战士".to_string() },
@@ -399,6 +400,7 @@ mod tests {
         // desc 既进 Javadoc 又进构造参数；引号/反斜杠/换行/注释终止符都不能漏出去
         let e = EnumDef {
             name: "HeroType".to_string(),
+            original_name: "HeroType".to_string(),
             path: std::path::PathBuf::new(),
             entries: vec![
                 EnumEntry {

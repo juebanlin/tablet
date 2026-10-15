@@ -113,6 +113,7 @@ mod tests {
             for sec in &schema.sections {
                 let g = groups_map.entry(sec.group.clone()).or_insert_with(|| Group {
                     name: sec.group.clone(),
+                    original_name: sec.group.clone(),
                     dir: std::path::PathBuf::new(),
                     tables: Vec::new(),
                     constants: Vec::new(),
@@ -130,6 +131,7 @@ mod tests {
                         let snap_fields = fields.clone();
                         g.tables.push(Table {
                             name: sec.name.clone(),
+                            original_name: sec.name.clone(),
                             path: std::path::PathBuf::new(),
                             schema: TableSchema { fields },
                             records: sec.preset.clone(),
@@ -156,6 +158,7 @@ mod tests {
                         let snap = entries.clone();
                         g.constants.push(Constant {
                             name: sec.name.clone(),
+                            original_name: sec.name.clone(),
                             path: std::path::PathBuf::new(),
                             entries,
                             dirty: false,
@@ -171,6 +174,7 @@ mod tests {
                         let snap = entries.clone();
                         g.enums.push(EnumDef {
                             name: sec.name.clone(),
+                            original_name: sec.name.clone(),
                             path: std::path::PathBuf::new(),
                             entries,
                             dirty: false,

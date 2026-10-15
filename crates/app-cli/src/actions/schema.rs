@@ -101,7 +101,11 @@ pub fn run_schema_rename_group(engine: &mut ProjectEngine, old: &str, new: &str)
         old_name: old.to_string(),
         new_name: new.to_string(),
     });
-    engine.save_all();
+    // 改名现在只在 save 时搬文件（见 ops::apply_pending_renames）。save 因验证错误
+    // 中止时盘上什么都没动，这里就不能对外声称"已重命名"。
+    if !engine.save_all() {
+        anyhow::bail!("重命名未落盘：项目存在验证错误，盘上仍是原名");
+    }
     Ok(())
 }
 
@@ -118,7 +122,9 @@ pub fn run_schema_rename_node(
         old_name: old.to_string(),
         new_name: new.to_string(),
     });
-    engine.save_all();
+    if !engine.save_all() {
+        anyhow::bail!("重命名未落盘：项目存在验证错误，盘上仍是原名");
+    }
     Ok(())
 }
 

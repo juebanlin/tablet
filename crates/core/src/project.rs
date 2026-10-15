@@ -526,6 +526,7 @@ fn load_group(name: &str, dir: &Path) -> Result<Group> {
 
     Ok(Group {
         name: name.to_string(),
+        original_name: name.to_string(),
         dir: dir.to_path_buf(),
         tables,
         constants,

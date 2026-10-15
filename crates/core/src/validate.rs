@@ -848,6 +848,7 @@ mod tests {
     fn mk_table(name: &str, fields: &[(&str, &str)], records: &[Vec<&str>]) -> Table {
         Table {
             name: name.to_string(),
+            original_name: name.to_string(),
             path: PathBuf::from(name),
             schema: TableSchema {
                 fields: fields.iter().map(|(n, t)| FieldDef {
@@ -871,6 +872,7 @@ mod tests {
     fn mk_constant(name: &str, entries: &[&str]) -> Constant {
         Constant {
             name: name.to_string(),
+            original_name: name.to_string(),
             path: PathBuf::from(name),
             entries: entries.iter().map(|n| ConstEntry {
                 name: n.to_string(),
@@ -930,7 +932,7 @@ mod tests {
             vec!["2", "1001;9999"],   // 9999 不存在 → RefValueMissing
         ]);
         let groups = vec![Group {
-            name: "g".into(), dir: PathBuf::from("g"),
+            name: "g".into(), original_name: "g".into(), dir: PathBuf::from("g"),
             tables: vec![hero, skill], constants: vec![], enums: vec![], is_new: false,
         }];
         let refs = RefIndex::build(&groups);

@@ -526,6 +526,7 @@ pub(crate) mod test_fixtures {
     pub fn table(name: &str, fields: Vec<FieldDef>) -> Table {
         Table {
             name: name.to_string(),
+            original_name: name.to_string(),
             path: PathBuf::new(),
             schema: TableSchema { fields: fields.clone() },
             records: Vec::new(),
@@ -542,6 +543,7 @@ pub(crate) mod test_fixtures {
     pub fn constant(name: &str, entries: Vec<ConstEntry>) -> Constant {
         Constant {
             name: name.to_string(),
+            original_name: name.to_string(),
             path: PathBuf::new(),
             entries: entries.clone(),
             dirty: false,
