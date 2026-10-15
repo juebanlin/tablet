@@ -1676,6 +1676,48 @@ impl ProjectEngine {
         self.ui_log(format!("已标记删除: {}/{}", group_name, node_name));
     }
 
+    /// 把某个节点还原成盘上的样子（「还原到已保存」，@02.26）。
+    ///
+    /// 只管**编辑**（内容 / 结构 / 身份），**不管存在性**：新建未保存的节点压根没有
+    /// 盘上的样子可还原，软删的节点还原内容后仍然是删着的。所以「没有可还原的东西」
+    /// 不是错误，只是没动作——返回 false，由调用方决定要不要说话。
+    ///
+    /// 这是「把 `original_*` 写回状态」这条普通路径的入口。将来做连续撤销时，
+    /// 它就该变成一次普通的历史记录，不需要另开旁路（@02.26）。
+    pub fn revert_node(&mut self, group_name: &str, node_name: &str) -> bool {
+        let mut did = false;
+        if let Some(g) = self.project_mut().groups.iter_mut().find(|g| g.name == group_name) {
+            if let Some(t) = g.tables.iter_mut().find(|t| t.name == node_name) {
+                if t.revertable() {
+                    t.revert_to_saved();
+                    did = true;
+                }
+            }
+            if let Some(c) = g.constants.iter_mut().find(|c| c.name == node_name) {
+                if c.revertable() {
+                    c.revert_to_saved();
+                    did = true;
+                }
+            }
+            if let Some(e) = g.enums.iter_mut().find(|e| e.name == node_name) {
+                if e.revertable() {
+                    e.revert_to_saved();
+                    did = true;
+                }
+            }
+        }
+        if !did {
+            return false;
+        }
+        // 表头 / 表名 / # @display 都可能变，schema 投影要重建
+        sync_schema_from_groups(self.project_mut());
+        // 内容换了，这个节点的校验结果得按新内容重算（revalidate_all 是 active 作用域的，
+        // 而 grid 显示的就是 active project 的节点）
+        self.revalidate_all();
+        self.ui_log(format!("已还原到上次保存: {}/{}", group_name, node_name));
+        true
+    }
+
     /// 把指定节点深拷贝到剪贴板（不改源数据，不动 dirty 标）。
     /// 找不到节点 → 仅 log warn，剪贴板不变。
     pub fn clipboard_copy_node(
@@ -3004,6 +3046,113 @@ package = \"com.user.kept\"
         // 没有叫 Hero 的节点，什么都没改
         assert_eq!(engine.find_table("hero", "HeroBase").unwrap().schema.fields[1].tbl_type, "@HeroBase");
         assert_eq!(engine.find_table("hero", "Skill").unwrap().schema.fields[1].tbl_type, "List<@HeroBase>");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ─── 「还原到已保存」（@02.26） ───────────────────────────────────
+
+    #[test]
+    fn revert_node_puts_every_edited_face_back() {
+        // 内容 / 结构 / 身份三样一起改，一次还原要全都回去。
+        let (dir, mut engine) = engine_with_saved_node("revert_all_faces", "hero", "HeroBase");
+
+        let t = engine.find_table("hero", "HeroBase").unwrap();
+        let (rec0, desc0) = (t.records[0][0].clone(), t.schema.fields[0].desc.clone());
+
+        {
+            let t = engine.find_table_mut("hero", "HeroBase").unwrap();
+            t.records[0][0] = "9".into();
+            t.schema.fields[0].desc = "改了".into();
+            t.name = "HeroBase2".into();
+            t.display_field = Some("id".into());
+            t.update_dirty();
+        }
+        assert!(engine.find_table("hero", "HeroBase2").unwrap().revertable());
+
+        assert!(engine.revert_node("hero", "HeroBase2"), "应当真的还原了");
+
+        let t = engine.find_table("hero", "HeroBase").unwrap();
+        assert_eq!(t.records[0][0], rec0, "内容没回去");
+        assert_eq!(t.schema.fields[0].desc, desc0, "结构没回去");
+        assert_eq!(t.name, "HeroBase", "名字没回去");
+        assert_eq!(t.display_field, None, "# @display 没回去");
+        assert!(!t.dirty && !t.schema_changed(), "还原了却还报脏");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn reverting_a_rename_moves_no_file_on_save() {
+        // 改名本来就只落内存、save 时才搬（C2/@02.26.1）。改回原名再保存，
+        // 盘上应当**什么都没动**——连一次多余的 rename 都不该发生。
+        let (dir, mut engine) = engine_with_saved_node("revert_rename_noop", "hero", "HeroBase");
+        let pid = engine.active_project_id().unwrap().to_string();
+        let gdir = config_dir(&dir).join("hero");
+
+        let before: Vec<String> = std::fs::read_dir(&gdir)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().to_string())
+            .collect();
+
+        engine.execute_action(&ProjectAction::RenameNode {
+            project_id: pid, group: "hero".into(),
+            old_name: "HeroBase".into(), new_name: "Renamed".into(),
+        });
+        assert!(engine.revert_node("hero", "Renamed"));
+        assert!(!engine.find_table("hero", "HeroBase").unwrap().dirty, "还原后该是干净的");
+
+        assert!(engine.save_all(), "保存应成功");
+
+        let mut after: Vec<String> = std::fs::read_dir(&gdir)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().to_string())
+            .collect();
+        let mut before_sorted = before.clone();
+        before_sorted.sort();
+        after.sort();
+        assert_eq!(before_sorted, after, "改回原名后保存不该搬动任何文件");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn revert_node_ignores_a_node_that_was_never_saved() {
+        // 盘上从来没有的节点没有「盘上的样子」可还原 —— 这是刻意划的边界，
+        // 存在性归右键的新建/删除管。
+        let (dir, mut engine) = engine_with_saved_node("revert_never_saved", "hero", "HeroBase");
+        let pid = engine.active_project_id().unwrap().to_string();
+        engine.execute_action(&ProjectAction::NewTable {
+            project_id: pid, group: "hero".into(), name: "Fresh".into(),
+        });
+
+        assert!(!engine.find_table("hero", "Fresh").unwrap().revertable(), "没落过盘的节点不该可还原");
+        assert!(!engine.revert_node("hero", "Fresh"), "不该动它");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn settings_changed_ignores_data_edits() {
+        // 「全部还原」按钮的可用状态。它还原不了数据改动，就不该为数据改动亮起来。
+        let (dir, mut engine) = engine_with_saved_node("settings_changed", "hero", "HeroBase");
+        let pid = engine.active_project_id().unwrap().to_string();
+        assert!(!engine.find_project(&pid).unwrap().settings_changed(), "起点该是干净的");
+
+        {
+            let t = engine.find_table_mut("hero", "HeroBase").unwrap();
+            t.records[0][0] = "9".into();
+            t.update_dirty();
+        }
+        assert!(!engine.find_project(&pid).unwrap().settings_changed(),
+            "只改了数据，不该点亮「全部还原」");
+        assert!(engine.find_project(&pid).unwrap().is_dirty(), "但它确实脏了");
+
+        engine.find_project_mut(&pid).unwrap().schema.meta.name = "别的名字".into();
+        assert!(engine.find_project(&pid).unwrap().settings_changed(), "改了 meta 该亮");
+
+        engine.find_project_mut(&pid).unwrap().revert_settings();
+        assert!(!engine.find_project(&pid).unwrap().settings_changed(), "还原后该自动回到干净");
 
         let _ = std::fs::remove_dir_all(&dir);
     }

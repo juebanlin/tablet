@@ -118,6 +118,28 @@ impl Project {
     pub fn toml_changed(&self) -> bool {
         self.config.export != self.original_export
     }
+
+    /// 项目的「自己的属性」有没有偏离盘上——`meta` / `separators`（进 `project.tblschema`）
+    /// 加 `[export]`（进 `project.toml`）。
+    ///
+    /// **刻意不含 `groups`**：那些是数据与结构，这个谓词喂给项目设置的「全部还原」按钮，
+    /// 而那个按钮还原不了数据改动，不该为它们亮起来。
+    pub fn settings_changed(&self) -> bool {
+        self.schema.meta != self.original_meta
+            || self.schema.separators != self.original_separators
+            || self.toml_changed()
+    }
+
+    /// 把 `meta` / `separators` / `[export]` 三块整体还原成盘上的样子。
+    ///
+    /// 与节点上的 [`Table::revert_to_saved`] 是同一条路径的两种粒度：都是「把
+    /// `original_*` 写回状态」。将来做连续撤销时，这里就是一次普通的历史记录，
+    /// 不需要另开一条绕过状态的旁路。
+    pub fn revert_settings(&mut self) {
+        self.schema.meta = self.original_meta.clone();
+        self.schema.separators = self.original_separators.clone();
+        self.config.export = self.original_export.clone();
+    }
 }
 
 /// `tablet.toml` 反序列化的顶层结构（全局配置）。
@@ -652,6 +674,26 @@ impl Table {
     pub fn update_dirty(&mut self) {
         self.dirty = self.records != self.original_records || self.schema_changed();
     }
+
+    /// 把盘上的样子写回来（内容 + 结构 + 身份四样）。
+    ///
+    /// **不含「存在性」**：新建未保存的节点压根没有盘上的样子（见 [`revertable`]），
+    /// 软删的节点还原了内容也仍然是删着的——那两件事归右键的新建/删除管，不混进「还原」。
+    ///
+    /// 改名**不需要任何文件系统动作**：改名本来就不在改名那一刻动盘（C2，@02.26.1），
+    /// 名字改回 `original_name` 等价于从没改过，save 时也不会去搬文件。
+    pub fn revert_to_saved(&mut self) {
+        self.records = self.original_records.clone();
+        self.schema.fields = self.original_fields.clone();
+        self.name = self.original_name.clone();
+        self.display_field = self.original_display_field.clone();
+        self.update_dirty();
+    }
+
+    /// 「还原」按钮该不该亮：盘上得有它，而且它现在和盘上不一样。
+    pub fn revertable(&self) -> bool {
+        self.saved && self.dirty
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -695,6 +737,18 @@ impl Constant {
 
     pub fn update_dirty(&mut self) {
         self.dirty = self.entries != self.original_entries || self.schema_changed();
+    }
+
+    /// 把盘上的样子写回来。语义与 [`Table::revert_to_saved`] 一致（含「不含存在性」那条）。
+    pub fn revert_to_saved(&mut self) {
+        self.entries = self.original_entries.clone();
+        self.name = self.original_name.clone();
+        self.update_dirty();
+    }
+
+    /// 「还原」按钮该不该亮。
+    pub fn revertable(&self) -> bool {
+        self.saved && self.dirty
     }
 }
 
@@ -742,6 +796,19 @@ impl EnumDef {
 
     pub fn update_dirty(&mut self) {
         self.dirty = self.entries != self.original_entries || self.schema_changed();
+    }
+
+    /// 把盘上的样子写回来。语义与 [`Table::revert_to_saved`] 一致（含「不含存在性」那条）。
+    pub fn revert_to_saved(&mut self) {
+        self.entries = self.original_entries.clone();
+        self.name = self.original_name.clone();
+        self.display_field = self.original_display_field.clone();
+        self.update_dirty();
+    }
+
+    /// 「还原」按钮该不该亮。
+    pub fn revertable(&self) -> bool {
+        self.saved && self.dirty
     }
 }
 
