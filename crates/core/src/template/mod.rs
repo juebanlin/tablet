@@ -11,13 +11,12 @@
 //!
 //! UI 端的"模板库"对话框按统一接口列出多个 source，详见 @04.6.6。
 
-use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
 
 use crate::tblschema::{
-    serialize_tblschema, SchemaMode, SchemaSection, TblSchema,
+    serialize_tblschema, TblSchema,
 };
 
 mod builtin;
@@ -73,14 +72,17 @@ pub trait TemplateSource {
     fn load_by_id(&self, id: &str) -> Option<TemplateContent>;
 }
 
-/// 把 schema 实例化为目标目录下的项目骨架：
-/// - `<target>/project.tblschema` 写入完整 schema（含 meta）
-/// - `<target>/config/<group>/<Name>.tbl` 按 mode 写入空骨架
-///   - Table：表头 4 行写好，数据行为空
-///   - Constant：每个常量行 `name | type | <empty> | export | desc`
-///   - Enum：枚举条目直接写入（来自 schema）
+/// 把 schema 展开成空骨架落盘：`<target>/project.tblschema` + `<target>/config/<group>/<name>.tbl`。
 ///
-/// target_dir 必须不存在或为空目录。失败回滚（不写半成品）。
+/// 用于「从模板 / schema 建项目」的落盘，以及 CLI 的 `util scaffold`（输出到任意目录，
+/// 不进 `projects/`）。
+///
+/// **`.tbl` 文本只有一个生成器**：这里走 `apply_schema_to_project`（sections → 内存节点）
+/// 再交给 `tbl::serialize_*`，和界面上保存出来的文件逐字一致。以前这里另有一套
+/// `render_*_skeleton`，两份渲染器已经漂了——`export` 一边写短码一边写中文（解析等价，
+/// 因为 `Export::from_str` 两种都收），而 `desc` 一边转义一边不转义。
+///
+/// target_dir 必须不存在或为空目录。先全部渲染到内存再落盘，失败不留半成品。
 pub fn instantiate_template(schema: &TblSchema, target_dir: &Path) -> Result<()> {
     if target_dir.exists() {
         let mut entries = std::fs::read_dir(target_dir)
@@ -93,23 +95,26 @@ pub fn instantiate_template(schema: &TblSchema, target_dir: &Path) -> Result<()>
             .with_context(|| format!("创建目标目录失败: {}", target_dir.display()))?;
     }
 
-    // 先 dry-run 全部内容到内存，确认无错才落盘——失败时尽量不留残留。
-    // 实例化后的项目 schema 不保留 preset（数据已灌入 .tbl 文件）
+    // 与建项目同一条路：sections → 内存节点（preset 作为初始数据灌入）
+    let mut groups: Vec<crate::model::Group> = Vec::new();
+    let config_dir = target_dir.join("config");
+    crate::tblschema::apply_schema_to_project(&mut groups, &schema.sections, &config_dir, true);
+
+    // 实例化后的 schema 不保留 preset（数据已经进了 .tbl）
     let mut schema_without_preset = schema.clone();
     for sec in &mut schema_without_preset.sections {
         sec.preset.clear();
     }
-    let schema_text = serialize_tblschema(&schema_without_preset);
 
     let mut planned: Vec<(PathBuf, String)> = Vec::new();
-    planned.push((target_dir.join(crate::project::PROJECT_SCHEMA_FILE), schema_text));
-
-    let config_dir = target_dir.join("config");
-    for sec in &schema.sections {
-        let dir = config_dir.join(&sec.group);
-        let path = dir.join(format!("{}.tbl", sec.name));
-        let content = render_tbl_skeleton(sec);
-        planned.push((path, content));
+    planned.push((
+        target_dir.join(crate::project::PROJECT_SCHEMA_FILE),
+        serialize_tblschema(&schema_without_preset),
+    ));
+    for g in &groups {
+        for t in &g.tables { planned.push((t.path.clone(), crate::tbl::serialize_table(t))); }
+        for c in &g.constants { planned.push((c.path.clone(), crate::tbl::serialize_constant(c))); }
+        for e in &g.enums { planned.push((e.path.clone(), crate::tbl::serialize_enum(e))); }
     }
 
     for (path, content) in &planned {
@@ -124,108 +129,12 @@ pub fn instantiate_template(schema: &TblSchema, target_dir: &Path) -> Result<()>
     Ok(())
 }
 
-fn render_tbl_skeleton(sec: &SchemaSection) -> String {
-    match sec.mode {
-        SchemaMode::Table => render_table_skeleton(sec),
-        SchemaMode::Constant => render_constant_skeleton(sec),
-        SchemaMode::Enum => render_enum_skeleton(sec),
-    }
-}
-
-fn render_table_skeleton(sec: &SchemaSection) -> String {
-    let mut s = String::new();
-    writeln!(s, "#!tbl v3").unwrap();
-    writeln!(s, "#mode table").unwrap();
-    writeln!(s, "---").unwrap();
-    // v3: @field blocks
-    for f in &sec.fields {
-        writeln!(s).unwrap();
-        writeln!(s, "@field {}", f.name).unwrap();
-        if !f.desc.is_empty() {
-            writeln!(s, "  desc:{}", f.desc).unwrap();
-        }
-        writeln!(s, "  export:{}", f.export_display()).unwrap();
-        writeln!(s, "  type:{}", f.tbl_type).unwrap();
-    }
-    // v3: [id] records
-    let n = sec.fields.len();
-    for row in &sec.preset {
-        let mut cells: Vec<String> = row.iter().cloned().collect();
-        cells.resize(n, String::new());
-        let id_val = cells.first().map(String::as_str).unwrap_or("");
-        writeln!(s).unwrap();
-        writeln!(s, "[{}]", id_val).unwrap();
-        for (i, v) in cells.iter().enumerate().skip(1) {
-            if v.is_empty() { continue; }
-            let tp = &sec.fields[i].tbl_type;
-            let encoded = crate::tbl_str::encode(v, tp);
-            writeln!(s, "  {}:{}", sec.fields[i].name, encoded).unwrap();
-        }
-    }
-    s
-}
-
-fn render_constant_skeleton(sec: &SchemaSection) -> String {
-    let mut s = String::new();
-    writeln!(s, "#!tbl v2").unwrap();
-    writeln!(s, "#mode constant").unwrap();
-    writeln!(s, "---").unwrap();
-    // Constant preset 行：name | type | value | export(code) | desc
-    // name/type/export 是原子标识符（无特殊字符），走 Atom；value 按声明类型 classify；desc 走 Str
-    for row in &sec.preset {
-        let name     = row.first()  .map(String::as_str).unwrap_or("");
-        let tbl_type = row.get(1)   .map(String::as_str).unwrap_or("");
-        let value    = row.get(2)   .map(String::as_str).unwrap_or("");
-        let export   = row.get(3)   .map(String::as_str).unwrap_or("cs");
-        let desc     = row.get(4)   .map(String::as_str).unwrap_or("");
-        writeln!(
-            s,
-            "{}|{}|{}|{}|{}",
-            crate::tbl_str::encode(name, "str"),
-            crate::tbl_str::encode(tbl_type, "str"),
-            crate::tbl_str::encode(value, tbl_type),
-            display_export(export),
-            crate::tbl_str::encode(desc, "txt"),
-        ).unwrap();
-    }
-    s
-}
-
-fn render_enum_skeleton(sec: &SchemaSection) -> String {
-    let mut s = String::new();
-    writeln!(s, "#!tbl v2").unwrap();
-    writeln!(s, "#mode enum").unwrap();
-    writeln!(s, "---").unwrap();
-    // Enum preset 行：id | name | desc；id 是原子数字，name/desc 走 Str
-    for row in &sec.preset {
-        let id   = row.first().map(String::as_str).unwrap_or("");
-        let name = row.get(1) .map(String::as_str).unwrap_or("");
-        let desc = row.get(2) .map(String::as_str).unwrap_or("");
-        writeln!(
-            s,
-            "{}|{}|{}",
-            crate::tbl_str::encode(id, "int"),
-            crate::tbl_str::encode(name, "str"),
-            crate::tbl_str::encode(desc, "txt"),
-        ).unwrap();
-    }
-    s
-}
-
-fn display_export(code: &str) -> &str {
-    match code {
-        "cs" | "" => "前后端",
-        "c" => "客户端",
-        "s" => "服务器",
-        "-" => "不导出",
-        _ => "前后端",
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tblschema::{fill_metadata_defaults, parse_tblschema, SchemaField, SchemaMetadata};
+    use crate::tblschema::{
+        fill_metadata_defaults, parse_tblschema, SchemaField, SchemaMetadata, SchemaMode, SchemaSection,
+    };
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     fn unique_tmp(label: &str) -> PathBuf {
@@ -325,12 +234,24 @@ mod tests {
         assert!(hero_type.contains("1|WARRIOR|战士"));
         assert!(hero_type.contains("2|MAGE|法师"));
 
-        // Constant 骨架：从 preset 灌入预设 value
+        // Constant 骨架：从 preset 灌入预设 value。
+        // export 写的是**短码** `cs`——与 `tbl::serialize_constant` 一致（以前这里
+        // 写的是展示用的中文"前后端"）。两种写法 `Export::from_str` 都收，所以这里
+        // 顺便把它读回来断言语义，而不是只比字面。
         let global =
             std::fs::read_to_string(target.join("config/global/GlobalConst.tbl"))
                 .expect("read const");
         assert!(global.contains("#mode constant"));
-        assert!(global.contains("max_level|int|100|前后端|最大等级"));
+        assert!(global.contains("max_level|int|100|cs|最大等级"), "got:\n{}", global);
+        let back = crate::tbl::parse_tbl(&target.join("config/global/GlobalConst.tbl"))
+            .expect("parse const");
+        match back {
+            crate::tbl::TblFile::Constant(c) => assert_eq!(
+                c.entries[0].export, crate::model::Export::ClientServer,
+                "export 短码应当解析回双端导出"
+            ),
+            _ => panic!("应为 Constant"),
+        }
 
         let _ = std::fs::remove_dir_all(&target);
     }

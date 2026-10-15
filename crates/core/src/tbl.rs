@@ -167,7 +167,9 @@ impl TableCodec for V3Codec {
                 let val = value.trim();
                 if let Some(ref mut f) = cur_field {
                     match key {
-                        "desc" => f.desc = val.to_string(),
+                        // 写盘走 `encode(desc, "txt")`（`serialize_table`），这里必须 decode 回去。
+                        // 漏了的话 `|` 会被写成 `\|` 并把反斜杠留在 desc 里（V2 那条路是解码的）。
+                        "desc" => f.desc = decode(val, "txt"),
                         "export" => f.export = Export::from_str(val),
                         "type" => f.tbl_type = val.to_string(),
                         _ => {}
@@ -404,4 +406,48 @@ pub fn serialize_enum(enum_def: &EnumDef) -> String {
         ));
     }
     s
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::{Export, FieldDef, Table, TableSchema};
+
+    fn tmp(label: &str) -> std::path::PathBuf {
+        static COUNTER: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let n = COUNTER.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        std::env::temp_dir().join(format!("tbl_rt_{}_{}_{}.tbl", label, std::process::id(), n))
+    }
+
+    fn table_with_desc(desc: &str) -> Table {
+        let f = vec![
+            FieldDef { name: "id".into(), desc: "ID".into(), tbl_type: "int".into(), export: Export::ClientServer },
+            FieldDef { name: "name".into(), desc: desc.into(), tbl_type: "str".into(), export: Export::ClientServer },
+        ];
+        Table {
+            name: "T".into(), original_name: "T".into(), path: std::path::PathBuf::new(),
+            schema: TableSchema { fields: f.clone() },
+            records: vec![vec!["1".into(), "a".into()]],
+            dirty: false, deleted: false,
+            original_records: vec![], original_fields: f,
+            saved: true, fmt_ver: TblVersion::V3,
+            display_field: None, original_display_field: None,
+        }
+    }
+
+    /// `desc` 写在 `@field` 块里是 `desc:<值>`，上面没有分隔符语义——但写盘时走的是
+    /// `encode(desc, "txt")` 转义。读回来必须 `decode` 回去，否则 `|` 会变成 `\|`
+    /// 原样留在 desc 里（写转义、读不解码 = 往返不保真）。
+    #[test]
+    fn v3_round_trip_preserves_desc_with_special_characters() {
+        for desc in ["普通说明", "含 | 竖线", r"含 \ 反斜杠", "含\n换行"] {
+            let t = table_with_desc(desc);
+            let txt = serialize_table(&t);
+            let p = tmp("desc");
+            std::fs::write(&p, &txt).unwrap();
+            let back = match parse_tbl(&p).unwrap() { TblFile::Table(t) => t, _ => panic!("应为 Table") };
+            let _ = std::fs::remove_file(&p);
+            assert_eq!(back.schema.fields[1].desc, desc, "desc 往返失真:\n{}", txt);
+        }
+    }
 }

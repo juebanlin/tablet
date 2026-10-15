@@ -714,44 +714,6 @@ impl ProjectEngine {
         true
     }
 
-    /// 用一个完整 schema（含项目身份 meta + sections 骨架）落地一个新 Project：
-    /// `<workdir>/projects/<schema.meta.id>/` 目录下立即写 schema + config/<group>/<name>.tbl 空骨架，
-    /// 然后加载到 self.projects 末尾，并加进 available_projects。返回新 project id 或错误信息。
-    pub fn create_project_from_schema(
-        &mut self,
-        schema: crate::tblschema::TblSchema,
-    ) -> Result<String, String> {
-        if !crate::tblschema::is_valid_metadata_id(&schema.meta.id) {
-            return Err(format!("project id 不合法: {}", schema.meta.id));
-        }
-        if self.available_projects.iter().any(|a| a.id == schema.meta.id) {
-            return Err(format!("project id 已存在: {}", schema.meta.id));
-        }
-        let project_id = schema.meta.id.clone();
-        let projects_dir = self.workdir.join(crate::project::PROJECTS_DIR);
-        if let Err(e) = std::fs::create_dir_all(&projects_dir) {
-            return Err(format!("创建 projects/ 失败: {}", e));
-        }
-        let project_root = projects_dir.join(&project_id);
-        if project_root.exists() {
-            return Err(format!("目录已存在: {}", project_root.display()));
-        }
-        if let Err(e) = crate::template::instantiate_template(&schema, &project_root) {
-            let _ = std::fs::remove_dir_all(&project_root);
-            return Err(format!("实例化失败: {}", e));
-        }
-        // 加载到 self.projects + available
-        match crate::project::load_specific_project(&self.workdir, &project_id) {
-            Ok(p) => {
-                self.available_projects.push(AvailableProject::from_project(&p));
-                self.available_projects.sort_by(|a, b| a.id.cmp(&b.id));
-                self.projects.push(p);
-                Ok(project_id)
-            }
-            Err(e) => Err(format!("加载新项目失败: {}", e)),
-        }
-    }
-
     /// 内存模式创建新 Project：与 clone_project_in_memory 行为对齐。
     /// - 不立即落盘；state=Pending
     /// - sections 展开为 group.is_new=true、节点 original="" → 树面板 `+` 标记
