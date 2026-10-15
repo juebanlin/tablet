@@ -63,6 +63,74 @@ fn sync_schema_from_groups(project: &mut Project) {
     project.resync_schema();
 }
 
+/// 把类型串里的 `@Old` 改写成 `@New`；没有命中返回 `None`。
+///
+/// 按**名字边界**匹配：`@Hero` 不能命中 `@HeroBase`。做法是看 `@Hero` 之后那个
+/// 字符——还是字母/数字/下划线就说明这是另一个名字，放过去。
+///
+/// 只做替换，不 parse 再 `to_type_string()` 重排：后者会把 `List< @Hero >`
+/// 这类手写空格一并规整掉，等于顺手改了与自己无关的列。
+fn rename_ref_in_type(type_str: &str, old: &str, new: &str) -> Option<String> {
+    let needle = format!("@{}", old);
+    let mut out = String::with_capacity(type_str.len());
+    let mut rest = type_str;
+    let mut changed = false;
+    while let Some(pos) = rest.find(&needle) {
+        let after = pos + needle.len();
+        let is_boundary = rest[after..]
+            .chars()
+            .next()
+            .map_or(true, |c| !(c.is_ascii_alphanumeric() || c == '_'));
+        out.push_str(&rest[..pos]);
+        if is_boundary {
+            out.push('@');
+            out.push_str(new);
+            changed = true;
+        } else {
+            out.push_str(&needle);
+        }
+        rest = &rest[after..];
+    }
+    out.push_str(rest);
+    if changed { Some(out) } else { None }
+}
+
+/// 节点改名后，把**同项目内**所有 `@OldName` 类型引用改写成 `@NewName`；返回改写处数。
+///
+/// 引用只在本项目内解析（`RefIndex::build` 只看 `project.groups`，跨 project 的
+/// 引用不存在），所以扫一遍本项目就是全集。
+///
+/// 只动**类型串**：引用值本身是 id、不是名字，数据行一格都不用碰。
+///
+/// 为什么必须改：`HeroBase` 有一列 `type:@HeroBase`（自引用）这种很常见，不改的话
+/// 改名当场让项目变成非法 → 保存被验证闸门拦下 → **改名永远落不了盘**。
+/// @01.8.5 早就写着改名"给警告、不阻断保存"，把引用一起带过去比给警告更干净。
+fn rewrite_refs_after_rename(project: &mut Project, old: &str, new: &str) -> usize {
+    let mut n = 0;
+    for g in &mut project.groups {
+        for t in &mut g.tables {
+            for f in &mut t.schema.fields {
+                if let Some(s) = rename_ref_in_type(&f.tbl_type, old, new) {
+                    f.tbl_type = s;
+                    n += 1;
+                }
+            }
+            // 类型串变了 → original_fields 对不上 → 该表自己要写盘
+            t.update_dirty();
+        }
+        for c in &mut g.constants {
+            for e in &mut c.entries {
+                if let Some(s) = rename_ref_in_type(&e.tbl_type, old, new) {
+                    e.tbl_type = s;
+                    n += 1;
+                }
+            }
+            c.update_dirty();
+        }
+    }
+    n
+}
+
 /// 保存前把「改了名但还没落盘」的组目录 / `.tbl` 文件在盘上搬到位。
 ///
 /// 改名是唯一一个曾经「保存前就碰文件系统」的操作（撤销也要它让路），所以现在
@@ -1976,6 +2044,7 @@ impl ProjectEngine {
             ProjectAction::RenameNode { project_id, group, old_name, new_name } => {
                 // 同 RenameGroup：预填后直接确认属常见操作，不是一次真正的改名。
                 if old_name == new_name { return; }
+                let mut refs_rewritten = 0usize;
                 if let Some(project) = self.find_project_mut(project_id) {
                     if let Some(g) = project.groups.iter_mut().find(|g| g.name == *group) {
                         let new_path = g.dir.join(format!("{}.tbl", new_name));
@@ -1997,7 +2066,14 @@ impl ProjectEngine {
                             e.update_dirty();
                         }
                     }
+                    // 引用跟着改名走（必须在 sync 之前——sync 读的就是这些类型串）
+                    refs_rewritten = rewrite_refs_after_rename(project, old_name, new_name);
                     sync_schema_from_groups(project);
+                }
+                if refs_rewritten > 0 {
+                    self.ui_log(format!(
+                        "已同步改写 {} 处 @{} 引用 → @{}", refs_rewritten, old_name, new_name
+                    ));
                 }
                 let migrated: Vec<_> = self.validation_errors.iter()
                     .filter(|(p, g, n, _, _)| p == project_id && g == group && n == old_name)
@@ -2719,6 +2795,101 @@ mod project_toml_template_tests {
 
         // 全程盘上一步没动
         assert!(config_dir(&dir).join("hero").join("HeroBase.tbl").is_file());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ── 改名要把引用一起带走（@01.8.5 改名"不阻断保存"的兑现） ──────────
+
+    #[test]
+    fn ref_rewrite_matches_by_name_boundary() {
+        assert_eq!(rename_ref_in_type("@Hero", "Hero", "Unit").as_deref(), Some("@Unit"));
+        assert_eq!(rename_ref_in_type("List<@Hero>", "Hero", "Unit").as_deref(), Some("List<@Unit>"));
+        assert_eq!(rename_ref_in_type("Map<int,@Hero>", "Hero", "Unit").as_deref(), Some("Map<int,@Unit>"));
+        assert_eq!(rename_ref_in_type("Map<@Hero,List<@Hero>>", "Hero", "Unit").as_deref(),
+                   Some("Map<@Unit,List<@Unit>>"));
+        // `@HeroBase` 不是 `@Hero`，不能被误伤
+        assert_eq!(rename_ref_in_type("@HeroBase", "Hero", "Unit"), None);
+        assert_eq!(rename_ref_in_type("List<@HeroBase>", "Hero", "Unit"), None);
+        assert_eq!(rename_ref_in_type("Map<int,@HeroBase>", "Hero", "Unit"), None);
+        // 无关的类型原样不动
+        assert_eq!(rename_ref_in_type("int", "Hero", "Unit"), None);
+        assert_eq!(rename_ref_in_type("@Skill", "Hero", "Unit"), None);
+        assert_eq!(rename_ref_in_type("List<str>", "Hero", "Unit"), None);
+    }
+
+    /// 造一份带引用的项目：`HeroBase` 自引用 + `Skill` 用 `List<@HeroBase>` 引用它。
+    fn engine_with_refs(label: &str) -> (PathBuf, ProjectEngine) {
+        let dir = unique_tmp(label);
+        let project_root = dir.join("projects").join("p1");
+        let gdir = project_root.join("config").join("hero");
+        let mk = |name: &str, field: FieldDef| Table {
+            name: name.to_string(),
+            original_name: name.to_string(),
+            path: gdir.join(format!("{}.tbl", name)),
+            schema: TableSchema { fields: vec![id_field(), field] },
+            records: vec![vec!["1".into(), "1".into()]],
+            dirty: true, deleted: false,
+            original_records: Vec::new(), original_fields: Vec::new(),
+            saved: false, fmt_ver: crate::tbl::DEFAULT_TBL_VERSION, display_field: None,
+        };
+        let mut project = make_project(dir.clone(), project_root, "p1");
+        project.groups.push(Group {
+            name: "hero".into(), original_name: "hero".into(), dir: gdir.clone(),
+            tables: vec![
+                mk("HeroBase", FieldDef { name: "leader".into(), desc: "关联英雄".into(),
+                    tbl_type: "@HeroBase".into(), export: Export::ClientServer }),
+                mk("Skill", FieldDef { name: "heroes".into(), desc: "关联英雄".into(),
+                    tbl_type: "List<@HeroBase>".into(), export: Export::ClientServer }),
+            ],
+            constants: vec![], enums: vec![], is_new: true,
+        });
+        save_project_files(&mut project);
+        std::fs::write(dir.join(crate::CONFIG_FILE), "").unwrap();
+        let loaded = crate::project::load_specific_project(&dir, "p1").expect("重新加载");
+        (dir, ProjectEngine::new(loaded, GlobalConfig::default()))
+    }
+
+    #[test]
+    fn renaming_a_referenced_table_moves_the_references_with_it() {
+        // 不改写引用的话，改名当场把项目变成非法（`@HeroBase` 找不到目标）→
+        // save_all 的验证闸门拦下 → 改名永远落不了盘。
+        let (dir, mut engine) = engine_with_refs("rename_refs");
+        let pid = engine.active_project_id().unwrap().to_string();
+        assert!(engine.validate().is_empty(), "起点应当是合法的: {:?}", engine.validate());
+
+        engine.execute_action(&ProjectAction::RenameNode {
+            project_id: pid.clone(), group: "hero".into(),
+            old_name: "HeroBase".into(), new_name: "HeroMain".into(),
+        });
+
+        // 自引用（HeroMain.leader）与被引用（Skill.heroes）都要跟过去
+        assert_eq!(engine.find_table("hero", "HeroMain").unwrap().schema.fields[1].tbl_type, "@HeroMain");
+        assert_eq!(engine.find_table("hero", "Skill").unwrap().schema.fields[1].tbl_type, "List<@HeroMain>");
+
+        // 项目仍然合法 → 改名真的能落盘
+        assert!(engine.validate().is_empty(), "引用跟过去了，不该有验证错误: {:?}", engine.validate());
+        assert!(engine.save_all(), "引用不再断裂，保存应当成功");
+
+        let gdir = config_dir(&dir).join("hero");
+        assert!(gdir.join("HeroMain.tbl").is_file(), "改名应已落盘");
+        assert!(!gdir.join("HeroBase.tbl").exists(), "旧文件应已搬走");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn rewriting_refs_does_not_touch_a_different_name() {
+        // `Hero` 改成 `Unit` 不能碰到 `HeroBase` 的引用——词边界要挡住。
+        let (dir, mut engine) = engine_with_refs("rename_refs_boundary");
+        let pid = engine.active_project_id().unwrap().to_string();
+        engine.execute_action(&ProjectAction::RenameNode {
+            project_id: pid, group: "hero".into(),
+            old_name: "Hero".into(), new_name: "Unit".into(),
+        });
+        // 没有叫 Hero 的节点，什么都没改
+        assert_eq!(engine.find_table("hero", "HeroBase").unwrap().schema.fields[1].tbl_type, "@HeroBase");
+        assert_eq!(engine.find_table("hero", "Skill").unwrap().schema.fields[1].tbl_type, "List<@HeroBase>");
 
         let _ = std::fs::remove_dir_all(&dir);
     }
