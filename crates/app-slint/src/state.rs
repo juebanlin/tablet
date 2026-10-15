@@ -763,44 +763,28 @@ impl CloneProjectState {
 
 /// 项目设置对话框（项目右键「项目设置...」入口）。
 ///
-/// 所有改动只更新内存中的 project meta + 分隔符，等"保存项目"才写盘。
-/// 脏由 `Project::schema_changed()` 对比盘上快照得出，不在这里标（@02.26.2）；
-/// 分隔符变了要全表 revalidate_all。
+/// **没有 apply buffer、没有快照、没有修改标记。** 对话框直接编辑内存里的 `Project`，
+/// 「这个字段和上次保存比变了吗」由 `Project::original_meta` / `original_separators` /
+/// `original_export` 回答 —— 和树上的分层脏是同一个道理：脏是算出来的，不是标出来的
+/// （@02.26.2）。
+///
+/// `确定` 只是关闭；提交点仍然是「保存项目」（未落盘项目连 `project_root` 目录都还没有，
+/// 见 @02.26.3）。
 #[derive(Default)]
 pub struct ProjectSettingsState {
     pub open: bool,
-    /// 当前编辑的 project id（也是 dialog 打开时的 old_id）
+    /// 正在编辑的 project id。只用来定位，**不存在「在这里改 id」这回事** ——
+    /// id 在新建 / 克隆对话框里定，之后只读。
     pub project_id: String,
     /// 0=身份  1=分隔符  2=导出设置
     pub tab: i32,
-
-    // 修改标记（对比 current 快照计算得出）
-    pub identity_tab_modified: bool,
-    pub sep_tab_modified: bool,
-    pub export_tab_modified: bool,
-
-    // —— apply buffer：待应用的编辑缓冲 ——
-    // 身份字段（来自 schema.meta）
-    pub id_buf: String,
-    pub name_buf: String,
-    pub category_buf: String,
-    pub version_buf: String,
-    /// id 实时校验消息（空 = 合法）；不合法时禁用「确定」
-    pub id_error: String,
-    /// id 是否可编辑：仅未落盘项目（克隆 / 新建）允许改 id；
-    /// 已存盘项目 id 固定（改 id 需 rename 目录，风险大），UI 禁用输入。
-    pub id_editable: bool,
-
-    // 分隔符缓冲（来自 schema.separators）
-    pub sep: tablet_core::types::SeparatorsSection,
-
-    // 导出配置缓冲（来自 config.export）
-    pub export: tablet_core::model::ExportConfig,
-
-    // —— current：当前已保存的值快照 ——
-    pub current_meta: Option<tablet_core::tblschema::SchemaMetadata>,
-    pub current_sep: Option<tablet_core::types::SeparatorsSection>,
-    pub current_export: Option<tablet_core::model::ExportConfig>,
+    /// 本会话里分隔符被写过（哪怕后来又改回去了）。关闭时据此决定要不要全表重校验。
+    ///
+    /// **不能换成「关闭时 `separators != original_separators` 才校验」。** 反例：
+    /// 会话 1 把 A 改成 B 并关闭（错误按 B 重算）；会话 2 打开时 B 还在，用户
+    /// 「全部还原」回 A 再关闭 —— 此时两者相等，等式守卫会跳过重校验，而
+    /// `validation_errors` 里留的还是按 B 算的。标记是粘的，所以那个序列会被正确重算。
+    pub sep_touched: bool,
 }
 
 impl ProjectSettingsState {
@@ -808,47 +792,7 @@ impl ProjectSettingsState {
         self.open = false;
         self.project_id.clear();
         self.tab = 0;
-        self.identity_tab_modified = false;
-        self.sep_tab_modified = false;
-        self.export_tab_modified = false;
-        self.id_buf.clear();
-        self.name_buf.clear();
-        self.category_buf.clear();
-        self.version_buf.clear();
-        self.id_error.clear();
-        self.id_editable = false;
-        self.sep = tablet_core::types::SeparatorsSection::default();
-        self.export = tablet_core::model::ExportConfig::default();
-        self.current_meta = None;
-        self.current_sep = None;
-        self.current_export = None;
-    }
-
-    pub fn undo(&mut self) {
-        match self.tab {
-            0 => {
-                if let Some(ref meta) = self.current_meta {
-                    self.id_buf = meta.id.clone();
-                    self.name_buf = meta.name.clone();
-                    self.category_buf = meta.category.clone();
-                    self.version_buf = meta.version.clone();
-                    self.identity_tab_modified = false;
-                }
-            }
-            1 => {
-                if let Some(ref sep) = self.current_sep {
-                    self.sep = sep.clone();
-                    self.sep_tab_modified = false;
-                }
-            }
-            2 => {
-                if let Some(ref export) = self.current_export {
-                    self.export = export.clone();
-                    self.export_tab_modified = false;
-                }
-            }
-            _ => {}
-        }
+        self.sep_touched = false;
     }
 }
 

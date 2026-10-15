@@ -13,6 +13,30 @@ use crate::convert;
 use crate::state::{self, AppState, CtxMenuKind, GridSelection, SelectedNode};
 use crate::{dialogs, AppWindow, CellKind};
 
+/// 当前选中的节点能不能「还原到已保存」（@02.26）。
+///
+/// 三个条件缺一不可：选中了叶节点、它属于 active project（`find_*` 系列只看 active）、
+/// 而且它**落过盘且现在和盘上不一样**（`revertable()`）。最后一条同时管住了
+/// 「新建未保存」——那种节点压根没有盘上的样子可还原。
+fn selected_revertable(state: &AppState) -> bool {
+    let Some(sel) = state.selected.as_ref() else { return false };
+    if state.engine.active_project_id() != Some(sel.project_id()) {
+        return false;
+    }
+    match sel {
+        SelectedNode::Table { group, name, .. } => {
+            state.engine.find_table(group, name).is_some_and(|t| t.revertable())
+        }
+        SelectedNode::Constant { group, name, .. } => {
+            state.engine.find_constant(group, name).is_some_and(|c| c.revertable())
+        }
+        SelectedNode::Enum { group, name, .. } => {
+            state.engine.find_enum(group, name).is_some_and(|e| e.revertable())
+        }
+        SelectedNode::Project { .. } | SelectedNode::Group { .. } => false,
+    }
+}
+
 /// 当前 grid 显示的节点 key：切到不同节点时用于判断是否需要重置滚动条。
 fn shown_node_key(state: &AppState) -> String {
     use crate::state::SelectedNode;
@@ -156,6 +180,9 @@ pub fn push(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
         );
         ui_h.set_excel_edit_enabled(leaf_selected && st.excel_session.is_none());
     }
+    // 「还原」按钮（@02.26）：把当前节点恢复成盘上的样子。
+    // 只管编辑，不管存在性 —— 新建未保存的节点没有「盘上的样子」可还原，置灰。
+    ui_h.set_revert_enabled(selected_revertable(&state.borrow()));
     ui_h.set_grid_col_count(snap.col_count);
     ui_h.set_grid_header_rows(slint::ModelRc::new(slint::VecModel::from(
         snap.header_rows.into_iter()
@@ -270,6 +297,34 @@ pub fn wire(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
                 push(&ui_h, &s);
                 crate::refresh::after_log(&ui_h, &s);
             }
+        });
+    }
+    // 「还原」按钮：把选中的节点恢复成盘上的样子（@02.26）。
+    // 只管编辑（内容 / 结构 / 身份），不管存在性 —— 那归右键的新建/删除管。
+    {
+        let s = state.clone();
+        let weak = ui_h.as_weak();
+        ui_h.on_revert_clicked(move || {
+            let target = {
+                let st = s.borrow();
+                match &st.selected {
+                    Some(SelectedNode::Table { group, name, .. }
+                        | SelectedNode::Constant { group, name, .. }
+                        | SelectedNode::Enum { group, name, .. }) => Some((group.clone(), name.clone())),
+                    _ => None,
+                }
+            };
+            let Some((group, name)) = target else {
+                s.borrow_mut().engine.ui_log("[还原] 未选中可还原的节点".to_string());
+                if let Some(ui_h) = weak.upgrade() { crate::refresh::after_log(&ui_h, &s); }
+                return;
+            };
+            let did = s.borrow_mut().engine.revert_node(&group, &name);
+            if !did {
+                s.borrow_mut().engine.ui_log(format!(
+                    "[还原] {}/{} 没有可还原的改动（新建未保存的节点没有盘上的样子）", group, name));
+            }
+            if let Some(ui_h) = weak.upgrade() { crate::refresh::after_grid_edit(&ui_h, &s); }
         });
     }
     // 单元格点击 → 行为按 ColumnKind + picker_trigger_data 配置分发：

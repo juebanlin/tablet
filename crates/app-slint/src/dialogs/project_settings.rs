@@ -1,776 +1,312 @@
-﻿// 项目设置对话框：身份（id/name/category/version）+ 分隔符（25 leaves）2 tab。
+// 项目设置对话框：身份（name / category / version，**id 只读**）+ 分隔符（25 个叶子）
+// + 导出配置（29 个叶子）。
 //
-// 所有改动只更新内存，等"保存项目"才写盘。脏不需要在这里标：meta / separators
-// 都由 `Project::schema_changed()` 跟盘上快照对比得出（@02.26.2）。
+// **没有 apply buffer、没有快照、没有修改标记。** 编辑直接落内存里的 `Project`，
+// 「这个字段和盘上不一样吗」由 `Project::original_meta` / `original_separators` /
+// `original_export` 回答（@02.26.2）——和树上的分层脏同一个道理：脏是算出来的。
+// 于是「改回去高亮自动消失」是免费的，不需要在编辑路径上补任何一笔。
+//
+// `确定` 只是关闭；提交点仍然是「保存项目」（未落盘项目连 `project_root` 目录都还没有，
+// 见 @02.26.3）。
+//
+// 分隔符改动要全表重校验，但**不在每次按键时做**——对话框是模态的，背后的 grid 没人看。
+// 统一挪到关闭时按 `sep_touched` 做一次，见 `close_and_apply`。
 
 use std::cell::RefCell;
 use std::rc::Rc;
 
 use slint::ComponentHandle;
-use tablet_core::tblschema::is_valid_metadata_id;
-use tablet_core::types::{SepKey, SeparatorsSection};
+use tablet_core::enums::{CppJsonLib, Encoding, JsonEmptyAs, LineEnding, XmlEmptyAs};
+use tablet_core::export_keys::ExportKey;
+use tablet_core::model::Project;
+use tablet_core::types::SepKey;
 
 use crate::state::AppState;
 use crate::{refresh, AppWindow};
 
-/// 由项目右键「项目设置...」入口调用：把当前 project meta + separators + export 拷进 buf，开 dialog。
+/// 由项目右键「项目设置...」入口调用。
+///
+/// 什么都不用拷 —— 对话框读写的就是 `Project` 本身，参照物是它自己的 `original_*`。
 pub fn open_for(state: &Rc<RefCell<AppState>>, project_id: &str) {
     let mut st = state.borrow_mut();
-    let Some(p) = st.engine.find_project(project_id) else {
+    if st.engine.find_project(project_id).is_none() {
         st.engine.ui_log(format!("[项目设置] 项目不存在: {}", project_id));
         return;
-    };
-
-    // 先提取所有需要的数据，避免借用冲突
-    let id = p.schema.meta.id.clone();
-    let name = p.schema.meta.name.clone();
-    let category = p.schema.meta.category.clone();
-    let version = p.schema.meta.version.clone();
-    let created_at = p.schema.meta.created_at.clone();
-    let source_template = p.schema.meta.source_template.clone();
-    let source_template_version = p.schema.meta.source_template_version.clone();
-    let has_preset = p.schema.meta.has_preset;
-    let sep = p.schema.separators.clone();
-    let export = p.config.export.clone();
-    let id_editable = p.state.is_pending();
-
+    }
     let ps = &mut st.project_settings;
     ps.open = true;
     ps.tab = 0;
-    ps.project_id = id.clone();
-
-    // apply buffer
-    ps.id_buf = id.clone();
-    ps.name_buf = name.clone();
-    ps.category_buf = category.clone();
-    ps.version_buf = version.clone();
-    ps.id_error.clear();
-    ps.id_editable = id_editable;
-    ps.sep = sep.clone();
-    ps.export = export.clone();
-
-    // current snapshots
-    ps.current_meta = Some(tablet_core::tblschema::SchemaMetadata {
-        id: id.clone(),
-        name: name.clone(),
-        category: category.clone(),
-        version: version.clone(),
-        created_at,
-        source_template,
-        source_template_version,
-        has_preset,
-    });
-    ps.current_sep = Some(sep.clone());
-    ps.current_export = Some(export.clone());
-
-    // reset modified flags
-    ps.identity_tab_modified = false;
-    ps.sep_tab_modified = false;
-    ps.export_tab_modified = false;
+    ps.project_id = project_id.to_string();
+    ps.sep_touched = false;
 }
 
-/// 计算 id 校验消息。空 = 合法。
-fn validate_id(st: &AppState, new_id: &str, old_id: &str) -> String {
-    if new_id == old_id {
-        return String::new();
+// ─── 往内存里落一次编辑 ────────────────────────────────────────────────────
+
+/// 项目没了就什么都不做（下一帧 `push` 会把对话框关掉）。
+fn edit_project(state: &Rc<RefCell<AppState>>, f: impl FnOnce(&mut Project)) {
+    let mut st = state.borrow_mut();
+    let id = st.project_settings.project_id.clone();
+    if let Some(p) = st.engine.find_project_mut(&id) {
+        f(p);
     }
-    if new_id.is_empty() {
-        return "Project ID 不能为空".to_string();
-    }
-    if !is_valid_metadata_id(new_id) {
-        return "ID 仅允许小写字母 / 数字 / _ / -，长度 1..=32".to_string();
-    }
-    let in_opened = st.engine.projects.iter().any(|p| p.schema.meta.id == new_id);
-    let in_available = st.engine.available_projects.iter().any(|a| a.id == new_id);
-    if in_opened || in_available {
-        return format!("ID 已存在: {}", new_id);
-    }
-    String::new()
 }
 
-/// 检测身份 tab 是否修改
-fn check_identity_modified(ps: &crate::state::ProjectSettingsState) -> bool {
-    let Some(ref current) = ps.current_meta else { return false };
-    current.id != ps.id_buf
-        || current.name != ps.name_buf
-        || current.category != ps.category_buf
-        || current.version != ps.version_buf
+/// 把盘上的快照取一份出来。**先 clone 再拿 mutable**，避开同时借 `engine` 两次。
+fn original_of<T>(state: &Rc<RefCell<AppState>>, f: impl FnOnce(&Project) -> T) -> Option<T> {
+    let st = state.borrow();
+    st.engine.find_project(&st.project_settings.project_id).map(f)
 }
 
-/// 检测分隔符 tab 是否修改
-fn check_sep_modified(ps: &crate::state::ProjectSettingsState) -> bool {
-    let Some(ref current) = ps.current_sep else { return false };
-    *current != ps.sep
+/// 写分隔符的统一入口：**凡写过就置 `sep_touched`**（关闭时要据此重校验）。
+fn write_sep(state: &Rc<RefCell<AppState>>, f: impl FnOnce(&mut tablet_core::types::SeparatorsSection)) {
+    let mut st = state.borrow_mut();
+    let id = st.project_settings.project_id.clone();
+    if let Some(p) = st.engine.find_project_mut(&id) {
+        f(&mut p.schema.separators);
+        st.project_settings.sep_touched = true;
+    }
 }
 
-/// 检测导出配置 tab 是否修改
-fn check_export_modified(ps: &crate::state::ProjectSettingsState) -> bool {
-    let Some(ref current) = ps.current_export else { return false };
-    *current != ps.export
-}
+// ─── push ─────────────────────────────────────────────────────────────────
 
 pub fn push(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
-    let mut st = state.borrow_mut();
-    // 实时校验 id（可能因 buf 改动）
-    let id_err = validate_id(&st, &st.project_settings.id_buf.clone(), &st.project_settings.project_id.clone());
-    st.project_settings.id_error = id_err.clone();
-
-    // 计算修改标记
-    st.project_settings.identity_tab_modified = check_identity_modified(&st.project_settings);
-    st.project_settings.sep_tab_modified = check_sep_modified(&st.project_settings);
-    st.project_settings.export_tab_modified = check_export_modified(&st.project_settings);
-
-    let ps = &st.project_settings;
-
-    ui_h.set_dlg_ps_open(ps.open);
-    if !ps.open {
+    let (open, tab, project_id) = {
+        let st = state.borrow();
+        let ps = &st.project_settings;
+        (ps.open, ps.tab, ps.project_id.clone())
+    };
+    ui_h.set_dlg_ps_open(open);
+    if !open {
         return;
     }
-    ui_h.set_ps_tab(ps.tab);
 
-    // 推送修改标记
-    ui_h.set_ps_identity_tab_modified(ps.identity_tab_modified);
-    ui_h.set_ps_sep_tab_modified(ps.sep_tab_modified);
-    ui_h.set_ps_export_tab_modified(ps.export_tab_modified);
+    let st = state.borrow();
+    let Some(p) = st.engine.find_project(&project_id) else {
+        // 项目在别处被关掉 / 删掉了 —— 对话框自己退出，不拿着悬空的 id 到处找。
+        // `push` 是 `refresh::after_ctx_menu` 每次右键都会调的，这条路径不是理论上的。
+        drop(st);
+        state.borrow_mut().project_settings.close();
+        ui_h.set_dlg_ps_open(false);
+        return;
+    };
 
-    // 身份字段
-    ui_h.set_ps_id_buf(ps.id_buf.clone().into());
-    ui_h.set_ps_name_buf(ps.name_buf.clone().into());
-    ui_h.set_ps_category_buf(ps.category_buf.clone().into());
-    ui_h.set_ps_version_buf(ps.version_buf.clone().into());
-    ui_h.set_ps_id_error(id_err.clone().into());
-    ui_h.set_ps_id_editable(ps.id_editable);
-    let can_confirm = id_err.is_empty();
-    ui_h.set_ps_can_confirm(can_confirm);
+    ui_h.set_ps_tab(tab);
+    // 「全部还原」只在 meta / separators / [export] 真的偏离盘上时可用。
+    // 刻意不含 groups —— 数据改动它还原不了，不该让按钮亮起来。
+    ui_h.set_ps_can_revert_all(p.settings_changed());
 
-    let s = &ps.sep;
-    ui_h.set_ps_sep_tuple2(s.tuple2.clone().into());
-    ui_h.set_ps_sep_tuple3(s.tuple3.clone().into());
-    ui_h.set_ps_sep_tuple4(s.tuple4.clone().into());
-    ui_h.set_ps_sep_list(s.list.clone().into());
-    ui_h.set_ps_sep_set(s.set.clone().into());
-    ui_h.set_ps_sep_map_kv(s.map.kv.clone().into());
-    ui_h.set_ps_sep_map_entry(s.map.entry.clone().into());
-    ui_h.set_ps_sep_lt2_tuple(s.list_tuple2.tuple.clone().into());
-    ui_h.set_ps_sep_lt2_list(s.list_tuple2.list.clone().into());
-    ui_h.set_ps_sep_lt3_tuple(s.list_tuple3.tuple.clone().into());
-    ui_h.set_ps_sep_lt3_list(s.list_tuple3.list.clone().into());
-    ui_h.set_ps_sep_lt4_tuple(s.list_tuple4.tuple.clone().into());
-    ui_h.set_ps_sep_lt4_list(s.list_tuple4.list.clone().into());
-    ui_h.set_ps_sep_mt2_kv(s.map_tuple2.kv.clone().into());
-    ui_h.set_ps_sep_mt2_tuple(s.map_tuple2.tuple.clone().into());
-    ui_h.set_ps_sep_mt2_entry(s.map_tuple2.entry.clone().into());
-    ui_h.set_ps_sep_mt3_kv(s.map_tuple3.kv.clone().into());
-    ui_h.set_ps_sep_mt3_tuple(s.map_tuple3.tuple.clone().into());
-    ui_h.set_ps_sep_mt3_entry(s.map_tuple3.entry.clone().into());
-    ui_h.set_ps_sep_mt4_kv(s.map_tuple4.kv.clone().into());
-    ui_h.set_ps_sep_mt4_tuple(s.map_tuple4.tuple.clone().into());
-    ui_h.set_ps_sep_mt4_entry(s.map_tuple4.entry.clone().into());
-    ui_h.set_ps_sep_ml_kv(s.map_list.kv.clone().into());
-    ui_h.set_ps_sep_ml_item(s.map_list.item.clone().into());
-    ui_h.set_ps_sep_ml_entry(s.map_list.entry.clone().into());
-
-    // 导出设置：程序启动时已修正配置，项目配置字段不应为 None，None 时使用 default 兜底即可
-    use tablet_core::enums::*;
-
-    let export = &ps.export;
-
-    // Encoding
-    let encoding = export.encoding.unwrap_or(Encoding::default());
-    let encoding_idx = Encoding::all().iter().position(|&e| e == encoding).unwrap_or(0) as i32;
-    ui_h.set_ps_export_encoding_index(encoding_idx);
-    let encoding_opts: Vec<slint::SharedString> = Encoding::all_str().iter().map(|s| (*s).into()).collect();
-    ui_h.set_ps_encoding_options(slint::ModelRc::new(slint::VecModel::from(encoding_opts)));
-
-    // LineEnding
-    let line_ending = export.line_ending.unwrap_or(LineEnding::default());
-    let line_ending_idx = LineEnding::all().iter().position(|&l| l == line_ending).unwrap_or(0) as i32;
-    ui_h.set_ps_export_line_ending_index(line_ending_idx);
-    let line_ending_opts: Vec<slint::SharedString> = LineEnding::all_str().iter().map(|s| (*s).into()).collect();
-    ui_h.set_ps_line_ending_options(slint::ModelRc::new(slint::VecModel::from(line_ending_opts)));
-
-    // JsonEmptyAs
-    let json_empty_as = export.json.as_ref().and_then(|j| j.empty_as).unwrap_or(JsonEmptyAs::default());
-    let json_empty_as_idx = JsonEmptyAs::all().iter().position(|&e| e == json_empty_as).unwrap_or(0) as i32;
-    ui_h.set_ps_export_json_empty_as_index(json_empty_as_idx);
-    let json_empty_as_opts: Vec<slint::SharedString> = JsonEmptyAs::all_str().iter().map(|s| (*s).into()).collect();
-    ui_h.set_ps_json_empty_as_options(slint::ModelRc::new(slint::VecModel::from(json_empty_as_opts)));
-
-    // XmlEmptyAs
-    let xml_empty_as = export.xml.as_ref().and_then(|x| x.empty_as).unwrap_or(XmlEmptyAs::default());
-    let xml_empty_as_idx = XmlEmptyAs::all().iter().position(|&e| e == xml_empty_as).unwrap_or(0) as i32;
-    ui_h.set_ps_export_xml_empty_as_index(xml_empty_as_idx);
-    let xml_empty_as_opts: Vec<slint::SharedString> = XmlEmptyAs::all_str().iter().map(|s| (*s).into()).collect();
-    ui_h.set_ps_xml_empty_as_options(slint::ModelRc::new(slint::VecModel::from(xml_empty_as_opts)));
-
-    // CppJsonLib
-    let cpp_json_lib = export.server.as_ref()
-        .and_then(|s| s.cpp.as_ref())
-        .and_then(|c| c.json_lib)
-        .unwrap_or(CppJsonLib::default());
-    let cpp_json_lib_idx = CppJsonLib::all().iter().position(|&l| l == cpp_json_lib).unwrap_or(0) as i32;
-    ui_h.set_ps_export_cpp_json_lib_index(cpp_json_lib_idx);
-    let cpp_json_lib_opts: Vec<slint::SharedString> = CppJsonLib::all_str().iter().map(|s| (*s).into()).collect();
-    ui_h.set_ps_cpp_json_lib_options(slint::ModelRc::new(slint::VecModel::from(cpp_json_lib_opts)));
-
-    // 字符串字段推送
-    ui_h.set_ps_export_server_data_output(
-        export.server.as_ref().and_then(|s| s.data_output.as_ref()).cloned().unwrap_or_default().into()
-    );
-    ui_h.set_ps_export_java_package(
-        export.server.as_ref().and_then(|s| s.java.as_ref()).and_then(|j| j.package.as_ref()).cloned().unwrap_or_default().into()
-    );
-    ui_h.set_ps_export_java_code_output(
-        export.server.as_ref().and_then(|s| s.java.as_ref()).and_then(|j| j.code_output.as_ref()).cloned().unwrap_or_default().into()
-    );
-    // 缺省开：与 export/java.rs 里的 unwrap_or(true) 保持同一口径
-    ui_h.set_ps_export_java_lombok(
-        export.server.as_ref().and_then(|s| s.java.as_ref()).and_then(|j| j.lombok).unwrap_or(true)
-    );
-    ui_h.set_ps_export_java_custom_regions(
-        export.server.as_ref().and_then(|s| s.java.as_ref()).and_then(|x| x.custom_regions).unwrap_or(true)
-    );
-    ui_h.set_ps_export_go_package(
-        export.server.as_ref().and_then(|s| s.go.as_ref()).and_then(|g| g.package.as_ref()).cloned().unwrap_or_default().into()
-    );
-    ui_h.set_ps_export_go_code_output(
-        export.server.as_ref().and_then(|s| s.go.as_ref()).and_then(|g| g.code_output.as_ref()).cloned().unwrap_or_default().into()
-    );
-    ui_h.set_ps_export_go_custom_regions(
-        export.server.as_ref().and_then(|s| s.go.as_ref()).and_then(|x| x.custom_regions).unwrap_or(true)
-    );
-    ui_h.set_ps_export_cpp_namespace(
-        export.server.as_ref().and_then(|s| s.cpp.as_ref()).and_then(|c| c.namespace.as_ref()).cloned().unwrap_or_default().into()
-    );
-    ui_h.set_ps_export_cpp_code_output(
-        export.server.as_ref().and_then(|s| s.cpp.as_ref()).and_then(|c| c.code_output.as_ref()).cloned().unwrap_or_default().into()
-    );
-    ui_h.set_ps_export_cpp_custom_regions(
-        export.server.as_ref().and_then(|s| s.cpp.as_ref()).and_then(|x| x.custom_regions).unwrap_or(true)
-    );
-    ui_h.set_ps_export_csharp_dotnet_namespace(
-        export.server.as_ref().and_then(|s| s.csharp_dotnet.as_ref()).and_then(|c| c.namespace.as_ref()).cloned().unwrap_or_default().into()
-    );
-    ui_h.set_ps_export_csharp_dotnet_code_output(
-        export.server.as_ref().and_then(|s| s.csharp_dotnet.as_ref()).and_then(|c| c.code_output.as_ref()).cloned().unwrap_or_default().into()
-    );
-    ui_h.set_ps_export_csharp_dotnet_custom_regions(
-        export.server.as_ref().and_then(|s| s.csharp_dotnet.as_ref()).and_then(|x| x.custom_regions).unwrap_or(true)
-    );
-    ui_h.set_ps_export_typescript_server_code_output(
-        export.server.as_ref().and_then(|s| s.typescript.as_ref()).and_then(|t| t.output.as_ref()).cloned().unwrap_or_default().into()
-    );
-    ui_h.set_ps_export_lua_output(
-        export.client.as_ref().and_then(|c| c.lua.as_ref()).and_then(|l| l.output.as_ref()).cloned().unwrap_or_default().into()
-    );
-    ui_h.set_ps_export_gdscript_output(
-        export.client.as_ref().and_then(|c| c.gdscript.as_ref()).and_then(|g| g.output.as_ref()).cloned().unwrap_or_default().into()
-    );
-    ui_h.set_ps_export_typescript_client_output(
-        export.client.as_ref().and_then(|c| c.typescript.as_ref()).and_then(|t| t.output.as_ref()).cloned().unwrap_or_default().into()
-    );
-    ui_h.set_ps_export_csharp_unity_namespace(
-        export.client.as_ref().and_then(|c| c.csharp_unity.as_ref()).and_then(|u| u.namespace.as_ref()).cloned().unwrap_or_default().into()
-    );
-    ui_h.set_ps_export_csharp_unity_code_output(
-        export.client.as_ref().and_then(|c| c.csharp_unity.as_ref()).and_then(|u| u.code_output.as_ref()).cloned().unwrap_or_default().into()
-    );
-    ui_h.set_ps_export_csharp_unity_custom_regions(
-        export.client.as_ref().and_then(|c| c.csharp_unity.as_ref()).and_then(|x| x.custom_regions).unwrap_or(true)
-    );
-    ui_h.set_ps_export_csharp_godot_namespace(
-        export.client.as_ref().and_then(|c| c.csharp_godot.as_ref()).and_then(|g| g.namespace.as_ref()).cloned().unwrap_or_default().into()
-    );
-    ui_h.set_ps_export_csharp_godot_code_output(
-        export.client.as_ref().and_then(|c| c.csharp_godot.as_ref()).and_then(|g| g.code_output.as_ref()).cloned().unwrap_or_default().into()
-    );
-    ui_h.set_ps_export_csharp_godot_custom_regions(
-        export.client.as_ref().and_then(|c| c.csharp_godot.as_ref()).and_then(|x| x.custom_regions).unwrap_or(true)
-    );
-}
-
-/// `# @sep` 行 key → 写到 SeparatorsSection 的对应字段。
-fn apply_sep_kv(sep: &mut SeparatorsSection, key: &str, value: &str) {
-    if let Some(k) = SepKey::from_directive_key(key) {
-        k.set(sep, value.to_string());
-    }
-}
-
-/// 导出配置字段编辑：从字符串值更新到 ExportConfig 结构
-fn apply_export_field(export: &mut tablet_core::model::ExportConfig, key: &str, value: &str) {
-    use std::str::FromStr;
-    use tablet_core::enums::*;
-
-    match key {
-        "encoding" => {
-            if let Ok(e) = Encoding::from_str(value) {
-                export.encoding = Some(e);
-            }
-        }
-        "line_ending" => {
-            if let Ok(l) = LineEnding::from_str(value) {
-                export.line_ending = Some(l);
-            }
-        }
-        "json_empty_as" => {
-            if export.json.is_none() {
-                export.json = Some(Default::default());
-            }
-            if let Some(ref mut json) = export.json {
-                if let Ok(e) = JsonEmptyAs::from_str(value) {
-                    json.empty_as = Some(e);
-                }
-            }
-        }
-        "xml_empty_as" => {
-            if export.xml.is_none() {
-                export.xml = Some(Default::default());
-            }
-            if let Some(ref mut xml) = export.xml {
-                if let Ok(e) = XmlEmptyAs::from_str(value) {
-                    xml.empty_as = Some(e);
-                }
-            }
-        }
-        "cpp_json_lib" => {
-            if export.server.is_none() {
-                export.server = Some(Default::default());
-            }
-            if let Some(ref mut server) = export.server {
-                if server.cpp.is_none() {
-                    server.cpp = Some(Default::default());
-                }
-                if let Some(ref mut cpp) = server.cpp {
-                    if let Ok(lib) = CppJsonLib::from_str(value) {
-                        cpp.json_lib = Some(lib);
-                    }
-                }
-            }
-        }
-        // 字符串字段
-        "server_data_output" => {
-            if export.server.is_none() {
-                export.server = Some(Default::default());
-            }
-            if let Some(ref mut server) = export.server {
-                server.data_output = if value.is_empty() { None } else { Some(value.to_string()) };
-            }
-        }
-        "java_package" => {
-            if export.server.is_none() {
-                export.server = Some(Default::default());
-            }
-            if let Some(ref mut server) = export.server {
-                if server.java.is_none() {
-                    server.java = Some(Default::default());
-                }
-                if let Some(ref mut java) = server.java {
-                    java.package = if value.is_empty() { None } else { Some(value.to_string()) };
-                }
-            }
-        }
-        "java_code_output" => {
-            if export.server.is_none() {
-                export.server = Some(Default::default());
-            }
-            if let Some(ref mut server) = export.server {
-                if server.java.is_none() {
-                    server.java = Some(Default::default());
-                }
-                if let Some(ref mut java) = server.java {
-                    java.code_output = if value.is_empty() { None } else { Some(value.to_string()) };
-                }
-            }
-        }
-        "java_lombok" => {
-            if export.server.is_none() {
-                export.server = Some(Default::default());
-            }
-            if let Some(ref mut server) = export.server {
-                if server.java.is_none() {
-                    server.java = Some(Default::default());
-                }
-                if let Some(ref mut java) = server.java {
-                    java.lombok = Some(value == "true");
-                }
-            }
-        }
-        "java_custom_regions" => {
-            if export.server.is_none() {
-                export.server = Some(Default::default());
-            }
-            if let Some(ref mut s) = export.server {
-                if s.java.is_none() {
-                    s.java = Some(Default::default());
-                }
-                if let Some(ref mut f) = s.java {
-                    f.custom_regions = Some(value == "true");
-                }
-            }
-        }
-        "go_custom_regions" => {
-            if export.server.is_none() {
-                export.server = Some(Default::default());
-            }
-            if let Some(ref mut s) = export.server {
-                if s.go.is_none() {
-                    s.go = Some(Default::default());
-                }
-                if let Some(ref mut f) = s.go {
-                    f.custom_regions = Some(value == "true");
-                }
-            }
-        }
-        "cpp_custom_regions" => {
-            if export.server.is_none() {
-                export.server = Some(Default::default());
-            }
-            if let Some(ref mut s) = export.server {
-                if s.cpp.is_none() {
-                    s.cpp = Some(Default::default());
-                }
-                if let Some(ref mut f) = s.cpp {
-                    f.custom_regions = Some(value == "true");
-                }
-            }
-        }
-        "csharp_dotnet_custom_regions" => {
-            if export.server.is_none() {
-                export.server = Some(Default::default());
-            }
-            if let Some(ref mut s) = export.server {
-                if s.csharp_dotnet.is_none() {
-                    s.csharp_dotnet = Some(Default::default());
-                }
-                if let Some(ref mut f) = s.csharp_dotnet {
-                    f.custom_regions = Some(value == "true");
-                }
-            }
-        }
-        "csharp_unity_custom_regions" => {
-            if export.client.is_none() {
-                export.client = Some(Default::default());
-            }
-            if let Some(ref mut s) = export.client {
-                if s.csharp_unity.is_none() {
-                    s.csharp_unity = Some(Default::default());
-                }
-                if let Some(ref mut f) = s.csharp_unity {
-                    f.custom_regions = Some(value == "true");
-                }
-            }
-        }
-        "csharp_godot_custom_regions" => {
-            if export.client.is_none() {
-                export.client = Some(Default::default());
-            }
-            if let Some(ref mut s) = export.client {
-                if s.csharp_godot.is_none() {
-                    s.csharp_godot = Some(Default::default());
-                }
-                if let Some(ref mut f) = s.csharp_godot {
-                    f.custom_regions = Some(value == "true");
-                }
-            }
-        }
-        "go_package" => {
-            if export.server.is_none() {
-                export.server = Some(Default::default());
-            }
-            if let Some(ref mut server) = export.server {
-                if server.go.is_none() {
-                    server.go = Some(Default::default());
-                }
-                if let Some(ref mut go) = server.go {
-                    go.package = if value.is_empty() { None } else { Some(value.to_string()) };
-                }
-            }
-        }
-        "go_code_output" => {
-            if export.server.is_none() {
-                export.server = Some(Default::default());
-            }
-            if let Some(ref mut server) = export.server {
-                if server.go.is_none() {
-                    server.go = Some(Default::default());
-                }
-                if let Some(ref mut go) = server.go {
-                    go.code_output = if value.is_empty() { None } else { Some(value.to_string()) };
-                }
-            }
-        }
-        "cpp_namespace" => {
-            if export.server.is_none() {
-                export.server = Some(Default::default());
-            }
-            if let Some(ref mut server) = export.server {
-                if server.cpp.is_none() {
-                    server.cpp = Some(Default::default());
-                }
-                if let Some(ref mut cpp) = server.cpp {
-                    cpp.namespace = if value.is_empty() { None } else { Some(value.to_string()) };
-                }
-            }
-        }
-        "cpp_code_output" => {
-            if export.server.is_none() {
-                export.server = Some(Default::default());
-            }
-            if let Some(ref mut server) = export.server {
-                if server.cpp.is_none() {
-                    server.cpp = Some(Default::default());
-                }
-                if let Some(ref mut cpp) = server.cpp {
-                    cpp.code_output = if value.is_empty() { None } else { Some(value.to_string()) };
-                }
-            }
-        }
-        "csharp_dotnet_namespace" => {
-            if export.server.is_none() {
-                export.server = Some(Default::default());
-            }
-            if let Some(ref mut server) = export.server {
-                if server.csharp_dotnet.is_none() {
-                    server.csharp_dotnet = Some(Default::default());
-                }
-                if let Some(ref mut cs) = server.csharp_dotnet {
-                    cs.namespace = if value.is_empty() { None } else { Some(value.to_string()) };
-                }
-            }
-        }
-        "csharp_dotnet_code_output" => {
-            if export.server.is_none() {
-                export.server = Some(Default::default());
-            }
-            if let Some(ref mut server) = export.server {
-                if server.csharp_dotnet.is_none() {
-                    server.csharp_dotnet = Some(Default::default());
-                }
-                if let Some(ref mut cs) = server.csharp_dotnet {
-                    cs.code_output = if value.is_empty() { None } else { Some(value.to_string()) };
-                }
-            }
-        }
-        "typescript_server_code_output" => {
-            if export.server.is_none() {
-                export.server = Some(Default::default());
-            }
-            if let Some(ref mut server) = export.server {
-                if server.typescript.is_none() {
-                    server.typescript = Some(Default::default());
-                }
-                if let Some(ref mut ts) = server.typescript {
-                    ts.output = if value.is_empty() { None } else { Some(value.to_string()) };
-                }
-            }
-        }
-        "lua_output" => {
-            if export.client.is_none() {
-                export.client = Some(Default::default());
-            }
-            if let Some(ref mut client) = export.client {
-                if client.lua.is_none() {
-                    client.lua = Some(Default::default());
-                }
-                if let Some(ref mut lua) = client.lua {
-                    lua.output = if value.is_empty() { None } else { Some(value.to_string()) };
-                }
-            }
-        }
-        "gdscript_output" => {
-            if export.client.is_none() {
-                export.client = Some(Default::default());
-            }
-            if let Some(ref mut client) = export.client {
-                if client.gdscript.is_none() {
-                    client.gdscript = Some(Default::default());
-                }
-                if let Some(ref mut gd) = client.gdscript {
-                    gd.output = if value.is_empty() { None } else { Some(value.to_string()) };
-                }
-            }
-        }
-        "typescript_client_output" => {
-            if export.client.is_none() {
-                export.client = Some(Default::default());
-            }
-            if let Some(ref mut client) = export.client {
-                if client.typescript.is_none() {
-                    client.typescript = Some(Default::default());
-                }
-                if let Some(ref mut ts) = client.typescript {
-                    ts.output = if value.is_empty() { None } else { Some(value.to_string()) };
-                }
-            }
-        }
-        "csharp_unity_namespace" => {
-            if export.client.is_none() {
-                export.client = Some(Default::default());
-            }
-            if let Some(ref mut client) = export.client {
-                if client.csharp_unity.is_none() {
-                    client.csharp_unity = Some(Default::default());
-                }
-                if let Some(ref mut cs) = client.csharp_unity {
-                    cs.namespace = if value.is_empty() { None } else { Some(value.to_string()) };
-                }
-            }
-        }
-        "csharp_unity_code_output" => {
-            if export.client.is_none() {
-                export.client = Some(Default::default());
-            }
-            if let Some(ref mut client) = export.client {
-                if client.csharp_unity.is_none() {
-                    client.csharp_unity = Some(Default::default());
-                }
-                if let Some(ref mut cs) = client.csharp_unity {
-                    cs.code_output = if value.is_empty() { None } else { Some(value.to_string()) };
-                }
-            }
-        }
-        "csharp_godot_namespace" => {
-            if export.client.is_none() {
-                export.client = Some(Default::default());
-            }
-            if let Some(ref mut client) = export.client {
-                if client.csharp_godot.is_none() {
-                    client.csharp_godot = Some(Default::default());
-                }
-                if let Some(ref mut cs) = client.csharp_godot {
-                    cs.namespace = if value.is_empty() { None } else { Some(value.to_string()) };
-                }
-            }
-        }
-        "csharp_godot_code_output" => {
-            if export.client.is_none() {
-                export.client = Some(Default::default());
-            }
-            if let Some(ref mut client) = export.client {
-                if client.csharp_godot.is_none() {
-                    client.csharp_godot = Some(Default::default());
-                }
-                if let Some(ref mut cs) = client.csharp_godot {
-                    cs.code_output = if value.is_empty() { None } else { Some(value.to_string()) };
-                }
-            }
-        }
+    match tab {
+        0 => push_identity(ui_h, p),
+        1 => push_sep(ui_h, p),
+        2 => push_export(ui_h, p),
         _ => {}
     }
 }
 
-/// 「确定」逻辑。更新所有字段到内存，标记 dirty，等"保存项目"才写盘。
-fn run(state: &Rc<RefCell<AppState>>) {
-    // 取出 buf，先放下 borrow
-    let (old_id, new_id, name, category, version, sep, export) = {
+fn push_identity(ui_h: &AppWindow, p: &Project) {
+    let (m, o) = (&p.schema.meta, &p.original_meta);
+    // id 只读：它在新建 / 克隆对话框里定，改 id 要动目录，风险大（@02.26）。
+    ui_h.set_ps_id(m.id.clone().into());
+    ui_h.set_ps_name(m.name.clone().into());
+    ui_h.set_ps_name_modified(m.name != o.name);
+    ui_h.set_ps_category(m.category.clone().into());
+    ui_h.set_ps_category_modified(m.category != o.category);
+    ui_h.set_ps_version(m.version.clone().into());
+    ui_h.set_ps_version_modified(m.version != o.version);
+}
+
+/// 分隔符 tab：25 个叶子，每个推「值」+「和盘上不一样吗」两件。
+///
+/// 成对写在相邻两行，是为了加字段时不会只加一半 —— 值推了、高亮忘了，
+/// 表现就是「改了没反应」，最难查的那一类。
+fn push_sep(ui_h: &AppWindow, p: &Project) {
+    let (live, orig) = (&p.schema.separators, &p.original_separators);
+    let v = |k: SepKey| k.get(live).to_string();
+    let m = |k: SepKey| k.get(live) != k.get(orig);
+
+    ui_h.set_ps_sep_tuple2(v(SepKey::Tuple2).into());
+    ui_h.set_ps_sep_tuple2_modified(m(SepKey::Tuple2));
+    ui_h.set_ps_sep_tuple3(v(SepKey::Tuple3).into());
+    ui_h.set_ps_sep_tuple3_modified(m(SepKey::Tuple3));
+    ui_h.set_ps_sep_tuple4(v(SepKey::Tuple4).into());
+    ui_h.set_ps_sep_tuple4_modified(m(SepKey::Tuple4));
+    ui_h.set_ps_sep_list(v(SepKey::List).into());
+    ui_h.set_ps_sep_list_modified(m(SepKey::List));
+    ui_h.set_ps_sep_set(v(SepKey::Set).into());
+    ui_h.set_ps_sep_set_modified(m(SepKey::Set));
+    ui_h.set_ps_sep_map_kv(v(SepKey::MapKv).into());
+    ui_h.set_ps_sep_map_kv_modified(m(SepKey::MapKv));
+    ui_h.set_ps_sep_map_entry(v(SepKey::MapEntry).into());
+    ui_h.set_ps_sep_map_entry_modified(m(SepKey::MapEntry));
+    ui_h.set_ps_sep_lt2_tuple(v(SepKey::ListTuple2Tuple).into());
+    ui_h.set_ps_sep_lt2_tuple_modified(m(SepKey::ListTuple2Tuple));
+    ui_h.set_ps_sep_lt2_list(v(SepKey::ListTuple2List).into());
+    ui_h.set_ps_sep_lt2_list_modified(m(SepKey::ListTuple2List));
+    ui_h.set_ps_sep_lt3_tuple(v(SepKey::ListTuple3Tuple).into());
+    ui_h.set_ps_sep_lt3_tuple_modified(m(SepKey::ListTuple3Tuple));
+    ui_h.set_ps_sep_lt3_list(v(SepKey::ListTuple3List).into());
+    ui_h.set_ps_sep_lt3_list_modified(m(SepKey::ListTuple3List));
+    ui_h.set_ps_sep_lt4_tuple(v(SepKey::ListTuple4Tuple).into());
+    ui_h.set_ps_sep_lt4_tuple_modified(m(SepKey::ListTuple4Tuple));
+    ui_h.set_ps_sep_lt4_list(v(SepKey::ListTuple4List).into());
+    ui_h.set_ps_sep_lt4_list_modified(m(SepKey::ListTuple4List));
+    ui_h.set_ps_sep_mt2_kv(v(SepKey::MapTuple2Kv).into());
+    ui_h.set_ps_sep_mt2_kv_modified(m(SepKey::MapTuple2Kv));
+    ui_h.set_ps_sep_mt2_tuple(v(SepKey::MapTuple2Tuple).into());
+    ui_h.set_ps_sep_mt2_tuple_modified(m(SepKey::MapTuple2Tuple));
+    ui_h.set_ps_sep_mt2_entry(v(SepKey::MapTuple2Entry).into());
+    ui_h.set_ps_sep_mt2_entry_modified(m(SepKey::MapTuple2Entry));
+    ui_h.set_ps_sep_mt3_kv(v(SepKey::MapTuple3Kv).into());
+    ui_h.set_ps_sep_mt3_kv_modified(m(SepKey::MapTuple3Kv));
+    ui_h.set_ps_sep_mt3_tuple(v(SepKey::MapTuple3Tuple).into());
+    ui_h.set_ps_sep_mt3_tuple_modified(m(SepKey::MapTuple3Tuple));
+    ui_h.set_ps_sep_mt3_entry(v(SepKey::MapTuple3Entry).into());
+    ui_h.set_ps_sep_mt3_entry_modified(m(SepKey::MapTuple3Entry));
+    ui_h.set_ps_sep_mt4_kv(v(SepKey::MapTuple4Kv).into());
+    ui_h.set_ps_sep_mt4_kv_modified(m(SepKey::MapTuple4Kv));
+    ui_h.set_ps_sep_mt4_tuple(v(SepKey::MapTuple4Tuple).into());
+    ui_h.set_ps_sep_mt4_tuple_modified(m(SepKey::MapTuple4Tuple));
+    ui_h.set_ps_sep_mt4_entry(v(SepKey::MapTuple4Entry).into());
+    ui_h.set_ps_sep_mt4_entry_modified(m(SepKey::MapTuple4Entry));
+    ui_h.set_ps_sep_ml_kv(v(SepKey::MapListKv).into());
+    ui_h.set_ps_sep_ml_kv_modified(m(SepKey::MapListKv));
+    ui_h.set_ps_sep_ml_item(v(SepKey::MapListItem).into());
+    ui_h.set_ps_sep_ml_item_modified(m(SepKey::MapListItem));
+    ui_h.set_ps_sep_ml_entry(v(SepKey::MapListEntry).into());
+    ui_h.set_ps_sep_ml_entry_modified(m(SepKey::MapListEntry));
+}
+
+/// 一个下拉字段：选项 + 选中下标 + 「改过吗」。
+fn push_combo(
+    ui_h: &AppWindow,
+    options: Vec<&'static str>,
+    value: &str,
+    modified: bool,
+    set_options: impl Fn(&AppWindow, slint::ModelRc<slint::SharedString>),
+    set_index: impl Fn(&AppWindow, i32),
+    set_modified: impl Fn(&AppWindow, bool),
+) {
+    // 值不在选项里（手改过 project.toml）时落到第一项，和原来 `unwrap_or(0)` 一致
+    let idx = options.iter().position(|o| *o == value).unwrap_or(0) as i32;
+    let model: Vec<slint::SharedString> = options.into_iter().map(Into::into).collect();
+    set_options(ui_h, slint::ModelRc::new(slint::VecModel::from(model)));
+    set_index(ui_h, idx);
+    set_modified(ui_h, modified);
+}
+
+/// 导出 tab：29 个叶子。值 / 下标 / 布尔三态，成对推「值 + 改没改」。
+fn push_export(ui_h: &AppWindow, p: &Project) {
+    let (live, orig) = (&p.config.export, &p.original_export);
+    let v = |k: ExportKey| k.get(live);
+    let m = |k: ExportKey| k.modified(live, orig);
+
+    push_combo(ui_h, Encoding::all_str(), &v(ExportKey::Encoding), m(ExportKey::Encoding),
+        |u, x| u.set_ps_encoding_options(x),
+        |u, i| u.set_ps_export_encoding_index(i),
+        |u, b| u.set_ps_export_encoding_modified(b));
+    push_combo(ui_h, LineEnding::all_str(), &v(ExportKey::LineEnding), m(ExportKey::LineEnding),
+        |u, x| u.set_ps_line_ending_options(x),
+        |u, i| u.set_ps_export_line_ending_index(i),
+        |u, b| u.set_ps_export_line_ending_modified(b));
+    push_combo(ui_h, JsonEmptyAs::all_str(), &v(ExportKey::JsonEmptyAs), m(ExportKey::JsonEmptyAs),
+        |u, x| u.set_ps_json_empty_as_options(x),
+        |u, i| u.set_ps_export_json_empty_as_index(i),
+        |u, b| u.set_ps_export_json_empty_as_modified(b));
+    push_combo(ui_h, XmlEmptyAs::all_str(), &v(ExportKey::XmlEmptyAs), m(ExportKey::XmlEmptyAs),
+        |u, x| u.set_ps_xml_empty_as_options(x),
+        |u, i| u.set_ps_export_xml_empty_as_index(i),
+        |u, b| u.set_ps_export_xml_empty_as_modified(b));
+    push_combo(ui_h, CppJsonLib::all_str(), &v(ExportKey::CppJsonLib), m(ExportKey::CppJsonLib),
+        |u, x| u.set_ps_cpp_json_lib_options(x),
+        |u, i| u.set_ps_export_cpp_json_lib_index(i),
+        |u, b| u.set_ps_export_cpp_json_lib_modified(b));
+
+    // 服务端 —— 字符串
+    ui_h.set_ps_export_server_data_output(v(ExportKey::ServerDataOutput).into());
+    ui_h.set_ps_export_server_data_output_modified(m(ExportKey::ServerDataOutput));
+    ui_h.set_ps_export_java_package(v(ExportKey::JavaPackage).into());
+    ui_h.set_ps_export_java_package_modified(m(ExportKey::JavaPackage));
+    ui_h.set_ps_export_java_code_output(v(ExportKey::JavaCodeOutput).into());
+    ui_h.set_ps_export_java_code_output_modified(m(ExportKey::JavaCodeOutput));
+    ui_h.set_ps_export_go_package(v(ExportKey::GoPackage).into());
+    ui_h.set_ps_export_go_package_modified(m(ExportKey::GoPackage));
+    ui_h.set_ps_export_go_code_output(v(ExportKey::GoCodeOutput).into());
+    ui_h.set_ps_export_go_code_output_modified(m(ExportKey::GoCodeOutput));
+    ui_h.set_ps_export_cpp_namespace(v(ExportKey::CppNamespace).into());
+    ui_h.set_ps_export_cpp_namespace_modified(m(ExportKey::CppNamespace));
+    ui_h.set_ps_export_cpp_code_output(v(ExportKey::CppCodeOutput).into());
+    ui_h.set_ps_export_cpp_code_output_modified(m(ExportKey::CppCodeOutput));
+    ui_h.set_ps_export_csharp_dotnet_namespace(v(ExportKey::CsharpDotnetNamespace).into());
+    ui_h.set_ps_export_csharp_dotnet_namespace_modified(m(ExportKey::CsharpDotnetNamespace));
+    ui_h.set_ps_export_csharp_dotnet_code_output(v(ExportKey::CsharpDotnetCodeOutput).into());
+    ui_h.set_ps_export_csharp_dotnet_code_output_modified(m(ExportKey::CsharpDotnetCodeOutput));
+    ui_h.set_ps_export_typescript_server_code_output(v(ExportKey::TypescriptServerCodeOutput).into());
+    ui_h.set_ps_export_typescript_server_code_output_modified(m(ExportKey::TypescriptServerCodeOutput));
+    // 服务端 —— 布尔
+    ui_h.set_ps_export_java_lombok(v(ExportKey::JavaLombok) == "true");
+    ui_h.set_ps_export_java_lombok_modified(m(ExportKey::JavaLombok));
+    ui_h.set_ps_export_java_custom_regions(v(ExportKey::JavaCustomRegions) == "true");
+    ui_h.set_ps_export_java_custom_regions_modified(m(ExportKey::JavaCustomRegions));
+    ui_h.set_ps_export_go_custom_regions(v(ExportKey::GoCustomRegions) == "true");
+    ui_h.set_ps_export_go_custom_regions_modified(m(ExportKey::GoCustomRegions));
+    ui_h.set_ps_export_cpp_custom_regions(v(ExportKey::CppCustomRegions) == "true");
+    ui_h.set_ps_export_cpp_custom_regions_modified(m(ExportKey::CppCustomRegions));
+    ui_h.set_ps_export_csharp_dotnet_custom_regions(v(ExportKey::CsharpDotnetCustomRegions) == "true");
+    ui_h.set_ps_export_csharp_dotnet_custom_regions_modified(m(ExportKey::CsharpDotnetCustomRegions));
+
+    // 客户端 —— 字符串
+    ui_h.set_ps_export_lua_output(v(ExportKey::LuaOutput).into());
+    ui_h.set_ps_export_lua_output_modified(m(ExportKey::LuaOutput));
+    ui_h.set_ps_export_gdscript_output(v(ExportKey::GdscriptOutput).into());
+    ui_h.set_ps_export_gdscript_output_modified(m(ExportKey::GdscriptOutput));
+    ui_h.set_ps_export_typescript_client_output(v(ExportKey::TypescriptClientOutput).into());
+    ui_h.set_ps_export_typescript_client_output_modified(m(ExportKey::TypescriptClientOutput));
+    ui_h.set_ps_export_csharp_unity_namespace(v(ExportKey::CsharpUnityNamespace).into());
+    ui_h.set_ps_export_csharp_unity_namespace_modified(m(ExportKey::CsharpUnityNamespace));
+    ui_h.set_ps_export_csharp_unity_code_output(v(ExportKey::CsharpUnityCodeOutput).into());
+    ui_h.set_ps_export_csharp_unity_code_output_modified(m(ExportKey::CsharpUnityCodeOutput));
+    ui_h.set_ps_export_csharp_godot_namespace(v(ExportKey::CsharpGodotNamespace).into());
+    ui_h.set_ps_export_csharp_godot_namespace_modified(m(ExportKey::CsharpGodotNamespace));
+    ui_h.set_ps_export_csharp_godot_code_output(v(ExportKey::CsharpGodotCodeOutput).into());
+    ui_h.set_ps_export_csharp_godot_code_output_modified(m(ExportKey::CsharpGodotCodeOutput));
+    // 客户端 —— 布尔
+    ui_h.set_ps_export_csharp_unity_custom_regions(v(ExportKey::CsharpUnityCustomRegions) == "true");
+    ui_h.set_ps_export_csharp_unity_custom_regions_modified(m(ExportKey::CsharpUnityCustomRegions));
+    ui_h.set_ps_export_csharp_godot_custom_regions(v(ExportKey::CsharpGodotCustomRegions) == "true");
+    ui_h.set_ps_export_csharp_godot_custom_regions_modified(m(ExportKey::CsharpGodotCustomRegions));
+}
+
+// ─── 关闭 ─────────────────────────────────────────────────────────────────
+
+/// **所有关闭路径都走这里**（`确定`、点遮罩）。少了这个收口，
+/// 某条路径就会带着已经改了的分隔符关掉而不重校验，grid 上的红框一直是旧的。
+fn close_and_apply(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
+    let (sep_touched, project_id) = {
         let st = state.borrow();
-        let ps = &st.project_settings;
-        (
-            ps.project_id.clone(),
-            ps.id_buf.clone(),
-            ps.name_buf.clone(),
-            ps.category_buf.clone(),
-            ps.version_buf.clone(),
-            ps.sep.clone(),
-            ps.export.clone(),
-        )
+        (st.project_settings.sep_touched, st.project_settings.project_id.clone())
     };
 
-    // 更新所有字段到内存（id / name / category / version / separators），
-    // 只标记 dirty，等"保存项目"才写盘。
-    let mut has_changes = false;
-    {
+    if sep_touched {
+        // `revalidate_all` 是 **active 作用域**的，而对话框可能开在非 active 项目上。
+        // 临时切过去、跑完切回来 —— 与原 `run()` 里那段一致。
         let mut st = state.borrow_mut();
-        if let Some(p) = st.engine.find_project_mut(&old_id) {
-            if p.schema.meta.id != new_id {
-                p.schema.meta.id = new_id.clone();
-                // 未落盘项目改 id 时需同步更新 project_root 路径
-                // 子节点路径会在首次保存时由 save_project_files 自动推演
-                if p.state.is_pending() {
-                    p.project_root = p.workdir.join("projects").join(&new_id);
-                }
-                has_changes = true;
-            }
-            if p.schema.meta.name != name {
-                p.schema.meta.name = name.clone();
-                has_changes = true;
-            }
-            if p.schema.meta.category != category {
-                p.schema.meta.category = category.clone();
-                has_changes = true;
-            }
-            if p.schema.meta.version != version {
-                p.schema.meta.version = version.clone();
-                has_changes = true;
-            }
-            if p.schema.separators != sep {
-                p.schema.separators = sep.clone();
-                has_changes = true;
-            }
-            if p.config.export != export {
-                p.config.export = export.clone();
-                has_changes = true;
-            }
-            // meta / separators 的改动不用在这里标脏：`Project::schema_changed()`
-            // 拿它们跟自己上次落盘的快照比，改回去会自动回到干净。
-        }
-    }
-
-    if has_changes {
-        let mut st = state.borrow_mut();
-
-        // ID 改变时，需要同步更新 engine 内部的所有索引结构
-        let id_changed = old_id != new_id;
-        if id_changed {
-            // 更新 available_projects 列表中的 id
-            if let Some(avail) = st.engine.available_projects.iter_mut().find(|a| a.id == old_id) {
-                avail.id = new_id.clone();
-            }
-            // 更新 opened_projects 列表
-            for opened_id in &mut st.engine.global_config.project_management.opened_projects {
-                if opened_id == &old_id {
-                    *opened_id = new_id.clone();
-                }
-            }
-            // 更新 last_project（如果是当前项目）
-            if st.engine.global_config.project_management.last_project == old_id {
-                st.engine.global_config.project_management.last_project = new_id.clone();
-            }
-            // 更新 project_order 列表
-            for order_id in &mut st.engine.global_config.project_management.project_order {
-                if order_id == &old_id {
-                    *order_id = new_id.clone();
-                }
-            }
-            // 更新 validation_errors 中的 project_id
-            let old_errors: Vec<_> = st.engine.validation_errors.iter()
-                .filter(|(pid, _, _, _, _)| pid == &old_id)
-                .cloned()
-                .collect();
-            for (_, g, n, r, c) in old_errors {
-                st.engine.validation_errors.remove(&(old_id.clone(), g.clone(), n.clone(), r, c));
-                st.engine.validation_errors.insert((new_id.clone(), g, n, r, c));
-            }
-        }
-
-        // schema 改了（特别是 separators）→ 重新生成合并后的 ProjectConfig
-        // 注意：ID 改变后要用新 ID 查找
-        let target_id = if id_changed { &new_id } else { &old_id };
-        st.engine.remerge_project_config(target_id);
-
-        // 分隔符变了要全表重校验（active scope）：临时切到目标 project 跑 revalidate_all 再切回。
-        let prev_active = st.engine.active_project_id().map(|s| s.to_string());
-        if st.engine.set_active_by_id(target_id) {
+        let prev = st.engine.active_project_id().map(str::to_string);
+        if st.engine.set_active_by_id(&project_id) {
             st.engine.revalidate_all();
         }
-        match prev_active {
+        match prev {
             Some(id) => { st.engine.set_active_by_id(&id); }
             None => st.engine.set_active_none(),
         }
-
-        st.engine.ui_log(format!("[项目设置] 已应用修改: {}（需保存项目才写盘）", target_id));
     }
+
+    state.borrow_mut().project_settings.close();
+    push(ui_h, state);
+    // 树上项目的 🟡、grid 里的红框都可能变了，两处都要刷
+    refresh::after_tree_change(ui_h, state);
 }
+
+// ─── 接线 ─────────────────────────────────────────────────────────────────
 
 pub fn wire(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
     // tab 切换
@@ -782,20 +318,13 @@ pub fn wire(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
             if let Some(ui_h) = weak.upgrade() { push(&ui_h, &s); }
         });
     }
-    // 身份字段 edited
-    {
-        let s = state.clone();
-        let weak = ui_h.as_weak();
-        ui_h.on_ps_id_edited(move |v| {
-            s.borrow_mut().project_settings.id_buf = v.to_string();
-            if let Some(ui_h) = weak.upgrade() { push(&ui_h, &s); }
-        });
-    }
+
+    // 身份三字段
     {
         let s = state.clone();
         let weak = ui_h.as_weak();
         ui_h.on_ps_name_edited(move |v| {
-            s.borrow_mut().project_settings.name_buf = v.to_string();
+            edit_project(&s, |p| p.schema.meta.name = v.to_string());
             if let Some(ui_h) = weak.upgrade() { push(&ui_h, &s); }
         });
     }
@@ -803,7 +332,7 @@ pub fn wire(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
         let s = state.clone();
         let weak = ui_h.as_weak();
         ui_h.on_ps_category_edited(move |v| {
-            s.borrow_mut().project_settings.category_buf = v.to_string();
+            edit_project(&s, |p| p.schema.meta.category = v.to_string());
             if let Some(ui_h) = weak.upgrade() { push(&ui_h, &s); }
         });
     }
@@ -811,93 +340,162 @@ pub fn wire(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
         let s = state.clone();
         let weak = ui_h.as_weak();
         ui_h.on_ps_version_edited(move |v| {
-            s.borrow_mut().project_settings.version_buf = v.to_string();
+            edit_project(&s, |p| p.schema.meta.version = v.to_string());
             if let Some(ui_h) = weak.upgrade() { push(&ui_h, &s); }
         });
     }
-    // 分隔符任一字段 edited（slint 端统一通过 sep-edited(key, value) 上来）
+    // 身份字段还原
+    {
+        let s = state.clone();
+        let weak = ui_h.as_weak();
+        ui_h.on_ps_identity_revert(move |field| {
+            let mut err: Option<String> = None;
+            match original_of(&s, |p| p.original_meta.clone()) {
+                None => {}
+                Some(o) => match field.as_str() {
+                    "name" => edit_project(&s, |p| p.schema.meta.name = o.name.clone()),
+                    "category" => edit_project(&s, |p| p.schema.meta.category = o.category.clone()),
+                    "version" => edit_project(&s, |p| p.schema.meta.version = o.version.clone()),
+                    // 认不出来的 key 要吵 —— 导出那边静默吞掉三个 key，就是这么漏的
+                    _ => err = Some(format!("不认识的身份字段: {}", field)),
+                },
+            }
+            if let Some(e) = err {
+                s.borrow_mut().engine.error_log(format!("[项目设置] {}", e));
+            }
+            if let Some(ui_h) = weak.upgrade() { push(&ui_h, &s); }
+        });
+    }
+
+    // 分隔符叶子编辑 / 还原
     {
         let s = state.clone();
         let weak = ui_h.as_weak();
         ui_h.on_ps_sep_edited(move |key, value| {
-            apply_sep_kv(&mut s.borrow_mut().project_settings.sep, &key, &value);
+            match SepKey::from_directive_key(&key) {
+                Some(k) => write_sep(&s, |sep| k.set(sep, value.to_string())),
+                None => s.borrow_mut().engine.error_log(format!("[项目设置] 不认识的分隔符字段: {}", key)),
+            }
             if let Some(ui_h) = weak.upgrade() { push(&ui_h, &s); }
         });
     }
-    // 导出配置字段 edited（slint 端统一通过 export-field-edited(key, value) 上来）
+    {
+        let s = state.clone();
+        let weak = ui_h.as_weak();
+        ui_h.on_ps_sep_revert(move |key| {
+            match SepKey::from_directive_key(&key) {
+                Some(k) => {
+                    let orig = original_of(&s, |p| p.original_separators.clone());
+                    if let Some(o) = orig {
+                        write_sep(&s, |sep| k.set(sep, k.get(&o).to_string()));
+                    }
+                }
+                None => s.borrow_mut().engine.error_log(format!("[项目设置] 不认识的分隔符字段: {}", key)),
+            }
+            if let Some(ui_h) = weak.upgrade() { push(&ui_h, &s); }
+        });
+    }
+
+    // 导出叶子编辑 / 还原
     {
         let s = state.clone();
         let weak = ui_h.as_weak();
         ui_h.on_ps_export_field_edited(move |key, value| {
-            apply_export_field(&mut s.borrow_mut().project_settings.export, &key, &value);
+            let mut err: Option<String> = None;
+            match ExportKey::from_str(&key) {
+                None => err = Some(format!("不认识的导出字段: {}", key)),
+                Some(k) => {
+                    let ok = {
+                        let mut st = s.borrow_mut();
+                        let id = st.project_settings.project_id.clone();
+                        match st.engine.find_project_mut(&id) {
+                            Some(p) => k.set(&mut p.config.export, &value),
+                            None => true,
+                        }
+                    };
+                    if !ok {
+                        err = Some(format!("导出配置不接受 {} = {:?}（值非法，保持原样）", key, value));
+                    }
+                }
+            }
+            if let Some(e) = err {
+                s.borrow_mut().engine.error_log(format!("[项目设置] {}", e));
+            }
             if let Some(ui_h) = weak.upgrade() { push(&ui_h, &s); }
         });
     }
-    // 应用模板（分隔符 tab）：应用当前程序内存中 globalConfig 的模板值
-    // 注意：不是恢复到 SeparatorsSection::default()，default() 仅用于 globalConfig 自身初始化
+    {
+        let s = state.clone();
+        let weak = ui_h.as_weak();
+        ui_h.on_ps_export_revert(move |key| {
+            match ExportKey::from_str(&key) {
+                None => s.borrow_mut().engine.error_log(format!("[项目设置] 不认识的导出字段: {}", key)),
+                Some(k) => {
+                    let orig = original_of(&s, |p| p.original_export.clone());
+                    if let Some(o) = orig {
+                        edit_project(&s, |p| k.revert(&mut p.config.export, &o));
+                    }
+                }
+            }
+            if let Some(ui_h) = weak.upgrade() { push(&ui_h, &s); }
+        });
+    }
+
+    // 应用模板：把全局配置的 separators / export 灌进本项目。
+    // 刻意保留 —— 它和「还原」不是一回事：还原的目标是**上次保存值**，套用的目标是**全局值**。
     {
         let s = state.clone();
         let weak = ui_h.as_weak();
         ui_h.on_ps_reset_sep(move || {
-            let template_sep = {
+            let template = {
                 let st = s.borrow();
                 st.engine.global_config.separators.clone()
             };
-            s.borrow_mut().project_settings.sep = template_sep;
+            write_sep(&s, |sep| *sep = template);
             if let Some(ui_h) = weak.upgrade() { push(&ui_h, &s); }
         });
     }
-    // 应用模板（导出配置 tab）：应用当前程序内存中 globalConfig 的模板值
-    // 注意：不是恢复到各枚举的 ::default()，default() 仅用于 globalConfig 自身初始化
     {
         let s = state.clone();
         let weak = ui_h.as_weak();
         ui_h.on_ps_reset_export(move || {
-            let template_export = {
+            let template = {
                 let st = s.borrow();
                 st.engine.global_config.export.clone().unwrap_or_default()
             };
-            s.borrow_mut().project_settings.export = template_export;
+            edit_project(&s, |p| p.config.export = template);
             if let Some(ui_h) = weak.upgrade() { push(&ui_h, &s); }
         });
     }
-    // 撤销按钮
+
+    // 全部还原
     {
         let s = state.clone();
         let weak = ui_h.as_weak();
-        ui_h.on_ps_undo_clicked(move || {
-            s.borrow_mut().project_settings.undo();
+        ui_h.on_ps_revert_all(move || {
+            {
+                let mut st = s.borrow_mut();
+                let id = st.project_settings.project_id.clone();
+                let mut sep_changed = false;
+                if let Some(p) = st.engine.find_project_mut(&id) {
+                    let before = p.schema.separators.clone();
+                    p.revert_settings();
+                    sep_changed = p.schema.separators != before;
+                }
+                if sep_changed {
+                    st.project_settings.sep_touched = true;
+                }
+            }
             if let Some(ui_h) = weak.upgrade() { push(&ui_h, &s); }
         });
     }
-    // 确定 / 取消
+
+    // 确认（= 关闭）与遮罩点击，都走同一条收口
     {
         let s = state.clone();
         let weak = ui_h.as_weak();
         ui_h.on_ps_confirm(move || {
-            // 防止 id 校验未通过时被 enter 触发
-            let ok = {
-                let st = s.borrow();
-                st.project_settings.id_error.is_empty()
-            };
-            if !ok {
-                if let Some(ui_h) = weak.upgrade() { push(&ui_h, &s); }
-                return;
-            }
-            run(&s);
-            s.borrow_mut().project_settings.close();
-            if let Some(ui_h) = weak.upgrade() {
-                push(&ui_h, &s);
-                refresh::after_tree_change(&ui_h, &s);
-            }
-        });
-    }
-    {
-        let s = state.clone();
-        let weak = ui_h.as_weak();
-        ui_h.on_ps_cancel(move || {
-            s.borrow_mut().project_settings.close();
-            if let Some(ui_h) = weak.upgrade() { push(&ui_h, &s); }
+            if let Some(ui_h) = weak.upgrade() { close_and_apply(&ui_h, &s); }
         });
     }
 }

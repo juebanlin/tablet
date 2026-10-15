@@ -27,9 +27,12 @@ export component GridSection inherits Rectangle {
     in-out property <int> display-field-index: 0;
     in property <bool> display-field-enabled: false;
     in property <bool> excel-edit-enabled: false;
+    /// 还原到已保存（@02.26）：当前节点和盘上不一样、且盘上确实有它
+    in property <bool> revert-enabled: false;
     callback show-ref-name-toggled(bool);
     callback display-field-selected(string);
     callback excel-edit-clicked();
+    callback revert-clicked();
 
     // ── 公式栏 ──
     in property <string> coord;
@@ -104,9 +107,11 @@ export component GridSection inherits Rectangle {
             display-field-index <=> root.display-field-index;
             display-field-enabled: root.display-field-enabled;
             excel-edit-enabled: root.excel-edit-enabled;
+            revert-enabled: root.revert-enabled;
             show-ref-name-toggled(c) => { root.show-ref-name-toggled(c); }
             display-field-selected(s) => { root.display-field-selected(s); }
             excel-edit-clicked => { root.excel-edit-clicked(); }
+            revert-clicked => { root.revert-clicked(); }
         }
         FormulaBar {
             coord: root.coord;

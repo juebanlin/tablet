@@ -1,8 +1,10 @@
 // 项目设置对话框：身份（id/name/category/version）+ 分隔符（25 leaves）2 tab。
 
 import { Theme } from "../theme.slint";
+import { Icons } from "../icons.slint";
+import { ModifiedField } from "../components/modified_field.slint";
 import { DialogChrome } from "dialog_chrome.slint";
-import { Button, LineEdit, ScrollView, ComboBox, CheckBox } from "std-widgets.slint";
+import { LineEdit, ScrollView, ComboBox, CheckBox } from "std-widgets.slint";
 
 // Tab segmented bar：身份 / 分隔符 / 导出设置
 component TabBar inherits Rectangle {
@@ -62,15 +64,21 @@ component TabBar inherits Rectangle {
 component SepRow inherits HorizontalLayout {
     in property <string> l1;
     in-out property <string> v1;
+    in property <bool> m1: false;
     in property <string> l2;
     in-out property <string> v2;
+    in property <bool> m2: false;
     in property <string> l3;
     in-out property <string> v3;
+    in property <bool> m3: false;
     in property <bool> show2: true;
     in property <bool> show3: false;
     callback edited1(string);
     callback edited2(string);
     callback edited3(string);
+    callback revert1();
+    callback revert2();
+    callback revert3();
 
     spacing: Theme.sp-2;
     alignment: start;
@@ -81,10 +89,15 @@ component SepRow inherits HorizontalLayout {
         vertical-alignment: center;
         horizontal-alignment: end;
     }
-    LineEdit {
-        text <=> root.v1;
-        width: 56px;
-        edited(s) => { root.edited1(s); }
+    ModifiedField {
+        // 宽度常驻（不亮时只藏 opacity），否则每敲一个字整行左右跳
+        modified: root.m1;
+        revert => { root.revert1(); }
+        LineEdit {
+            text <=> root.v1;
+            width: 56px;
+            edited(s) => { root.edited1(s); }
+        }
     }
     if root.show2: Text {
         text: root.l2; width: 96px;
@@ -92,10 +105,14 @@ component SepRow inherits HorizontalLayout {
         vertical-alignment: center;
         horizontal-alignment: end;
     }
-    if root.show2: LineEdit {
-        text <=> root.v2;
-        width: 56px;
-        edited(s) => { root.edited2(s); }
+    if root.show2: ModifiedField {
+        modified: root.m2;
+        revert => { root.revert2(); }
+        LineEdit {
+            text <=> root.v2;
+            width: 56px;
+            edited(s) => { root.edited2(s); }
+        }
     }
     if root.show3: Text {
         text: root.l3; width: 96px;
@@ -103,107 +120,166 @@ component SepRow inherits HorizontalLayout {
         vertical-alignment: center;
         horizontal-alignment: end;
     }
-    if root.show3: LineEdit {
-        text <=> root.v3;
-        width: 56px;
-        edited(s) => { root.edited3(s); }
+    if root.show3: ModifiedField {
+        modified: root.m3;
+        revert => { root.revert3(); }
+        LineEdit {
+            text <=> root.v3;
+            width: 56px;
+            edited(s) => { root.edited3(s); }
+        }
     }
 }
 
 export component ProjectSettingsDialog inherits Rectangle {
     in property <bool> open: false;
     in property <int> tab: 0;
-    in-out property <bool> identity-tab-modified: false;
-    in-out property <bool> sep-tab-modified: false;
-    in-out property <bool> export-tab-modified: false;
+    // 属性名与 AppWindow 上的 `ps-*` **完全一致** —— app.slint 那边是一比一机械绑定，
+    // 一眼能看出有没有漏绑。新增字段两边各加一行，名字必须一致。
+    //
+    // `*-modified` = 「这个字段和盘上不一样吗」，由后端按 `Project::original_*` 算好推上来
+    // （@02.26.2）。这里不做比较：`None` 与 `Some(默认值)` 的差别在渲染值上看不出来。
+    in property <string> ps-id;
+    in property <bool> ps-can-revert-all: false;
+    in-out property <string> ps-name;
+    in property <bool> ps-name-modified: false;
+    in-out property <string> ps-category;
+    in property <bool> ps-category-modified: false;
+    in-out property <string> ps-version;
+    in property <bool> ps-version-modified: false;
 
-    // 身份 buf
-    in-out property <string> id-buf;
-    in-out property <string> name-buf;
-    in-out property <string> category-buf;
-    in-out property <string> version-buf;
-    in property <string> id-error;
-    in property <bool> can-confirm: true;
-    // id 是否可编辑：仅未落盘项目（克隆 / 新建）为 true；已存盘项目 id 固定。
-    in property <bool> id-editable: false;
-    // 分隔符 buf —— 25 个叶子
-    in-out property <string> sep-tuple2;
-    in-out property <string> sep-tuple3;
-    in-out property <string> sep-tuple4;
-    in-out property <string> sep-list;
-    in-out property <string> sep-set;
-    in-out property <string> sep-map-kv;
-    in-out property <string> sep-map-entry;
-    in-out property <string> sep-lt2-tuple;
-    in-out property <string> sep-lt2-list;
-    in-out property <string> sep-lt3-tuple;
-    in-out property <string> sep-lt3-list;
-    in-out property <string> sep-lt4-tuple;
-    in-out property <string> sep-lt4-list;
-    in-out property <string> sep-mt2-kv;
-    in-out property <string> sep-mt2-tuple;
-    in-out property <string> sep-mt2-entry;
-    in-out property <string> sep-mt3-kv;
-    in-out property <string> sep-mt3-tuple;
-    in-out property <string> sep-mt3-entry;
-    in-out property <string> sep-mt4-kv;
-    in-out property <string> sep-mt4-tuple;
-    in-out property <string> sep-mt4-entry;
-    in-out property <string> sep-ml-kv;
-    in-out property <string> sep-ml-item;
-    in-out property <string> sep-ml-entry;
+    in-out property <string> ps-sep-tuple2;
+    in property <bool> ps-sep-tuple2-modified: false;
+    in-out property <string> ps-sep-tuple3;
+    in property <bool> ps-sep-tuple3-modified: false;
+    in-out property <string> ps-sep-tuple4;
+    in property <bool> ps-sep-tuple4-modified: false;
+    in-out property <string> ps-sep-list;
+    in property <bool> ps-sep-list-modified: false;
+    in-out property <string> ps-sep-set;
+    in property <bool> ps-sep-set-modified: false;
+    in-out property <string> ps-sep-map-kv;
+    in property <bool> ps-sep-map-kv-modified: false;
+    in-out property <string> ps-sep-map-entry;
+    in property <bool> ps-sep-map-entry-modified: false;
+    in-out property <string> ps-sep-lt2-tuple;
+    in property <bool> ps-sep-lt2-tuple-modified: false;
+    in-out property <string> ps-sep-lt2-list;
+    in property <bool> ps-sep-lt2-list-modified: false;
+    in-out property <string> ps-sep-lt3-tuple;
+    in property <bool> ps-sep-lt3-tuple-modified: false;
+    in-out property <string> ps-sep-lt3-list;
+    in property <bool> ps-sep-lt3-list-modified: false;
+    in-out property <string> ps-sep-lt4-tuple;
+    in property <bool> ps-sep-lt4-tuple-modified: false;
+    in-out property <string> ps-sep-lt4-list;
+    in property <bool> ps-sep-lt4-list-modified: false;
+    in-out property <string> ps-sep-mt2-kv;
+    in property <bool> ps-sep-mt2-kv-modified: false;
+    in-out property <string> ps-sep-mt2-tuple;
+    in property <bool> ps-sep-mt2-tuple-modified: false;
+    in-out property <string> ps-sep-mt2-entry;
+    in property <bool> ps-sep-mt2-entry-modified: false;
+    in-out property <string> ps-sep-mt3-kv;
+    in property <bool> ps-sep-mt3-kv-modified: false;
+    in-out property <string> ps-sep-mt3-tuple;
+    in property <bool> ps-sep-mt3-tuple-modified: false;
+    in-out property <string> ps-sep-mt3-entry;
+    in property <bool> ps-sep-mt3-entry-modified: false;
+    in-out property <string> ps-sep-mt4-kv;
+    in property <bool> ps-sep-mt4-kv-modified: false;
+    in-out property <string> ps-sep-mt4-tuple;
+    in property <bool> ps-sep-mt4-tuple-modified: false;
+    in-out property <string> ps-sep-mt4-entry;
+    in property <bool> ps-sep-mt4-entry-modified: false;
+    in-out property <string> ps-sep-ml-kv;
+    in property <bool> ps-sep-ml-kv-modified: false;
+    in-out property <string> ps-sep-ml-item;
+    in property <bool> ps-sep-ml-item-modified: false;
+    in-out property <string> ps-sep-ml-entry;
+    in property <bool> ps-sep-ml-entry-modified: false;
 
-    // 枚举选项列表（由后端推送）
     in property <[string]> ps-encoding-options;
     in property <[string]> ps-line-ending-options;
     in property <[string]> ps-json-empty-as-options;
     in property <[string]> ps-xml-empty-as-options;
     in property <[string]> ps-cpp-json-lib-options;
-
-    // 导出设置 buf
     in-out property <int> ps-export-encoding-index;
+    in property <bool> ps-export-encoding-modified: false;
     in-out property <int> ps-export-line-ending-index;
+    in property <bool> ps-export-line-ending-modified: false;
     in-out property <int> ps-export-json-empty-as-index;
+    in property <bool> ps-export-json-empty-as-modified: false;
     in-out property <int> ps-export-xml-empty-as-index;
-    in-out property <string> ps-export-server-data-output;
-    in-out property <string> ps-export-java-package;
-    in-out property <string> ps-export-java-code-output;
-    in-out property <bool> ps-export-java-lombok;
-    in-out property <bool> ps-export-java-custom-regions;
-    in-out property <string> ps-export-go-package;
-    in-out property <string> ps-export-go-code-output;
-    in-out property <bool> ps-export-go-custom-regions;
-    in-out property <string> ps-export-cpp-namespace;
-    in-out property <string> ps-export-cpp-code-output;
+    in property <bool> ps-export-xml-empty-as-modified: false;
     in-out property <int> ps-export-cpp-json-lib-index;
-    in-out property <bool> ps-export-cpp-custom-regions;
+    in property <bool> ps-export-cpp-json-lib-modified: false;
+    in-out property <string> ps-export-server-data-output;
+    in property <bool> ps-export-server-data-output-modified: false;
+    in-out property <string> ps-export-java-package;
+    in property <bool> ps-export-java-package-modified: false;
+    in-out property <string> ps-export-java-code-output;
+    in property <bool> ps-export-java-code-output-modified: false;
+    in-out property <string> ps-export-go-package;
+    in property <bool> ps-export-go-package-modified: false;
+    in-out property <string> ps-export-go-code-output;
+    in property <bool> ps-export-go-code-output-modified: false;
+    in-out property <string> ps-export-cpp-namespace;
+    in property <bool> ps-export-cpp-namespace-modified: false;
+    in-out property <string> ps-export-cpp-code-output;
+    in property <bool> ps-export-cpp-code-output-modified: false;
     in-out property <string> ps-export-csharp-dotnet-namespace;
+    in property <bool> ps-export-csharp-dotnet-namespace-modified: false;
     in-out property <string> ps-export-csharp-dotnet-code-output;
-    in-out property <bool> ps-export-csharp-dotnet-custom-regions;
+    in property <bool> ps-export-csharp-dotnet-code-output-modified: false;
     in-out property <string> ps-export-typescript-server-code-output;
+    in property <bool> ps-export-typescript-server-code-output-modified: false;
     in-out property <string> ps-export-lua-output;
+    in property <bool> ps-export-lua-output-modified: false;
     in-out property <string> ps-export-gdscript-output;
+    in property <bool> ps-export-gdscript-output-modified: false;
     in-out property <string> ps-export-typescript-client-output;
+    in property <bool> ps-export-typescript-client-output-modified: false;
     in-out property <string> ps-export-csharp-unity-namespace;
+    in property <bool> ps-export-csharp-unity-namespace-modified: false;
     in-out property <string> ps-export-csharp-unity-code-output;
-    in-out property <bool> ps-export-csharp-unity-custom-regions;
+    in property <bool> ps-export-csharp-unity-code-output-modified: false;
     in-out property <string> ps-export-csharp-godot-namespace;
+    in property <bool> ps-export-csharp-godot-namespace-modified: false;
     in-out property <string> ps-export-csharp-godot-code-output;
+    in property <bool> ps-export-csharp-godot-code-output-modified: false;
+    in-out property <bool> ps-export-cpp-custom-regions;
+    in property <bool> ps-export-cpp-custom-regions-modified: false;
+    in-out property <bool> ps-export-java-lombok;
+    in property <bool> ps-export-java-lombok-modified: false;
+    in-out property <bool> ps-export-java-custom-regions;
+    in property <bool> ps-export-java-custom-regions-modified: false;
+    in-out property <bool> ps-export-go-custom-regions;
+    in property <bool> ps-export-go-custom-regions-modified: false;
+    in-out property <bool> ps-export-csharp-dotnet-custom-regions;
+    in property <bool> ps-export-csharp-dotnet-custom-regions-modified: false;
+    in-out property <bool> ps-export-csharp-unity-custom-regions;
+    in property <bool> ps-export-csharp-unity-custom-regions-modified: false;
     in-out property <bool> ps-export-csharp-godot-custom-regions;
+    in property <bool> ps-export-csharp-godot-custom-regions-modified: false;
 
     callback tab-changed(int);
-    callback id-edited(string);
     callback name-edited(string);
     callback category-edited(string);
     callback version-edited(string);
-    /// (key, value) — key 与 # @sep 行 key 一致
+    /// (key, value) —— key 与 `SepKey::as_directive_key()` 一致
     callback sep-edited(string, string);
+    /// (key, value) —— key 与 `ExportKey::as_str()` 一致
     callback export-field-edited(string, string);
+    /// 单字段还原：把 original_* 的对应叶子写回（@02.26）
+    callback identity-revert(string);
+    callback sep-revert(string);
+    callback export-revert(string);
     callback reset-sep();
     callback reset-export();
-    callback undo-clicked();
+    callback revert-all();
+    /// 确定 = 关闭
     callback confirm();
-    callback cancel();
 
     visible: root.open;
     width: 100%;
@@ -214,10 +290,12 @@ export component ProjectSettingsDialog inherits Rectangle {
         dialog-w: 720px;
         dialog-h: 560px;
         primary-text: "确定";
-        primary-enabled: root.can-confirm;
         primary-clicked => { root.confirm(); }
-        cancel-clicked => { root.cancel(); }
-        scrim-clicked => { root.cancel(); }
+        // **没有取消**：编辑实时落内存，关闭即保留（@02.26）。反悔靠字段上的还原按钮
+        // 与「全部还原」，不是靠关掉重来。遮罩点击也走 confirm —— 已经没有「取消」可以等同了。
+        show-cancel: false;
+        cancel-clicked => { root.confirm(); }
+        scrim-clicked => { root.confirm(); }
         show-secondary: root.tab == 1 || root.tab == 2;
         secondary-text: "应用模板";
         secondary-clicked => {
@@ -228,9 +306,9 @@ export component ProjectSettingsDialog inherits Rectangle {
             }
         }
         show-third: true;
-        third-text: "撤销改动";
-        undo-enabled: root.tab == 0 ? root.identity-tab-modified : (root.tab == 1 ? root.sep-tab-modified : root.export-tab-modified);
-        third-clicked => { root.undo-clicked(); }
+        third-text: "全部还原";
+        third-enabled: root.ps-can-revert-all;
+        third-clicked => { root.revert-all(); }
 
         VerticalLayout {
             spacing: 0;
@@ -241,60 +319,72 @@ export component ProjectSettingsDialog inherits Rectangle {
                 changed(i) => { root.tab-changed(i); }
             }
 
-            // 身份 tab —— 4 行表单
+            // 身份 tab —— id 只读，其余三行可编辑
             if root.tab == 0: Rectangle {
                 vertical-stretch: 1;
                 VerticalLayout {
                     padding: Theme.sp-4;
                     spacing: Theme.sp-3;
 
+                    // id 只读：它在新建 / 克隆对话框里定，之后改 id 要搬目录、风险大（@02.26）。
+                    // 所以这里是「锁 + 文字」，不是输入框。
                     HorizontalLayout {
                         spacing: Theme.sp-3;
                         alignment: stretch;
                         Text { text: "项目 ID:"; width: 96px; vertical-alignment: center; color: Theme.text-primary; }
-                        LineEdit {
-                            text <=> root.id-buf;
-                            enabled: root.id-editable;
-                            edited(s) => { root.id-edited(s); }
+                        Text {
+                            text: Icons.lock + " " + root.ps-id;
+                            vertical-alignment: center;
+                            color: Theme.text-secondary;
                         }
                     }
                     HorizontalLayout {
                         spacing: Theme.sp-3;
                         alignment: stretch;
                         Text { text: "名称:"; width: 96px; vertical-alignment: center; color: Theme.text-primary; }
-                        LineEdit {
-                            text <=> root.name-buf;
+                        ModifiedField {
+                            horizontal-stretch: 1;
+                            modified: root.ps-name-modified;
+                            revert => { root.identity-revert("name"); }
+                            LineEdit {
+                            text <=> root.ps-name;
+                            horizontal-stretch: 1;
                             edited(s) => { root.name-edited(s); }
+                            }
                         }
                     }
                     HorizontalLayout {
                         spacing: Theme.sp-3;
                         alignment: stretch;
                         Text { text: "分类:"; width: 96px; vertical-alignment: center; color: Theme.text-primary; }
-                        LineEdit {
-                            text <=> root.category-buf;
+                        ModifiedField {
+                            horizontal-stretch: 1;
+                            modified: root.ps-category-modified;
+                            revert => { root.identity-revert("category"); }
+                            LineEdit {
+                            text <=> root.ps-category;
+                            horizontal-stretch: 1;
                             edited(s) => { root.category-edited(s); }
+                            }
                         }
                     }
                     HorizontalLayout {
                         spacing: Theme.sp-3;
                         alignment: stretch;
                         Text { text: "版本:"; width: 96px; vertical-alignment: center; color: Theme.text-primary; }
-                        LineEdit {
-                            text <=> root.version-buf;
+                        ModifiedField {
+                            horizontal-stretch: 1;
+                            modified: root.ps-version-modified;
+                            revert => { root.identity-revert("version"); }
+                            LineEdit {
+                            text <=> root.ps-version;
+                            horizontal-stretch: 1;
                             edited(s) => { root.version-edited(s); }
+                            }
                         }
                     }
-                    if root.id-error != "": Text {
-                        text: root.id-error;
-                        color: Theme.text-error;
-                        font-size: Theme.fs-tiny;
-                        wrap: word-wrap;
-                    }
                     Text {
-                        text: root.id-editable
-                            ? "提示：id 可改（项目尚未保存）；保存后 id 将固定，其它字段随项目保存落到 .tblschema。"
-                            : "提示：已保存项目的 id 不可修改；其它字段随项目保存落到 .tblschema 元数据。";
+                        text: "提示：id 可改（项目尚未保存）；保存后 id 将固定，其它字段随项目保存落到 .tblschema。";
                         color: Theme.text-secondary;
                         font-size: Theme.fs-tiny;
                         wrap: word-wrap;
@@ -313,18 +403,28 @@ export component ProjectSettingsDialog inherits Rectangle {
                     // 基础容器
                     Text { text: "基础"; color: Theme.text-secondary; font-size: Theme.fs-small; }
                     SepRow {
-                        l1: "Tuple2"; v1 <=> root.sep-tuple2;
-                        l2: "Tuple3"; v2 <=> root.sep-tuple3;
-                        l3: "Tuple4"; v3 <=> root.sep-tuple4;
+                        l1: "Tuple2"; v1 <=> root.ps-sep-tuple2;
+                        l2: "Tuple3"; v2 <=> root.ps-sep-tuple3;
+                        l3: "Tuple4"; v3 <=> root.ps-sep-tuple4;
                         show2: true; show3: true;
+                        m1: root.ps-sep-tuple2-modified;
+                        revert1 => { root.sep-revert("Tuple2"); }
+                        m2: root.ps-sep-tuple3-modified;
+                        revert2 => { root.sep-revert("Tuple3"); }
+                        m3: root.ps-sep-tuple4-modified;
+                        revert3 => { root.sep-revert("Tuple4"); }
                         edited1(s) => { root.sep-edited("Tuple2", s); }
                         edited2(s) => { root.sep-edited("Tuple3", s); }
                         edited3(s) => { root.sep-edited("Tuple4", s); }
                     }
                     SepRow {
-                        l1: "List"; v1 <=> root.sep-list;
-                        l2: "Set"; v2 <=> root.sep-set;
+                        l1: "List"; v1 <=> root.ps-sep-list;
+                        l2: "Set"; v2 <=> root.ps-sep-set;
                         show2: true; show3: false;
+                        m1: root.ps-sep-list-modified;
+                        revert1 => { root.sep-revert("List"); }
+                        m2: root.ps-sep-set-modified;
+                        revert2 => { root.sep-revert("Set"); }
                         edited1(s) => { root.sep-edited("List", s); }
                         edited2(s) => { root.sep-edited("Set", s); }
                     }
@@ -332,9 +432,13 @@ export component ProjectSettingsDialog inherits Rectangle {
                     // Map
                     Text { text: "Map"; color: Theme.text-secondary; font-size: Theme.fs-small; }
                     SepRow {
-                        l1: "Map.kv"; v1 <=> root.sep-map-kv;
-                        l2: "Map.entry"; v2 <=> root.sep-map-entry;
+                        l1: "Map.kv"; v1 <=> root.ps-sep-map-kv;
+                        l2: "Map.entry"; v2 <=> root.ps-sep-map-entry;
                         show2: true; show3: false;
+                        m1: root.ps-sep-map-kv-modified;
+                        revert1 => { root.sep-revert("Map.kv"); }
+                        m2: root.ps-sep-map-entry-modified;
+                        revert2 => { root.sep-revert("Map.entry"); }
                         edited1(s) => { root.sep-edited("Map.kv", s); }
                         edited2(s) => { root.sep-edited("Map.entry", s); }
                     }
@@ -342,23 +446,35 @@ export component ProjectSettingsDialog inherits Rectangle {
                     // List<TupleN>
                     Text { text: "List<TupleN>"; color: Theme.text-secondary; font-size: Theme.fs-small; }
                     SepRow {
-                        l1: "List_Tuple2.tuple"; v1 <=> root.sep-lt2-tuple;
-                        l2: "List_Tuple2.list"; v2 <=> root.sep-lt2-list;
+                        l1: "List_Tuple2.tuple"; v1 <=> root.ps-sep-lt2-tuple;
+                        l2: "List_Tuple2.list"; v2 <=> root.ps-sep-lt2-list;
                         show2: true; show3: false;
+                        m1: root.ps-sep-lt2-tuple-modified;
+                        revert1 => { root.sep-revert("List_Tuple2.tuple"); }
+                        m2: root.ps-sep-lt2-list-modified;
+                        revert2 => { root.sep-revert("List_Tuple2.list"); }
                         edited1(s) => { root.sep-edited("List_Tuple2.tuple", s); }
                         edited2(s) => { root.sep-edited("List_Tuple2.list", s); }
                     }
                     SepRow {
-                        l1: "List_Tuple3.tuple"; v1 <=> root.sep-lt3-tuple;
-                        l2: "List_Tuple3.list"; v2 <=> root.sep-lt3-list;
+                        l1: "List_Tuple3.tuple"; v1 <=> root.ps-sep-lt3-tuple;
+                        l2: "List_Tuple3.list"; v2 <=> root.ps-sep-lt3-list;
                         show2: true; show3: false;
+                        m1: root.ps-sep-lt3-tuple-modified;
+                        revert1 => { root.sep-revert("List_Tuple3.tuple"); }
+                        m2: root.ps-sep-lt3-list-modified;
+                        revert2 => { root.sep-revert("List_Tuple3.list"); }
                         edited1(s) => { root.sep-edited("List_Tuple3.tuple", s); }
                         edited2(s) => { root.sep-edited("List_Tuple3.list", s); }
                     }
                     SepRow {
-                        l1: "List_Tuple4.tuple"; v1 <=> root.sep-lt4-tuple;
-                        l2: "List_Tuple4.list"; v2 <=> root.sep-lt4-list;
+                        l1: "List_Tuple4.tuple"; v1 <=> root.ps-sep-lt4-tuple;
+                        l2: "List_Tuple4.list"; v2 <=> root.ps-sep-lt4-list;
                         show2: true; show3: false;
+                        m1: root.ps-sep-lt4-tuple-modified;
+                        revert1 => { root.sep-revert("List_Tuple4.tuple"); }
+                        m2: root.ps-sep-lt4-list-modified;
+                        revert2 => { root.sep-revert("List_Tuple4.list"); }
                         edited1(s) => { root.sep-edited("List_Tuple4.tuple", s); }
                         edited2(s) => { root.sep-edited("List_Tuple4.list", s); }
                     }
@@ -366,28 +482,46 @@ export component ProjectSettingsDialog inherits Rectangle {
                     // Map<*,TupleN>
                     Text { text: "Map<*,TupleN>"; color: Theme.text-secondary; font-size: Theme.fs-small; }
                     SepRow {
-                        l1: "Map_Tuple2.kv"; v1 <=> root.sep-mt2-kv;
-                        l2: "Map_Tuple2.tuple"; v2 <=> root.sep-mt2-tuple;
-                        l3: "Map_Tuple2.entry"; v3 <=> root.sep-mt2-entry;
+                        l1: "Map_Tuple2.kv"; v1 <=> root.ps-sep-mt2-kv;
+                        l2: "Map_Tuple2.tuple"; v2 <=> root.ps-sep-mt2-tuple;
+                        l3: "Map_Tuple2.entry"; v3 <=> root.ps-sep-mt2-entry;
                         show2: true; show3: true;
+                        m1: root.ps-sep-mt2-kv-modified;
+                        revert1 => { root.sep-revert("Map_Tuple2.kv"); }
+                        m2: root.ps-sep-mt2-tuple-modified;
+                        revert2 => { root.sep-revert("Map_Tuple2.tuple"); }
+                        m3: root.ps-sep-mt2-entry-modified;
+                        revert3 => { root.sep-revert("Map_Tuple2.entry"); }
                         edited1(s) => { root.sep-edited("Map_Tuple2.kv", s); }
                         edited2(s) => { root.sep-edited("Map_Tuple2.tuple", s); }
                         edited3(s) => { root.sep-edited("Map_Tuple2.entry", s); }
                     }
                     SepRow {
-                        l1: "Map_Tuple3.kv"; v1 <=> root.sep-mt3-kv;
-                        l2: "Map_Tuple3.tuple"; v2 <=> root.sep-mt3-tuple;
-                        l3: "Map_Tuple3.entry"; v3 <=> root.sep-mt3-entry;
+                        l1: "Map_Tuple3.kv"; v1 <=> root.ps-sep-mt3-kv;
+                        l2: "Map_Tuple3.tuple"; v2 <=> root.ps-sep-mt3-tuple;
+                        l3: "Map_Tuple3.entry"; v3 <=> root.ps-sep-mt3-entry;
                         show2: true; show3: true;
+                        m1: root.ps-sep-mt3-kv-modified;
+                        revert1 => { root.sep-revert("Map_Tuple3.kv"); }
+                        m2: root.ps-sep-mt3-tuple-modified;
+                        revert2 => { root.sep-revert("Map_Tuple3.tuple"); }
+                        m3: root.ps-sep-mt3-entry-modified;
+                        revert3 => { root.sep-revert("Map_Tuple3.entry"); }
                         edited1(s) => { root.sep-edited("Map_Tuple3.kv", s); }
                         edited2(s) => { root.sep-edited("Map_Tuple3.tuple", s); }
                         edited3(s) => { root.sep-edited("Map_Tuple3.entry", s); }
                     }
                     SepRow {
-                        l1: "Map_Tuple4.kv"; v1 <=> root.sep-mt4-kv;
-                        l2: "Map_Tuple4.tuple"; v2 <=> root.sep-mt4-tuple;
-                        l3: "Map_Tuple4.entry"; v3 <=> root.sep-mt4-entry;
+                        l1: "Map_Tuple4.kv"; v1 <=> root.ps-sep-mt4-kv;
+                        l2: "Map_Tuple4.tuple"; v2 <=> root.ps-sep-mt4-tuple;
+                        l3: "Map_Tuple4.entry"; v3 <=> root.ps-sep-mt4-entry;
                         show2: true; show3: true;
+                        m1: root.ps-sep-mt4-kv-modified;
+                        revert1 => { root.sep-revert("Map_Tuple4.kv"); }
+                        m2: root.ps-sep-mt4-tuple-modified;
+                        revert2 => { root.sep-revert("Map_Tuple4.tuple"); }
+                        m3: root.ps-sep-mt4-entry-modified;
+                        revert3 => { root.sep-revert("Map_Tuple4.entry"); }
                         edited1(s) => { root.sep-edited("Map_Tuple4.kv", s); }
                         edited2(s) => { root.sep-edited("Map_Tuple4.tuple", s); }
                         edited3(s) => { root.sep-edited("Map_Tuple4.entry", s); }
@@ -396,10 +530,16 @@ export component ProjectSettingsDialog inherits Rectangle {
                     // Map<*,List>
                     Text { text: "Map<*,List>"; color: Theme.text-secondary; font-size: Theme.fs-small; }
                     SepRow {
-                        l1: "Map_List.kv"; v1 <=> root.sep-ml-kv;
-                        l2: "Map_List.item"; v2 <=> root.sep-ml-item;
-                        l3: "Map_List.entry"; v3 <=> root.sep-ml-entry;
+                        l1: "Map_List.kv"; v1 <=> root.ps-sep-ml-kv;
+                        l2: "Map_List.item"; v2 <=> root.ps-sep-ml-item;
+                        l3: "Map_List.entry"; v3 <=> root.ps-sep-ml-entry;
                         show2: true; show3: true;
+                        m1: root.ps-sep-ml-kv-modified;
+                        revert1 => { root.sep-revert("Map_List.kv"); }
+                        m2: root.ps-sep-ml-item-modified;
+                        revert2 => { root.sep-revert("Map_List.item"); }
+                        m3: root.ps-sep-ml-entry-modified;
+                        revert3 => { root.sep-revert("Map_List.entry"); }
                         edited1(s) => { root.sep-edited("Map_List.kv", s); }
                         edited2(s) => { root.sep-edited("Map_List.item", s); }
                         edited3(s) => { root.sep-edited("Map_List.entry", s); }
@@ -420,22 +560,30 @@ export component ProjectSettingsDialog inherits Rectangle {
                         spacing: Theme.sp-3;
                         alignment: start;
                         Text { text: "编码:"; width: 140px; vertical-alignment: center; color: Theme.text-primary; }
-                        ComboBox {
-                            model: root.ps-encoding-options;
-                            current-index <=> root.ps-export-encoding-index;
-                            width: 180px;
-                            selected(s) => { root.export-field-edited("encoding", s); }
+                        ModifiedField {
+                            modified: root.ps-export-encoding-modified;
+                            revert => { root.export-revert("encoding"); }
+                            ComboBox {
+                                model: root.ps-encoding-options;
+                                current-index <=> root.ps-export-encoding-index;
+                                width: 180px;
+                                selected(s) => { root.export-field-edited("encoding", s); }
+                            }
                         }
                     }
                     HorizontalLayout {
                         spacing: Theme.sp-3;
                         alignment: start;
                         Text { text: "换行符:"; width: 140px; vertical-alignment: center; color: Theme.text-primary; }
-                        ComboBox {
-                            model: root.ps-line-ending-options;
-                            current-index <=> root.ps-export-line-ending-index;
-                            width: 180px;
-                            selected(s) => { root.export-field-edited("line_ending", s); }
+                        ModifiedField {
+                            modified: root.ps-export-line-ending-modified;
+                            revert => { root.export-revert("line_ending"); }
+                            ComboBox {
+                                model: root.ps-line-ending-options;
+                                current-index <=> root.ps-export-line-ending-index;
+                                width: 180px;
+                                selected(s) => { root.export-field-edited("line_ending", s); }
+                            }
                         }
                     }
 
@@ -447,22 +595,30 @@ export component ProjectSettingsDialog inherits Rectangle {
                         spacing: Theme.sp-3;
                         alignment: start;
                         Text { text: "JSON 空值处理:"; width: 140px; vertical-alignment: center; color: Theme.text-primary; }
-                        ComboBox {
-                            model: root.ps-json-empty-as-options;
-                            current-index <=> root.ps-export-json-empty-as-index;
-                            width: 180px;
-                            selected(s) => { root.export-field-edited("json_empty_as", s); }
+                        ModifiedField {
+                            modified: root.ps-export-json-empty-as-modified;
+                            revert => { root.export-revert("json_empty_as"); }
+                            ComboBox {
+                                model: root.ps-json-empty-as-options;
+                                current-index <=> root.ps-export-json-empty-as-index;
+                                width: 180px;
+                                selected(s) => { root.export-field-edited("json_empty_as", s); }
+                            }
                         }
                     }
                     HorizontalLayout {
                         spacing: Theme.sp-3;
                         alignment: start;
                         Text { text: "XML 空值处理:"; width: 140px; vertical-alignment: center; color: Theme.text-primary; }
-                        ComboBox {
-                            model: root.ps-xml-empty-as-options;
-                            current-index <=> root.ps-export-xml-empty-as-index;
-                            width: 180px;
-                            selected(s) => { root.export-field-edited("xml_empty_as", s); }
+                        ModifiedField {
+                            modified: root.ps-export-xml-empty-as-modified;
+                            revert => { root.export-revert("xml_empty_as"); }
+                            ComboBox {
+                                model: root.ps-xml-empty-as-options;
+                                current-index <=> root.ps-export-xml-empty-as-index;
+                                width: 180px;
+                                selected(s) => { root.export-field-edited("xml_empty_as", s); }
+                            }
                         }
                     }
 
@@ -474,10 +630,14 @@ export component ProjectSettingsDialog inherits Rectangle {
                         spacing: Theme.sp-3;
                         alignment: start;
                         Text { text: "数据输出目录:"; width: 140px; vertical-alignment: center; color: Theme.text-primary; }
-                        LineEdit {
-                            text <=> root.ps-export-server-data-output;
-                            width: 300px;
-                            edited(s) => { root.export-field-edited("server_data_output", s); }
+                        ModifiedField {
+                            modified: root.ps-export-server-data-output-modified;
+                            revert => { root.export-revert("server_data_output"); }
+                            LineEdit {
+                                text <=> root.ps-export-server-data-output;
+                                width: 300px;
+                                edited(s) => { root.export-field-edited("server_data_output", s); }
+                            }
                         }
                     }
 
@@ -486,40 +646,56 @@ export component ProjectSettingsDialog inherits Rectangle {
                         spacing: Theme.sp-3;
                         alignment: start;
                         Text { text: "  package:"; width: 140px; vertical-alignment: center; color: Theme.text-primary; }
-                        LineEdit {
-                            text <=> root.ps-export-java-package;
-                            width: 300px;
-                            edited(s) => { root.export-field-edited("java_package", s); }
+                        ModifiedField {
+                            modified: root.ps-export-java-package-modified;
+                            revert => { root.export-revert("java_package"); }
+                            LineEdit {
+                                text <=> root.ps-export-java-package;
+                                width: 300px;
+                                edited(s) => { root.export-field-edited("java_package", s); }
+                            }
                         }
                     }
                     HorizontalLayout {
                         spacing: Theme.sp-3;
                         alignment: start;
                         Text { text: "  code_output:"; width: 140px; vertical-alignment: center; color: Theme.text-primary; }
-                        LineEdit {
-                            text <=> root.ps-export-java-code-output;
-                            width: 300px;
-                            edited(s) => { root.export-field-edited("java_code_output", s); }
+                        ModifiedField {
+                            modified: root.ps-export-java-code-output-modified;
+                            revert => { root.export-revert("java_code_output"); }
+                            LineEdit {
+                                text <=> root.ps-export-java-code-output;
+                                width: 300px;
+                                edited(s) => { root.export-field-edited("java_code_output", s); }
+                            }
                         }
                     }
                     HorizontalLayout {
                         spacing: Theme.sp-3;
                         alignment: start;
                         Text { text: "  lombok:"; width: 140px; vertical-alignment: center; color: Theme.text-primary; }
-                        CheckBox {
-                            text: "@Getter 代替手写 getter";
-                            checked <=> root.ps-export-java-lombok;
-                            toggled => { root.export-field-edited("java_lombok", root.ps-export-java-lombok ? "true" : "false"); }
+                        ModifiedField {
+                            modified: root.ps-export-java-lombok-modified;
+                            revert => { root.export-revert("java_lombok"); }
+                            CheckBox {
+                                text: "@Getter 代替手写 getter";
+                                checked <=> root.ps-export-java-lombok;
+                                toggled => { root.export-field-edited("java_lombok", root.ps-export-java-lombok ? "true" : "false"); }
+                            }
                         }
                     }
                     HorizontalLayout {
                         spacing: Theme.sp-3;
                         alignment: start;
                         Text { text: "  custom_regions:"; width: 140px; vertical-alignment: center; color: Theme.text-primary; }
-                        CheckBox {
-                            text: "产物带业务扩展保留区间";
-                            checked <=> root.ps-export-java-custom-regions;
-                            toggled => { root.export-field-edited("java_custom_regions", root.ps-export-java-custom-regions ? "true" : "false"); }
+                        ModifiedField {
+                            modified: root.ps-export-java-custom-regions-modified;
+                            revert => { root.export-revert("java_custom_regions"); }
+                            CheckBox {
+                                text: "产物带业务扩展保留区间";
+                                checked <=> root.ps-export-java-custom-regions;
+                                toggled => { root.export-field-edited("java_custom_regions", root.ps-export-java-custom-regions ? "true" : "false"); }
+                            }
                         }
                     }
 
@@ -528,30 +704,42 @@ export component ProjectSettingsDialog inherits Rectangle {
                         spacing: Theme.sp-3;
                         alignment: start;
                         Text { text: "  package:"; width: 140px; vertical-alignment: center; color: Theme.text-primary; }
-                        LineEdit {
-                            text <=> root.ps-export-go-package;
-                            width: 300px;
-                            edited(s) => { root.export-field-edited("go_package", s); }
+                        ModifiedField {
+                            modified: root.ps-export-go-package-modified;
+                            revert => { root.export-revert("go_package"); }
+                            LineEdit {
+                                text <=> root.ps-export-go-package;
+                                width: 300px;
+                                edited(s) => { root.export-field-edited("go_package", s); }
+                            }
                         }
                     }
                     HorizontalLayout {
                         spacing: Theme.sp-3;
                         alignment: start;
                         Text { text: "  code_output:"; width: 140px; vertical-alignment: center; color: Theme.text-primary; }
-                        LineEdit {
-                            text <=> root.ps-export-go-code-output;
-                            width: 300px;
-                            edited(s) => { root.export-field-edited("go_code_output", s); }
+                        ModifiedField {
+                            modified: root.ps-export-go-code-output-modified;
+                            revert => { root.export-revert("go_code_output"); }
+                            LineEdit {
+                                text <=> root.ps-export-go-code-output;
+                                width: 300px;
+                                edited(s) => { root.export-field-edited("go_code_output", s); }
+                            }
                         }
                     }
                     HorizontalLayout {
                         spacing: Theme.sp-3;
                         alignment: start;
                         Text { text: "  custom_regions:"; width: 140px; vertical-alignment: center; color: Theme.text-primary; }
-                        CheckBox {
-                            text: "产物带业务扩展保留区间";
-                            checked <=> root.ps-export-go-custom-regions;
-                            toggled => { root.export-field-edited("go_custom_regions", root.ps-export-go-custom-regions ? "true" : "false"); }
+                        ModifiedField {
+                            modified: root.ps-export-go-custom-regions-modified;
+                            revert => { root.export-revert("go_custom_regions"); }
+                            CheckBox {
+                                text: "产物带业务扩展保留区间";
+                                checked <=> root.ps-export-go-custom-regions;
+                                toggled => { root.export-field-edited("go_custom_regions", root.ps-export-go-custom-regions ? "true" : "false"); }
+                            }
                         }
                     }
 
@@ -560,41 +748,57 @@ export component ProjectSettingsDialog inherits Rectangle {
                         spacing: Theme.sp-3;
                         alignment: start;
                         Text { text: "  namespace:"; width: 140px; vertical-alignment: center; color: Theme.text-primary; }
-                        LineEdit {
-                            text <=> root.ps-export-cpp-namespace;
-                            width: 300px;
-                            edited(s) => { root.export-field-edited("cpp_namespace", s); }
+                        ModifiedField {
+                            modified: root.ps-export-cpp-namespace-modified;
+                            revert => { root.export-revert("cpp_namespace"); }
+                            LineEdit {
+                                text <=> root.ps-export-cpp-namespace;
+                                width: 300px;
+                                edited(s) => { root.export-field-edited("cpp_namespace", s); }
+                            }
                         }
                     }
                     HorizontalLayout {
                         spacing: Theme.sp-3;
                         alignment: start;
                         Text { text: "  code_output:"; width: 140px; vertical-alignment: center; color: Theme.text-primary; }
-                        LineEdit {
-                            text <=> root.ps-export-cpp-code-output;
-                            width: 300px;
-                            edited(s) => { root.export-field-edited("cpp_code_output", s); }
+                        ModifiedField {
+                            modified: root.ps-export-cpp-code-output-modified;
+                            revert => { root.export-revert("cpp_code_output"); }
+                            LineEdit {
+                                text <=> root.ps-export-cpp-code-output;
+                                width: 300px;
+                                edited(s) => { root.export-field-edited("cpp_code_output", s); }
+                            }
                         }
                     }
                     HorizontalLayout {
                         spacing: Theme.sp-3;
                         alignment: start;
                         Text { text: "  json_lib:"; width: 140px; vertical-alignment: center; color: Theme.text-primary; }
-                        ComboBox {
-                            model: root.ps-cpp-json-lib-options;
-                            current-index <=> root.ps-export-cpp-json-lib-index;
-                            width: 180px;
-                            selected(s) => { root.export-field-edited("cpp_json_lib", s); }
+                        ModifiedField {
+                            modified: root.ps-export-cpp-json-lib-modified;
+                            revert => { root.export-revert("cpp_json_lib"); }
+                            ComboBox {
+                                model: root.ps-cpp-json-lib-options;
+                                current-index <=> root.ps-export-cpp-json-lib-index;
+                                width: 180px;
+                                selected(s) => { root.export-field-edited("cpp_json_lib", s); }
+                            }
                         }
                     }
                     HorizontalLayout {
                         spacing: Theme.sp-3;
                         alignment: start;
                         Text { text: "  custom_regions:"; width: 140px; vertical-alignment: center; color: Theme.text-primary; }
-                        CheckBox {
-                            text: "产物带业务扩展保留区间";
-                            checked <=> root.ps-export-cpp-custom-regions;
-                            toggled => { root.export-field-edited("cpp_custom_regions", root.ps-export-cpp-custom-regions ? "true" : "false"); }
+                        ModifiedField {
+                            modified: root.ps-export-cpp-custom-regions-modified;
+                            revert => { root.export-revert("cpp_custom_regions"); }
+                            CheckBox {
+                                text: "产物带业务扩展保留区间";
+                                checked <=> root.ps-export-cpp-custom-regions;
+                                toggled => { root.export-field-edited("cpp_custom_regions", root.ps-export-cpp-custom-regions ? "true" : "false"); }
+                            }
                         }
                     }
 
@@ -603,30 +807,42 @@ export component ProjectSettingsDialog inherits Rectangle {
                         spacing: Theme.sp-3;
                         alignment: start;
                         Text { text: "  namespace:"; width: 140px; vertical-alignment: center; color: Theme.text-primary; }
-                        LineEdit {
-                            text <=> root.ps-export-csharp-dotnet-namespace;
-                            width: 300px;
-                            edited(s) => { root.export-field-edited("csharp_dotnet_namespace", s); }
+                        ModifiedField {
+                            modified: root.ps-export-csharp-dotnet-namespace-modified;
+                            revert => { root.export-revert("csharp_dotnet_namespace"); }
+                            LineEdit {
+                                text <=> root.ps-export-csharp-dotnet-namespace;
+                                width: 300px;
+                                edited(s) => { root.export-field-edited("csharp_dotnet_namespace", s); }
+                            }
                         }
                     }
                     HorizontalLayout {
                         spacing: Theme.sp-3;
                         alignment: start;
                         Text { text: "  code_output:"; width: 140px; vertical-alignment: center; color: Theme.text-primary; }
-                        LineEdit {
-                            text <=> root.ps-export-csharp-dotnet-code-output;
-                            width: 300px;
-                            edited(s) => { root.export-field-edited("csharp_dotnet_code_output", s); }
+                        ModifiedField {
+                            modified: root.ps-export-csharp-dotnet-code-output-modified;
+                            revert => { root.export-revert("csharp_dotnet_code_output"); }
+                            LineEdit {
+                                text <=> root.ps-export-csharp-dotnet-code-output;
+                                width: 300px;
+                                edited(s) => { root.export-field-edited("csharp_dotnet_code_output", s); }
+                            }
                         }
                     }
                     HorizontalLayout {
                         spacing: Theme.sp-3;
                         alignment: start;
                         Text { text: "  custom_regions:"; width: 140px; vertical-alignment: center; color: Theme.text-primary; }
-                        CheckBox {
-                            text: "产物带业务扩展保留区间";
-                            checked <=> root.ps-export-csharp-dotnet-custom-regions;
-                            toggled => { root.export-field-edited("csdn_custom_regions", root.ps-export-csharp-dotnet-custom-regions ? "true" : "false"); }
+                        ModifiedField {
+                            modified: root.ps-export-csharp-dotnet-custom-regions-modified;
+                            revert => { root.export-revert("csharp_dotnet_custom_regions"); }
+                            CheckBox {
+                                text: "产物带业务扩展保留区间";
+                                checked <=> root.ps-export-csharp-dotnet-custom-regions;
+                                toggled => { root.export-field-edited("csharp_dotnet_custom_regions", root.ps-export-csharp-dotnet-custom-regions ? "true" : "false"); }
+                            }
                         }
                     }
 
@@ -635,10 +851,14 @@ export component ProjectSettingsDialog inherits Rectangle {
                         spacing: Theme.sp-3;
                         alignment: start;
                         Text { text: "  code_output:"; width: 140px; vertical-alignment: center; color: Theme.text-primary; }
-                        LineEdit {
-                            text <=> root.ps-export-typescript-server-code-output;
-                            width: 300px;
-                            edited(s) => { root.export-field-edited("typescript_server_code_output", s); }
+                        ModifiedField {
+                            modified: root.ps-export-typescript-server-code-output-modified;
+                            revert => { root.export-revert("typescript_server_code_output"); }
+                            LineEdit {
+                                text <=> root.ps-export-typescript-server-code-output;
+                                width: 300px;
+                                edited(s) => { root.export-field-edited("typescript_server_code_output", s); }
+                            }
                         }
                     }
 
@@ -652,10 +872,14 @@ export component ProjectSettingsDialog inherits Rectangle {
                         spacing: Theme.sp-3;
                         alignment: start;
                         Text { text: "  output:"; width: 140px; vertical-alignment: center; color: Theme.text-primary; }
-                        LineEdit {
-                            text <=> root.ps-export-lua-output;
-                            width: 300px;
-                            edited(s) => { root.export-field-edited("lua_output", s); }
+                        ModifiedField {
+                            modified: root.ps-export-lua-output-modified;
+                            revert => { root.export-revert("lua_output"); }
+                            LineEdit {
+                                text <=> root.ps-export-lua-output;
+                                width: 300px;
+                                edited(s) => { root.export-field-edited("lua_output", s); }
+                            }
                         }
                     }
 
@@ -664,10 +888,14 @@ export component ProjectSettingsDialog inherits Rectangle {
                         spacing: Theme.sp-3;
                         alignment: start;
                         Text { text: "  output:"; width: 140px; vertical-alignment: center; color: Theme.text-primary; }
-                        LineEdit {
-                            text <=> root.ps-export-gdscript-output;
-                            width: 300px;
-                            edited(s) => { root.export-field-edited("gdscript_output", s); }
+                        ModifiedField {
+                            modified: root.ps-export-gdscript-output-modified;
+                            revert => { root.export-revert("gdscript_output"); }
+                            LineEdit {
+                                text <=> root.ps-export-gdscript-output;
+                                width: 300px;
+                                edited(s) => { root.export-field-edited("gdscript_output", s); }
+                            }
                         }
                     }
 
@@ -676,10 +904,14 @@ export component ProjectSettingsDialog inherits Rectangle {
                         spacing: Theme.sp-3;
                         alignment: start;
                         Text { text: "  output:"; width: 140px; vertical-alignment: center; color: Theme.text-primary; }
-                        LineEdit {
-                            text <=> root.ps-export-typescript-client-output;
-                            width: 300px;
-                            edited(s) => { root.export-field-edited("typescript_client_output", s); }
+                        ModifiedField {
+                            modified: root.ps-export-typescript-client-output-modified;
+                            revert => { root.export-revert("typescript_client_output"); }
+                            LineEdit {
+                                text <=> root.ps-export-typescript-client-output;
+                                width: 300px;
+                                edited(s) => { root.export-field-edited("typescript_client_output", s); }
+                            }
                         }
                     }
 
@@ -688,30 +920,42 @@ export component ProjectSettingsDialog inherits Rectangle {
                         spacing: Theme.sp-3;
                         alignment: start;
                         Text { text: "  namespace:"; width: 140px; vertical-alignment: center; color: Theme.text-primary; }
-                        LineEdit {
-                            text <=> root.ps-export-csharp-unity-namespace;
-                            width: 300px;
-                            edited(s) => { root.export-field-edited("csharp_unity_namespace", s); }
+                        ModifiedField {
+                            modified: root.ps-export-csharp-unity-namespace-modified;
+                            revert => { root.export-revert("csharp_unity_namespace"); }
+                            LineEdit {
+                                text <=> root.ps-export-csharp-unity-namespace;
+                                width: 300px;
+                                edited(s) => { root.export-field-edited("csharp_unity_namespace", s); }
+                            }
                         }
                     }
                     HorizontalLayout {
                         spacing: Theme.sp-3;
                         alignment: start;
                         Text { text: "  code_output:"; width: 140px; vertical-alignment: center; color: Theme.text-primary; }
-                        LineEdit {
-                            text <=> root.ps-export-csharp-unity-code-output;
-                            width: 300px;
-                            edited(s) => { root.export-field-edited("csharp_unity_code_output", s); }
+                        ModifiedField {
+                            modified: root.ps-export-csharp-unity-code-output-modified;
+                            revert => { root.export-revert("csharp_unity_code_output"); }
+                            LineEdit {
+                                text <=> root.ps-export-csharp-unity-code-output;
+                                width: 300px;
+                                edited(s) => { root.export-field-edited("csharp_unity_code_output", s); }
+                            }
                         }
                     }
                     HorizontalLayout {
                         spacing: Theme.sp-3;
                         alignment: start;
                         Text { text: "  custom_regions:"; width: 140px; vertical-alignment: center; color: Theme.text-primary; }
-                        CheckBox {
-                            text: "产物带业务扩展保留区间";
-                            checked <=> root.ps-export-csharp-unity-custom-regions;
-                            toggled => { root.export-field-edited("csu_custom_regions", root.ps-export-csharp-unity-custom-regions ? "true" : "false"); }
+                        ModifiedField {
+                            modified: root.ps-export-csharp-unity-custom-regions-modified;
+                            revert => { root.export-revert("csharp_unity_custom_regions"); }
+                            CheckBox {
+                                text: "产物带业务扩展保留区间";
+                                checked <=> root.ps-export-csharp-unity-custom-regions;
+                                toggled => { root.export-field-edited("csharp_unity_custom_regions", root.ps-export-csharp-unity-custom-regions ? "true" : "false"); }
+                            }
                         }
                     }
 
@@ -720,30 +964,42 @@ export component ProjectSettingsDialog inherits Rectangle {
                         spacing: Theme.sp-3;
                         alignment: start;
                         Text { text: "  namespace:"; width: 140px; vertical-alignment: center; color: Theme.text-primary; }
-                        LineEdit {
-                            text <=> root.ps-export-csharp-godot-namespace;
-                            width: 300px;
-                            edited(s) => { root.export-field-edited("csharp_godot_namespace", s); }
+                        ModifiedField {
+                            modified: root.ps-export-csharp-godot-namespace-modified;
+                            revert => { root.export-revert("csharp_godot_namespace"); }
+                            LineEdit {
+                                text <=> root.ps-export-csharp-godot-namespace;
+                                width: 300px;
+                                edited(s) => { root.export-field-edited("csharp_godot_namespace", s); }
+                            }
                         }
                     }
                     HorizontalLayout {
                         spacing: Theme.sp-3;
                         alignment: start;
                         Text { text: "  code_output:"; width: 140px; vertical-alignment: center; color: Theme.text-primary; }
-                        LineEdit {
-                            text <=> root.ps-export-csharp-godot-code-output;
-                            width: 300px;
-                            edited(s) => { root.export-field-edited("csharp_godot_code_output", s); }
+                        ModifiedField {
+                            modified: root.ps-export-csharp-godot-code-output-modified;
+                            revert => { root.export-revert("csharp_godot_code_output"); }
+                            LineEdit {
+                                text <=> root.ps-export-csharp-godot-code-output;
+                                width: 300px;
+                                edited(s) => { root.export-field-edited("csharp_godot_code_output", s); }
+                            }
                         }
                     }
                     HorizontalLayout {
                         spacing: Theme.sp-3;
                         alignment: start;
                         Text { text: "  custom_regions:"; width: 140px; vertical-alignment: center; color: Theme.text-primary; }
-                        CheckBox {
-                            text: "产物带业务扩展保留区间";
-                            checked <=> root.ps-export-csharp-godot-custom-regions;
-                            toggled => { root.export-field-edited("csg_custom_regions", root.ps-export-csharp-godot-custom-regions ? "true" : "false"); }
+                        ModifiedField {
+                            modified: root.ps-export-csharp-godot-custom-regions-modified;
+                            revert => { root.export-revert("csharp_godot_custom_regions"); }
+                            CheckBox {
+                                text: "产物带业务扩展保留区间";
+                                checked <=> root.ps-export-csharp-godot-custom-regions;
+                                toggled => { root.export-field-edited("csharp_godot_custom_regions", root.ps-export-csharp-godot-custom-regions ? "true" : "false"); }
+                            }
                         }
                     }
 

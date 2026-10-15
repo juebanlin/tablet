@@ -223,7 +223,7 @@ export component GlobalSettingsDialog inherits Rectangle {
         secondary-clicked => { root.reset-clicked(); }
         show-third: true;
         third-text: "撤销改动";
-        undo-enabled: root.tab == 0 ? root.ui-tab-modified : (root.tab == 1 ? root.sep-tab-modified : root.export-tab-modified);
+        third-enabled: root.tab == 0 ? root.ui-tab-modified : (root.tab == 1 ? root.sep-tab-modified : root.export-tab-modified);
         third-clicked => { root.undo-clicked(); }
 
         VerticalLayout {

@@ -49,6 +49,12 @@ const G_NEW: &str = "🆕";
 const G_MOD: &str = "📝";
 const G_DEL: &str = "🗑️";
 const G_ERR: &str = "🚨";
+// 还原到已保存。
+//
+// 别再用 ↺(U+21BA)：本机 Windows 字体链里**实测是豆腐块**（已加进下面测试的 BANNED）。
+// 顺带一个教训 —— 它和能画的 ←(U+2190) / →(U+2192) 同在 Arrows 块（U+2190–U+21FF），
+// "同块必能画"这个推断不成立；只有 emoji 那一族是稳定可画的。
+const G_REVERT: &str = "🔄";
 
 // ════════════════ ② 语义常量（多个可指向同一原始字形）════════════════
 
@@ -84,6 +90,9 @@ pub const ICON_SEARCH: &str = G_SEARCH;
 pub const ICON_BLOCK: &str = G_BLOCK;
 /// 成功 / 新增
 pub const ICON_OK: &str = G_OK;
+
+/// 「还原到已保存」：项目设置每个字段右侧的还原按钮、grid 区功能 bar 的 [还原]（@02.26）
+pub const ICON_REVERT: &str = G_REVERT;
 
 // ──────── 复选框三态（schema 导入勾选） ────────
 pub const CHECK_ON: &str = G_CHECK_ON;
@@ -139,6 +148,7 @@ pub fn wire(ui: &AppWindow) {
     i.set_arrow_right(ARROW_RIGHT.into());
     i.set_file(ICON_FILE.into());
     i.set_search(ICON_SEARCH.into());
+    i.set_revert(ICON_REVERT.into());
 }
 
 #[cfg(test)]
@@ -155,7 +165,7 @@ mod tests {
         ("G_CHECK_ON", G_CHECK_ON), ("G_CHECK_OFF", G_CHECK_OFF),
         ("G_CHECK_PARTIAL", G_CHECK_PARTIAL), ("G_ARROW_LEFT", G_ARROW_LEFT),
         ("G_ARROW_RIGHT", G_ARROW_RIGHT), ("G_NEW", G_NEW), ("G_MOD", G_MOD),
-        ("G_DEL", G_DEL), ("G_ERR", G_ERR),
+        ("G_DEL", G_DEL), ("G_ERR", G_ERR), ("G_REVERT", G_REVERT),
     ];
 
     /// 别名成立：语义常量确实指向原始字形，而不是各写各的字面量。
@@ -183,8 +193,11 @@ mod tests {
     /// 跨平台坑位守门：这几个字形实测过、能画；同族变体是豆腐块，别混进来。
     #[test]
     fn glyphs_stay_within_the_measured_safe_set() {
-        // ⏎(U+23CE) 与 ▾▸(U+25BE/U+25B8) 实测渲染成方块，出现过就不许再进来
-        const BANNED: &[char] = &['\u{23CE}', '\u{25BE}', '\u{25B8}', '\u{25B9}', '\u{25BF}'];
+        // 实测渲染成方块，出现过就不许再进来。
+        // ↺(U+21BA) 是 2026-10 在「还原到已保存」那个按钮上试出来的。
+        const BANNED: &[char] = &[
+            '\u{23CE}', '\u{25BE}', '\u{25B8}', '\u{25B9}', '\u{25BF}', '\u{21BA}',
+        ];
         for (name, g) in PRIMITIVES {
             for ch in g.chars() {
                 assert!(!BANNED.contains(&ch), "{name} 含实测会渲染成方块的字形 {ch:?} (U+{:04X})", ch as u32);

@@ -1,0 +1,55 @@
+// 「这个值和盘上不一样」的通用外观：淡蓝底 + 右侧一个还原按钮。
+// 用在项目设置的每个可编辑字段上（@02.26）。
+//
+// 只负责**画**，不知道怎么还原 —— 点击往上抛 revert()，由 Rust 拿 original_* 写回。
+// 这条是有意的：还原必须是「把快照写回状态」这条普通路径，不能是绕过状态的一次性
+// 副作用，否则将来做连续撤销时会有洞（@02.26）。
+//
+// **值本身不进这个组件。** 调用方的控件用 `<=>` 直连自己的 in-out property：
+// 一旦让值走 `@children` 之外的中转，LineEdit 的输入自赋值会打断单向绑定
+// （input_dialog.slint:47-50 踩过），而且每次按键重建会丢焦点。
+
+import { Theme } from "../theme.slint";
+import { Icons } from "../icons.slint";
+
+export component ModifiedField inherits Rectangle {
+    /// 该字段现在和盘上不一样吗。由后端算好推上来 —— 这里不做比较，
+    /// 因为 `ExportConfig` 里 `None` 与 `Some(默认值)` 的差别在渲染值上看不出来。
+    in property <bool> modified: false;
+    callback revert();
+
+    // 控件自己带不透明底色，光铺一层淡蓝会被它盖掉、只剩图标那条缝可见。
+    // 所以外面再套一圈 padding + 边框，让高亮真的看得见。
+    // **边框宽度恒定**（只换颜色）—— 否则每次改回去整行会缩 1px。
+    background: modified ? Theme.bg-field-modified : transparent;
+    border-width: 1px;
+    border-color: modified ? Theme.border-selected : transparent;
+    border-radius: 3px;
+
+    HorizontalLayout {
+        padding: 1px;
+        spacing: Theme.sp-1;
+        alignment: start;
+
+        @children
+
+        // 还原按钮的宽度**常驻**：不亮时只用 opacity 藏起来。
+        // 若写成 `if modified: …`，每敲一个字整行都会左右跳一下。
+        Rectangle {
+            width: 16px;
+            opacity: root.modified ? 1 : 0;
+            Text {
+                text: Icons.revert;
+                font-size: Theme.fs-small;
+                color: Theme.text-info;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+            TouchArea {
+                // 不亮时别吃点击：opacity 为 0 仍然会命中
+                enabled: root.modified;
+                clicked => { root.revert(); }
+            }
+        }
+    }
+}

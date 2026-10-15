@@ -13,9 +13,14 @@ export component GridRibbon inherits Rectangle {
     in-out property <int> display-field-index: 0;
     in property <bool> display-field-enabled: false;
     in property <bool> excel-edit-enabled: false;
+    // 还原到已保存（@02.26）：把当前选中的节点恢复成盘上的样子。
+    // 只管**编辑**（内容 / 结构 / 身份），不管存在性——新建未保存的节点压根没有
+    // 「盘上的样子」可还原，那时按钮置灰。
+    in property <bool> revert-enabled: false;
     callback show-ref-name-toggled(bool);
     callback display-field-selected(string);
     callback excel-edit-clicked();
+    callback revert-clicked();
 
     height: Theme.ribbon-h;
     background: Theme.bg-toolbar;
@@ -28,6 +33,11 @@ export component GridRibbon inherits Rectangle {
         spacing: Theme.sp-5;
         alignment: start;
 
+        Button {
+            text: "还原";
+            enabled: root.revert-enabled;
+            clicked => { root.revert-clicked(); }
+        }
         Button {
             text: "Excel 编辑";
             enabled: root.excel-edit-enabled;

@@ -17,7 +17,12 @@ export component DialogChrome inherits Rectangle {
     in property <bool> default-enabled: true;
     in property <bool> show-third: false;
     in property <string> third-text: "";
-    in property <bool> undo-enabled: true;
+    /// 第三个按钮的可用状态。项目设置那个是「全部还原」，全局设置那个是「撤销改动」，
+    /// 名字取中性的。
+    in property <bool> third-enabled: true;
+    /// 要不要「取消」。项目设置是**没有取消**的：编辑实时落内存，关闭即保留，
+    /// 反悔靠字段级的还原按钮与「全部还原」（@02.26）。其余对话框照旧。
+    in property <bool> show-cancel: true;
 
     callback primary-clicked();
     callback cancel-clicked();
@@ -86,7 +91,7 @@ export component DialogChrome inherits Rectangle {
                     alignment: end;
                     if root.show-third: Button {
                         text: root.third-text;
-                        enabled: root.undo-enabled;
+                        enabled: root.third-enabled;
                         clicked => { root.third-clicked(); }
                     }
                     if root.show-secondary: Button {
@@ -100,7 +105,7 @@ export component DialogChrome inherits Rectangle {
                         enabled: root.primary-enabled;
                         clicked => { root.primary-clicked(); }
                     }
-                    Button {
+                    if root.show-cancel: Button {
                         text: root.cancel-text;
                         clicked => { root.cancel-clicked(); }
                     }

@@ -19,6 +19,10 @@ export global Theme {
     out property <color> bg-header-readonly: #c8c8c8;   // ReadOnly 表头底（gray 200）
     out property <color> bg-row-alt: #f8f8f8;
     out property <color> bg-row-selected: #b4d7ff;
+    // 「这个值和盘上不一样」的字段底色（项目设置 @02.26）。
+    // 刻意不用 mark-modified 那个橙 —— 树上的 🟡 是「要保存」，这里是「和盘上不一样」，
+    // 两件事不是一回事（一个组的脏会带上数据改动，这里只管这一个字段）。
+    out property <color> bg-field-modified: #e6f0fb;
     out property <color> bg-row-hover: #e6effa;
     out property <color> bg-cell-selected: #b4d7ff;
     out property <color> scrim: #00000060;              // 模态遮罩
