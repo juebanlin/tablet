@@ -45,6 +45,10 @@ pub struct SyncRow {
     pub tbl_more_cols: bool,
     pub xlsx_more_cols: bool,
     pub headers_mismatch: bool,
+    /// desc 行与 tablet 有差异（只算匹配前缀内的列，即回读时会落地的那几列）。
+    /// 要并进「有差异」判定：否则只改了 desc 的行不会显示同步按钮，
+    /// 就算显示了也会被「数据已同步，无需操作」守卫拦下。
+    pub desc_diff: bool,
     pub actions: Vec<SyncAction>,
 }
 
@@ -71,7 +75,7 @@ pub fn load_sync_data(state: &AppState) -> Vec<SyncRow> {
     for group in &project.groups {
         let xlsx_path = xlsx_groups.get(&group.name);
         let xlsx_sheets: Vec<excel_sync::XlsxSheet> = xlsx_path
-            .and_then(|p| excel_sync::read_xlsx_sheets(p).ok())
+            .and_then(|p| excel_sync::read_xlsx_sheets(p, Some(group)).ok())
             .unwrap_or_default();
 
         for table in &group.tables {
@@ -94,6 +98,7 @@ pub fn load_sync_data(state: &AppState) -> Vec<SyncRow> {
                         right_blocks_reason: String::new(),
                         right_xlsx_name: group.name.clone(),
                         headers_match: false, matched_cols: 0, tbl_more_cols: false, xlsx_more_cols: false, headers_mismatch: false,
+                        desc_diff: false,
                         actions: vec![SyncAction::Import],
                     });
                 }
@@ -115,6 +120,7 @@ fn add_table_row(
         right_sheet_name: String::new(), right_blocks_reason: String::new(),
         right_xlsx_name: xlsx_name.unwrap_or("").into(),
         headers_match: false, matched_cols: 0, tbl_more_cols: false, xlsx_more_cols: false, headers_mismatch: false,
+        desc_diff: false,
         actions: vec![],
     };
 
@@ -124,6 +130,12 @@ fn add_table_row(
         row.right_cols = sheet.headers.len();
         let cm = excel_sync::compute_column_match(&table.schema.fields, &sheet.headers);
         row.matched_cols = cm.matched_prefix;
+        // 只比匹配前缀内的列：前缀之外的回读时本来就不落地，算进来会让按钮
+        // 出现却按下去什么也不发生
+        row.desc_diff = sheet.descs.as_ref().is_some_and(|d| {
+            (0..cm.matched_prefix)
+                .any(|i| d.get(i).is_some_and(|v| v != &table.schema.fields[i].desc))
+        });
         let tbl_has_more = cm.tablet_only > 0;
 
         if cm.matched_prefix == 0 { // first col doesn't match → invalid
@@ -189,7 +201,8 @@ pub fn push(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
         xlsx_more_cols: r.xlsx_more_cols,
         hdr_mismatch: r.headers_mismatch,
         has_diff: r.left_diff.added > 0 || r.left_diff.modified > 0 || r.left_diff.removed > 0
-            || r.right_diff.added > 0 || r.right_diff.modified > 0 || r.right_diff.removed > 0,
+            || r.right_diff.added > 0 || r.right_diff.modified > 0 || r.right_diff.removed > 0
+            || r.desc_diff,
     }).collect();
     ui.set_es_rows(slint::ModelRc::new(VecModel::from(es_rows)));
 }
@@ -229,10 +242,12 @@ fn execute_action(state: &Rc<RefCell<AppState>>, row_idx: i32, act: i32) -> Resu
     };
     let row = rows.get(row_idx as usize).ok_or("行索引无效")?;
 
-    // Guard: don't push/pull if there's no actual diff
+    // Guard: don't push/pull if there's no actual diff.
+    // desc 差异也算 —— 只改了 desc 而数据没动，同样是「有东西要同步」。
     if matches!(act, 1 | 2) {
         let has_diff = row.left_diff.added > 0 || row.left_diff.modified > 0
-            || row.left_diff.removed > 0 || row.right_diff.removed > 0;
+            || row.left_diff.removed > 0 || row.right_diff.removed > 0
+            || row.desc_diff;
         if !has_diff {
             return Err("数据已同步，无需操作".into());
         }
@@ -277,9 +292,9 @@ fn execute_action(state: &Rc<RefCell<AppState>>, row_idx: i32, act: i32) -> Resu
             let group = project.groups.iter_mut()
                 .find(|g| g.name == *group_name).ok_or("找不到组")?;
             // Merge: only overwrite columns that xlsx has. Tablet-only columns are preserved.
-            for (tname, xlsx_records) in &patches.tables {
-                if let Some(table) = group.tables.iter_mut().find(|t| &t.name == tname) {
-                    for (ri, xlsx_row) in xlsx_records.iter().enumerate() {
+            for patch in &patches.tables {
+                if let Some(table) = group.tables.iter_mut().find(|t| t.name == patch.name) {
+                    for (ri, xlsx_row) in patch.records.iter().enumerate() {
                         while table.records.len() <= ri { table.records.push(vec![String::new(); table.schema.fields.len()]); }
                         for (ci, val) in xlsx_row.iter().enumerate() {
                             if ci < table.schema.fields.len() && !val.is_empty() {
@@ -288,10 +303,18 @@ fn execute_action(state: &Rc<RefCell<AppState>>, row_idx: i32, act: i32) -> Resu
                             }
                         }
                     }
-                    // Sync completes → update snapshot so dirty flag reflects reality
-                    table.original_records = table.records.clone();
-                    table.original_fields = table.schema.fields.clone();
-                    table.dirty = false;
+                    // desc 以 Excel 为准，含空串：新布局下第 1 行策划看得见，清空就是他的意思。
+                    // descs 按位置对应前面的列（长度 = 匹配前缀列数）。
+                    if let Some(descs) = &patch.descs {
+                        for (i, d) in descs.iter().enumerate() {
+                            if let Some(f) = table.schema.fields.get_mut(i) { f.desc = d.clone(); }
+                        }
+                    }
+                    // 重算 dirty，**不要**手写 original_records / dirty=false：
+                    // 那样会让 save_project_files 判定这张表干净而跳过，回读的数据
+                    // 永远写不进 .tbl、重载即丢。excel_bridge::apply_patch_to_group
+                    // 是同样的约定（比对快照，不伪造快照）。
+                    table.update_dirty();
                 }
             }
             Ok(format!("已同步 {} ← {}", group_name, xlsx_path.display()))

@@ -146,6 +146,8 @@ GridArea 单元格 / 选区支持 Excel 风格的复制粘贴：
 
 **表头 4 列**：`组 / 节点` ｜ `tablet(行x列)` ｜ `操作` ｜ `Excel(行x列 | 匹配+差异)`
 
+**xlsx 的表头是 4 行**（desc / export / type / 列名，数据从第 5 行起），与 @02 §19 的导出布局逐格一致。定位是**让策划自由操作 Excel**：约定列名不改、desc 可改、颜色与行高列宽随便调，而这份 xlsx 与 tbl 之间**只交换 desc + 数据**。所以同步是双向的——`数据→` 连 desc 一起刷新，`←数据` 把 desc 和数据一起带回 tbl。**desc 差异也计入「有差异」判定**，只改了 desc 的行同样会亮出同步按钮。
+
 **每行状态**：
 
 | 状态 | 判定 | 显示 |
@@ -161,14 +163,18 @@ GridArea 单元格 / 选区支持 Excel 风格的复制粘贴：
 
 | 按钮 | 核心调用 | 语义 |
 |------|---------|------|
-| `数据→` | `sync_group_to_xlsx(..., DataOnly)` | 仅覆盖匹配前缀列数据，不补列 |
-| `←数据` | `read_group_from_xlsx(..., force=false)` | 从 xlsx 合并回 tablet（只覆盖 xlsx 有的列） |
-| `补列→` | `sync_group_to_xlsx(..., WithColumns)` | 在匹配前缀后插入 tablet 独有列 |
-| `强制→` | `sync_group_to_xlsx(..., Full)` | 整表覆写（表头不匹配/结构冲突时用） |
-| `创建→` | `sync_group_to_xlsx(..., Full)` | xlsx 不存在则新建 |
+| `数据→` | `sync_group_to_xlsx(..., DataOnly)` | 刷新匹配前缀列的表头 + 数据，不补列 |
+| `←数据` | `read_group_from_xlsx(..., force=false)` | 从 xlsx 合并回 tablet（只覆盖 xlsx 有的列，desc 一并带回） |
+| `补列→` | `sync_group_to_xlsx(..., WithColumns)` | 在匹配前缀后追加 tablet 独有列 |
+| `强制→` | `sync_group_to_xlsx(..., Full)` | 本表就地重写：表头 4 行 + 全部数据行，并清掉多余的列与数据行 |
+| `创建→` | `sync_group_to_xlsx(..., Full)` | xlsx 文件不存在，新建一份 |
 | `←导入` | `read_group_from_xlsx(..., force=false)` | xlsx 独有 sheet 导入 |
 
-所有操作即时执行，结果写入 UI 日志（`[同步]` / `[同步失败]`）。执行前对 `数据→` / `←数据` 做差异守卫：无差异时拒绝（`数据已同步，无需操作`）。执行完成后自动刷新主界面与对话框。
+**`强制→` 是就地重写，不是重建工作簿**：它只在目标 sheet 上重写表头与数据、清掉多余的列和行，同一文件里其他 sheet、策划刷的颜色与调的高宽都留着。文件都不存在时（`创建→`）才走「从零造一份」。
+
+所有操作即时执行，结果写入 UI 日志（`[同步]` / `[同步失败]`）。执行前对 `数据→` / `←数据` 做差异守卫：无差异时拒绝（`数据已同步，无需操作`）；desc 差异算差异。执行完成后自动刷新主界面与对话框。
+
+**回读会正确产生未保存标记**：回读走 `update_dirty()` 比对落盘快照，不伪造快照。所以同步完树节点会出现 `*`，**必须点「保存全部」才真正写进 `.tbl`**。
 
 ### 7.3 核心引擎（`tablet_core::excel_sync`）
 
@@ -176,16 +182,18 @@ GridArea 单元格 / 选区支持 Excel 风格的复制粘贴：
 
 | API | 作用 |
 |-----|------|
-| `read_xlsx_sheets(path)` | 用 umya-spreadsheet 读取 xlsx 全部 sheet（value() 直接返回字符串，避免 calamine 类型推断） |
+| `read_xlsx_sheets(path, group)` | 用 umya-spreadsheet 读取 xlsx 全部 sheet（value() 直接返回字符串，避免 calamine 类型推断）；`group` 用来判定表头是新 4 行布局还是旧的 1 行布局 |
 | `compute_column_match(fields, headers)` | 计算匹配前缀列数 + 两侧独有列数 + 列映射 |
 | `classify_header(headers, fields)` | 表头分类：`Identical` / `TailDiff` / `Mismatch` / `Invalid` |
 | `diff_rows(left, right)` | 行差异统计（added / removed / modified） |
 | `sync_group_to_xlsx(path, group, mode)` | tablet → xlsx（`DataOnly` / `WithColumns` / `Full`） |
 | `read_group_from_xlsx(path, group, force)` | xlsx → tablet，返回 `GroupPatch` 合并回内存 |
 
-底层用 **umya-spreadsheet** 读写（保留已有 xlsx 格式化），与 `tablet_core::excel` 的 calamine + rust_xlsxwriter 路线不同。
+底层用 **umya-spreadsheet** 读写（保留已有 xlsx 格式化），与 `tablet_core::excel` 的 calamine + rust_xlsxwriter 路线不同。推送走 `lazy_read`，只反序列化要写的 sheet，其余走 zip 原始字节直通（@02 §20.1）。
 
 ### 7.4 已知缺口
 
 - **`←导入` 对 xlsx 独有 sheet（right_only）实际是 no-op**——`read_group_from_xlsx` 只对 group 中已有同名表生成 patch，纯新 sheet 不会建表。按钮虽显示但无实际效果，后续需扩展为"从 sheet 新建 table"。
 - `.excel/` 目录与 `.tbl-cache/` 相互独立；启动/退出清理只处理 `.tbl-cache`，`.excel` 下的 xlsx 由用户手动管理或删除。
+- **`lazy_read` 保真的边界**：没被同步的 sheet 逐字节原样保留；**被同步的那几张表**会走 umya 的再序列化，丢掉它没有建模的元素——行/列分组折叠（大纲）、已应用的筛选/排序条件（筛选范围还在、条件没了）、适应页面缩放、迷你图/切片器、条件格式里的自定义数字格式、`tableStyles` 样式列表。单元格样式、列宽行高、冻结窗格、合并单元格、条件格式、数据验证、批注、超链接、图片图表都保留。
+- **列名不锁**：xlsx 不带 sheet protection。原因是这条流用 umya 原地编辑，而 umya 不认识 `<protectedRanges>`（"放开某片区域可编辑"那个元素）、会静默丢掉，却保留整表保护开关——结果是把文件变成整张只读。列名靠约定 + 面板兜底（改坏了列匹配前缀会变短，该行显示「表头不符合规范」）。
