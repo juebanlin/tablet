@@ -449,21 +449,21 @@ pub fn export_all_csharp(project: &Project, runtime: CSharpRuntime) -> Result<su
                 .and_then(|s| s.csharp_dotnet.as_ref());
             let output = cfg.and_then(|c| c.code_output.as_deref()).unwrap_or(runtime.default_code_output());
             let namespace = cfg.and_then(|c| c.namespace.as_deref()).unwrap_or(runtime.default_namespace());
-            (output, namespace, cfg.and_then(|c| c.custom_regions).unwrap_or(false))
+            (output, namespace, cfg.and_then(|c| c.custom_regions).unwrap_or(true))
         }
         CSharpRuntime::Unity => {
             let cfg = export_cfg.client.as_ref()
                 .and_then(|c| c.csharp_unity.as_ref());
             let output = cfg.and_then(|c| c.code_output.as_deref()).unwrap_or(runtime.default_code_output());
             let namespace = cfg.and_then(|c| c.namespace.as_deref()).unwrap_or(runtime.default_namespace());
-            (output, namespace, cfg.and_then(|c| c.custom_regions).unwrap_or(false))
+            (output, namespace, cfg.and_then(|c| c.custom_regions).unwrap_or(true))
         }
         CSharpRuntime::Godot => {
             let cfg = export_cfg.client.as_ref()
                 .and_then(|c| c.csharp_godot.as_ref());
             let output = cfg.and_then(|c| c.code_output.as_deref()).unwrap_or(runtime.default_code_output());
             let namespace = cfg.and_then(|c| c.namespace.as_deref()).unwrap_or(runtime.default_namespace());
-            (output, namespace, cfg.and_then(|c| c.custom_regions).unwrap_or(false))
+            (output, namespace, cfg.and_then(|c| c.custom_regions).unwrap_or(true))
         }
     };
 

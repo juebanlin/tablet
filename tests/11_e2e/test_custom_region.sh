@@ -26,8 +26,10 @@ inject_code() {
 assert_single_region() {
     local file="$1" tag="$2"
     local b e
-    b=$(grep -c "$BEGIN_MARK" "$file" 2>/dev/null || echo 0)
-    e=$(grep -c "$END_MARK" "$file" 2>/dev/null || echo 0)
+    # 注意别写成 `grep -c … || echo 0`：零匹配时 grep 自己也打一个 "0" 再返回 1，
+    # 于是变量变成两行 "0\n0"，后面比字符串就永远不等
+    b=$(grep -c "$BEGIN_MARK" "$file" 2>/dev/null || true); b=${b:-0}
+    e=$(grep -c "$END_MARK" "$file" 2>/dev/null || true); e=${e:-0}
     if [ "$b" = "1" ] && [ "$e" = "1" ]; then
         _pass "[$tag] 标记恰好一对"
     else
@@ -40,13 +42,10 @@ setup_empty_workspace
 PROJ="$WORK_DIR/projects/rt"
 JAVA_PKG_PATH="com/game/config/tpl"
 
-# 四个后端一起开（C# 走 dotnet 段）
-CR="-s export.server.java.custom_regions=true"
-CR="$CR -s export.server.go.custom_regions=true"
-CR="$CR -s export.server.cpp.custom_regions=true"
-CR="$CR -s export.server.csharp_dotnet.custom_regions=true"
+# custom_regions 不配任何东西 —— 默认就是开的，这条用例顺带把默认路径也覆盖了。
 # lombok 关掉：这条用例只关心保留区间，别把 lombok 的依赖拖进来
-run_cli $CR -s export.server.java.lombok=false export code --java --go --cpp --csharp
+LOMBOK_OFF="-s export.server.java.lombok=false"
+run_cli $LOMBOK_OFF export code --java --go --cpp --csharp
 assert_exit 0
 
 # ── 落点检查：四个后端各挑一个类型文件 ──
@@ -65,8 +64,7 @@ CS_ITEM=$(find "$PROJ/gen/server/csharp" -name "ItemTpl.cs" | head -1)
 ITEM_TPL="$PROJ/gen/server/java/$JAVA_PKG_PATH/ItemTpl.java"
 inject_code "$ITEM_TPL" "    public String bizLabel() { return \"item-\" + id + \"-\" + name; }"
 
-JAVA_ARGS="-s export.server.java.custom_regions=true -s export.server.java.lombok=false"
-run_cli $JAVA_ARGS export code --java
+run_cli $LOMBOK_OFF export code --java
 assert_exit 0
 if grep -q "bizLabel()" "$ITEM_TPL"; then
     _pass "java: 注入的方法留存"
@@ -93,7 +91,7 @@ fi
 # ── Go：注入一个文件作用域的方法（Go 的方法必须这么写，落点正是为此选的）──
 if [ -n "$GO_ITEM" ]; then
     inject_code "$GO_ITEM" "func (t *ItemTpl) BizLabel() string { return \"item\" }"
-    run_cli -s export.server.go.custom_regions=true export code --go
+    run_cli -s export.server.java.lombok=false export code --go
     assert_exit 0
     if grep -q "BizLabel" "$GO_ITEM"; then
         _pass "go: 注入的方法留存"

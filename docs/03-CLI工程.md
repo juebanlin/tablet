@@ -229,7 +229,7 @@ Project 列表由启动扫描 `projects/` 目录得出，**不需要**在 `table
 | package | Java 包名 | — |
 | code_output | Java 模板类输出目录 | — |
 | lombok | 用 Lombok 的 `@Getter` 代替逐字段手写 getter（只写注解，不打包 jar） | `true` |
-| custom_regions | 产物带业务扩展保留区间，重新导出时留住区间内的手写代码（区间外一律覆盖） | `false` |
+| custom_regions | 产物带业务扩展保留区间，重新导出时留住区间内的手写代码（区间外一律覆盖） | `true` |
 
 ### 4.7 [export.server.go]
 
@@ -237,7 +237,7 @@ Project 列表由启动扫描 `projects/` 目录得出，**不需要**在 `table
 |------|------|--------|
 | package | Go package | — |
 | code_output | Go 代码输出目录 | — |
-| custom_regions | 产物带业务扩展保留区间，重新导出时留住区间内的手写代码（区间外一律覆盖） | `false` |
+| custom_regions | 产物带业务扩展保留区间，重新导出时留住区间内的手写代码（区间外一律覆盖） | `true` |
 
 ### 4.8 [export.client.lua]
 

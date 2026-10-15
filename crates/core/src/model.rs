@@ -194,8 +194,8 @@ pub struct JavaExport {
     /// 产物里带上「业务扩展保留区间」：类型末尾一对 `// <TBL-CUSTOM-*> ` 标记，
     /// 重新导出时把标记**之间**的手写代码原样搬过去（区间外一律重新生成）。
     ///
-    /// 默认 **false**——不配这个键时产物与没有本特性时逐字节一致。
-    /// 契约与边界情况见 @02 与 @11.3.4。
+    /// 默认 **true**——生成产物默认就带标记，不需要它的人显式关掉。
+    /// 契约与边界情况见 @02.11 与 @11.3.4。
     #[serde(default)]
     pub custom_regions: Option<bool>,
 }
@@ -206,7 +206,7 @@ impl Default for JavaExport {
             package: Some("com.game.config".to_string()),
             code_output: Some("gen/server/java".to_string()),
             lombok: Some(true),
-            custom_regions: Some(false),
+            custom_regions: Some(true),
         }
     }
 }
@@ -219,8 +219,8 @@ pub struct GoExport {
     /// 产物里带上「业务扩展保留区间」：类型末尾一对 `// <TBL-CUSTOM-*> ` 标记，
     /// 重新导出时把标记**之间**的手写代码原样搬过去（区间外一律重新生成）。
     ///
-    /// 默认 **false**——不配这个键时产物与没有本特性时逐字节一致。
-    /// 契约与边界情况见 @02 与 @11.3.4。
+    /// 默认 **true**——生成产物默认就带标记，不需要它的人显式关掉。
+    /// 契约与边界情况见 @02.11 与 @11.3.4。
     #[serde(default)]
     pub custom_regions: Option<bool>,
 }
@@ -230,7 +230,7 @@ impl Default for GoExport {
         Self {
             package: Some("config".to_string()),
             code_output: Some("gen/server/go".to_string()),
-            custom_regions: Some(false),
+            custom_regions: Some(true),
         }
     }
 }
@@ -245,8 +245,8 @@ pub struct CppExport {
     /// 产物里带上「业务扩展保留区间」：类型末尾一对 `// <TBL-CUSTOM-*> ` 标记，
     /// 重新导出时把标记**之间**的手写代码原样搬过去（区间外一律重新生成）。
     ///
-    /// 默认 **false**——不配这个键时产物与没有本特性时逐字节一致。
-    /// 契约与边界情况见 @02 与 @11.3.4。
+    /// 默认 **true**——生成产物默认就带标记，不需要它的人显式关掉。
+    /// 契约与边界情况见 @02.11 与 @11.3.4。
     #[serde(default)]
     pub custom_regions: Option<bool>,
 }
@@ -257,7 +257,7 @@ impl Default for CppExport {
             namespace: Some("game::config".to_string()),
             code_output: Some("gen/server/cpp".to_string()),
             json_lib: Some(crate::enums::CppJsonLib::Nlohmann),
-            custom_regions: Some(false),
+            custom_regions: Some(true),
         }
     }
 }
@@ -271,8 +271,8 @@ pub struct DotNetExport {
     /// 产物里带上「业务扩展保留区间」：类型末尾一对 `// <TBL-CUSTOM-*> ` 标记，
     /// 重新导出时把标记**之间**的手写代码原样搬过去（区间外一律重新生成）。
     ///
-    /// 默认 **false**——不配这个键时产物与没有本特性时逐字节一致。
-    /// 契约与边界情况见 @02 与 @11.3.4。
+    /// 默认 **true**——生成产物默认就带标记，不需要它的人显式关掉。
+    /// 契约与边界情况见 @02.11 与 @11.3.4。
     #[serde(default)]
     pub custom_regions: Option<bool>,
 }
@@ -282,7 +282,7 @@ impl Default for DotNetExport {
         Self {
             namespace: Some("Game.Config.Server".to_string()),
             code_output: Some("gen/server/csharp".to_string()),
-            custom_regions: Some(false),
+            custom_regions: Some(true),
         }
     }
 }
@@ -296,8 +296,8 @@ pub struct UnityCSharpExport {
     /// 产物里带上「业务扩展保留区间」：类型末尾一对 `// <TBL-CUSTOM-*> ` 标记，
     /// 重新导出时把标记**之间**的手写代码原样搬过去（区间外一律重新生成）。
     ///
-    /// 默认 **false**——不配这个键时产物与没有本特性时逐字节一致。
-    /// 契约与边界情况见 @02 与 @11.3.4。
+    /// 默认 **true**——生成产物默认就带标记，不需要它的人显式关掉。
+    /// 契约与边界情况见 @02.11 与 @11.3.4。
     #[serde(default)]
     pub custom_regions: Option<bool>,
 }
@@ -307,7 +307,7 @@ impl Default for UnityCSharpExport {
         Self {
             namespace: Some("Game.Config.Client".to_string()),
             code_output: Some("gen/client/csharp_unity".to_string()),
-            custom_regions: Some(false),
+            custom_regions: Some(true),
         }
     }
 }
@@ -321,8 +321,8 @@ pub struct GodotCSharpExport {
     /// 产物里带上「业务扩展保留区间」：类型末尾一对 `// <TBL-CUSTOM-*> ` 标记，
     /// 重新导出时把标记**之间**的手写代码原样搬过去（区间外一律重新生成）。
     ///
-    /// 默认 **false**——不配这个键时产物与没有本特性时逐字节一致。
-    /// 契约与边界情况见 @02 与 @11.3.4。
+    /// 默认 **true**——生成产物默认就带标记，不需要它的人显式关掉。
+    /// 契约与边界情况见 @02.11 与 @11.3.4。
     #[serde(default)]
     pub custom_regions: Option<bool>,
 }
@@ -332,7 +332,7 @@ impl Default for GodotCSharpExport {
         Self {
             namespace: Some("Game.Config.Client".to_string()),
             code_output: Some("gen/client/csharp_godot".to_string()),
-            custom_regions: Some(false),
+            custom_regions: Some(true),
         }
     }
 }

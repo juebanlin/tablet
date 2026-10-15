@@ -191,7 +191,7 @@ pub fn push(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
         gs.export.server.as_ref().and_then(|s| s.java.as_ref()).and_then(|j| j.lombok).unwrap_or(true)
     );
     ui_h.set_gs_export_java_custom_regions(
-        gs.export.server.as_ref().and_then(|s| s.java.as_ref()).and_then(|x| x.custom_regions).unwrap_or(false)
+        gs.export.server.as_ref().and_then(|s| s.java.as_ref()).and_then(|x| x.custom_regions).unwrap_or(true)
     );
     ui_h.set_gs_export_go_package(
         gs.export.server.as_ref().and_then(|s| s.go.as_ref()).and_then(|g| g.package.as_ref()).cloned().unwrap_or_default().into()
@@ -200,7 +200,7 @@ pub fn push(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
         gs.export.server.as_ref().and_then(|s| s.go.as_ref()).and_then(|g| g.code_output.as_ref()).cloned().unwrap_or_default().into()
     );
     ui_h.set_gs_export_go_custom_regions(
-        gs.export.server.as_ref().and_then(|s| s.go.as_ref()).and_then(|x| x.custom_regions).unwrap_or(false)
+        gs.export.server.as_ref().and_then(|s| s.go.as_ref()).and_then(|x| x.custom_regions).unwrap_or(true)
     );
     ui_h.set_gs_export_cpp_namespace(
         gs.export.server.as_ref().and_then(|s| s.cpp.as_ref()).and_then(|c| c.namespace.as_ref()).cloned().unwrap_or_default().into()
@@ -209,7 +209,7 @@ pub fn push(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
         gs.export.server.as_ref().and_then(|s| s.cpp.as_ref()).and_then(|c| c.code_output.as_ref()).cloned().unwrap_or_default().into()
     );
     ui_h.set_gs_export_cpp_custom_regions(
-        gs.export.server.as_ref().and_then(|s| s.cpp.as_ref()).and_then(|x| x.custom_regions).unwrap_or(false)
+        gs.export.server.as_ref().and_then(|s| s.cpp.as_ref()).and_then(|x| x.custom_regions).unwrap_or(true)
     );
     let cpp_json_lib = gs.export.server.as_ref().and_then(|s| s.cpp.as_ref()).and_then(|c| c.json_lib).unwrap_or(tablet_core::enums::CppJsonLib::default());
     let cpp_json_lib_idx = tablet_core::enums::CppJsonLib::all().iter().position(|&l| l == cpp_json_lib).unwrap_or(0) as i32;
@@ -222,7 +222,7 @@ pub fn push(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
         gs.export.server.as_ref().and_then(|s| s.csharp_dotnet.as_ref()).and_then(|c| c.code_output.as_ref()).cloned().unwrap_or_default().into()
     );
     ui_h.set_gs_export_csharp_dotnet_custom_regions(
-        gs.export.server.as_ref().and_then(|s| s.csharp_dotnet.as_ref()).and_then(|x| x.custom_regions).unwrap_or(false)
+        gs.export.server.as_ref().and_then(|s| s.csharp_dotnet.as_ref()).and_then(|x| x.custom_regions).unwrap_or(true)
     );
     ui_h.set_gs_export_typescript_server_code_output(
         gs.export.server.as_ref().and_then(|s| s.typescript.as_ref()).and_then(|t| t.output.as_ref()).cloned().unwrap_or_default().into()
@@ -245,7 +245,7 @@ pub fn push(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
         gs.export.client.as_ref().and_then(|c| c.csharp_unity.as_ref()).and_then(|u| u.code_output.as_ref()).cloned().unwrap_or_default().into()
     );
     ui_h.set_gs_export_csharp_unity_custom_regions(
-        gs.export.client.as_ref().and_then(|c| c.csharp_unity.as_ref()).and_then(|x| x.custom_regions).unwrap_or(false)
+        gs.export.client.as_ref().and_then(|c| c.csharp_unity.as_ref()).and_then(|x| x.custom_regions).unwrap_or(true)
     );
     ui_h.set_gs_export_csharp_godot_namespace(
         gs.export.client.as_ref().and_then(|c| c.csharp_godot.as_ref()).and_then(|g| g.namespace.as_ref()).cloned().unwrap_or_default().into()
@@ -254,7 +254,7 @@ pub fn push(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
         gs.export.client.as_ref().and_then(|c| c.csharp_godot.as_ref()).and_then(|g| g.code_output.as_ref()).cloned().unwrap_or_default().into()
     );
     ui_h.set_gs_export_csharp_godot_custom_regions(
-        gs.export.client.as_ref().and_then(|c| c.csharp_godot.as_ref()).and_then(|x| x.custom_regions).unwrap_or(false)
+        gs.export.client.as_ref().and_then(|c| c.csharp_godot.as_ref()).and_then(|x| x.custom_regions).unwrap_or(true)
     );
 }
 

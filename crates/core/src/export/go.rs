@@ -257,7 +257,7 @@ pub fn export_all_go(project: &Project) -> Result<super::ExportResult> {
     );
     let encoding = export_cfg.encoding.map(|e| e.as_str())
         .unwrap_or("utf-8").to_string();
-    let custom_regions = go.and_then(|g| g.custom_regions).unwrap_or(false);
+    let custom_regions = go.and_then(|g| g.custom_regions).unwrap_or(true);
     let opts = super::ExportOptions { line_ending, encoding };
 
     let output_dir = project.export_root().join(code_output).join(pkg);

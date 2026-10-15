@@ -227,7 +227,7 @@ pub fn push(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
         export.server.as_ref().and_then(|s| s.java.as_ref()).and_then(|j| j.lombok).unwrap_or(true)
     );
     ui_h.set_ps_export_java_custom_regions(
-        export.server.as_ref().and_then(|s| s.java.as_ref()).and_then(|x| x.custom_regions).unwrap_or(false)
+        export.server.as_ref().and_then(|s| s.java.as_ref()).and_then(|x| x.custom_regions).unwrap_or(true)
     );
     ui_h.set_ps_export_go_package(
         export.server.as_ref().and_then(|s| s.go.as_ref()).and_then(|g| g.package.as_ref()).cloned().unwrap_or_default().into()
@@ -236,7 +236,7 @@ pub fn push(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
         export.server.as_ref().and_then(|s| s.go.as_ref()).and_then(|g| g.code_output.as_ref()).cloned().unwrap_or_default().into()
     );
     ui_h.set_ps_export_go_custom_regions(
-        export.server.as_ref().and_then(|s| s.go.as_ref()).and_then(|x| x.custom_regions).unwrap_or(false)
+        export.server.as_ref().and_then(|s| s.go.as_ref()).and_then(|x| x.custom_regions).unwrap_or(true)
     );
     ui_h.set_ps_export_cpp_namespace(
         export.server.as_ref().and_then(|s| s.cpp.as_ref()).and_then(|c| c.namespace.as_ref()).cloned().unwrap_or_default().into()
@@ -245,7 +245,7 @@ pub fn push(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
         export.server.as_ref().and_then(|s| s.cpp.as_ref()).and_then(|c| c.code_output.as_ref()).cloned().unwrap_or_default().into()
     );
     ui_h.set_ps_export_cpp_custom_regions(
-        export.server.as_ref().and_then(|s| s.cpp.as_ref()).and_then(|x| x.custom_regions).unwrap_or(false)
+        export.server.as_ref().and_then(|s| s.cpp.as_ref()).and_then(|x| x.custom_regions).unwrap_or(true)
     );
     ui_h.set_ps_export_csharp_dotnet_namespace(
         export.server.as_ref().and_then(|s| s.csharp_dotnet.as_ref()).and_then(|c| c.namespace.as_ref()).cloned().unwrap_or_default().into()
@@ -254,7 +254,7 @@ pub fn push(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
         export.server.as_ref().and_then(|s| s.csharp_dotnet.as_ref()).and_then(|c| c.code_output.as_ref()).cloned().unwrap_or_default().into()
     );
     ui_h.set_ps_export_csharp_dotnet_custom_regions(
-        export.server.as_ref().and_then(|s| s.csharp_dotnet.as_ref()).and_then(|x| x.custom_regions).unwrap_or(false)
+        export.server.as_ref().and_then(|s| s.csharp_dotnet.as_ref()).and_then(|x| x.custom_regions).unwrap_or(true)
     );
     ui_h.set_ps_export_typescript_server_code_output(
         export.server.as_ref().and_then(|s| s.typescript.as_ref()).and_then(|t| t.output.as_ref()).cloned().unwrap_or_default().into()
@@ -275,7 +275,7 @@ pub fn push(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
         export.client.as_ref().and_then(|c| c.csharp_unity.as_ref()).and_then(|u| u.code_output.as_ref()).cloned().unwrap_or_default().into()
     );
     ui_h.set_ps_export_csharp_unity_custom_regions(
-        export.client.as_ref().and_then(|c| c.csharp_unity.as_ref()).and_then(|x| x.custom_regions).unwrap_or(false)
+        export.client.as_ref().and_then(|c| c.csharp_unity.as_ref()).and_then(|x| x.custom_regions).unwrap_or(true)
     );
     ui_h.set_ps_export_csharp_godot_namespace(
         export.client.as_ref().and_then(|c| c.csharp_godot.as_ref()).and_then(|g| g.namespace.as_ref()).cloned().unwrap_or_default().into()
@@ -284,7 +284,7 @@ pub fn push(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
         export.client.as_ref().and_then(|c| c.csharp_godot.as_ref()).and_then(|g| g.code_output.as_ref()).cloned().unwrap_or_default().into()
     );
     ui_h.set_ps_export_csharp_godot_custom_regions(
-        export.client.as_ref().and_then(|c| c.csharp_godot.as_ref()).and_then(|x| x.custom_regions).unwrap_or(false)
+        export.client.as_ref().and_then(|c| c.csharp_godot.as_ref()).and_then(|x| x.custom_regions).unwrap_or(true)
     );
 }
 

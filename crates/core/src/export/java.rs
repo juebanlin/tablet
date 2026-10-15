@@ -268,7 +268,7 @@ pub fn export_all_java(project: &Project) -> Result<super::ExportResult> {
     // 缺省开：字段 getter 交给 Lombok 的 @Getter
     let lombok = java.and_then(|j| j.lombok).unwrap_or(true);
     // 缺省关：不配就与没有本特性时逐字节一致
-    let custom_regions = java.and_then(|j| j.custom_regions).unwrap_or(false);
+    let custom_regions = java.and_then(|j| j.custom_regions).unwrap_or(true);
 
     let line_ending = LineEnding::from_config(
         export_cfg.line_ending.map(|l| l.as_str())
