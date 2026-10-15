@@ -34,6 +34,7 @@ pub fn table(name: &str, records: Vec<Vec<&str>>) -> Table {
         saved: false,
         fmt_ver: DEFAULT_TBL_VERSION,
         display_field: None,
+        original_display_field: None,
     }
 }
 

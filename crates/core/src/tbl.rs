@@ -86,6 +86,7 @@ impl TableCodec for V2Codec {
             original_records: records.clone(), original_fields: field_defs,
             records, dirty: false, deleted: false, saved: true, fmt_ver: TblVersion::V2,
             display_field: None,
+            original_display_field: None,
         })
     }
 
@@ -206,6 +207,7 @@ impl TableCodec for V3Codec {
             original_records: records.clone(), original_fields: field_defs,
             records, dirty: false, deleted: false, saved: true, fmt_ver: TblVersion::V3,
             display_field: None,
+            original_display_field: None,
         })
     }
 
@@ -364,6 +366,7 @@ fn parse_enum(path: &Path, data_lines: &[&str]) -> Result<TblFile> {
         original_entries: entries.clone(), entries,
         dirty: false, deleted: false, saved: true,
         display_field: None,
+        original_display_field: None,
     }))
 }
 

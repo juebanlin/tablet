@@ -611,6 +611,7 @@ mod tests {
             deleted: false,
             original_entries: Vec::new(), saved: true,
             display_field: None,
+            original_display_field: None,
         };
         let out = export_enum_ts(&e);
         assert!(out.contains("export enum HeroTypeEnum {"));
@@ -633,6 +634,7 @@ mod tests {
             ],
             dirty: false, deleted: false, original_entries: Vec::new(), saved: true,
             display_field: None,
+            original_display_field: None,
         };
 
         let out = export_enum_ts(&e);
@@ -667,6 +669,7 @@ mod tests {
             entries: vec![EnumEntry { id: "1".to_string(), name: "Warrior".to_string(), desc: "战士".to_string() }],
             dirty: false, deleted: false, original_entries: Vec::new(), saved: true,
             display_field: None,
+            original_display_field: None,
         };
         let out = export_enum_ts(&e);
         assert!(out.contains("// 使用：import { HeroTypeEnum, HeroTypeEnumDesc, HeroTypeEnumNames } from './HeroType'"), "got:\n{}", out);
@@ -687,6 +690,7 @@ mod tests {
             entries: vec![EnumEntry { id: "1".to_string(), name: "Warrior".to_string(), desc: "战士".to_string() }],
             dirty: false, deleted: false, original_entries: Vec::new(), saved: true,
             display_field: None,
+            original_display_field: None,
         };
 
         for src in [

@@ -763,9 +763,9 @@ impl CloneProjectState {
 
 /// 项目设置对话框（项目右键「项目设置...」入口）。
 ///
-/// 所有改动只更新内存中的 project meta + 分隔符，标记 schema_dirty，
-/// 等"保存项目"才写盘。
-/// schema_dirty=true，写盘 + revalidate_all。
+/// 所有改动只更新内存中的 project meta + 分隔符，等"保存项目"才写盘。
+/// 脏由 `Project::schema_changed()` 对比盘上快照得出，不在这里标（@02.26.2）；
+/// 分隔符变了要全表 revalidate_all。
 #[derive(Default)]
 pub struct ProjectSettingsState {
     pub open: bool,

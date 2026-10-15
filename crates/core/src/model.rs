@@ -4,7 +4,7 @@ use crate::enums::{
     Encoding, LineEnding, JsonEmptyAs, XmlEmptyAs, LogLevel,
     PickerTrigger, RefPickerStrategy, ProjectSort,
 };
-use crate::tblschema::TblSchema;
+use crate::tblschema::{SchemaMetadata, TblSchema};
 
 /// 项目状态：区分已落盘 vs 未落盘
 #[derive(Debug, Clone, PartialEq)]
@@ -38,12 +38,15 @@ pub struct Project {
     /// - `schema.meta.id / name / created_at / source_template* / category / version` = 项目身份
     /// - `schema.sections` = 结构骨架，由 ops 在 group/node 变动时增量同步
     pub schema: TblSchema,
-    /// 上次落盘时的 schema 快照，用于 `resync_schema()` 比对（同 `Table::original_records`）。
-    pub original_schema: TblSchema,
+    /// 上次落盘时的 `schema.meta` / `schema.separators` 快照。
+    ///
+    /// **只有这两样是项目「自己的属性」**——`schema.sections` 是 groups 的投影
+    /// （`schema_from_project` 只读组名 / 节点名 / 列定义 / `# @display`），
+    /// 拿它跟一份快照比等于把缓存和自己的副本对一遍。所以这里不存 `original_schema`。
+    /// 见 [`Project::schema_changed`]。
+    pub original_meta: SchemaMetadata,
+    pub original_separators: crate::types::SeparatorsSection,
     pub groups: Vec<Group>,
-    /// schema 是否需要写盘。**由 `resync_schema()` 算出来**，不要直接赋值——
-    /// 见 [`Project::resync_schema`]。
-    pub schema_dirty: bool,
     /// 项目状态：Loaded（已落盘）或 Pending（待保存）。
     /// save 时 Pending 项目会先 create_dir_all，然后切换为 Loaded。
     pub state: ProjectState,
@@ -65,25 +68,40 @@ impl Project {
         self.project_root.as_path()
     }
 
-    /// 从 `groups` 重推 `schema.sections`，并**重算**（而不是置 true）`schema_dirty`。
+    /// 从 `groups` 重推 `schema.sections`（`meta` / `separators` 原样保留）。
     ///
-    /// 任何改动 `schema` 的操作（新建 / 改名 / 删除 / 拷贝节点、增删列、改表头）
-    /// 之后都要调它，取代过去手工写 `schema_dirty = true` 的做法。
-    ///
-    /// 为什么必须算：`schema_dirty` 的含义是「现在写盘会和盘上不一样吗」，而
-    /// 「来回一趟」是常态——把 HeroBase 改名成 HeroMain、又改回 HeroBase，
-    /// `schema.sections` 与盘上逐字相同，就该回到干净。置 true 的写法撕不掉，
-    /// 项目行的 🟡 会永远留着（改名改回去、节点干净了、项目还脏着）。
-    ///
-    /// 比较用**结构相等**而不是序列化文本：手改过 `project.tblschema`（加注释、
-    /// 调顺序）不该被当成"脏"——真要按文本比，那种项目一打开就永远亮着。
+    /// 单纯刷新投影缓存，**不碰任何"脏"状态**——脏是算出来的（见
+    /// [`Project::schema_changed`]），没有可以写错的标。
     pub fn resync_schema(&mut self) {
         let mut s = crate::tblschema::schema_from_project(&self.groups, false);
         s.meta = self.schema.meta.clone();
         s.separators = self.schema.separators.clone();
         self.schema = s;
-        // 未落盘的项目没有"盘上"可对照，一律算脏
-        self.schema_dirty = self.state.is_pending() || self.schema != self.original_schema;
+    }
+
+    /// `project.tblschema` 现在写盘会和盘上不一样吗。
+    ///
+    /// 项目「自己的属性」只有 `meta` 与 `separators`；`schema.sections` 是 groups 的
+    /// 投影，所以结构变化由**子节点自己**回答（`Group::schema_changed`），不在这里
+    /// 另存一份快照去比——那等于把缓存和它自己的副本对一遍。
+    ///
+    /// 用途：`save_project_files` 决定要不要写 schema 文件。
+    pub fn schema_changed(&self) -> bool {
+        self.state.is_pending()
+            || self.schema.meta != self.original_meta
+            || self.schema.separators != self.original_separators
+            || self.groups.iter().any(|g| g.schema_changed())
+    }
+
+    /// 这个项目现在写盘会有任何东西落地吗——**UI 树的项目行 🟡** 就是它。
+    ///
+    /// 与 [`schema_changed`](Self::schema_changed) 的区别：这里子层用 `is_dirty()`，
+    /// 连"只改了一个格子的值"也算（那个格子确实要写进 .tbl，只是不动 schema 文件）。
+    pub fn is_dirty(&self) -> bool {
+        self.state.is_pending()
+            || self.schema.meta != self.original_meta
+            || self.schema.separators != self.original_separators
+            || self.groups.iter().any(|g| g.is_dirty())
     }
 }
 
@@ -542,6 +560,35 @@ pub struct Group {
     pub is_new: bool,
 }
 
+impl Group {
+    /// 影响 `project.tblschema` 的改动：自己的名字 / 新增，或**任何子节点**。
+    /// 「A.B.C 里只有 C 改了」在这里体现为 C 说 true，A 和 B 只是把它聚合上来。
+    pub fn schema_changed(&self) -> bool {
+        self.is_new
+            || self.original_name != self.name
+            || self.tables.iter().any(|t| node_pending(t.deleted, t.saved, t.schema_changed()))
+            || self.constants.iter().any(|c| node_pending(c.deleted, c.saved, c.schema_changed()))
+            || self.enums.iter().any(|e| node_pending(e.deleted, e.saved, e.schema_changed()))
+    }
+
+    /// UI 树投影用：连「只改了数据」也算（那个格子确实要写进 .tbl）。
+    pub fn is_dirty(&self) -> bool {
+        self.is_new
+            || self.original_name != self.name
+            || self.tables.iter().any(|t| node_pending(t.deleted, t.saved, t.dirty))
+            || self.constants.iter().any(|c| node_pending(c.deleted, c.saved, c.dirty))
+            || self.enums.iter().any(|e| node_pending(e.deleted, e.saved, e.dirty))
+    }
+}
+
+/// 一个叶子节点「save 会不会有动作」。
+///
+/// 软删的节点不再看它自己的 `dirty`：删掉一个**落过盘**的节点 save 要 remove 文件
+/// （算有动作），而「新建了又没保存就删掉」的节点盘上从来没有过、save 什么也不做。
+fn node_pending(deleted: bool, saved: bool, changed: bool) -> bool {
+    if deleted { saved } else { changed }
+}
+
 #[derive(Debug, Clone)]
 pub struct Table {
     pub name: String,
@@ -569,15 +616,26 @@ pub struct Table {
     /// `Some(列名)` = 展示该列（须为 str/int/txt 叶子类型）。
     /// 持久化在 project.tblschema 段内的 `# @display` 行；本字段是运行时真相源。
     pub display_field: Option<String>,
+    /// 上次落盘时的 `display_field`。`# @display` 写在 project.tblschema 里，
+    /// 所以要进 `schema_changed()`（@02.26.2）。
+    pub original_display_field: Option<String>,
 }
 
 impl Table {
-    pub fn update_dirty(&mut self) {
-        self.dirty = self.records != self.original_records
+    /// 影响 `project.tblschema` 的改动。
+    ///
+    /// **不含 `records`**——改一个格子的值会让本表要写盘，但 schema 文件一个字都不用动。
+    /// 父层的聚合必须用这个而不是 `dirty`，否则每次单元格编辑都会把 schema 标脏。
+    pub fn schema_changed(&self) -> bool {
+        // 改名也是一次未落盘的改动：盘上还是旧文件名，save 时才搬。
+        self.original_name != self.name
             || self.schema.fields != self.original_fields
-            // 改名也是一次未落盘的改动：盘上还是旧文件名，save 时才搬。
-            // 少了这条，改名后的节点在树上显示为「干净」。
-            || self.original_name != self.name;
+            || self.original_display_field != self.display_field
+    }
+
+    /// 这个 `.tbl` 现在写盘会和盘上不一样吗。UI 树节点行 🟡 就是它。
+    pub fn update_dirty(&mut self) {
+        self.dirty = self.records != self.original_records || self.schema_changed();
     }
 }
 
@@ -615,9 +673,13 @@ pub struct Constant {
 }
 
 impl Constant {
+    /// 影响 `project.tblschema` 的改动：只有名字（常量段在 schema 里只剩段头）。
+    pub fn schema_changed(&self) -> bool {
+        self.original_name != self.name
+    }
+
     pub fn update_dirty(&mut self) {
-        self.dirty = self.entries != self.original_entries
-            || self.original_name != self.name;
+        self.dirty = self.entries != self.original_entries || self.schema_changed();
     }
 }
 
@@ -652,12 +714,19 @@ pub struct EnumDef {
     /// 被引用展示列（@10）：被 `@本枚举` 引用时展示 `name` 还是 `desc`。`None` = 显示原始 id。
     /// 持久化在 project.tblschema 段内的 `# @display` 行；本字段是运行时真相源。
     pub display_field: Option<String>,
+    /// 上次落盘时的 `display_field`。语义同 `Table::original_display_field`。
+    pub original_display_field: Option<String>,
 }
 
 impl EnumDef {
+    /// 影响 `project.tblschema` 的改动：名字 + `# @display`（**不含 entries**）。
+    pub fn schema_changed(&self) -> bool {
+        self.original_name != self.name
+            || self.original_display_field != self.display_field
+    }
+
     pub fn update_dirty(&mut self) {
-        self.dirty = self.entries != self.original_entries
-            || self.original_name != self.name;
+        self.dirty = self.entries != self.original_entries || self.schema_changed();
     }
 }
 

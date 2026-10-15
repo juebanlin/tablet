@@ -573,6 +573,7 @@ pub fn apply_schema_to_project(
                         saved: false,
                         fmt_ver: crate::tbl::DEFAULT_TBL_VERSION,
                         display_field: sec.display.clone(),
+                        original_display_field: None,
                     });
                     added += 1;
                 }
@@ -643,6 +644,7 @@ pub fn apply_schema_to_project(
                         deleted: false,
                         original_entries: snap, saved: false,
                         display_field: sec.display.clone(),
+                        original_display_field: None,
                     });
                     added += 1;
                 }
@@ -665,11 +667,15 @@ pub fn apply_display_to_groups(groups: &mut [Group], schema: &TblSchema) {
             SchemaMode::Table => {
                 if let Some(t) = group.tables.iter_mut().find(|t| t.name == sec.name) {
                     t.display_field = Some(display.clone());
+                    // 这是**从盘上读回来的**值（`.tbl` 里没有 `# @display`，靠 schema 回填），
+                    // 所以快照要一起填——否则一打开就显示"改过"，项目永远亮 🟡。
+                    t.original_display_field = Some(display.clone());
                 }
             }
             SchemaMode::Enum => {
                 if let Some(e) = group.enums.iter_mut().find(|e| e.name == sec.name) {
                     e.display_field = Some(display.clone());
+                    e.original_display_field = Some(display.clone());
                 }
             }
             SchemaMode::Constant => {}
@@ -1218,12 +1224,14 @@ id | int | cs | x
                 schema: TableSchema { fields: vec![] }, records: vec![],
                 dirty: false, deleted: false, original_records: vec![], original_fields: vec![],
                 saved: true, fmt_ver: crate::tbl::DEFAULT_TBL_VERSION, display_field: None,
+                original_display_field: None,
             }],
             constants: vec![],
             enums: vec![EnumDef {
                 name: "HeroType".into(), original_name: "HeroType".into(), path: std::path::PathBuf::new(),
                 entries: vec![], dirty: false, deleted: false,
                 original_entries: vec![], saved: true, display_field: None,
+                original_display_field: None,
             }],
             is_new: false,
         }];

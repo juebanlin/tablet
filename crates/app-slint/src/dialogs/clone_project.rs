@@ -62,7 +62,7 @@ pub fn push(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
     ui_h.set_np_can_confirm(can_confirm);
 }
 
-/// 内存克隆 + 改 category/version。克隆走内存模式（schema_dirty=true）。
+/// 内存克隆 + 改 category/version。克隆走内存模式（state=Pending，未落盘）。
 fn run(state: &Rc<RefCell<AppState>>) {
     let mut st = state.borrow_mut();
     let source_project_id = st.clone_project.source_project_id.clone();

@@ -537,6 +537,7 @@ pub(crate) mod test_fixtures {
             saved: true,
             fmt_ver: crate::tbl::TblVersion::V3,
             display_field: None,
+            original_display_field: None,
         }
     }
 

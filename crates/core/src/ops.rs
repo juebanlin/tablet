@@ -56,8 +56,8 @@ fn dedupe_name<'a, I: IntoIterator<Item = &'a str>>(base: &str, existing: I) -> 
 /// / paste_node_to / paste_group_to 后都要调一次，保证 save 时 project.tblschema
 /// 与磁盘 .tbl 一致。
 ///
-/// `schema_dirty` 由 `Project::resync_schema` **算出来**，不在这里置 true——
-/// 改名改回原名后应当自动回到干净（@02.26.2）。
+/// 这里不碰任何"脏"状态：脏由每层自己跟盘上快照比出来（@02.26.2），
+/// 改名改回原名后会自动回到干净。
 fn sync_schema_from_groups(project: &mut Project) {
     // sync 永远不带 preset：project.tblschema 是「结构骨架」，行数据归项目里的 .tbl
     project.resync_schema();
@@ -240,14 +240,15 @@ fn rename_tbl_file(
 fn save_project_files(project: &mut Project) -> (usize, usize, Vec<String>) {
     let mut count = 0;
     let mut deleted = 0;
+    // 第一次落盘：盘上还什么都没有，schema 必须无条件写一份
+    let first_save = project.state.is_pending();
     // 第一步：克隆出来但未落盘的项目，先建 root 目录 + 让 schema 一并落地
-    if project.state.is_pending() {
+    if first_save {
         if let Err(e) = std::fs::create_dir_all(&project.project_root) {
             eprintln!("warn: create project root failed: {} ({})", project.project_root.display(), e);
             return (0, 0, Vec::new());
         }
         project.state = crate::model::ProjectState::Loaded;
-        project.schema_dirty = true;
 
         // 未落盘项目首次保存时，根据当前 project_root 重新推演所有路径
         // （应对"项目设置"修改 id 的场景：id 改了、project_root 更新了，但子节点路径还是旧的）
@@ -285,14 +286,15 @@ fn save_project_files(project: &mut Project) -> (usize, usize, Vec<String>) {
             ),
         }
     }
-    if project.schema_dirty {
-        sync_schema_from_groups(project);
+    // schema 文件只在**真的会不一样**时才写：改一个格子的值不该动它。
+    if first_save || project.schema_changed() {
+        project.resync_schema();
         let txt = crate::tblschema::serialize_tblschema(&project.schema);
         let path = project.project_root.join(crate::project::PROJECT_SCHEMA_FILE);
         if std::fs::write(&path, txt).is_ok() {
             // 落盘后「盘上是什么」才追上内存
-            project.original_schema = project.schema.clone();
-            project.schema_dirty = false;
+            project.original_meta = project.schema.meta.clone();
+            project.original_separators = project.schema.separators.clone();
             count += 1;
         }
     }
@@ -746,7 +748,7 @@ impl ProjectEngine {
     }
 
     /// 内存模式创建新 Project：与 clone_project_in_memory 行为对齐。
-    /// - 不立即落盘；state=Pending、schema_dirty=true
+    /// - 不立即落盘；state=Pending
     /// - sections 展开为 group.is_new=true、节点 original="" → 树面板 `+` 标记
     /// - config 借用现有任意 opened project 的 ProjectConfig，否则用默认 fallback
     /// - 同时加进 available_projects（未保存前目录还不存在，但 UI 树要展示）
@@ -778,9 +780,9 @@ impl ProjectEngine {
             config,
             schema: schema.clone(),
             // 还没落盘 → 「盘上」是空的
-            original_schema: crate::tblschema::TblSchema::default(),
+            original_meta: crate::tblschema::SchemaMetadata::default(),
+            original_separators: Default::default(),
             groups: Vec::new(),
-            schema_dirty: true,
             state: crate::model::ProjectState::Pending,
         };
 
@@ -817,7 +819,7 @@ impl ProjectEngine {
     }
 
     /// 内存深拷贝克隆：把 source_project_id 的当前状态（含未保存改动）整体复制为新 project，
-    /// 加进 self.projects 但**不立即落盘**（state=Pending，schema_dirty=true，
+    /// 加进 self.projects 但**不立即落盘**（state=Pending，
     /// 全部 group is_new=true，所有节点 dirty=true / original=""）。用户保存时才会落盘。
     /// - source 必须是 opened（在 self.projects 里）
     /// - 同时把新 project 加进 available_projects（未保存前目录还不存在，但 UI 树要展示）
@@ -845,9 +847,9 @@ impl ProjectEngine {
         new_project.schema.meta.created_at =
             chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
         // source_template* 沿用源（克隆来源最早还是那个 template）
-        new_project.schema_dirty = true;
         // 克隆体的「盘上」是空的，不能继承源项目盘上的那份
-        new_project.original_schema = crate::tblschema::TblSchema::default();
+        new_project.original_meta = crate::tblschema::SchemaMetadata::default();
+        new_project.original_separators = Default::default();
         new_project.state = crate::model::ProjectState::Pending;
 
         let new_data_dir = new_project.data_dir();
@@ -1641,29 +1643,12 @@ impl ProjectEngine {
     /// 当前 active Project 是否有未保存改动；`is_dirty_any` 跨全部 Project。
     /// 全部关闭时返回 false。
     pub fn is_dirty(&self) -> bool {
-        let Some(p) = self.active() else { return false; };
-        if p.state.is_pending() || p.schema_dirty { return true; }
-        for g in &p.groups {
-            if g.is_new { return true; }
-            for t in &g.tables { if t.dirty || t.deleted { return true; } }
-            for c in &g.constants { if c.dirty || c.deleted { return true; } }
-            for e in &g.enums { if e.dirty || e.deleted { return true; } }
-        }
-        false
+        self.active().is_some_and(|p| p.is_dirty())
     }
 
     /// 任一 Project 有未保存改动。退出工具 / 全保存判空用。
     pub fn is_dirty_any(&self) -> bool {
-        for p in &self.projects {
-            if p.state.is_pending() || p.schema_dirty { return true; }
-            for g in &p.groups {
-                if g.is_new { return true; }
-                for t in &g.tables { if t.dirty || t.deleted { return true; } }
-                for c in &g.constants { if c.dirty || c.deleted { return true; } }
-                for e in &g.enums { if e.dirty || e.deleted { return true; } }
-            }
-        }
-        false
+        self.projects.iter().any(|p| p.is_dirty())
     }
 
     pub fn delete_group(&mut self, group_name: &str) {
@@ -1956,6 +1941,7 @@ impl ProjectEngine {
                             saved: false,
                             fmt_ver: DEFAULT_TBL_VERSION,
                             display_field: None,
+                            original_display_field: None,
                         });
                         ok = true;
                     }
@@ -2001,6 +1987,7 @@ impl ProjectEngine {
                             deleted: false,
                             original_entries: Vec::new(), saved: false,
                             display_field: None,
+                            original_display_field: None,
                         });
                         ok = true;
                     }
@@ -2011,8 +1998,8 @@ impl ProjectEngine {
                 }
             }
             ProjectAction::RenameGroup { project_id, old_name, new_name } => {
-                // 重命名弹窗预填当前名，直接回车 = 没改名。放过它——否则会白标一次
-                // schema_dirty（树上凭空多一个 🟡），盘上还做一次 A → A 的空 rename。
+                // 重命名弹窗预填当前名，直接回车 = 没改名。放过它，免得盘上做一次
+                // A → A 的空 rename、日志里多一条假改名。
                 if old_name == new_name { return; }
                 let pid = project_id.clone();
                 if let Some(project) = self.find_project_mut(&pid) {
@@ -2148,18 +2135,10 @@ impl ProjectEngine {
     }
 
     /// 该 Project 是否有未保存改动。
+    /// 内存模式新建 / 克隆出来的项目：root 还没落盘 → 一定 dirty，即便 groups 为空
+    /// 也算（空项目也不能"关掉就没了"）。`Project::is_dirty` 里已经含这条。
     pub fn is_project_dirty(&self, project_id: &str) -> bool {
-        let Some(project) = self.find_project(project_id) else { return false; };
-        // 内存模式新建 / 克隆出来的项目：root 还没落盘 / schema 还没落盘 → 一定 dirty。
-        // 即便 groups 为空也算（空 Empty 项目也不能"关掉就没了"）
-        if project.state.is_pending() || project.schema_dirty { return true; }
-        for g in &project.groups {
-            if g.is_new { return true; }
-            for t in &g.tables { if t.dirty || t.deleted { return true; } }
-            for c in &g.constants { if c.dirty || c.deleted { return true; } }
-            for e in &g.enums { if e.dirty || e.deleted { return true; } }
-        }
-        false
+        self.find_project(project_id).is_some_and(|p| p.is_dirty())
     }
 
     /// 校验 rename project 时新 id 合法性。返回 None 表示通过。
@@ -2446,9 +2425,9 @@ mod project_toml_template_tests {
             project_root,
             config,
             schema,
-            original_schema: crate::tblschema::TblSchema::default(),
+            original_meta: crate::tblschema::SchemaMetadata::default(),
+            original_separators: Default::default(),
             groups: Vec::new(),
-            schema_dirty: true,
             state: crate::model::ProjectState::Pending,
         }
     }
@@ -2522,6 +2501,7 @@ mod project_toml_template_tests {
                 original_records: Vec::new(), original_fields: Vec::new(),
                 saved: false, fmt_ver: crate::tbl::DEFAULT_TBL_VERSION,
                 display_field: Some("name".to_string()),
+                original_display_field: None,
             }],
             constants: Vec::new(),
             enums: vec![EnumDef {
@@ -2532,6 +2512,7 @@ mod project_toml_template_tests {
                 dirty: true, deleted: false,
                 original_entries: Vec::new(), saved: false,
                 display_field: Some("desc".to_string()),
+                original_display_field: None,
             }],
             is_new: true,
         });
@@ -2545,6 +2526,11 @@ mod project_toml_template_tests {
         let (engine, _) = crate::project::load_workspace(&dir).expect("reload");
         assert_eq!(engine.find_table("g", "T").expect("table").display_field.as_deref(), Some("name"));
         assert_eq!(engine.find_enum("g", "E").expect("enum").display_field.as_deref(), Some("desc"));
+        // 回填必须连 `original_display_field` 一起填：它是"从盘上读回来的"值。
+        // 只填 display_field 的话，刚加载的项目就显示"改过"、永远亮 🟡。
+        let p = engine.find_project("p1").expect("project");
+        assert!(!p.is_dirty(), "刚加载的项目不该有任何未落盘的改动");
+        assert!(!p.schema_changed(), "……schema 更不该");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -2564,7 +2550,6 @@ mod project_toml_template_tests {
             let p = engine.find_project_mut("p1").unwrap();
             p.schema.meta.id = "p2".to_string();
             p.schema.meta.name = "新名字".to_string();
-            p.schema_dirty = true;
         }
 
         // 内存中身份已更新
@@ -2572,7 +2557,7 @@ mod project_toml_template_tests {
         assert_eq!(p.schema.meta.id, "p2");
         assert_eq!(p.schema.meta.name, "新名字");
         assert!(p.state.is_pending(), "仍未落盘");
-        assert!(p.schema_dirty, "schema 标记为 dirty，等 save 落盘");
+        assert!(p.schema_changed(), "meta 变了 → schema 与盘上不一致");
         // 磁盘上不应有任何文件（目录都没建）
         assert!(!project_root.exists(), "旧目录不该被创建");
         assert!(!dir.join("projects").join("p2").exists(), "新目录不该被创建");
@@ -2593,7 +2578,7 @@ mod project_toml_template_tests {
 
     /// 造一份「已经落过盘」的项目：内存建 → `save` → **从盘上重新 load**。
     ///
-    /// 刻意手搓 `original_name` / `saved` / `original_schema` 是不行的——那等于
+    /// 刻意手搓 `original_name` / `saved` / `original_meta` 是不行的——那等于
     /// 我自己给自己出题。走一遍真实链路顺带把一件事钉住：`resync_schema()` 从
     /// groups 重建出来的 schema 必须**等于**从 `project.tblschema` 解析出来的，
     /// 否则每个项目一打开就永远亮着 🟡。
@@ -2616,6 +2601,7 @@ mod project_toml_template_tests {
                 dirty: true, deleted: false,
                 original_records: Vec::new(), original_fields: Vec::new(),
                 saved: false, fmt_ver: crate::tbl::DEFAULT_TBL_VERSION, display_field: None,
+            original_display_field: None,
             }],
             constants: vec![], enums: vec![], is_new: true,
         });
@@ -2624,7 +2610,8 @@ mod project_toml_template_tests {
         // load_specific_project 要求工作区根有 tablet.toml（全部字段都能缺省）
         std::fs::write(dir.join(crate::CONFIG_FILE), "").unwrap();
         let loaded = crate::project::load_specific_project(&dir, "p1").expect("重新加载");
-        assert!(!loaded.schema_dirty, "刚加载的项目不该是脏的");
+        assert!(!loaded.is_dirty(), "刚加载的项目不该有任何未落盘的改动");
+        assert!(!loaded.schema_changed(), "……schema 更不该");
         (dir, ProjectEngine::new(loaded, GlobalConfig::default()))
     }
 
@@ -2724,6 +2711,7 @@ mod project_toml_template_tests {
                 dirty: true, deleted: false,
                 original_records: Vec::new(), original_fields: Vec::new(),
                 saved: false, fmt_ver: crate::tbl::DEFAULT_TBL_VERSION, display_field: None,
+            original_display_field: None,
             }],
             constants: vec![], enums: vec![], is_new: true,
         });
@@ -2782,12 +2770,12 @@ mod project_toml_template_tests {
         };
 
         rename(&mut engine, "HeroBase", "HeroMain");
-        assert!(engine.find_project(&pid).unwrap().schema_dirty,
+        assert!(engine.find_project(&pid).unwrap().schema_changed(),
             "真改了名，schema 与盘上不一致 → 该脏");
         assert!(engine.is_project_dirty(&pid), "项目此时应亮 🟡");
 
         rename(&mut engine, "HeroMain", "HeroBase");
-        assert!(!engine.find_project(&pid).unwrap().schema_dirty,
+        assert!(!engine.find_project(&pid).unwrap().schema_changed(),
             "改回原名后 schema 与盘上一致，不该还标脏");
         assert!(!engine.find_table("hero", "HeroBase").unwrap().dirty,
             "节点同样应回到干净");
@@ -2832,6 +2820,7 @@ mod project_toml_template_tests {
             dirty: true, deleted: false,
             original_records: Vec::new(), original_fields: Vec::new(),
             saved: false, fmt_ver: crate::tbl::DEFAULT_TBL_VERSION, display_field: None,
+            original_display_field: None,
         };
         let mut project = make_project(dir.clone(), project_root, "p1");
         project.groups.push(Group {
@@ -2874,6 +2863,57 @@ mod project_toml_template_tests {
         let gdir = config_dir(&dir).join("hero");
         assert!(gdir.join("HeroMain.tbl").is_file(), "改名应已落盘");
         assert!(!gdir.join("HeroBase.tbl").exists(), "旧文件应已搬走");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ── 分层的脏：每层只回答"我和盘上一致吗"，UI 往上投影 ──────────
+
+    #[test]
+    fn a_data_edit_dirties_the_node_but_not_the_schema() {
+        // 分层的关键一条。父层如果直接 OR 子节点的 `dirty`，那么**每次单元格编辑**
+        // 都会把 project.tblschema 标成需要重写——改一个格子的值根本不动 schema。
+        let (dir, mut engine) = engine_with_saved_node("schema_layer", "hero", "HeroBase");
+        let pid = engine.active_project_id().unwrap().to_string();
+        assert!(!engine.find_project(&pid).unwrap().schema_changed(), "起点应当干净");
+
+        engine.set_table_cell("hero", "HeroBase", 0, 0, "42");
+
+        let p = engine.find_project(&pid).unwrap();
+        assert!(p.is_dirty(), "数据改了 → 这个项目有东西要写盘");
+        assert!(!p.schema_changed(), "但 project.tblschema 一个字都不用动");
+        assert!(engine.find_table("hero", "HeroBase").unwrap().dirty, "该表自己要写盘");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn display_field_is_part_of_the_schema_and_reverting_it_clears_it() {
+        // `# @display` 写在 project.tblschema 里，所以它必须进 `schema_changed()`；
+        // 而它没有 records 那种自然快照，靠 `original_display_field`。
+        let (dir, mut engine) = engine_with_saved_node("schema_display", "hero", "HeroBase");
+        let pid = engine.active_project_id().unwrap().to_string();
+
+        engine.find_table_mut("hero", "HeroBase").unwrap().display_field = Some("id".into());
+        assert!(engine.find_project(&pid).unwrap().schema_changed(), "改了 # @display → schema 要写");
+
+        engine.find_table_mut("hero", "HeroBase").unwrap().display_field = None;
+        assert!(!engine.find_project(&pid).unwrap().schema_changed(), "改回默认 → 回到干净");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn deleting_a_saved_node_is_a_schema_change() {
+        // 被删掉的段要从 project.tblschema 里消失，所以删除也是 schema 变更。
+        // 而"新建了又没保存就删掉"的节点盘上从来没有过，不该算。
+        let (dir, mut engine) = engine_with_saved_node("schema_delete", "hero", "HeroBase");
+        let pid = engine.active_project_id().unwrap().to_string();
+
+        engine.delete_node("hero", "HeroBase");
+        assert!(engine.find_project(&pid).unwrap().schema_changed(),
+            "删掉落过盘的节点 → schema 里那一段要消失");
+        assert!(engine.find_project(&pid).unwrap().is_dirty(), "save 要 remove 文件");
 
         let _ = std::fs::remove_dir_all(&dir);
     }

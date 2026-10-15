@@ -698,6 +698,7 @@ mod tests {
             deleted: false,
             original_entries: Vec::new(), saved: true,
             display_field: None,
+            original_display_field: None,
         };
         let out = gen_enum_header(&e, "game::config", false);
         assert!(out.contains("namespace game::config"));

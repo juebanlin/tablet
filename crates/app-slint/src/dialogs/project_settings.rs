@@ -1,6 +1,7 @@
 ﻿// 项目设置对话框：身份（id/name/category/version）+ 分隔符（25 leaves）2 tab。
 //
-// 所有改动只更新内存，标记 schema_dirty=true，等"保存项目"才写盘。
+// 所有改动只更新内存，等"保存项目"才写盘。脏不需要在这里标：meta / separators
+// 都由 `Project::schema_changed()` 跟盘上快照对比得出（@02.26.2）。
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -710,9 +711,8 @@ fn run(state: &Rc<RefCell<AppState>>) {
                 p.config.export = export.clone();
                 has_changes = true;
             }
-            if has_changes {
-                p.schema_dirty = true;
-            }
+            // meta / separators 的改动不用在这里标脏：`Project::schema_changed()`
+            // 拿它们跟自己上次落盘的快照比，改回去会自动回到干净。
         }
     }
 

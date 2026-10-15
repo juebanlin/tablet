@@ -110,12 +110,14 @@ pub fn build_tree_nodes(state: &mut AppState) -> Vec<TreeNode> {
         // 项目根节点 marker 聚合
         let project_obj = state.engine.find_project(pid);
         let root_pending = project_obj.map(|p| p.state.is_pending()).unwrap_or(false);
-        let schema_dirty = project_obj.map(|p| p.schema_dirty).unwrap_or(false);
+        let own_changed = project_obj.map(|p| p.schema_changed()).unwrap_or(false);
         let mut all_deleted_self = false;
         let mut all_deleted = true;
-        // 项目级"新建未落盘"算 has_new；项目级 schema_dirty（且 root 已落盘 → 仅 meta/structure 改）算 has_dirty。
+        // 项目级"新建未落盘"算 has_new；项目级 schema 变了（且 root 已落盘 → 仅 meta/结构改）算 has_dirty。
         // 这两条让空项目（无 group）也能正确显示 🟢/🟡。
-        let mut has_dirty = schema_dirty && !root_pending;
+        // 注意 own_changed 已经含了子节点的结构变化（`Group::schema_changed` 聚合上来），
+        // 下面那轮 OR 的是"只改了数据"的部分——两者合起来就是 `Project::is_dirty()`。
+        let mut has_dirty = own_changed && !root_pending;
         let mut has_new = root_pending;
         for g in &groups {
             if !g.tables.is_empty() || !g.constants.is_empty() || !g.enums.is_empty() {

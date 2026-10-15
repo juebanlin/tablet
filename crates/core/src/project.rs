@@ -149,10 +149,10 @@ fn load_specific_project_impl(
         project_root: project_root.to_path_buf(),
         config,
         // 刚从盘上读进来，盘上的就是它自己
-        original_schema: schema.clone(),
+        original_meta: schema.meta.clone(),
+        original_separators: schema.separators.clone(),
         schema,
         groups,
-        schema_dirty: false,
         state: crate::model::ProjectState::Loaded,
     })
 }
