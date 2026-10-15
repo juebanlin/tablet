@@ -83,7 +83,7 @@ fn run(state: &Rc<RefCell<AppState>>) {
     if let Some(p) = st.engine.find_project_mut(&new_id) {
         p.schema.meta.category = category;
         p.schema.meta.version = version;
-        p.schema_dirty = true;
+        p.resync_schema();
     }
     st.engine.ui_log(format!(
         "[复制项目] 已创建 {}（内存中，需保存才落地）",

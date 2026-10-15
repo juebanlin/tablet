@@ -92,7 +92,9 @@ fn set_selected_display_field(state: &Rc<RefCell<AppState>>, value: &str) {
         _ => return,
     }
     if let Some(p) = st.engine.active_mut() {
-        p.schema_dirty = true;
+        // `# @display` 住在 project.tblschema 里 → 走重算，不是置 true：
+        // 选过去又选回来（或选回默认的 name）应当自动回到干净。
+        p.resync_schema();
     }
     st.engine.ui_log(format!("[被引用展示列] 设为 {}", value));
 }

@@ -38,8 +38,11 @@ pub struct Project {
     /// - `schema.meta.id / name / created_at / source_template* / category / version` = 项目身份
     /// - `schema.sections` = 结构骨架，由 ops 在 group/node 变动时增量同步
     pub schema: TblSchema,
+    /// 上次落盘时的 schema 快照，用于 `resync_schema()` 比对（同 `Table::original_records`）。
+    pub original_schema: TblSchema,
     pub groups: Vec<Group>,
-    /// schema 是否需要写盘：rename / 结构变动时置 true，save 时落 project.tblschema 后清零。
+    /// schema 是否需要写盘。**由 `resync_schema()` 算出来**，不要直接赋值——
+    /// 见 [`Project::resync_schema`]。
     pub schema_dirty: bool,
     /// 项目状态：Loaded（已落盘）或 Pending（待保存）。
     /// save 时 Pending 项目会先 create_dir_all，然后切换为 Loaded。
@@ -60,6 +63,27 @@ impl Project {
     /// 导出根：Project 导出目录 `<project_root>/`（每个 Project 独立 gen/，避免互相覆盖）
     pub fn export_root(&self) -> &std::path::Path {
         self.project_root.as_path()
+    }
+
+    /// 从 `groups` 重推 `schema.sections`，并**重算**（而不是置 true）`schema_dirty`。
+    ///
+    /// 任何改动 `schema` 的操作（新建 / 改名 / 删除 / 拷贝节点、增删列、改表头）
+    /// 之后都要调它，取代过去手工写 `schema_dirty = true` 的做法。
+    ///
+    /// 为什么必须算：`schema_dirty` 的含义是「现在写盘会和盘上不一样吗」，而
+    /// 「来回一趟」是常态——把 HeroBase 改名成 HeroMain、又改回 HeroBase，
+    /// `schema.sections` 与盘上逐字相同，就该回到干净。置 true 的写法撕不掉，
+    /// 项目行的 🟡 会永远留着（改名改回去、节点干净了、项目还脏着）。
+    ///
+    /// 比较用**结构相等**而不是序列化文本：手改过 `project.tblschema`（加注释、
+    /// 调顺序）不该被当成"脏"——真要按文本比，那种项目一打开就永远亮着。
+    pub fn resync_schema(&mut self) {
+        let mut s = crate::tblschema::schema_from_project(&self.groups, false);
+        s.meta = self.schema.meta.clone();
+        s.separators = self.schema.separators.clone();
+        self.schema = s;
+        // 未落盘的项目没有"盘上"可对照，一律算脏
+        self.schema_dirty = self.state.is_pending() || self.schema != self.original_schema;
     }
 }
 

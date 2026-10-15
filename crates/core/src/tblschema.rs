@@ -4,7 +4,7 @@ use crate::model::*;
 use crate::tbl_str;
 use crate::types::SeparatorsSection;
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct SchemaMetadata {
     pub id: String,         // 路径标识：[a-z0-9_-]{1,32}；缺省时由调用方按文件名兜底
     pub name: String,       // 显示文本（含中文）；缺省时 = id
@@ -21,7 +21,7 @@ pub struct SchemaMetadata {
     pub has_preset: bool,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct TblSchema {
     pub meta: SchemaMetadata,
     /// 分隔符配置（25 个叶子键，对齐 `SeparatorsSection`）。
@@ -32,7 +32,7 @@ pub struct TblSchema {
     pub sections: Vec<SchemaSection>,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct SchemaSection {
     pub group: String,
     pub name: String,
@@ -58,7 +58,7 @@ pub enum SchemaMode {
     Enum,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct SchemaField {
     pub name: String,
     pub tbl_type: String,

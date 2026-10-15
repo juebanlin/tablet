@@ -55,13 +55,12 @@ fn dedupe_name<'a, I: IntoIterator<Item = &'a str>>(base: &str, existing: I) -> 
 /// 任何 NewGroup / RenameGroup / DeleteGroup / NewTable / RenameNode / DeleteNode
 /// / paste_node_to / paste_group_to 后都要调一次，保证 save 时 project.tblschema
 /// 与磁盘 .tbl 一致。
+///
+/// `schema_dirty` 由 `Project::resync_schema` **算出来**，不在这里置 true——
+/// 改名改回原名后应当自动回到干净（@02.26.2）。
 fn sync_schema_from_groups(project: &mut Project) {
     // sync 永远不带 preset：project.tblschema 是「结构骨架」，行数据归项目里的 .tbl
-    let mut s = crate::tblschema::schema_from_project(&project.groups, false);
-    s.meta = project.schema.meta.clone();
-    s.separators = project.schema.separators.clone();
-    project.schema = s;
-    project.schema_dirty = true;
+    project.resync_schema();
 }
 
 /// 保存前把「改了名但还没落盘」的组目录 / `.tbl` 文件在盘上搬到位。
@@ -223,6 +222,8 @@ fn save_project_files(project: &mut Project) -> (usize, usize, Vec<String>) {
         let txt = crate::tblschema::serialize_tblschema(&project.schema);
         let path = project.project_root.join(crate::project::PROJECT_SCHEMA_FILE);
         if std::fs::write(&path, txt).is_ok() {
+            // 落盘后「盘上是什么」才追上内存
+            project.original_schema = project.schema.clone();
             project.schema_dirty = false;
             count += 1;
         }
@@ -708,6 +709,8 @@ impl ProjectEngine {
             project_root: project_root.clone(),
             config,
             schema: schema.clone(),
+            // 还没落盘 → 「盘上」是空的
+            original_schema: crate::tblschema::TblSchema::default(),
             groups: Vec::new(),
             schema_dirty: true,
             state: crate::model::ProjectState::Pending,
@@ -775,6 +778,8 @@ impl ProjectEngine {
             chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
         // source_template* 沿用源（克隆来源最早还是那个 template）
         new_project.schema_dirty = true;
+        // 克隆体的「盘上」是空的，不能继承源项目盘上的那份
+        new_project.original_schema = crate::tblschema::TblSchema::default();
         new_project.state = crate::model::ProjectState::Pending;
 
         let new_data_dir = new_project.data_dir();
@@ -1190,7 +1195,7 @@ impl ProjectEngine {
                 t.update_dirty();
             }
         }
-        self.project_mut().schema_dirty = true;
+        self.project_mut().resync_schema();
         if let Some(kw) = keyword_err {
             self.ui_log(format!("字段名 '{}' 是保留关键字，不允许使用", kw));
         }
@@ -1248,7 +1253,7 @@ impl ProjectEngine {
                 t.update_dirty();
             }
         }
-        self.project_mut().schema_dirty = true;
+        self.project_mut().resync_schema();
     }
 
     pub fn delete_column(&mut self, group: &str, name: &str, at: usize) {
@@ -1263,7 +1268,7 @@ impl ProjectEngine {
                 }
             }
         }
-        self.project_mut().schema_dirty = true;
+        self.project_mut().resync_schema();
     }
 
     pub fn paste_table_data(&mut self, group: &str, name: &str, start_row: usize, start_col: usize, grid: &[Vec<String>]) {
@@ -2365,6 +2370,7 @@ mod project_toml_template_tests {
             project_root,
             config,
             schema,
+            original_schema: crate::tblschema::TblSchema::default(),
             groups: Vec::new(),
             schema_dirty: true,
             state: crate::model::ProjectState::Pending,
@@ -2509,43 +2515,41 @@ mod project_toml_template_tests {
         FieldDef { name: "id".into(), desc: "ID".into(), tbl_type: "int".into(), export: Export::ClientServer }
     }
 
-    /// 造一份「已经落过盘」的项目：盘上有 `config/<group>/<node>.tbl`，
-    /// 内存里的 `original_name` / `saved` / `original_records` 都跟盘对得上
-    /// （等价于 load 完之后、什么都没改的状态）。
+    /// 造一份「已经落过盘」的项目：内存建 → `save` → **从盘上重新 load**。
+    ///
+    /// 刻意手搓 `original_name` / `saved` / `original_schema` 是不行的——那等于
+    /// 我自己给自己出题。走一遍真实链路顺带把一件事钉住：`resync_schema()` 从
+    /// groups 重建出来的 schema 必须**等于**从 `project.tblschema` 解析出来的，
+    /// 否则每个项目一打开就永远亮着 🟡。
     fn engine_with_saved_node(label: &str, group: &str, node: &str) -> (PathBuf, ProjectEngine) {
         let dir = unique_tmp(label);
         let project_root = dir.join("projects").join("p1");
         let gdir = project_root.join("config").join(group);
-        std::fs::create_dir_all(&gdir).unwrap();
-        let path = gdir.join(format!("{}.tbl", node));
 
         let mut project = make_project(dir.clone(), project_root, "p1");
-        project.state = crate::model::ProjectState::Loaded;
-        project.schema_dirty = false;
-        let table = Table {
-            name: node.to_string(),
-            original_name: node.to_string(),
-            path: path.clone(),
-            schema: TableSchema { fields: vec![id_field()] },
-            records: vec![vec!["1".into()]],
-            dirty: false, deleted: false,
-            original_records: vec![vec!["1".into()]],
-            original_fields: vec![id_field()],
-            saved: true,
-            fmt_ver: crate::tbl::DEFAULT_TBL_VERSION,
-            display_field: None,
-        };
-        std::fs::write(&path, crate::tbl::serialize_table(&table)).unwrap();
         project.groups.push(Group {
             name: group.to_string(),
             original_name: group.to_string(),
-            dir: gdir,
-            tables: vec![table],
-            constants: vec![],
-            enums: vec![],
-            is_new: false,
+            dir: gdir.clone(),
+            tables: vec![Table {
+                name: node.to_string(),
+                original_name: node.to_string(),
+                path: gdir.join(format!("{}.tbl", node)),
+                schema: TableSchema { fields: vec![id_field()] },
+                records: vec![vec!["1".into()]],
+                dirty: true, deleted: false,
+                original_records: Vec::new(), original_fields: Vec::new(),
+                saved: false, fmt_ver: crate::tbl::DEFAULT_TBL_VERSION, display_field: None,
+            }],
+            constants: vec![], enums: vec![], is_new: true,
         });
-        (dir, ProjectEngine::new(project, GlobalConfig::default()))
+        save_project_files(&mut project);
+
+        // load_specific_project 要求工作区根有 tablet.toml（全部字段都能缺省）
+        std::fs::write(dir.join(crate::CONFIG_FILE), "").unwrap();
+        let loaded = crate::project::load_specific_project(&dir, "p1").expect("重新加载");
+        assert!(!loaded.schema_dirty, "刚加载的项目不该是脏的");
+        (dir, ProjectEngine::new(loaded, GlobalConfig::default()))
     }
 
     fn config_dir(dir: &Path) -> PathBuf {
@@ -2683,6 +2687,38 @@ mod project_toml_template_tests {
         assert!(gdir.join("HeroBase.tbl").is_file(), "旧文件应原地未动");
         assert!(engine.logs().iter().any(|l| l.contains("保留原名")),
             "失败必须报到日志，不能吞: {:?}", engine.logs());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn renaming_back_to_the_original_name_clears_the_project_dirty_mark() {
+        // 改名 A→A1 再改回 A：节点 🟡 会消失（`update_dirty()` 是算的），
+        // 项目 🟡 曾经不会——`schema_dirty` 是贴上就撕不掉的标。
+        // `schema.sections` 此时与盘上逐字相同，就该回到干净。
+        let (dir, mut engine) = engine_with_saved_node("rename_roundtrip", "hero", "HeroBase");
+        let pid = engine.active_project_id().unwrap().to_string();
+        let rename = |engine: &mut ProjectEngine, old: &str, new: &str| {
+            engine.execute_action(&ProjectAction::RenameNode {
+                project_id: pid.clone(), group: "hero".into(),
+                old_name: old.into(), new_name: new.into(),
+            });
+        };
+
+        rename(&mut engine, "HeroBase", "HeroMain");
+        assert!(engine.find_project(&pid).unwrap().schema_dirty,
+            "真改了名，schema 与盘上不一致 → 该脏");
+        assert!(engine.is_project_dirty(&pid), "项目此时应亮 🟡");
+
+        rename(&mut engine, "HeroMain", "HeroBase");
+        assert!(!engine.find_project(&pid).unwrap().schema_dirty,
+            "改回原名后 schema 与盘上一致，不该还标脏");
+        assert!(!engine.find_table("hero", "HeroBase").unwrap().dirty,
+            "节点同样应回到干净");
+        assert!(!engine.is_project_dirty(&pid), "整个项目不该再显示 🟡");
+
+        // 全程盘上一步没动
+        assert!(config_dir(&dir).join("hero").join("HeroBase.tbl").is_file());
 
         let _ = std::fs::remove_dir_all(&dir);
     }

@@ -148,6 +148,8 @@ fn load_specific_project_impl(
         workdir: workdir.to_path_buf(),
         project_root: project_root.to_path_buf(),
         config,
+        // 刚从盘上读进来，盘上的就是它自己
+        original_schema: schema.clone(),
         schema,
         groups,
         schema_dirty: false,
