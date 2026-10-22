@@ -292,10 +292,17 @@ fn save_project_files(project: &mut Project) -> (usize, usize, Vec<String>) {
         }
     }
     // schema 文件只在**真的会不一样**时才写：改一个格子的值不该动它。
-    if first_save || project.schema_changed() {
-        project.resync_schema();
-        let txt = crate::tblschema::serialize_tblschema(&project.schema);
-        let path = project.project_root.join(crate::project::PROJECT_SCHEMA_FILE);
+    //
+    // **判据是「和盘上的字不一样」，不是内存里的脏标。** `schema.sections` 是 groups 的
+    // 投影，手改 `.tbl`（加一列 / 加一条）不会让任何 `original_*` 变化，于是
+    // `schema_changed()` 为假 —— 旧代码就此跳过，`project.tblschema` 永远停在上一次
+    // 结构变更时的样子。CLI 的工作流正是「改 .tbl → workspace save」，那条路必须把投影
+    // 刷新掉，否则下一个 `project new --from-file` / `util scaffold` 拿到的还是旧结构。
+    project.resync_schema();
+    let txt = crate::tblschema::serialize_tblschema(&project.schema);
+    let path = project.project_root.join(crate::project::PROJECT_SCHEMA_FILE);
+    let on_disk = std::fs::read_to_string(&path).ok();
+    if first_save || project.schema_changed() || on_disk.as_deref() != Some(txt.as_str()) {
         if std::fs::write(&path, txt).is_ok() {
             // 落盘后「盘上是什么」才追上内存
             project.original_meta = project.schema.meta.clone();
@@ -305,10 +312,20 @@ fn save_project_files(project: &mut Project) -> (usize, usize, Vec<String>) {
     }
     // 改名先落位（盘上搬完），再走下面的写入循环——两边都靠 original_name 对齐
     let warnings = apply_pending_renames(project);
+    // 「节点被删光」的组要在盘上和内存里都消失；**「本来就是空的新组」不能跟着殉葬**。
+    // 两者在写入循环结束时看起来一样（三个 vec 都空），所以先记下它本来有没有节点。
+    // CLI 是每条命令一个进程：`schema add-group` 保存后若把空组删掉，下一条
+    // `schema add-table --group <新组>` 就查无此组 —— 这条链必须能跨进程走通。
+    let mut emptied: Vec<String> = Vec::new();
     for group in &mut project.groups {
+        // 「本来就有节点」（哪怕此刻已被标删）才可能在这次保存里变成"删空"。
+        // 用 `!is_empty()` 而不是 `any(!deleted)`：`delete_group` 是先给所有节点打
+        // `deleted` 再保存的，用后者会把"刚删光"误判成"本来就是空"。
+        let had_any_nodes = !group.tables.is_empty()
+            || !group.constants.is_empty()
+            || !group.enums.is_empty();
         if group.is_new {
             let _ = std::fs::create_dir_all(&group.dir);
-            group.is_new = false;
         }
         for table in &mut group.tables {
             if table.deleted {
@@ -366,11 +383,17 @@ fn save_project_files(project: &mut Project) -> (usize, usize, Vec<String>) {
         group.tables.retain(|t| !t.deleted);
         group.constants.retain(|c| !c.deleted);
         group.enums.retain(|e| !e.deleted);
-        if group.tables.is_empty() && group.constants.is_empty() && group.enums.is_empty() && !group.is_new && group.dir.is_dir() {
-            let _ = std::fs::remove_dir_all(&group.dir);
+        let now_empty = group.tables.is_empty() && group.constants.is_empty() && group.enums.is_empty();
+        if had_any_nodes && now_empty {
+            // 是"删空"不是"本来就空"：盘上目录和内存里的组一起去掉
+            if group.dir.is_dir() {
+                let _ = std::fs::remove_dir_all(&group.dir);
+            }
+            emptied.push(group.name.clone());
         }
+        group.is_new = false;
     }
-    project.groups.retain(|g| !g.tables.is_empty() || !g.constants.is_empty() || !g.enums.is_empty());
+    project.groups.retain(|g| !emptied.contains(&g.name));
     (count, deleted, warnings)
 }
 
@@ -2705,6 +2728,69 @@ package = \"com.user.kept\"
         assert!(gdir.join("HeroMain.tbl").is_file(), "保存后新文件应就位");
         assert_eq!(engine.find_table("hero", "HeroMain").unwrap().original_name, "HeroMain");
 
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 手改 `.tbl`（加一列）后 `save`，`project.tblschema` 必须跟着刷新。
+    ///
+    /// `schema.sections` 是 groups 的投影，手改数据文件不会让任何 `original_*` 变化 ——
+    /// 旧代码只看内存脏标，于是**永远**跳过这次写入，投影停在上一次结构变更时的样子。
+    /// CLI 的工作流正是「改 .tbl → workspace save → 下一次以 schema 为准的操作」。
+    #[test]
+    fn saving_refreshes_a_schema_projection_left_stale_by_a_hand_edited_tbl() {
+        let (dir, _engine) = engine_with_saved_node("stale_proj", "hero", "HeroBase");
+        let tbl = config_dir(&dir).join("hero").join("HeroBase.tbl");
+        // 手写一份多一列的 .tbl：v3 自描述，字段定义就在文件里
+        std::fs::write(&tbl, "#!tbl v3\n#mode table\n---\n\n\
+@field id\n  desc:ID\n  export:cs\n  type:int\n\n\
+@field hp\n  desc:血量\n  export:cs\n  type:int\n\n\
+[1]\n  hp:10\n").unwrap();
+
+        // 重新加载：内存与盘一致，**不脏**
+        let loaded = crate::project::load_specific_project(&dir, "p1").expect("reload");
+        assert!(!loaded.schema_changed(), "刚加载的项目不该显示为改过");
+        let mut engine = ProjectEngine::new(loaded, GlobalConfig::default());
+
+        assert!(engine.save_all());
+
+        let schema = std::fs::read_to_string(
+            dir.join("projects/p1").join(crate::project::PROJECT_SCHEMA_FILE)).unwrap();
+        assert!(schema.contains("hp | int | cs | 血量"),
+            "save 没刷新投影:\n{}", schema);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 新建的空 Group 要能落盘活下来。
+    ///
+    /// 以前的清理逻辑是「三个 vec 都空 → 删目录 + 从内存移除」。CLI 每条命令一个进程，
+    /// 于是 `schema add-group` 保存后空组当场消失，下一条 `schema add-table
+    /// --group <新组>` 就查无此组（而且以前还会报"已添加 Table"）。
+    #[test]
+    fn a_new_empty_group_survives_save() {
+        let (dir, mut engine) = engine_with_saved_node("empty_group", "hero", "A");
+        let pid = engine.active_project_id().unwrap().to_string();
+        engine.execute_action(&ProjectAction::NewGroup {
+            project_id: pid, name: "fresh".into(),
+        });
+        assert!(engine.save_all(), "空组不该让保存失败");
+
+        assert!(config_dir(&dir).join("fresh").is_dir(), "空组目录应已创建");
+        let loaded = crate::project::load_specific_project(&dir, "p1").expect("reload");
+        assert!(loaded.groups.iter().any(|g| g.name == "fresh"),
+            "重新加载后空组应还在: {:?}", loaded.groups.iter().map(|g| &g.name).collect::<Vec<_>>());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 反过来：节点被删光的组要连目录一起消失，否则下次加载又冒出来一个空组。
+    #[test]
+    fn deleting_every_node_removes_the_group_directory() {
+        let (dir, mut engine) = engine_with_saved_node("del_all", "hero", "A");
+        engine.delete_group("hero");
+        assert!(engine.save_all());
+        assert!(!config_dir(&dir).join("hero").exists(), "删空的组目录应被清掉");
+        let loaded = crate::project::load_specific_project(&dir, "p1").expect("reload");
+        assert!(loaded.groups.is_empty(), "重新加载后不该再出现: {:?}",
+            loaded.groups.iter().map(|g| &g.name).collect::<Vec<_>>());
         let _ = std::fs::remove_dir_all(&dir);
     }
 
