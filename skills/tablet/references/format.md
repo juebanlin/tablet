@@ -221,7 +221,34 @@ max_level|int|100|cs|等级上限
 
 ---
 
-## 三、项目目录
+## 三、Xlsx 组（工作簿形态）
+
+一个组可以不用 `.tbl` 目录，而是**一个 `<group>.xlsx`**：sheet 名 = 节点名，数据在 sheet 里，
+**结构（字段 / 类型 / export / 顺序）仍在 `project.tblschema` 的 section**。表头是派生显示。
+
+```text
+Table sheet（4 行表头，数据从第 5 行起）
+  A1: <desc>   A2: 前后端   A3: int   A4: id      A5: 1001
+  B1: <desc>   B2: 前后端   B3: str   B4: name    B5: 亚瑟
+```
+
+```text
+Constant sheet（1 行表头）
+  name | type | value | export | desc
+```
+```text
+Enum sheet（1 行表头）
+  id | name | desc
+```
+
+- 字段按**表头里的字段名**对齐（策划可以在中间插私有列，工具不碰）；
+- schema 有 section、workbook 没有同名 sheet → 项目打不开；workbook 多出来的 sheet → 忽略；
+- sheet 名 ≤31 字符，且不能含 `\ / ? * [ ] :`；
+- **不要手写这个文件**：二进制、且要保留样式。用 GUI / Excel / CLI 的 schema 命令。
+
+---
+
+## 四、项目目录
 
 ```text
 <workdir>/
@@ -229,7 +256,8 @@ max_level|int|100|cs|等级上限
 └── projects/<id>/
     ├── project.tblschema            结构投影（由 .tbl 生成）
     ├── project.toml                 可选的 [export] 覆盖
-    ├── config/<group>/<Name>.tbl    数据与结构真相源
+    ├── config/<group>/<Name>.tbl    Tbl 组：数据与结构真相源
+    ├── config/<group>/<group>.xlsx  Xlsx 组：数据真相源（结构在 project.tblschema）
     ├── gen/                         导出默认落点
     └── .tbl-cache/                  Excel 桥接临时文件
 ```

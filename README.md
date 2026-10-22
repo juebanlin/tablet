@@ -4,6 +4,7 @@
 
 - **`tablet`**（GUI）：Slint 写的桌面端，零参数 / `--gui` 走 GUI；其它参数转 CLI fallback
 - **`tablet-cli`**：纯命令行工具，Jenkins / 自动化批处理用
+- 组有两种存储后端：默认 `.tbl` 目录（文本、可 diff），也可以是一个 `.xlsx` 工作簿（节点 = sheet，用于接管存量 Excel，见 docs/02 §26.8）
 
 ## v1.2.3 重大改进
 
@@ -27,7 +28,7 @@
 - **左侧 TreeSection** —— 多 Project 树根管理：
   - 项目列表区：新建项目（模板 / 文件 / 空白三 tab） + 排序模式下拉（ID / Name / 创建时间 / 手工拖拽）
   - 搜索框支持名称 + 拼音首字母匹配；过滤下拉按状态筛（全部 / 改动 / 新增 / 修改 / 删除）
-  - 节点三层：Project（🏠）→ Group（📁）→ Table（📊）/ Constant（📋）/ Enum（🔤）
+  - 节点三层：Project（📦）→ Group（📁 `.tbl` 组 / 📗 工作簿组）→ Table（📊）/ Constant（📋）/ Enum（🔢）
   - 状态 chip：`+` 新增（绿） / `*` 修改（黄） / `-` 删除（红） / `!` 验证错（红）
 - **中间 GridSection** —— Excel 风格表格编辑：
   - GridRibbon：`Excel 编辑`（调起外部 Excel/WPS/LibreOffice）+ 显示引用名称总闸 + 被引用展示列下拉（@10）
@@ -45,11 +46,11 @@
   - 「文件」：导入本地 `.tblschema` 文件骨架
   - 「空白」：从零起项目
 - **TreeSection 右键菜单**（按节点类型分流）：
-  - **Project**（已打开）：保存 / 导出（多语言代码 + 数据）/ 导出 Schema / 导出为本地模板 / 合并 Schema / 新建 Group / 复制（克隆）/ 项目设置（身份/分隔符/导出配置）/ 关闭 / 删除 / 在文件管理器打开
+  - **Project**（已打开）：保存 / 导出（多语言代码 + 数据）/ 导出 Schema / 导出为本地模板 / 合并 Schema / 新建 Group / 新建 Excel Group / 复制（克隆）/ 粘贴为 .tbl Group / 粘贴为 Excel Group / 项目设置（身份/分隔符/导出配置）/ 关闭 / 删除 / 在文件管理器打开
   - **Project**（未打开）：打开 / 项目设置 / 在文件管理器打开 / 删除
-  - **Group**：新建 Table / 新建 Constant / 新建 Enum / 用 Excel 打开（整组多 sheet xlsx）/ 复制 Group（含全部内容）/ 粘贴节点 / 粘贴 Group / 重命名 / 删除
+  - **Group**：新建 Table / 新建 Constant / 新建 Enum / 用 Excel 打开（`.tbl` 组走临时本；工作簿组直接开原文件）/ 复制 Group（含全部内容）/ 粘贴节点 / 粘贴为 .tbl Group / 粘贴为 Excel Group / 重命名 / 删除（工作簿组另有「从磁盘重新加载」）
   - **叶节点**（Table / Constant / Enum）：复制 / 粘贴 / 重命名 / 删除
-  - **空白处**：新建 Group
+  - **空白处**：新建 Group / 新建 Excel Group
 - **GridSection 右键菜单**：
   - **列字母**（A/B/C ...）：左侧插入列 / 右侧插入列 / 删除列
   - **行号**（1/2/3 ...）：上方插入行 / 下方插入行 / 删除行
@@ -59,7 +60,8 @@
   - **Excel 同步面板**：底部面板「Excel 文件」tab →「同步」→ 对比 `.excel/*.xlsx` 与内存 group，逐表给同步动作（数据→ / ←数据 / 补列→ / 强制→ / 创建→ / ←导入）
 - **保存与并发**：
   - 延迟写盘——编辑全部在内存，按「保存全部」才落 .tbl 文件
-  - 进程锁 `.tablet.lock` + PID 检查，防多实例并发改同一 workspace
+  - 进程锁 `.tablet.lock` + PID 存活检查：**GUI 与 CLI 互斥**，同一工作区同时只有一个 tablet 进程在操作
+  - 工作簿组另有基线核对：外部 Excel 改过就拒绝保存；干净的组由后台轮询自动重载
   - 树过滤器（全部 / 改动 / 新增 / 修改 / 删除）方便提交前 review
 - **导出**：通过 Project 右键「导出」一次跑全部已配置的目标——12 平台（Java / Go / C++ / C# .NET / Unity / Godot / GDScript / TypeScript / Lua / JSON / XML / xlsx）；导出前自动跑验证，错则中断
 

@@ -27,12 +27,16 @@ allowed-tools:
 |---|---|
 | 从零建一套配置 | 写 `<id>.tblschema`（含 `# @preset` 数据）→ `project new --from-file` |
 | 已有的项目加/改数据 | 直接改 `projects/<id>/config/<group>/<Name>.tbl` → `workspace save` |
+| 数据在 `.xlsx` 里的组（工作簿组） | 见 §五之二：**不要手写 xlsx**，用 GUI / Excel / schema 命令 |
 | 加一个组 / 表 / 常量 / 枚举 | `tablet-cli schema add-*`（会自动校验并落盘） |
 | 只想知道结构 | `tablet-cli schema show --fmt json` |
 | 打包给程序读 | `tablet-cli export all -o <dir>` |
 
-> **真相源**：项目建好之后，每张表的结构与数据以 `.tbl` 为准；`project.tblschema` 是它的**投影**，
-> 在 `workspace save` 或任何写命令落盘时重写。改 `.tblschema` 不会改动已有的 `.tbl`。
+> **真相源**：两种组后端（@02.26.8）——
+> - `.tbl` 组：结构与数据都在各 `.tbl` 里；`project.tblschema` 是投影，保存时重写。
+> - `.xlsx` 组：结构在 `project.tblschema` 的 section，数据在工作簿的 sheet 里。
+>
+> 项目建好之后改 `.tblschema` 不会改动已有的 `.tbl`；`.xlsx` 组反过来，结构以 schema 为准。
 
 ## 二、三步流水线（最常用）
 
@@ -190,6 +194,20 @@ max_level|int|100|cs|等级上限
 改完 `.tbl` 跑一次 `workspace save`，把结构同步进 `project.tblschema`。
 **一个 `.tbl` 写坏了，整个项目会拒绝加载**（不会再静默少一张表）。
 
+## 五之二、Xlsx 组（工作簿组）
+
+有的项目把数据放在 `<group>.xlsx` 里：**一个组一个工作簿，节点 = sheet**。工具把它当普通组用——
+`validate` / `export` / `schema show` 完全一样，导出结果和 `.tbl` 组没有区别。
+
+- **结构仍然在 `project.tblschema`**：字段名 / 类型 / export / 顺序以 section 为准；sheet 只是数据。
+- Table sheet：第 1–4 行是 desc / export / type / 字段名（**派生显示**，改了不生效），第 5 行起是数据。
+- Constant sheet：1 行表头 `name | type | value | export | desc`；Enum：`id | name | desc`。
+- **不要用文本工具手写 `.xlsx`**（二进制）。要改数据：GUI 里编辑、或「用 Excel 打开（原文件）」、
+  或把整组转成 `.tbl`（复制组 → 粘贴为 .tbl Group）。
+- 建组：`schema add-group --name G --storage xlsx`；之后 `add-table` / `add-constant` / `add-enum`
+  自动落成 sheet（节点名 = sheet 名，必须 PascalCase 且 ≤31 字符）。
+- GUI 开着时 CLI 会拒绝执行（工作区锁）；`util` / `list-templates` 除外。
+
 ## 六、CLI 速查
 
 ```bash
@@ -200,7 +218,7 @@ tablet-cli [-w <workdir>] [--project <id>] [--fmt json] <命令>
 |---|---|
 | 看模板 | `list-templates` |
 | 项目 | `project list` / `info` / `new` / `rename` / `delete --confirm` / `clone` |
-| 结构 | `schema show`；`add-group --name G`；`add-table\|add-constant --group G --name N`；`add-enum --group G --name N --entry 1:X:说明` |
+| 结构 | `schema show`；`add-group --name G [--storage tbl\|xlsx]`；`add-table\|add-constant --group G --name N`；`add-enum --group G --name N --entry 1:X:说明` |
 | 改名 / 删除 | `schema rename-group --old A --new B`；`schema rename-node --group G --old A --new B`；`schema delete-group --name G`；`schema delete-node --group G --name N` |
 | 验证 | `validate [--group G] [--node N]` |
 | 导出 | `export data [--json\|--xml] [--group G] [--node N] [-o DIR]`；`export code --java\|--go\|--lua\|--gdscript\|--typescript\|--cpp\|--csharp\|--all [-o DIR]`；`export all [-o DIR]` |

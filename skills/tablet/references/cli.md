@@ -43,7 +43,7 @@ tablet-cli project delete --id <id> --confirm
 ```bash
 tablet-cli schema show [--fmt json]
 
-tablet-cli schema add-group --name <G>
+tablet-cli schema add-group --name <G> [--storage tbl|xlsx]
 tablet-cli schema add-table    --group <G> --name <N>
 tablet-cli schema add-constant --group <G> --name <N>
 tablet-cli schema add-enum     --group <G> --name <N> --entry 1:NAME:说明 [--entry 2:OTHER]
@@ -53,6 +53,12 @@ tablet-cli schema rename-node  --group <G> --old <A> --new <B>
 tablet-cli schema delete-group --name <G>
 tablet-cli schema delete-node  --group <G> --name <N>
 ```
+
+`--storage xlsx` 建的是「工作簿组」：一组一个 `<group>.xlsx`，节点 = sheet，数据落在 Excel 里
+（结构仍由 `project.tblschema` 的 section 决定）。默认 `tbl`。
+
+工作簿组对 `validate` / `export` / `schema show` 完全透明；`util` 系列是文件工具，不识别这种组。
+GUI 开着时 CLI 会被工作区锁拒绝（`util` / `list-templates` 除外）。
 
 所有写命令都是 **校验 → 执行 → 落盘 → 看结果**：
 
@@ -191,3 +197,4 @@ done
 | `保存失败：项目存在 N 个验证错误` | 先 `validate` 定位，再改 `.tbl` |
 | `Project X 打不开: … 解析失败` | 该项目的 `project.tblschema` 或某个 `.tbl` 坏了；`project new` 仍可用 |
 | `--fmt json` 没输出 JSON | 该命令不支持（只有查询类支持） |
+| `工作区正被另一个 GUI 使用（PID xxx）` | GUI 开着时 CLI 拒绝执行；先关 GUI（`util` / `list-templates` 不受限） |

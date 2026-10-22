@@ -428,6 +428,25 @@ CLI 主要由 AI / 脚本驱动：**没有反馈等于没有发生**（@02.26.7�
 3. **凡是对外声称"已添加 / 已重命名 / 已保存"的命令，都必须先看 `save_all()` 的返回值**：
    项目有验证错误时它一个字节都不写。
 
+### 7.5 GUI 与 CLI 互斥
+
+同一个工作区同一时刻只允许一个 tablet 进程操作：GUI 和 CLI 共享同一份
+`projects/<id>/config/`，同时写就是丢更新（临时文件名还会撞车）。
+
+做法是 git `index.lock` 那一套：
+
+- 工作区根下 `.tablet.lock`，内容 `<pid> <kind>`（kind = `gui` / `cli`）；
+- `create_new` 独占创建，谁先谁得；
+- 拿不到锁时读 PID：**活着 → 拒绝**并说明是谁占着；已经死了 → 当残留锁清掉重试；
+- 持有者退出（含 panic 之外的正常路径）时 drop 释放，且只删 PID 对得上的那一把。
+
+适用范围：`util` 与 `list-templates` 不碰工作区状态，不参与互斥；其余命令（含
+只读的 `project list`）都会先拿锁。因此 **GUI 开着时 CLI 会直接失败**，
+报 `工作区正被另一个 GUI 使用（PID xxx）`。
+
+这层锁只管**本工具的进程之间**：Excel 占用由 `~$` 检测（@02.26.8），
+外部改动由基线核对兜底。
+
 ## 8. 子命令
 
 ### 8.1 project — 项目管理
@@ -611,7 +630,13 @@ global/
 ```bash
 tablet-cli schema add-group --name skill
 tablet-cli --project rpg-demo schema add-group --name quest
+
+# 工作簿形态的组（节点 = sheet，数据落在 <group>.xlsx）
+tablet-cli schema add-group --name xg --storage xlsx
 ```
+
+`--storage` 只接受 `tbl`（默认）/ `xlsx`（@02.26.8）。一组一种后端：xlsx 组加节点
+（`add-table` / `add-constant` / `add-enum`）时不会再写 `.tbl`，而是落成工作簿里的 sheet。
 
 #### `schema add-table` / `add-constant` / `add-enum`
 
