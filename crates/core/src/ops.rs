@@ -1812,6 +1812,11 @@ impl ProjectEngine {
     }
 
     pub fn insert_column(&mut self, group: &str, name: &str, at: usize) {
+        // 第 0 列是系统 id 列，不能在它左边插列（UI 已隐藏入口，这里是兜底）。
+        if at == 0 {
+            self.warn_log("id 列左侧不能插入列".to_string());
+            return;
+        }
         if let Some(g) = self.project_mut().groups.iter_mut().find(|g| g.name == group) {
             if let Some(t) = g.tables.iter_mut().find(|t| t.name == name) {
                 let at = at.min(t.schema.fields.len());
@@ -1831,6 +1836,11 @@ impl ProjectEngine {
     }
 
     pub fn delete_column(&mut self, group: &str, name: &str, at: usize) {
+        // id 列不能删：删了表就没有主键了（校验也会拦，但别让它先落进内存）。
+        if at == 0 {
+            self.warn_log("id 列不能删除".to_string());
+            return;
+        }
         if let Some(g) = self.project_mut().groups.iter_mut().find(|g| g.name == group) {
             if let Some(t) = g.tables.iter_mut().find(|t| t.name == name) {
                 if at < t.schema.fields.len() {
@@ -3618,6 +3628,28 @@ package = \"com.user.kept\"
             t.dirty = true;
         }
         assert!(engine.reload_xlsx_group("p1", "xg").is_err(), "脏组不该被重载");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// id 列是系统列：不能删，也不能在它左边插列。
+    #[test]
+    fn the_id_column_cannot_be_deleted_or_shifted() {
+        let (dir, mut engine) = engine_with_saved_node("id_col", "hero", "A");
+
+        engine.insert_column("hero", "A", 0);
+        let t = engine.find_table("hero", "A").unwrap();
+        assert_eq!(t.schema.fields.len(), 1, "id 左侧不该插进来");
+        assert_eq!(t.schema.fields[0].name, "id");
+
+        engine.delete_column("hero", "A", 0);
+        let t = engine.find_table("hero", "A").unwrap();
+        assert_eq!(t.schema.fields.len(), 1, "id 不该被删");
+        assert_eq!(t.schema.fields[0].name, "id");
+
+        // id 右侧可以插
+        engine.insert_column("hero", "A", 1);
+        assert_eq!(engine.find_table("hero", "A").unwrap().schema.fields.len(), 2);
+
         let _ = std::fs::remove_dir_all(&dir);
     }
 

@@ -715,6 +715,7 @@ export component AppWindow inherits Window {
     in property <string> dlg-input-label: "名称:";
     in-out property <string> dlg-input-buffer: "";
     in property <string> dlg-input-error: "";
+    in property <string> dlg-input-hint: "";
     in property <bool> dlg-input-can-confirm: false;
     callback inp-set-input(string);
     callback inp-confirm();
@@ -1431,6 +1432,7 @@ export component AppWindow inherits Window {
         label-text: root.dlg-input-label;
         input-buffer <=> root.dlg-input-buffer;
         error-text: root.dlg-input-error;
+        hint-text: root.dlg-input-hint;
         can-confirm: root.dlg-input-can-confirm;
         set-input(s) => { root.inp-set-input(s); }
         confirm => { root.inp-confirm(); }

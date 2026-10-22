@@ -477,6 +477,22 @@ impl PendingAction {
             _ => "",
         }
     }
+    /// 输入框下方的规则示例。命名规则是硬约束（@01 §8），给个能照着抄的例子
+    /// 比让人记住正则省事；新建和改名都要显示。
+    pub fn name_hint(&self) -> &'static str {
+        match self {
+            // 组名：字母数字下划线 + 中文，不需要 PascalCase
+            PendingAction::NewGroup { .. } | PendingAction::RenameGroup { .. } =>
+                "例：hero；可用中文，如 战斗系统",
+            // 节点名：Java 类名规则（大写开头，英文数字下划线）
+            PendingAction::NewTable { .. }
+            | PendingAction::NewConstant { .. }
+            | PendingAction::NewEnum { .. }
+            | PendingAction::RenameNode { .. } =>
+                "例：HeroBase（大写字母开头，只用英文、数字、下划线）",
+            _ => "",
+        }
+    }
     pub fn confirm_title(&self) -> &'static str {
         match self {
             PendingAction::DeleteGroup { .. } => "确认删除",

@@ -11,6 +11,8 @@ export component InputDialog inherits Rectangle {
     in property <string> label-text: "名称:";
     in-out property <string> input-buffer: "";
     in property <string> error-text: "";
+    /// 输入规则示例（灰色小字，在输入框下方）；空串则不占位
+    in property <string> hint-text: "";
     in property <bool> can-confirm: false;
 
     callback set-input(string);
@@ -24,7 +26,7 @@ export component InputDialog inherits Rectangle {
     DialogChrome {
         title: root.title;
         dialog-w: 360px;
-        dialog-h: 170px;
+        dialog-h: 190px;
         primary-enabled: root.can-confirm;
         primary-clicked => { root.confirm(); }
         cancel-clicked => { root.cancel(); }
@@ -53,6 +55,12 @@ export component InputDialog inherits Rectangle {
                         if (root.can-confirm) { root.confirm(); }
                     }
                 }
+            }
+            if root.hint-text != "": Text {
+                text: root.hint-text;
+                font-size: Theme.fs-tiny;
+                color: Theme.text-secondary;
+                wrap: word-wrap;
             }
             if root.error-text != "": Text {
                 text: root.error-text;

@@ -137,11 +137,19 @@ pub(crate) fn items_for(kind: &CtxMenuKind, state: &AppState) -> Vec<CtxMenuItem
             item("重命名", "tree.rename-node", false),
             item("删除", "tree.delete-node", false),
         ],
-        CtxMenuKind::GridCol { .. } => vec![
-            item("左侧插入列", "grid.col-insert-left", false),
-            item("右侧插入列", "grid.col-insert-right", false),
-            item("删除列", "grid.col-delete", false),
-        ],
+        CtxMenuKind::GridCol { col } => {
+            // 第 0 列是系统 id 列：不能在它左边插列，也不能删它（@01 §5.5）。
+            let is_id = *col == 0;
+            let mut items = Vec::new();
+            if !is_id {
+                items.push(item("左侧插入列", "grid.col-insert-left", false));
+            }
+            items.push(item("右侧插入列", "grid.col-insert-right", false));
+            if !is_id {
+                items.push(item("删除列", "grid.col-delete", false));
+            }
+            items
+        },
         CtxMenuKind::GridRow { .. } => vec![
             item("上方插入行", "grid.row-insert-above", false),
             item("下方插入行", "grid.row-insert-below", false),

@@ -22,6 +22,7 @@ pub fn push_input(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
             ui_h.set_dlg_input_label("名称:".into());
             ui_h.set_dlg_input_buffer(st.pending.input_buffer.clone().into());
             ui_h.set_dlg_input_error(st.pending.error.clone().unwrap_or_default().into());
+            ui_h.set_dlg_input_hint(action.name_hint().into());
             let can_confirm = st.pending.error.is_none() && !st.pending.input_buffer.is_empty();
             ui_h.set_dlg_input_can_confirm(can_confirm);
         }
@@ -29,6 +30,7 @@ pub fn push_input(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
             ui_h.set_dlg_input_open(false);
             ui_h.set_dlg_input_buffer(slint::SharedString::new());
             ui_h.set_dlg_input_error(slint::SharedString::new());
+            ui_h.set_dlg_input_hint(slint::SharedString::new());
             ui_h.set_dlg_input_can_confirm(false);
         }
     }
