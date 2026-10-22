@@ -409,6 +409,25 @@ tablet-cli [全局选项] <命令>
 优先级（从低到高）：内置默认值 → `--config` → `--schema` → `--sep`。
 这是**显式参数之间**的优先级，与项目上下文无关（`util` 子命令不接受 `-w`/`--project`）。
 
+### 7.4 退出码与失败契约
+
+CLI 主要由 AI / 脚本驱动：**没有反馈等于没有发生**（@02.26.7）。
+
+| 退出码 | 含义 |
+|---|---|
+| `0` | 命令完成且结果可信（导出文件已写、改动已落盘） |
+| `1` | 验证不通过 / 参数指向的目标不存在 / 落盘被验证闸门拦下 / 解析失败 / I/O 失败 |
+| `2` | clap 用法错误（缺必填参数、未知选项） |
+
+三条硬约定：
+
+1. **报错走 stderr，机器可读的信息走 stdout**（`--fmt json` 时 stdout 只有 JSON）。
+2. **解析不了的文件直接失败**，不做"跳过这一条继续"：`.tblschema` 坏 → 项目打不开；
+   `.tbl` 坏 → 整个项目打不开（以前只 warn 一行，然后那张表就从项目里消失了）。
+   扫描类命令（`project list`）仍按目录名兜底，但加载闸门会拦下后续所有需要项目上下文的命令。
+3. **凡是对外声称"已添加 / 已重命名 / 已保存"的命令，都必须先看 `save_all()` 的返回值**：
+   项目有验证错误时它一个字节都不写。
+
 ## 8. 子命令
 
 ### 8.1 project — 项目管理
@@ -469,14 +488,15 @@ Project: slg-test (SLG 测试项目)
 
 #### `project new`
 
-从模板创建新 Project。
+从模板或一个 `.tblschema` 文件创建新 Project。
 
 | 参数 | 说明 | 默认 |
 |------|------|------|
-| `--template <id>` | 模板 id（来自 `list-templates`），必填 | — |
+| `--template <id>` | 模板 id（来自 `list-templates`）；与 `--from-file` 二选一 | — |
+| `--from-file <path>` | 直接从一个 `.tblschema` 建项目（`# @preset` 会落成 `.tbl` 数据） | — |
 | `--id <pid>` | Project id，约束 `[a-z0-9_-]{1,32}` | — |
-| `--name <n>` | Project 显示名 | = id |
-| `--switch-after` | 创建后写入 `[project] last_project` | true |
+| `--name <n>` | Project 显示名 | `--from-file` 时取 schema 的 `# @meta name`，否则 = id |
+| `--switch-after <bool>` | 创建后写入 `[project] last_project` | `true` |
 
 ```bash
 # 最小用法
@@ -484,11 +504,16 @@ tablet-cli project new --template slg-base --id slg-2026
 
 # 完整参数
 tablet-cli -w D:/work/game-config project new \
-  --template slg-base --id slg-2026 --name "SLG 2026" --switch-after
+  --template slg-base --id slg-2026 --name "SLG 2026" --switch-after true
+
+# 从 AI 生成的 schema 文件建项目（含预设数据）
+tablet-cli project new --from-file demo.tblschema --id demo
 
 # 不切换活跃项目
-tablet-cli project new --template empty --id temp-test --switch-after false
+tablet-cli project new --from-file demo.tblschema --id temp-test --switch-after false
 ```
+
+> 校验闸门不过（字段名非法、引用不存在、枚举为空……）时**整个项目撤回**，逐条打印原因并 exit 1，不留半成品。
 
 #### `project rename`
 
@@ -593,8 +618,22 @@ tablet-cli --project rpg-demo schema add-group --name quest
 ```bash
 tablet-cli schema add-table --group hero --name HeroLevel
 tablet-cli schema add-constant --group global --name ServerConfig
-tablet-cli schema add-enum --group hero --name HeroRarity
+
+# 枚举条目必须同一条命令给全：空枚举过不了校验，也就落不了盘
+tablet-cli schema add-enum --group hero --name HeroRarity \
+  --entry 1:COMMON:普通 --entry 2:RARE:稀有
 ```
+
+`--entry` 格式 `ID:NAME[:DESC]`，可重复；id 必须是正整数（0 保留给"未设置"），name 必须 UPPER_SNAKE_CASE。
+
+> **schema 写命令一律「先校验、再动手、最后看落盘结果」**：
+> 名字不合规（组名 / 节点名）→ 报错退出；目标 Group 不存在 → 报错退出；
+> 节点撞名 → 报错退出（`NewTable` 是无条件 push，撞名会覆盖同名 `.tbl`）；
+> 改名 / 删除的目标不存在 → 报错退出（不再静默 no-op 后宣布成功）；
+> 保存时项目有验证错误 → 报错退出并逐条打印，盘上一个字节都没动。
+>
+> 一个组里最后一个节点被删掉时，组目录一并清理；**新建的空组**则保留，
+> 好让 `add-group` → `add-table` 能跨进程走通。
 
 #### `schema rename-group`
 
@@ -635,7 +674,8 @@ tablet-cli schema delete-node --group hero --name HeroOld
 | `export code` | 导出代码文件（Java/Go/Lua/...） | 全项目，选语言 |
 | `export all` | 全量导出（data + code） | CI 一把梭 |
 
-退出码恒为 0；单格式失败仅 eprintln，不影响其它格式。
+单格式失败**不打断**其它格式（逐项继续），但**只要有一个格式失败，退出码就是 1**——
+`export all || exit 1` 这种 CI 写法全靠它。（以前这里恒为 0。）
 
 #### `export data`
 
@@ -791,6 +831,9 @@ tablet-cli --fmt json validate --group hero
 
 退出码：通过 → 0；任一错误 → 1。
 
+**`--group` / `--node` 指到不存在的东西也是 1**（"Group 不存在: xxx" / "节点不存在: g/n"）。
+空集恒真：以前 `--group typo` 会返回"验证通过"+0，脚本无从分辨"这个组没问题"和"根本没有这个组"。
+
 ---
 
 ### 8.5 excel — Excel 桥接
@@ -837,12 +880,15 @@ tablet-cli excel import --group item --file D:/shared/item_update.xlsx
 
 #### `workspace save`
 
-保存所有 dirty 节点到磁盘。
+保存所有 dirty 节点到磁盘，并顺手刷新 `project.tblschema` 投影
+（手改过 `.tbl` 也能把结构同步进 schema 文件）。
 
 ```bash
 tablet-cli workspace save
 tablet-cli --project slg-test workspace save
 ```
+
+项目存在验证错误时**一个字节都不写**，命令逐条打印错误并 exit 1——不会对外声称"已保存"。
 
 #### `workspace reload`
 
