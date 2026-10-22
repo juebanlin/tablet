@@ -497,7 +497,11 @@ tablet-cli project new --template empty --id temp-test --switch-after false
 | 参数 | 说明 | 默认 |
 |------|------|------|
 | `--id <id>` | 目标项目 id，必填 | — |
-| `--new-id <id>` | 新 id（会迁移目录） | 不改 |
+| `--new-id <id>` | 新 id（会迁移目录）。必须满足 `[a-z0-9_-]{1,32}`，否则报错且**原项目不动** | 不改 |
+
+读取 `project.tblschema` 失败（含 `# @meta id` 声明了非法值）时，命令**非零退出**并逐条打印
+`错误: Project <id> 打不开: <文件>: line N: ...`；见 @02.26.7。
+例外：`project new` 不因为有别的项目打不开就拒绝（建新的正是折腾坏之后的出路之一）。
 | `--new-name <name>` | 新显示名 | 不改 |
 
 ```bash
