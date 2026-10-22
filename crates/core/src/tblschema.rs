@@ -171,6 +171,24 @@ pub fn parse_tblschema(content: &str) -> Result<TblSchema> {
                     .into_iter()
                     .map(|s| tbl_str::decode(s.trim(), "txt"))
                     .collect();
+
+                // **列数上限：多出来的列会被 `apply_schema_to_project` 直接丢掉。**
+                // `Vec::resize` 截断不报错，等于"多写一列 → 少一个值"；AI 复制粘贴
+                // 一行很容易多一个 `|`。少写（尾部空列）是允许的，缺的位置按空处理。
+                let max_cols = match sec.mode {
+                    SchemaMode::Table => sec.fields.len(),
+                    SchemaMode::Constant => 5, // name | type | value | export | desc
+                    SchemaMode::Enum => 3,     // id | name | desc
+                };
+                // 空表（一个字段都没有）交给后面的「表没有定义任何字段」，这里不抢答
+                let check_cols = !matches!(sec.mode, SchemaMode::Table) || !sec.fields.is_empty();
+                if check_cols && cells.len() > max_cols {
+                    bail!(
+                        "line {}: [{}/{}] 的 preset 行有 {} 列，最多 {} 列（多出来的会被丢弃）",
+                        line_num + 1, sec.group, sec.name, cells.len(), max_cols
+                    );
+                }
+
                 // 常量预设行的第 4 列是 export，和字段行同一个规矩：只认短码
                 if matches!(sec.mode, SchemaMode::Constant) {
                     if let Some(raw) = cells.get(3) {
@@ -777,6 +795,32 @@ mod tests {
         assert!(parse_tblschema(ok).is_ok());
     }
 
+    /// preset 行**多出来的列会被静默丢弃**（`Vec::resize` 截断），直接报错。
+    ///
+    /// 少写没问题（尾部空列省略很自然），多写一定是用错了：复制粘贴多一个 `|`、
+    /// 或者拿旧表的数据往新表里灌，都会"少一个值"而看不出来。
+    #[test]
+    fn preset_rows_with_more_columns_than_declared_are_rejected() {
+        let table_extra = "#!tblschema v1\n[g/T] table\nid | int | cs | ID\nname | str | cs | 名\n\
+# @preset\n1 | 甲 | 多出来的\n";
+        let err = parse_tblschema(table_extra).expect_err("表 preset 多列应被拒绝");
+        let msg = format!("{}", err);
+        assert!(msg.contains("line 6"), "要带行号: {}", msg);
+        assert!(msg.contains("最多 2 列"), "要说清上限: {}", msg);
+
+        // 少写：允许（缺的位置按空处理）
+        let table_short = "#!tblschema v1\n[g/T] table\nid | int | cs | ID\nname | str | cs | 名\n\
+# @preset\n1\n";
+        assert!(parse_tblschema(table_short).is_ok(), "短行应当允许");
+
+        let const_extra = "#!tblschema v1\n[g/C] constant\n\
+# @preset\nmax_level | int | 100 | cs | 上限 | 多余\n";
+        assert!(parse_tblschema(const_extra).is_err(), "常量 preset 最多 5 列");
+
+        let enum_extra = "#!tblschema v1\n[g/E] enum\n# @preset\n1 | A | 甲 | 多余\n";
+        assert!(parse_tblschema(enum_extra).is_err(), "枚举 preset 最多 3 列");
+    }
+
     #[test]
     fn parse_tblschema_with_sep_lines() {
         // # @sep 行覆写默认；未列出的字段保持默认；未知 key 忽略；列出位置在第一个 [section] 之前。
@@ -1195,7 +1239,7 @@ path | str | C:\\test | cs | 反斜杠路径
 [a/T] table
 id | int | cs | x
 # @preset
-1 | foo
+1
 [b/U] table
 id | int | cs | y
 "#;

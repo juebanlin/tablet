@@ -76,6 +76,7 @@ tablet-cli -w <workdir> --project demo export all -o artifacts/demo
 - `constant`：段体必须是空的，条目只写在 `# @preset` 里，5 列 `name | type | value | export | desc`。
 - `enum`：段体必须是空的，条目只写在 `# @preset` 里，3 列 `id | name | desc`。
 - `# @preset` 必须出现在某个 `[group/Name]` 之后，作用到下一个段头为止。
+- preset 行的列数**不能超过**声明（Table = 字段数，Constant = 5，Enum = 3）；少写可以，多写会报错。
 
 ### 类型
 
