@@ -38,6 +38,16 @@ pub fn run_with_args(args: &[String]) -> Result<i32> {
 }
 
 fn run(cli: Cli) -> Result<i32> {
+    // GUI 与 CLI 互斥（@03.7.5）：两边共享同一个 `projects/`，同时写就是丢更新。
+    // `util` 是纯文件工具（不碰工作区状态），`list-templates` 只读应用目录，不参与。
+    let _workspace_lock = match &cli.command {
+        Command::Util(_) | Command::ListTemplates => None,
+        _ => Some(tablet_core::workspace_lock::acquire(
+            &cli.workdir,
+            tablet_core::workspace_lock::ProcKind::Cli,
+        )?),
+    };
+
     match &cli.command {
         // 不需要加载 Project 的命令
         Command::ListTemplates => {

@@ -20,6 +20,7 @@ pub mod excel_sync;
 pub mod search;
 pub mod test_util;
 pub mod config_fix;
+pub mod workspace_lock;
 
 pub use search::name_matches;
 

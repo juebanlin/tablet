@@ -159,16 +159,17 @@ fn run_gui(workdir_arg: Option<PathBuf>) -> anyhow::Result<()> {
         None => std::env::current_dir()?,
     };
 
-    let lock_path = workdir.join(tablet_core::LOCK_FILE);
-    if let Ok(content) = std::fs::read_to_string(&lock_path) {
-        if let Ok(pid) = content.trim().parse::<u32>() {
-            if is_process_alive(pid) {
-                eprintln!("另一个 TBL Tool 实例正在运行 (PID: {})", pid);
-                std::process::exit(1);
-            }
+    // 工作区进程锁：GUI 与 CLI 互斥（@03.7.5）。持有到函数结束，drop 时释放。
+    let _workspace_lock = match tablet_core::workspace_lock::acquire(
+        &workdir,
+        tablet_core::workspace_lock::ProcKind::Gui,
+    ) {
+        Ok(l) => l,
+        Err(e) => {
+            eprintln!("{:#}", e);
+            std::process::exit(1);
         }
-    }
-    std::fs::write(&lock_path, std::process::id().to_string())?;
+    };
 
     // 提前初始化日志系统（在 load 之前），避免配置加载时的 ICU4X 警告无法被过滤
     let log_path = workdir.join(tablet_core::LOG_FILE);
@@ -324,31 +325,9 @@ fn run_gui(workdir_arg: Option<PathBuf>) -> anyhow::Result<()> {
     let result = app_window.run().map_err(|e| anyhow::anyhow!("{}", e));
     // 退出清理（@plans §5.7）：清掉所有 Project 的 .tbl-cache/*.xlsx
     excel_bridge::cleanup_all_caches_on_exit(&app_state);
-    let _ = std::fs::remove_file(&lock_path);
     result
 }
 
-fn is_process_alive(pid: u32) -> bool {
-    #[cfg(target_os = "windows")]
-    {
-        use std::process::Command;
-        Command::new("tasklist")
-            .args(["/FI", &format!("PID eq {}", pid), "/NH"])
-            .output()
-            .map(|o| String::from_utf8_lossy(&o.stdout).contains(&pid.to_string()))
-            .unwrap_or(false)
-    }
-    #[cfg(not(target_os = "windows"))]
-    {
-        // Unix-like：kill 0 不发送信号，仅检查目标进程是否存在
-        use std::process::Command;
-        Command::new("kill")
-            .args(["-0", &pid.to_string()])
-            .status()
-            .map(|s| s.success())
-            .unwrap_or(false)
-    }
-}
 
 #[cfg(test)]
 mod crash_hook_tests {
