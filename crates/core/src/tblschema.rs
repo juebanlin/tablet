@@ -94,6 +94,8 @@ pub fn parse_tblschema(content: &str) -> Result<TblSchema> {
     let mut sections = Vec::new();
     let mut current: Option<SchemaSection> = None;
     let mut meta = SchemaMetadata::default();
+    // 声明 `# @meta id` 的那一行（1-based），用于报错定位。`None` = 压根没声明。
+    let mut meta_id_line: Option<usize> = None;
     let mut separators = SeparatorsSection::default();
     let mut seen_section = false;
     let mut in_preset = false;
@@ -132,7 +134,10 @@ pub fn parse_tblschema(content: &str) -> Result<TblSchema> {
             if !seen_section {
                 if let Some((key, value)) = parse_meta_line(trimmed) {
                     match key.as_str() {
-                        "id" => meta.id = value,
+                        "id" => {
+                            meta_id_line = Some(line_num + 1);
+                            meta.id = value;
+                        }
                         "name" => meta.name = value,
                         "category" => meta.category = value,
                         "version" => meta.version = value,
@@ -210,6 +215,24 @@ pub fn parse_tblschema(content: &str) -> Result<TblSchema> {
 
     // has_preset 永远从 sections 重算，忽略 @meta 行声明
     meta.has_preset = sections.iter().any(|s| !s.preset.is_empty());
+
+    // **声明了 id 就必须合法。** 「没声明」是合法的——合并用的片段、裸 `.tblschema` 都
+    // 不带 id（`merge_schemas` 也不挂 metadata，见下），要拦的是「声明了一个别处都不允许
+    // 存在的 id」。空值声明（`# @meta id:`）算非法，那是写坏了，不是"没声明"。
+    //
+    // 这条是给**机器调用方**的反馈：CLI 主要由 AI / 脚本驱动，静静接受一个非法 id 会让
+    // 问题潜伏到下一次操作才炸，而那时现场已经变了。@02.26 那个洞就是这么来的——改名
+    // 能造出 `Bad-Id`，而加载时谁都不吭声。
+
+
+    if let Some(n) = meta_id_line {
+        if !is_valid_metadata_id(&meta.id) {
+            bail!(
+                "line {}: `# @meta id` 不合法: {:?}（只允许小写字母 / 数字 / _ / -，长度 1..=32）",
+                n, meta.id
+            );
+        }
+    }
 
     Ok(TblSchema { meta, separators, sections })
 }
@@ -927,6 +950,50 @@ id | int | cs | x
         assert_eq!(back.meta.category, "test");
         assert_eq!(back.meta.version, "0.1.0");
         assert_eq!(back.sections.len(), 1);
+    }
+
+    #[test]
+    fn rejects_an_invalid_declared_id_with_line_number() {
+        // 声明了 id 就必须合法。以前加载时谁都不校验 —— 于是"改名到一个非法 id"能造出
+        // 一个别处都不允许存在的项目，而且一直到下一次操作为止都没人吭声。
+        let src = "#!tblschema v1
+# @meta id: Bad-Id
+
+[g/T] table
+id | int | cs | ID
+";
+        let err = parse_tblschema(src).expect_err("非法 id 应当被拒绝");
+        let msg = err.to_string();
+        assert!(msg.contains("line 2"), "应当给出行号: {}", msg);
+        assert!(msg.contains("Bad-Id"), "应当给出非法值: {}", msg);
+    }
+
+    #[test]
+    fn rejects_an_empty_declared_id() {
+        // `# @meta id:` 是**写坏了**，不是"没声明" —— 这两种要分得开。
+        let src = "#!tblschema v1
+# @meta id:
+
+[g/T] table
+id | int | cs | ID
+";
+        let err = parse_tblschema(src).expect_err("空 id 声明应当被拒绝");
+        assert!(err.to_string().contains("line 2"), "{}", err);
+    }
+
+    #[test]
+    fn a_schema_without_an_id_is_still_fine() {
+        // **没声明 id 是合法的**：合并用的片段、裸 .tblschema 都不带 id
+        // （`merge_schemas` 也不挂 metadata）。这一条是防止上面那道校验收得太紧，
+        // 把 merge_schema 那条路一起打死。
+        let src = "#!tblschema v1
+
+[g/T] table
+id | int | cs | ID
+";
+        let schema = parse_tblschema(src).expect("没有 id 声明应当照样能解析");
+        assert!(schema.meta.id.is_empty());
+        assert_eq!(schema.sections.len(), 1);
     }
 
     #[test]

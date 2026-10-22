@@ -34,10 +34,14 @@ pub fn run_project_rename(
 
     let id_changed = id != effective_new_id;
     if id_changed {
-        // 检查新 id 是否已存在
-        let new_root = workdir.join(PROJECTS_DIR).join(effective_new_id);
-        if new_root.exists() {
-            anyhow::bail!("项目 id 已存在: {}", effective_new_id);
+        // 走 core 的校验，**别自己拼路径判存在**。只判 `new_root.exists()` 会放过两类：
+        //   1. 字符集 —— `Bad-Id` / `foo bar` / 中文。新建与克隆都拦这些，只有这里放行，
+        //      于是能造出一个"别的地方都不允许存在"的 id。
+        //   2. **路径穿越** —— `--new-id ../escaped` 会把目录从 `projects/` 里挪出去
+        //      （实测过，项目直接落到工作区根）。这是 `validate_project_id_rename`
+        //      本来就要挡的事，它却一直没人调用。
+        if let Some(err) = engine.validate_project_id_rename(effective_new_id, id) {
+            anyhow::bail!("{}", err);
         }
         schema.meta.id = effective_new_id.to_string();
     }
