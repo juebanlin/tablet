@@ -1,39 +1,48 @@
 # skills
 
-面向 **tablet** 用户的 AI 辅助技能包。复制到自己 AI 编程工具的 skill 目录后，AI 助手即可识别并按规则操作 tablet 工具链。
-
-## 术语
-
-| 名称 | 含义 |
-|------|------|
-| **tablet** | 项目名 / GUI 程序名（带参数时自动转为 CLI 模式） |
-| **tablet-cli** | 纯 CLI 程序名（功能与 `tablet` CLI 模式一致） |
-| **.tbl** | 数据文件格式（表/常量/枚举） |
-| **.tblschema** | 结构定义文件格式（schema + 预设数据） |
-| **tbl** | 技能名 — 文件内容格式相关 |
-| **tbl-cli** | 技能名 — CLI 命令操作相关 |
+面向 **tablet** 用户的 AI 辅助技能包。复制到你的 AI 编程工具的 skill 目录后，
+AI 助手就能按规则**生成配置表并驱动 CLI 跑流水线**。
 
 ## 内容
 
-| 技能 | 作用 |
+| 技能 | 覆盖 |
 |---|---|
-| [`tbl/`](tbl/) | `.tblschema` / `.tbl` 文件格式规范 + 工作流（生成模板、设计字段类型、追加预设数据、手工校验） |
-| [`tbl-cli/`](tbl-cli/) | `tablet-cli` / `tablet` 全部 CLI 命令参考（项目管理、结构操作、导出、验证、Excel 桥接、分隔符查询、文件工具） |
+| [`tablet/`](tablet/) | `.tblschema` / `.tbl` 文件格式 + `tablet-cli` 全部命令 + 退出码约定 |
 
-> `tbl` 管**怎么写文件**，`tbl-cli` 管**怎么调命令**。两者互补，按需安装。
+一个技能管全流程（写文件 → 建项目 → 验证 → 导出），不再拆成 format / cli 两个包。
+
+```
+tablet/
+├── SKILL.md                       入口：路线选择、硬规则、流水线、速查
+└── references/
+    ├── format.md                  .tblschema v1 与 .tbl v3 完整语法
+    ├── types.md                   类型系统、引用、关键字、非法组合
+    ├── cli.md                     命令全表、退出码、典型流水线
+    └── example.tblschema          可被 CLI 直接验证通过的完整例子
+```
 
 ## 安装
 
-按你使用的 AI 工具，把目录拷到对应位置：
-
 | 工具 | 目标位置 |
 |---|---|
-| [Claude Code](https://claude.com/claude-code) | `<your-project>/.claude/skills/tbl/` 和/或 `.claude/skills/tbl-cli/` |
+| [Claude Code](https://claude.com/claude-code) | `<your-project>/.claude/skills/tablet/` |
 | 其它支持 SKILL.md frontmatter 的工具 | 按其约定路径 |
 | 不识别 SKILL.md 的工具 | 把 `SKILL.md` 与 `references/*` 作为系统提示 / 上下文资料一起塞 |
 
-拷贝后在编辑会话里说 "用 tbl 技能给我新建一个 schema"（或 `/tbl`）、"用 tbl-cli 导出 JSON 数据"（或 `/tbl-cli`）即可。
+装好后说「用 tablet 技能给我生成一套配置表并导出」即可（或 `/tablet`）。
+
+## 自检
+
+`references/example.tblschema` 是**机器可验证**的样板：
+
+```bash
+tablet-cli -w /tmp/tbl-check project new \
+  --from-file skills/tablet/references/example.tblschema --id demo
+tablet-cli -w /tmp/tbl-check --project demo validate   # 期望 exit 0
+```
+
+改完技能文档后跑一遍，确保示例没有随实现漂移。
 
 ## 更新
 
-技能内容随 tablet 版本演进。覆盖式拷贝即可。
+技能内容随 tablet 版本演进，覆盖式拷贝即可。

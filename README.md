@@ -138,10 +138,9 @@ tablet-cli --project slg-prod export all
 
 | 技能 | 用途 |
 |------|------|
-| [`skills/tbl/`](skills/tbl/) | `.tblschema` / `.tbl` 文件格式规范 + 生成/校验/扩展工作流 |
-| [`skills/tbl-cli/`](skills/tbl-cli/) | `tablet-cli` / `tablet` 全部 CLI 命令操作参考 |
+| [`skills/tablet/`](skills/tablet/) | `.tblschema` / `.tbl` 格式 + `tablet-cli` 命令 + 「建项目 → 验证 → 导出」流水线 |
 
-`tbl` 管文件内容格式，`tbl-cli` 管命令行操作，两者互补。详见 [`skills/README.md`](skills/README.md)。
+一个技能覆盖写文件与跑命令。详见 [`skills/README.md`](skills/README.md)。
 
 ## 构建
 

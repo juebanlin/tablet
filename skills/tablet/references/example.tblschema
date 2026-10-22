@@ -1,0 +1,45 @@
+#!tblschema v1
+# @meta id: demo
+# @meta name: 演示项目
+# @meta category: sample
+
+# 覆盖：enum / table / constant、普通字段、List、Tuple、Map、@Ref、txt、# @display。
+# 默认分隔符即可，所以没有 # @sep 行。
+
+[hero/HeroType] enum
+# @display: name
+# @preset
+1 | WARRIOR | 战士
+2 | MAGE    | 法师
+3 | ARCHER  | 弓手
+
+[hero/Hero] table
+# @display: name
+id     | int             | cs | 英雄ID
+name   | str             | cs | 名字
+kind   | @HeroType       | cs | 职业
+hp     | int             | s  | 血量
+atk    | float           | s  | 攻击
+skills | List<int>       | cs | 技能 id
+born   | Tuple2<int,int> | cs | 出生坐标
+attrs  | Map<str,int>    | s  | 属性加成
+equips | List<@Equip>    | cs | 初始装备
+bio    | txt             | cs | 背景故事
+# @preset
+1001 | 亚瑟 | 1 | 1200 | 88.5  | 1;2;3 | 5,10 | hp:200;atk:10 | 2001;2002 | 圆桌骑士团团长
+1002 | 梅林 | 2 | 700  | 120.0 | 4;5   | 0,0  | mp:300;atk:5  | 2003      | 大魔法师
+
+[item/Equip] table
+id    | int | cs | 装备ID
+name  | str | cs | 名称
+price | int | s  | 价格
+# @preset
+2001 | 长剑 | 100
+2002 | 盾牌 | 80
+2003 | 法杖 | 150
+
+[global/GameConst] constant
+# @preset
+max_level | int             | 100     | cs | 等级上限
+start_pos | Tuple2<int,int> | 5,10    | cs | 出生坐标
+gm_names  | List<str>       | gm1;gm2 | s  | GM 名单
