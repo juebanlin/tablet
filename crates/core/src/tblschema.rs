@@ -276,6 +276,21 @@ fn parse_section_header(line: &str, line_num: usize) -> Result<SchemaSection> {
     let (group, name) = path.split_once('/')
         .ok_or_else(|| anyhow::anyhow!("line {}: section must be [group/Name]", line_num + 1))?;
 
+    // 名字在这里就拦下来，别等到生成了 `bad_name.tpl` 才发现。
+    // 段名会变成 .tbl 文件名、生成代码里的类名；组名会变成目录名。两者都由
+    // `validate.rs` 定义规则，这里只是把同一套规则前移到**解析**这一步 ——
+    // `project new --from-file` / `util parse-schema` / `merge-schema` 都过这个口。
+    let (group, name) = (group.trim(), name.trim());
+    if !crate::validate::is_valid_group_name(group) {
+        bail!("line {}: 组名 {:?} 不合法（只能包含中英文数字下划线）", line_num + 1, group);
+    }
+    if !crate::validate::is_valid_node_name(name) {
+        bail!(
+            "line {}: 配置项名 {:?} 不合法（必须大写字母开头，只含英文数字下划线，如 HeroBase）",
+            line_num + 1, name
+        );
+    }
+
     let parts: Vec<&str> = rest.split_whitespace().collect();
     let mode_str = parts.first().copied().unwrap_or("");
     let mode = match mode_str {
@@ -739,6 +754,28 @@ pub fn fill_metadata_defaults(schema: &mut TblSchema, file_stem: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 段名 / 组名在**解析**这一步就拦下来。
+    ///
+    /// 它们会变成 `.tbl` 文件名、目录名和生成代码里的类名。以前只有 GUI 的
+    /// 「新建节点」对话框校验，`project new --from-file` / `util parse-schema`
+    /// 一路放行 —— 然后生成出 `bad_nameTpl.java` 这种编译不过的代码。
+    #[test]
+    fn section_and_group_names_are_checked_at_parse_time() {
+        let bad_section = "#!tblschema v1\n\n[hero/bad_name] table\nid | int | cs | ID\n";
+        let err = parse_tblschema(bad_section).expect_err("小写段名应被拒绝");
+        let msg = format!("{}", err);
+        assert!(msg.contains("line 3"), "错误要带行号: {}", msg);
+        assert!(msg.contains("bad_name"), "错误要点名: {}", msg);
+
+        let bad_group = "#!tblschema v1\n\n[bad group!/T] table\nid | int | cs | ID\n";
+        let err = parse_tblschema(bad_group).expect_err("非法组名应被拒绝");
+        assert!(format!("{}", err).contains("组名"), "{}", err);
+
+        // 合法的（含中文组名）照常通过
+        let ok = "#!tblschema v1\n\n[英雄/HeroBase] table\nid | int | cs | ID\n";
+        assert!(parse_tblschema(ok).is_ok());
+    }
 
     #[test]
     fn parse_tblschema_with_sep_lines() {

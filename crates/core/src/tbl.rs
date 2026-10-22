@@ -142,7 +142,9 @@ impl TableCodec for V3Codec {
         for line in data_lines {
             let trimmed = line.trim();
             if trimmed.is_empty() { continue; }
-            if trimmed.starts_with("#@color:") { continue; }
+            // `#` 开头是注释（含 Excel 往返用的 `#@color:` 行标记）。
+            // 必须在属性/字段解析**之前**跳过：注释里带个冒号否则会被当成未知属性。
+            if trimmed.starts_with('#') { continue; }
 
             // @field block start
             if let Some(fname) = trimmed.strip_prefix("@field ") {
@@ -183,14 +185,31 @@ impl TableCodec for V3Codec {
                             f.export = e;
                         }
                         "type" => f.tbl_type = val.to_string(),
-                        _ => {}
+                        // 拼错的属性名不能吞：`descr:` / `typo:` 会让这段描述/类型
+                        // 悄悄变回默认值，而文件看着没毛病。
+                        _ => bail!(
+                            "{}: @field {} 有未知属性 \"{}\"（只认 desc / export / type）",
+                            path.display(), f.name, key
+                        ),
                     }
                 } else if let Some(ref mut r) = cur_record {
                     // record field: key=field name, value=cell
-                    if let Some(idx) = field_defs.iter().position(|fd| fd.name == key) {
-                        let tp = field_defs[idx].tbl_type.clone();
-                        while r.len() <= idx { r.push(String::new()); }
-                        r[idx] = decode(val, &tp);
+                    //
+                    // **拼错的字段名必须报错。** 以前这里找不到就 `if let Some` 落空，
+                    // 整行值被静默丢弃：AI 把 `hp` 写成 `HP`，`validate` 依然全绿，
+                    // 导出少一个字段，直到运行时才发现。
+                    match field_defs.iter().position(|fd| fd.name == key) {
+                        Some(idx) => {
+                            let tp = field_defs[idx].tbl_type.clone();
+                            while r.len() <= idx { r.push(String::new()); }
+                            r[idx] = decode(val, &tp);
+                        }
+                        None => bail!(
+                            "{}: [{}] 里出现未声明的字段 \"{}\"（字段名拼错，或 @field 块写在了记录之后）",
+                            path.display(),
+                            r.first().map(String::as_str).unwrap_or("?"),
+                            key
+                        ),
                     }
                 }
             }
@@ -296,14 +315,18 @@ impl Codec {
 // ===== Top-level parse / serialize =====
 
 pub fn parse_tbl(path: &Path) -> Result<TblFile> {
-    let content = std::fs::read_to_string(path)?;
+    // 每个错误都自带文件路径：调用方（加载整个项目 / util parse-tbl）不必再包一层，
+    // 否则 `A 失败: A: ...` 会把路径打两遍。
+    let content = std::fs::read_to_string(path)
+        .map_err(|e| anyhow::anyhow!("{}: 读取失败: {}", path.display(), e))?;
     let mut lines = content.lines();
 
     let first = lines.next().unwrap_or("");
     if !first.starts_with("#!tbl") {
-        bail!("not a valid .tbl file: missing #!tbl header");
+        bail!("{}: 缺少 #!tbl 头（第一行应为 `#!tbl v2` 或 `#!tbl v3`）", path.display());
     }
-    let codec = Codec::detect(first)?;
+    let codec = Codec::detect(first)
+        .map_err(|e| anyhow::anyhow!("{}: {}", path.display(), e))?;
 
     let mut mode = String::new();
     let mut desc_line = String::new();
@@ -486,6 +509,39 @@ mod tests {
         assert!(msg.contains("前后端"), "错误里应当有那个值: {}", msg);
         assert!(msg.contains("cs / c / s / -"), "错误里应当说清合法集合: {}", msg);
         assert!(msg.contains("name"), "错误里应当点名是哪个字段: {}", msg);
+    }
+
+    /// 记录里拼错字段名 / `@field` 块里拼错属性名，都必须报错。
+    ///
+    /// 以前两处都是"找不到就跳过"：`hp` 写成 `HP` 整行值被丢弃，`validate` 依然全绿，
+    /// 导出少一个字段——手改 `.tbl` 正是 AI / 脚本的主要工作方式。
+    #[test]
+    fn v3_rejects_unknown_field_and_unknown_property() {
+        let good = serialize_table(&table_with_desc("x"));
+
+        let bad_field = good.replace("  name:a", "  Name:a");
+        assert_ne!(bad_field, good, "夹具没改到，锚点过时了");
+        let p = tmp("bad_field");
+        std::fs::write(&p, &bad_field).unwrap();
+        let msg = match parse_tbl(&p) { Err(e) => e.to_string(), Ok(_) => panic!("未声明字段应当被拒绝") };
+        let _ = std::fs::remove_file(&p);
+        assert!(msg.contains("Name"), "错误里要点名: {}", msg);
+        assert!(msg.contains("[1]"), "错误里要带记录 id: {}", msg);
+
+        let bad_prop = good.replace("  desc:x", "  descr:x");
+        assert_ne!(bad_prop, good, "夹具没改到，锚点过时了");
+        let p = tmp("bad_prop");
+        std::fs::write(&p, &bad_prop).unwrap();
+        let msg = match parse_tbl(&p) { Err(e) => e.to_string(), Ok(_) => panic!("未知属性应当被拒绝") };
+        let _ = std::fs::remove_file(&p);
+        assert!(msg.contains("descr"), "错误里要点名: {}", msg);
+
+        // 注释（哪怕带冒号）不算属性
+        let with_comment = good.replace("  desc:x", "  # 备注: 这行是注释\n  desc:x");
+        let p = tmp("comment_ok");
+        std::fs::write(&p, &with_comment).unwrap();
+        assert!(parse_tbl(&p).is_ok(), "带冒号的注释不该被当成属性");
+        let _ = std::fs::remove_file(&p);
     }
 
     #[test]

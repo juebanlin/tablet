@@ -553,11 +553,16 @@ fn load_group(name: &str, dir: &Path) -> Result<Group> {
 
     for entry in entries {
         let path = entry.path();
+        // **读不懂就报错，不许静默跳过。** 以前这里是 `Err(e) => eprintln!("warn: ...")`：
+        // 一个写坏的 `.tbl` 会在 stderr 留一行字，然后从项目里**整个消失**——导出少一张表，
+        // 退出码还是 0。这和 `.tblschema` 那边 `Err(_) => fallback` 是同一个洞（@02.26.7）：
+        // CLI 主要由 AI / 脚本驱动，没有反馈等于没有发生。
         match tbl::parse_tbl(&path) {
             Ok(TblFile::Table(t)) => tables.push(t),
             Ok(TblFile::Constant(c)) => constants.push(c),
             Ok(TblFile::Enum(e)) => enums.push(e),
-            Err(e) => eprintln!("warn: failed to parse {}: {}", path.display(), e),
+            // 解析器已经自带文件路径，这里原样往上抛，别把路径再包一遍
+            Err(e) => return Err(e),
         }
     }
 
@@ -622,6 +627,27 @@ mod tests {
         .unwrap();
         let proj = load_project(&dir).expect("load");
         assert_eq!(proj.schema.meta.id, "aaa");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 一个写坏的 `.tbl` 必须让整个项目**打不开**，不能悄悄少一张表。
+    ///
+    /// 以前这里是 `eprintln!("warn: failed to parse ...")` 然后跳过：导出少一张表、
+    /// 退出码还是 0。`.tblschema` 那边刚补过同一个洞（@02.26.7），数据文件这条
+    /// 对 AI / 脚本同样致命 —— 它们只看退出码。
+    #[test]
+    fn a_broken_tbl_fails_the_load_instead_of_vanishing() {
+        let dir = unique_tmp("broken_tbl");
+        let root = dir.join("projects/p1");
+        std::fs::create_dir_all(root.join("config/hero")).unwrap();
+        write_schema(&root, "p1", "项目1");
+        std::fs::write(root.join("config/hero/Bad.tbl"), "#!tbl v99\n#mode table\n---\n").unwrap();
+        std::fs::write(dir.join("tablet.toml"), "").unwrap();
+
+        let err = load_project(&dir).expect_err("写坏的 .tbl 必须报错");
+        let msg = format!("{:#}", err);
+        assert!(msg.contains("Bad.tbl"), "错误里要有文件路径: {}", msg);
+        assert!(msg.contains("v99") || msg.contains("版本"), "错误里要说清原因: {}", msg);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
