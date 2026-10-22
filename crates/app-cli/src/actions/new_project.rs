@@ -68,7 +68,9 @@ pub fn run_new_project(
 
     // 走 engine：内存态建 → 验证闸门 → 立刻保存。
     // 闸门不过时 `create_project_from_schema` 会把项目整个撤回，这里把原因原样报给用户。
-    let (mut engine, _config_fixed) = tablet_core::project::load_workspace(workdir)?;
+    let (mut engine, _config_fixed, _failed) = tablet_core::project::load_workspace(workdir)?;
+    // 注意：这里**不**因为有别的项目打不开就拒绝建新项目 —— 「建一个新的」正是
+    // 折腾坏了之后的出路之一，堵死它没有意义。打不开的项目会在其它命令上吵。
     let id = engine.create_project_from_schema(schema).map_err(|e| anyhow::anyhow!(e))?;
     let project_root = engine.find_project(&id)
         .map(|p| p.project_root.clone())

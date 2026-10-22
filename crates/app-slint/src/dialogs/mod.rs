@@ -2,6 +2,7 @@
 // 数据导出 / Schema 导入导出 / 新建项目（统一） / 克隆项目 / 项目设置 / 全局设置）。
 // 每个模块统一暴露 `wire(ui, state)` 注册 callback，`push(ui, state)` 把 state 同步到 UI。
 
+pub mod alert;
 pub mod context_menu;
 pub mod pending;
 pub mod type_selector;

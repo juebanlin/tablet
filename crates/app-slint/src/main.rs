@@ -222,7 +222,7 @@ fn run_gui(workdir_arg: Option<PathBuf>) -> anyhow::Result<()> {
     // 日志系统就绪后、加载项目之前挂上：这样加载期 panic 也能留下记录
     install_crash_hook(&workdir, time_offset);
 
-    let (app_state_inner, config_fixed) = AppState::load(&workdir)?;
+    let (app_state_inner, config_fixed, open_failures) = AppState::load(&workdir)?;
     let app_state = Rc::new(RefCell::new(app_state_inner));
 
     // 延迟记录配置修复日志（在日志系统初始化后）
@@ -244,6 +244,20 @@ fn run_gui(workdir_arg: Option<PathBuf>) -> anyhow::Result<()> {
         app_window.set_picker_trigger_header_single(st.picker_trigger_header_single);
         app_window.set_picker_trigger_data_single(st.picker_trigger_data_single);
         app_window.set_tree_sort_index(ui::tree::sort_to_index(&st.project_sort));
+    }
+
+    // 启动时打不开的项目：**中断打开 + 弹框说明**，而不是兜底成空项目静静放过去。
+    // 放在这里是因为弹框要有窗口，而加载期还没有（@02.26）。
+    for f in &open_failures {
+        dialogs::alert::raise(
+            &app_state,
+            "项目打不开",
+            &format!("Project {} 已跳过：
+{}", f.id, f.message),
+        );
+    }
+    if !open_failures.is_empty() {
+        dialogs::alert::push(&app_window, &app_state);
     }
 
     // 「关于」→「检查更新」：跳 GitHub 仓库
@@ -298,6 +312,7 @@ fn run_gui(workdir_arg: Option<PathBuf>) -> anyhow::Result<()> {
     dialogs::clone_project::wire(&app_window, &app_state);
     dialogs::project_settings::wire(&app_window, &app_state);
     dialogs::global_settings::wire(&app_window, &app_state);
+    dialogs::alert::wire(&app_window, &app_state);
     excel_bridge::wire(&app_window, &app_state);
 
     // 启动时扫描 Excel 编辑残留（@plans §5.6）：上次崩溃 / kill 留下的 .tbl-cache/*.xlsx

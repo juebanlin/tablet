@@ -1606,7 +1606,7 @@ impl ProjectEngine {
         let workdir = self.workdir.clone();
         let last_id = self.active_project_id().map(str::to_string);
         match crate::project::load_workspace(&workdir) {
-            Ok((mut new_engine, _config_fixed)) => {
+            Ok((mut new_engine, _config_fixed, failed)) => {
                 // 维持原 active：若原 active 在新 opened 列表里则保留，否则用新 active
                 if let Some(pid) = last_id.as_deref() {
                     new_engine.set_active_by_id(pid);
@@ -1622,6 +1622,10 @@ impl ProjectEngine {
                 self.default_separators = new_engine.default_separators;
                 self.validation_errors.clear();
                 self.ui_log(format!("重新加载完成，共 {} 个 Project / {} 个 Group", pcount, group_total));
+                // 打不开的项目要吵：reload 是显式动作，静静少一个项目比报错更难查
+                for f in &failed {
+                    self.error_log(format!("[重新加载] Project {} 打不开: {}", f.id, f.message));
+                }
             }
             Err(e) => self.ui_log(format!("加载失败: {}", e)),
         }
@@ -2579,7 +2583,7 @@ package = \"com.user.kept\"
         assert!(schema_txt.contains("[g/E] enum\n# @display: desc"), "schema = {}", schema_txt);
 
         // 重载：.tbl 里不含 display 信息，应从 schema 段回填到节点
-        let (engine, _) = crate::project::load_workspace(&dir).expect("reload");
+        let (engine, _, _) = crate::project::load_workspace(&dir).expect("reload");
         assert_eq!(engine.find_table("g", "T").expect("table").display_field.as_deref(), Some("name"));
         assert_eq!(engine.find_enum("g", "E").expect("enum").display_field.as_deref(), Some("desc"));
         // 回填必须连 `original_display_field` 一起填：它是"从盘上读回来的"值。

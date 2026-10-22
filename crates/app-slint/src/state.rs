@@ -921,11 +921,23 @@ pub struct AppState {
     pub excel_session: Option<crate::excel_bridge::ExcelSession>,
     /// Excel 同步面板是否打开。
     pub excel_sync_open: bool,
+    /// 待显示的提示框（标题, 正文）。`Some` = 弹着。
+    ///
+    /// 目前唯一来源：**项目打不开**（`project.tblschema` 解析失败，@02.26）。
+    /// 那条路「中断打开 + 弹框说明」，而不是兜底成空项目静静放过去。
+    pub alert: Option<(String, String)>,
 }
 
 impl AppState {
-    pub fn load(workdir: &Path) -> anyhow::Result<(Self, bool)> {
-        let (mut engine, config_fixed) = load_workspace(workdir)?;
+    /// 返回值第三项是**打不开的项目**：`project.tblschema` 存在但解析失败的那些。
+    ///
+    /// 不在加载里兜底成空项目，也不自己弹框（那时还没有窗口）—— 交给 main.rs 在窗口
+    /// 建好之后弹（@02.26）。数据是从 `.tbl` 另外读的，所以兜底会让项目**看起来一切正常**，
+    /// 直到下一次保存把原始 schema 覆盖掉。
+    pub fn load(
+        workdir: &Path,
+    ) -> anyhow::Result<(Self, bool, Vec<tablet_core::project::ProjectOpenFailure>)> {
+        let (mut engine, config_fixed, open_failures) = load_workspace(workdir)?;
         // UI 配置从全局配置读取（不随项目切换）
         let rt_validate = engine.global_config.ui.as_ref()
             .map_or(false, |u| u.realtime_validate);
@@ -993,7 +1005,8 @@ impl AppState {
             project_order,
             excel_session: None,
             excel_sync_open: false,
-        }, config_fixed))
+            alert: None,
+        }, config_fixed, open_failures))
     }
 
     /// 写一个单元格的真实存储值；按当前 selected 节点类型分发到 engine。

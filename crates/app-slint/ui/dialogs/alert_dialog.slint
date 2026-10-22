@@ -1,0 +1,44 @@
+// AlertDialog：只有一个「确定」的提示框（@02.26）。
+//
+// 与 ConfirmDialog 的分工：那个问「要不要做某事」（有取消，取消是个真实选择）；
+// 这个报告「已经出事了，看一眼」（没有可取消的动作，只能确认）。
+// 目前唯一用途：项目打不开时中断打开并说明原因。
+
+import { Theme } from "../theme.slint";
+import { DialogChrome } from "dialog_chrome.slint";
+
+export component AlertDialog inherits Rectangle {
+    in property <bool> open: false;
+    in property <string> title: "提示";
+    in property <string> message: "";
+    callback close();
+
+    visible: root.open;
+    width: 100%;
+    height: 100%;
+
+    DialogChrome {
+        title: root.title;
+        dialog-w: 520px;
+        dialog-h: 220px;
+        primary-text: "确定";
+        primary-enabled: true;
+        primary-clicked => { root.close(); }
+        // 没有可取消的动作 —— 遮罩点击也走同一个出口
+        show-cancel: false;
+        cancel-clicked => { root.close(); }
+        scrim-clicked => { root.close(); }
+
+        VerticalLayout {
+            padding: Theme.sp-4;
+            spacing: Theme.sp-3;
+            Text {
+                text: root.message;
+                font-size: Theme.fs-small;
+                color: Theme.text-primary;
+                wrap: word-wrap;
+            }
+            Rectangle { vertical-stretch: 1; }
+        }
+    }
+}

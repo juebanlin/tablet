@@ -126,10 +126,10 @@ fn load_specific_project_impl(
     global_config: &GlobalConfig,
 ) -> Result<Project> {
     let proj_text = std::fs::read_to_string(project_root.join(PROJECT_TOML_FILE)).ok();
-    let schema = read_project_schema_with_fallback(
+    let schema = read_project_schema(
         project_root,
         project_root.file_name().unwrap().to_str().unwrap(),
-    );
+    )?;
 
     // 解析项目级配置（仅 [export] 段）
     let config = parse_project_config(proj_text.as_deref(), global_config)?;
@@ -287,7 +287,7 @@ pub fn load_all_projects(workdir: &Path) -> Result<Vec<Project>> {
 ///    - 否则若 `last_project` 非空且存在：仅打开它
 ///    - 否则打开 available 第一个（保持兼容，确保启动有内容）
 /// 3. active = `last_project`（不在 opened 里则 fallback opened[0]）
-pub fn load_workspace(workdir: &Path) -> Result<(crate::ops::ProjectEngine, bool)> {
+pub fn load_workspace(workdir: &Path) -> Result<(crate::ops::ProjectEngine, bool, Vec<ProjectOpenFailure>)> {
     use crate::ops::{AvailableProject, ProjectEngine};
 
     let projects_dir = workdir.join(PROJECTS_DIR);
@@ -314,7 +314,7 @@ pub fn load_workspace(workdir: &Path) -> Result<(crate::ops::ProjectEngine, bool
             Vec::new(),
             Vec::new(),
             None,
-        ), config_fixed));
+        ), config_fixed, Vec::new()));
     }
 
     let entries = scan_projects_dir(&projects_dir);
@@ -340,7 +340,7 @@ pub fn load_workspace(workdir: &Path) -> Result<(crate::ops::ProjectEngine, bool
             Vec::new(),
             Vec::new(),
             None,
-        ), config_fixed));
+        ), config_fixed, Vec::new()));
     }
 
     // 计算 to_open
@@ -357,11 +357,14 @@ pub fn load_workspace(workdir: &Path) -> Result<(crate::ops::ProjectEngine, bool
         vec![available[0].id.clone()]
     };
 
+    // 打不开的项目**不在这里吞掉**：收集起来交给调用方决定怎么出声
+    // （CLI = 打消息 + 非零退出；GUI = 日志 + 弹框 + 不打开它）。
     let mut opened: Vec<Project> = Vec::with_capacity(to_open.len());
+    let mut failed: Vec<ProjectOpenFailure> = Vec::new();
     for id in &to_open {
         match load_specific_project(workdir, id) {
             Ok(p) => opened.push(p),
-            Err(e) => eprintln!("warn: 加载 Project {} 失败: {}", id, e),
+            Err(e) => failed.push(ProjectOpenFailure { id: id.clone(), message: e.to_string() }),
         }
     }
 
@@ -380,7 +383,17 @@ pub fn load_workspace(workdir: &Path) -> Result<(crate::ops::ProjectEngine, bool
     // workspace tablet.toml [separators] 作为「新建空项目」时 schema.separators 的初值；
     // toml 里没写的字段走 SeparatorsSection 自身 default。
     engine.set_default_separators(global_config.separators.clone());
-    Ok((engine, config_fixed))
+    Ok((engine, config_fixed, failed))
+}
+
+/// 一个打不开的 Project：id 与原因（带文件路径与行号）。
+///
+/// 由 [`load_workspace`] 带回，**不在这里决定怎么出声** —— CLI 要的是消息 + 非零退出，
+/// GUI 要的是日志 + 弹框，两边呈现方式不同。
+#[derive(Debug, Clone)]
+pub struct ProjectOpenFailure {
+    pub id: String,
+    pub message: String,
 }
 
 /// 项目布局变化后的落盘由 `ProjectEngine::persist_global_config` 承担（见 ops.rs），
@@ -446,29 +459,45 @@ fn pick_project<'a>(candidates: &'a [ProjectListEntry], preferred: &str) -> Opti
     candidates.first()
 }
 
-/// 读 `<project_root>/project.tblschema` 解析出 schema；缺失或解析失败时返回带 id/name 兜底
-/// 的空 schema（id = project_id_fallback、name = project_id_fallback）。
-fn read_project_schema_with_fallback(
+/// 读 `<project_root>/project.tblschema` 解析出 schema。
+///
+/// - 文件**缺失** → 带 id/name 兜底的空 schema（还没建 schema，不算"坏"）
+/// - 文件在但**解析失败** → `Err`，原因里带文件路径与行号
+///
+/// **"存在但读不懂"必须失败，不能兜底。** 原来这里是 `Err(_) => fallback`，把解析错误
+/// 整个吞掉：一个写坏的 `project.tblschema` 会静默变成「空身份 + 默认分隔符」的项目，
+/// 而数据是从 `.tbl` 另外读的，所以项目**看起来一切正常** —— 直到下一次保存，把原始
+/// 内容覆盖掉。CLI 主要由 AI / 脚本驱动，没有反馈就等于没有发生（@02.26）。
+fn read_project_schema(
     project_root: &Path,
     project_id_fallback: &str,
-) -> crate::tblschema::TblSchema {
+) -> Result<crate::tblschema::TblSchema> {
     let path = project_root.join(PROJECT_SCHEMA_FILE);
     let txt = match std::fs::read_to_string(&path) {
         Ok(t) => t,
-        Err(_) => return fallback_schema(project_id_fallback),
+        Err(_) => return Ok(fallback_schema(project_id_fallback)),
     };
-    match crate::tblschema::parse_tblschema(&txt) {
-        Ok(mut s) => {
-            if s.meta.id.is_empty() {
-                s.meta.id = project_id_fallback.to_string();
-            }
-            if s.meta.name.is_empty() {
-                s.meta.name = s.meta.id.clone();
-            }
-            s
-        }
-        Err(_) => fallback_schema(project_id_fallback),
+    let mut s = crate::tblschema::parse_tblschema(&txt)
+        .map_err(|e| anyhow::anyhow!("{} 解析失败: {}", path.display(), e))?;
+    if s.meta.id.is_empty() {
+        s.meta.id = project_id_fallback.to_string();
     }
+    if s.meta.name.is_empty() {
+        s.meta.name = s.meta.id.clone();
+    }
+    Ok(s)
+}
+
+/// 扫描 `projects/` 时用的宽松版：**一律兜底**。
+///
+/// 列表要能列出坏项目（按目录名），一个坏项目不该让整张列表打不开；
+/// 真要动它的时候走 [`read_project_schema`]，那时会硬失败并给出位置。
+fn read_project_schema_lenient(
+    project_root: &Path,
+    project_id_fallback: &str,
+) -> crate::tblschema::TblSchema {
+    read_project_schema(project_root, project_id_fallback)
+        .unwrap_or_else(|_| fallback_schema(project_id_fallback))
 }
 
 fn fallback_schema(id: &str) -> crate::tblschema::TblSchema {
@@ -481,7 +510,7 @@ fn fallback_schema(id: &str) -> crate::tblschema::TblSchema {
 /// 仅读取 schema.meta 的 (id, name)，用于 scan_projects_dir 列表展示与 created_at 取值。
 /// 失败时返回 None；调用方按目录名兜底。
 fn read_project_meta_short(project_root: &Path) -> Option<(String, String)> {
-    let s = read_project_schema_with_fallback(project_root, "");
+    let s = read_project_schema_lenient(project_root, "");
     if s.meta.id.is_empty() {
         return None;
     }
@@ -490,7 +519,7 @@ fn read_project_meta_short(project_root: &Path) -> Option<(String, String)> {
 
 /// 读取 schema.meta.created_at（可空）。供 load_workspace 填 AvailableProject。
 fn read_project_created_at(project_root: &Path) -> String {
-    read_project_schema_with_fallback(project_root, "").meta.created_at
+    read_project_schema_lenient(project_root, "").meta.created_at
 }
 
 
@@ -765,7 +794,7 @@ mod tests {
             dir.join("tablet.toml"),
             "[project]\nlast_project = \"p\"\n\n[ui]\nrealtime_validate = true\npicker_trigger_data = \"double\"\n",
         ).unwrap();
-        let (engine, _) = load_workspace(&dir).expect("load");
+        let (engine, _, _) = load_workspace(&dir).expect("load");
         let ui = engine.global_config.ui.as_ref().expect("[ui] present");
         // 项目 toml 的 [ui] 该被 strip → 全局值留下来
         assert!(ui.realtime_validate, "项目级 [ui] 应被 strip，全局 realtime_validate=true 留下");
@@ -789,7 +818,7 @@ mod tests {
             "[project]\nname = \"x\"\nlast_project = \"p2\"\n",
         ).unwrap();
 
-        let (engine, _) = load_workspace(&dir).expect("load_workspace");
+        let (engine, _, _) = load_workspace(&dir).expect("load_workspace");
         assert_eq!(engine.available().len(), 2);
         assert_eq!(engine.projects.len(), 1, "只打开 last_project");
         assert_eq!(engine.projects[0].schema.meta.id, "p2");
@@ -808,7 +837,7 @@ mod tests {
             "[project]\nname = \"x\"\nlast_project = \"p2\"\nopened_projects = [\"p2\", \"p1\"]\n",
         ).unwrap();
 
-        let (engine, _) = load_workspace(&dir).expect("load_workspace");
+        let (engine, _, _) = load_workspace(&dir).expect("load_workspace");
         let ids = engine.opened_ids();
         assert_eq!(ids, vec!["p2".to_string(), "p1".to_string()]);
         assert_eq!(engine.active_project_id(), Some("p2"));
@@ -827,7 +856,7 @@ mod tests {
             "[project]\nname = \"x\"\nlast_project = \"alpha\"\n",
         ).unwrap();
 
-        let (engine, _) = load_workspace(&dir).expect("load_workspace");
+        let (engine, _, _) = load_workspace(&dir).expect("load_workspace");
         assert_eq!(engine.available().len(), 2);
         assert_eq!(engine.projects.len(), 1);
         assert!(!engine.is_opened("beta"));
@@ -845,7 +874,7 @@ mod tests {
             "[project]\nname = \"x\"\nlast_project = \"a\"\n",
         ).unwrap();
 
-        let (mut engine, _) = load_workspace(&dir).expect("load_workspace");
+        let (mut engine, _, _) = load_workspace(&dir).expect("load_workspace");
         assert_eq!(engine.active_project_id(), Some("a"));
         let opened = engine.open_project("b").expect("open b");
         assert!(opened);
@@ -867,7 +896,7 @@ mod tests {
             "[project]\nname = \"x\"\nlast_project = \"a\"\nopened_projects = [\"a\", \"b\"]\n",
         ).unwrap();
 
-        let (mut engine, _) = load_workspace(&dir).expect("load_workspace");
+        let (mut engine, _, _) = load_workspace(&dir).expect("load_workspace");
         assert_eq!(engine.active_project_id(), Some("a"));
         let closed = engine.close_project("a");
         assert!(closed);
@@ -888,7 +917,7 @@ mod tests {
             dir.join("tablet.toml"),
             "[project]\nname = \"x\"\nlast_project = \"only\"\n",
         ).unwrap();
-        let (mut engine, _) = load_workspace(&dir).expect("load_workspace");
+        let (mut engine, _, _) = load_workspace(&dir).expect("load_workspace");
         engine.close_project("only");
         assert!(engine.projects.is_empty());
         assert_eq!(engine.active_project_id(), None);
@@ -906,7 +935,7 @@ mod tests {
             "[project]\nname = \"my-game\"\nlast_project = \"p1\"\n\n[ui]\nshow_meta_id = false\n",
         ).unwrap();
 
-        let (mut engine, _) = load_workspace(&dir).expect("load");
+        let (mut engine, _, _) = load_workspace(&dir).expect("load");
         engine.open_project("p2").unwrap();
         engine.set_active_by_id("p2");
         // 模拟全局设置也改过一处 ui
@@ -920,7 +949,7 @@ mod tests {
         assert_eq!(engine.global_config.project_management.project_sort, crate::enums::ProjectSort::Name);
 
         // re-load：四段都在、值一致
-        let (engine2, _) = load_workspace(&dir).expect("reload");
+        let (engine2, _, _) = load_workspace(&dir).expect("reload");
         let opened = engine2.opened_ids();
         assert!(opened.contains(&"p1".to_string()));
         assert!(opened.contains(&"p2".to_string()));
@@ -946,7 +975,7 @@ mod tests {
             "[project]\nlast_project = \"a\"\n\n[ui]\nshow_meta_id = true\n",
         ).unwrap();
 
-        let (mut engine, _) = load_workspace(&dir).expect("load");
+        let (mut engine, _, _) = load_workspace(&dir).expect("load");
         // 把内存改成与磁盘不同，模拟 stale
         engine.global_config.ui.as_mut().unwrap().show_meta_id = false;
         engine.reload();

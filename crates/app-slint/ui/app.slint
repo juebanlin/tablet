@@ -35,6 +35,7 @@ import { ProjectSettingsDialog } from "dialogs/project_settings.slint";
 import { GlobalSettingsDialog } from "dialogs/global_settings.slint";
 import { InputDialog } from "dialogs/input_dialog.slint";
 import { ConfirmDialog } from "dialogs/confirm_dialog.slint";
+import { AlertDialog } from "dialogs/alert_dialog.slint";
 import { ExcelSyncDialog, EsRow, EsOp } from "dialogs/excel_sync_dialog.slint";
 
 export { TreeNode, HeaderCell, DataCell, DataRow, CellKind, RefItem, TsParamSlot, RefRow, RefHeader, SchemaItem, CtxMenuItem, TemplateItem }
@@ -693,6 +694,13 @@ export component AppWindow inherits Window {
     callback gs-reset-clicked();
     callback gs-confirm();
     callback gs-cancel();
+
+    // ── Dialog: 提示框（只有一个「确定」）──────────────────
+    // 目前唯一用途：项目打不开时中断打开并说明原因（@02.26）。
+    in property <bool> dlg-alert-open: false;
+    in property <string> dlg-alert-title;
+    in property <string> dlg-alert-message;
+    callback dlg-alert-closed();
 
     // ── ContextMenu / InputDialog / ConfirmDialog ───────────
     in property <bool> ctx-menu-open: false;
@@ -1435,6 +1443,13 @@ export component AppWindow inherits Window {
         message: root.dlg-confirm-message;
         confirm => { root.cf-confirm(); }
         cancel => { root.cf-cancel(); }
+    }
+
+    AlertDialog {
+        open: root.dlg-alert-open;
+        title: root.dlg-alert-title;
+        message: root.dlg-alert-message;
+        close => { root.dlg-alert-closed(); }
     }
 
     // Excel 同步面板

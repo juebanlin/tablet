@@ -74,7 +74,13 @@ pub(crate) fn open_project_with_persist(state: &Rc<RefCell<AppState>>, pid: &str
         }
         Ok(false) => false,
         Err(e) => {
-            state.borrow_mut().engine.error_log(format!("[workspace] 打开 {} 失败: {}", pid, e));
+            // 「打开项目」是显式动作：坏了要说清楚，不能只是日志里一行、界面毫无反应
+            crate::dialogs::alert::raise(
+                state,
+                "项目打不开",
+                &format!("Project {} 已跳过：
+{}", pid, e),
+            );
             false
         }
     }

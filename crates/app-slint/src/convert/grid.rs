@@ -626,7 +626,7 @@ desc | txt | cs | 描述
   desc:第一行\\n第二行\\t尾段
 ").unwrap();
 
-        let (mut state, _) = AppState::load(&dir).unwrap();
+        let (mut state, _, _) = AppState::load(&dir).unwrap();
         state.selected = Some(SelectedNode::Table {
             project_id: "demo".into(),
             group: "hero".into(),

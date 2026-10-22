@@ -389,11 +389,27 @@ fn run(cli: Cli) -> Result<i32> {
     }
 }
 
+/// 加载工作区，并把「打不开的项目」当成命令失败。
+///
+/// CLI 主要由 AI / 脚本驱动：**静静少一个项目比报错更难查**（@02.26）。打不开的项目在
+/// `load_workspace` 里已经被跳过了（不会进 engine），所以这里只负责吵 + 非零退出 ——
+/// `bail!` 经 main.rs 翻成 exit 1。
+fn load_workspace_checked(workdir: &std::path::Path) -> Result<(ProjectEngine, bool)> {
+    let (engine, config_fixed, failed) = load_workspace(workdir)?;
+    if !failed.is_empty() {
+        for f in &failed {
+            eprintln!("错误: Project {} 打不开: {}", f.id, f.message);
+        }
+        anyhow::bail!("有 {} 个 Project 打不开，已中止", failed.len());
+    }
+    Ok((engine, config_fixed))
+}
+
 fn dispatch_project(cli: &Cli, pa: &ProjectArgs) -> Result<i32> {
     match &pa.action {
         ProjectAction::List => {
             // 先触发配置加载（含自动修复），即使 list 命令不需要用到 engine
-            let (_engine, config_fixed) = load_workspace(&cli.workdir)?;
+            let (_engine, config_fixed) = load_workspace_checked(&cli.workdir)?;
             if config_fixed {
                 eprintln!("已自动修复 tablet.toml 中的无效配置值");
             }
@@ -419,7 +435,7 @@ fn dispatch_project(cli: &Cli, pa: &ProjectArgs) -> Result<i32> {
             Ok(0)
         }
         ProjectAction::Info { id } => {
-            let (mut engine, _config_fixed) = load_workspace(&cli.workdir)?;
+            let (mut engine, _config_fixed) = load_workspace_checked(&cli.workdir)?;
             if let Some(pid) = cli.project.as_deref().or(id.as_deref()) {
                 engine.set_active_by_id(pid);
             }
@@ -432,7 +448,7 @@ fn dispatch_project(cli: &Cli, pa: &ProjectArgs) -> Result<i32> {
             Ok(0)
         }
         ProjectAction::Rename { id, new_id, new_name } => {
-            let (mut engine, _config_fixed) = load_workspace(&cli.workdir)?;
+            let (mut engine, _config_fixed) = load_workspace_checked(&cli.workdir)?;
             run_project_rename(&mut engine, id, new_id.as_deref(), new_name.as_deref())?;
             println!("已重命名 Project: {}", new_id.as_deref().unwrap_or(id));
             Ok(0)
@@ -442,13 +458,13 @@ fn dispatch_project(cli: &Cli, pa: &ProjectArgs) -> Result<i32> {
                 eprintln!("错误: 删除操作不可逆，请添加 --confirm 确认");
                 return Ok(1);
             }
-            let (mut engine, _config_fixed) = load_workspace(&cli.workdir)?;
+            let (mut engine, _config_fixed) = load_workspace_checked(&cli.workdir)?;
             run_project_delete(&mut engine, id)?;
             println!("已删除 Project: {}", id);
             Ok(0)
         }
         ProjectAction::Clone { source, id, name } => {
-            let (mut engine, _config_fixed) = load_workspace(&cli.workdir)?;
+            let (mut engine, _config_fixed) = load_workspace_checked(&cli.workdir)?;
             run_project_clone(&mut engine, source, id, name.as_deref())?;
             println!("已克隆 Project: {} → {}", source, id);
             Ok(0)
