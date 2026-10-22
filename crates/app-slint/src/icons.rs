@@ -26,6 +26,8 @@ use crate::AppWindow;
 
 const G_PROJECT: &str = "📦";
 const G_GROUP: &str = "📁";
+/// Xlsx 组：数据在一个工作簿里（节点 = sheet），与目录型的 📁 区分开。
+const G_GROUP_XLSX: &str = "📗";
 const G_TABLE: &str = "📊";
 const G_CONST: &str = "📋";
 const G_ENUM: &str = "🔢";
@@ -61,6 +63,7 @@ const G_REVERT: &str = "🔄";
 // ──────── 节点图标（树面板 + grid 标题） ────────
 pub const ICON_PROJECT: &str = G_PROJECT;
 pub const ICON_GROUP: &str = G_GROUP;
+pub const ICON_GROUP_XLSX: &str = G_GROUP_XLSX;
 pub const ICON_TABLE: &str = G_TABLE;
 pub const ICON_CONST: &str = G_CONST;
 pub const ICON_ENUM: &str = G_ENUM;
@@ -157,7 +160,7 @@ mod tests {
 
     /// 原始字形表：新增字形时这里也要加一行，测试守住两条不变式。
     const PRIMITIVES: &[(&str, &str)] = &[
-        ("G_PROJECT", G_PROJECT), ("G_GROUP", G_GROUP), ("G_TABLE", G_TABLE),
+        ("G_PROJECT", G_PROJECT), ("G_GROUP", G_GROUP), ("G_GROUP_XLSX", G_GROUP_XLSX), ("G_TABLE", G_TABLE),
         ("G_CONST", G_CONST), ("G_ENUM", G_ENUM), ("G_STAR", G_STAR),
         ("G_WARN", G_WARN), ("G_WARN_EMOJI", G_WARN_EMOJI), ("G_LOCK", G_LOCK),
         ("G_FILE", G_FILE), ("G_SEARCH", G_SEARCH), ("G_BLOCK", G_BLOCK),

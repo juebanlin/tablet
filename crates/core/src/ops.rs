@@ -149,6 +149,9 @@ fn apply_pending_renames(project: &mut Project) -> Vec<String> {
     let mut warnings = Vec::new();
     let data_dir = project.data_dir();
     for group in &mut project.groups {
+        // 记住改名前盘上的名字：组改名块之后 `original_name` 就被就地更新了，
+        // 而工作簿文件还叫旧名（目录搬完，里面的文件不会跟着改）。
+        let old_group_name = group.original_name.clone();
         // ── 组目录 ──
         if group.original_name != group.name {
             let old_dir = data_dir.join(&group.original_name);
@@ -180,6 +183,27 @@ fn apply_pending_renames(project: &mut Project) -> Vec<String> {
         }
         // 组目录定下来后重算子节点 path：`dir` 变了，叶子名没变的也得跟着改
         let dir = group.dir.clone();
+
+        // Xlsx 组：工作簿文件名跟着组名走，节点没有自己的文件；节点改名在
+        // `save_xlsx_group` 里落成 sheet 改名（那边才知道 original_name）。
+        if group.is_xlsx() {
+            let book = group.book_path();
+            let old_book = dir.join(format!("{}.xlsx", old_group_name));
+            if old_book != book && old_book.is_file() {
+                if let Err(e) = std::fs::rename(&old_book, &book) {
+                    warnings.push(format!(
+                        "重命名工作簿 {} → {} 失败: {}",
+                        old_book.display(), book.display(), e
+                    ));
+                }
+            }
+            for t in &mut group.tables { t.path = book.clone(); }
+            for c in &mut group.constants { c.path = book.clone(); }
+            for e in &mut group.enums { e.path = book.clone(); }
+            group.original_name = group.name.clone();
+            continue;
+        }
+
         for t in &mut group.tables { t.path = dir.join(format!("{}.tbl", t.name)); }
         for c in &mut group.constants { c.path = dir.join(format!("{}.tbl", c.name)); }
         for e in &mut group.enums { e.path = dir.join(format!("{}.tbl", e.name)); }
@@ -237,16 +261,21 @@ fn rename_tbl_file(
 ///
 /// 项目级落盘（root 目录创建 / .tblschema 写入）算 1 次保存动作，
 /// 让"空项目（仅 meta，无 group）"首次保存的日志为"已保存 1 个文件"而不是"无修改"。
-fn save_project_files(project: &mut Project) -> (usize, usize, Vec<String>) {
+/// 写盘。返回 `(写入文件数, 删除文件数, 警告, 是否失败)`。
+///
+/// 第四个元素是给「xlsx 组保存冲突 / 被 Excel 占用」这类**整组写不进去**的情况用的：
+/// 调用方据此让 `save_all` 返回 false，别对外声称"已保存"。
+fn save_project_files(project: &mut Project) -> (usize, usize, Vec<String>, bool) {
     let mut count = 0;
     let mut deleted = 0;
+    let mut failed = false;
     // 第一次落盘：盘上还什么都没有，schema 必须无条件写一份
     let first_save = project.state.is_pending();
     // 第一步：克隆出来但未落盘的项目，先建 root 目录 + 让 schema 一并落地
     if first_save {
         if let Err(e) = std::fs::create_dir_all(&project.project_root) {
             eprintln!("warn: create project root failed: {} ({})", project.project_root.display(), e);
-            return (0, 0, Vec::new());
+            return (0, 0, Vec::new(), true);
         }
         project.state = crate::model::ProjectState::Loaded;
 
@@ -255,6 +284,13 @@ fn save_project_files(project: &mut Project) -> (usize, usize, Vec<String>) {
         let new_data_dir = project.data_dir();
         for group in &mut project.groups {
             group.dir = new_data_dir.join(&group.name);
+            let book = group.book_path();
+            if group.is_xlsx() {
+                for table in &mut group.tables { table.path = book.clone(); }
+                for constant in &mut group.constants { constant.path = book.clone(); }
+                for enum_def in &mut group.enums { enum_def.path = book.clone(); }
+                continue;
+            }
             for table in &mut group.tables {
                 table.path = group.dir.join(format!("{}.tbl", table.name));
             }
@@ -264,6 +300,25 @@ fn save_project_files(project: &mut Project) -> (usize, usize, Vec<String>) {
             for enum_def in &mut group.enums {
                 enum_def.path = group.dir.join(format!("{}.tbl", enum_def.name));
             }
+        }
+    }
+    // Xlsx 组的**预检**：锁文件 / 外部改动 / sheet 名长度，全部在动盘之前问完。
+    // 否则会出现「组改名已经搬了目录、schema 还没来得及写」——下次加载时组名对不上
+    // schema section，那个组的节点会静默消失。
+    {
+        let mut msgs = Vec::new();
+        for group in &project.groups {
+            if group.is_xlsx() && xlsx_group_needs_write(group) {
+                if let Some(m) = xlsx_preflight(group) {
+                    msgs.push(m);
+                }
+            }
+        }
+        if !msgs.is_empty() {
+            if first_save {
+                project.state = crate::model::ProjectState::Pending;
+            }
+            return (0, 0, msgs, true);
         }
     }
     // `project.toml` 是**可选的 `[export]` 覆盖段**：只在用户真的改过 export 时才写。
@@ -299,19 +354,19 @@ fn save_project_files(project: &mut Project) -> (usize, usize, Vec<String>) {
     // 结构变更时的样子。CLI 的工作流正是「改 .tbl → workspace save」，那条路必须把投影
     // 刷新掉，否则下一个 `project new --from-file` / `util scaffold` 拿到的还是旧结构。
     project.resync_schema();
-    let txt = crate::tblschema::serialize_tblschema(&project.schema);
-    let path = project.project_root.join(crate::project::PROJECT_SCHEMA_FILE);
-    let on_disk = std::fs::read_to_string(&path).ok();
-    if first_save || project.schema_changed() || on_disk.as_deref() != Some(txt.as_str()) {
-        if std::fs::write(&path, txt).is_ok() {
-            // 落盘后「盘上是什么」才追上内存
-            project.original_meta = project.schema.meta.clone();
-            project.original_separators = project.schema.separators.clone();
-            count += 1;
-        }
-    }
+    let schema_txt = crate::tblschema::serialize_tblschema(&project.schema);
+    let schema_path = project.project_root.join(crate::project::PROJECT_SCHEMA_FILE);
+    let schema_on_disk = std::fs::read_to_string(&schema_path).ok();
+    let schema_needs_write = first_save
+        || project.schema_changed()
+        || schema_on_disk.as_deref() != Some(schema_txt.as_str());
+    // **真正的写放在组循环之后**：schema 是 groups 的投影，如果某个组没写进去
+    // （xlsx 被 Excel 占用 / 外部改过），先把 schema 落盘就会造出「schema 里有这个节点、
+    // 盘上却没有它的数据」——项目当场打不开。要么一起成功，要么一起不写。
+    let txt = schema_txt;
+    let path = schema_path;
     // 改名先落位（盘上搬完），再走下面的写入循环——两边都靠 original_name 对齐
-    let warnings = apply_pending_renames(project);
+    let mut warnings = apply_pending_renames(project);
     // 「节点被删光」的组要在盘上和内存里都消失；**「本来就是空的新组」不能跟着殉葬**。
     // 两者在写入循环结束时看起来一样（三个 vec 都空），所以先记下它本来有没有节点。
     // CLI 是每条命令一个进程：`schema add-group` 保存后若把空组删掉，下一条
@@ -326,6 +381,19 @@ fn save_project_files(project: &mut Project) -> (usize, usize, Vec<String>) {
             || !group.enums.is_empty();
         if group.is_new {
             let _ = std::fs::create_dir_all(&group.dir);
+        }
+        // Xlsx 组走自己的工作簿写入器：一次会话写完整组，脏的才写。
+        // 注意**不能**落到下面的 .tbl 写法里——那会去 `dir/<Node>.tbl` 找不存在的文件。
+        if group.is_xlsx() {
+            let outcome = save_xlsx_group(group);
+            count += outcome.written;
+            deleted += outcome.deleted;
+            warnings.extend(outcome.warnings);
+            failed |= outcome.failed;
+            if outcome.emptied {
+                emptied.push(group.name.clone());
+            }
+            continue;
         }
         for table in &mut group.tables {
             if table.deleted {
@@ -394,7 +462,425 @@ fn save_project_files(project: &mut Project) -> (usize, usize, Vec<String>) {
         group.is_new = false;
     }
     project.groups.retain(|g| !emptied.contains(&g.name));
-    (count, deleted, warnings)
+
+    // 组都写成功了才写 schema 投影（见上面的注释）。
+    if !failed && schema_needs_write {
+        if std::fs::write(&path, txt).is_ok() {
+            // 落盘后「盘上是什么」才追上内存
+            project.original_meta = project.schema.meta.clone();
+            project.original_separators = project.schema.separators.clone();
+            count += 1;
+        }
+    }
+    if failed && first_save {
+        // 首次保存没走完：盘上还没有完整的项目，别让内存把它当成已落盘。
+        project.state = crate::model::ProjectState::Pending;
+    }
+    (count, deleted, warnings, failed)
+}
+
+/// 这个 xlsx 组这次保存要不要动文件。
+fn xlsx_group_needs_write(group: &crate::model::Group) -> bool {
+    group.is_new
+        || group.tables.iter().any(|t| !t.deleted && t.dirty || t.deleted)
+        || group.constants.iter().any(|c| !c.deleted && c.dirty || c.deleted)
+        || group.enums.iter().any(|e| !e.deleted && e.dirty || e.deleted)
+}
+
+/// 动盘之前的确定性检查：被 Excel 占用 / 外部改过 / sheet 名超长。
+/// 返回 `Some(原因)` = 这次不能写。
+fn xlsx_preflight(group: &crate::model::Group) -> Option<String> {
+    let path = group.book_path();
+
+    // Excel 正开着时会留 `~$xxx.xlsx`，这会儿写进去只会写坏。
+    let lock = group.dir.join(format!("~${}.xlsx", group.name));
+    if lock.exists() {
+        return Some(format!(
+            "[{}] 保存失败：{} 正被 Excel 打开，请先关闭 Excel",
+            group.name, path.display()
+        ));
+    }
+
+    // 外部改过：加载时的 (mtime, size) 对不上就不写，交给用户决定重新加载还是另存。
+    if !group.is_new {
+        if let Some(prev) = group.book_stamp {
+            if crate::project::file_stamp(&path) != Some(prev) {
+                return Some(format!(
+                    "[{}] 保存失败：{} 已被外部修改，请重新加载后再改（或先备份再覆盖）",
+                    group.name, path.display()
+                ));
+            }
+        }
+    }
+
+    // 名字是 sheet 名的约束：段名规则不含非法字符，但可能超 31 字符。
+    for name in group.tables.iter().filter(|t| !t.deleted).map(|t| &t.name)
+        .chain(group.constants.iter().filter(|c| !c.deleted).map(|c| &c.name))
+        .chain(group.enums.iter().filter(|e| !e.deleted).map(|e| &e.name))
+    {
+        if name.chars().count() > 31 {
+            return Some(format!(
+                "[{}] 保存失败：节点名 {:?} 超过 Excel sheet 名上限 31 字符，请改名",
+                group.name, name
+            ));
+        }
+    }
+    None
+}
+
+/// Xlsx 组的写盘结果。
+struct XlsxSaveOutcome {
+    written: usize,
+    deleted: usize,
+    warnings: Vec<String>,
+    /// 整组没写进去（被 Excel 占用 / 外部改过 / 写入失败）。调用方要让 `save_all` 返回 false。
+    failed: bool,
+    /// 节点被删光，组本身也该消失。
+    emptied: bool,
+}
+
+impl XlsxSaveOutcome {
+    fn ok() -> Self {
+        Self { written: 0, deleted: 0, warnings: Vec::new(), failed: false, emptied: false }
+    }
+}
+
+/// 把 Xlsx 组写回 `<group>.xlsx`（@02.27）。
+///
+/// 三条铁律，都来自对字节稳定性的实测：
+/// 1. **不脏就不碰文件**。umya 每次写盘都会重打 zip + 打当前时间戳，字节必变；
+///    "顺手保存"会让 git 每次多一个改动。
+/// 2. **一次会话写完整组**。每开一次文件就重写整个容器，逐节点写等于反复重打。
+/// 3. **只写脏 sheet**，其余 sheet 走 `lazy_read` 的原始字节直通（实测 CRC 不变）。
+fn save_xlsx_group(group: &mut crate::model::Group) -> XlsxSaveOutcome {
+    let mut out = XlsxSaveOutcome::ok();
+    let path = group.book_path();
+
+    let had_any_nodes = !group.tables.is_empty()
+        || !group.constants.is_empty()
+        || !group.enums.is_empty();
+    let remaining = group.tables.iter().filter(|t| !t.deleted).count()
+        + group.constants.iter().filter(|c| !c.deleted).count()
+        + group.enums.iter().filter(|e| !e.deleted).count();
+
+    if !xlsx_group_needs_write(group) {
+        return out; // 干净 = 一个字节都不碰
+    }
+    if let Some(msg) = xlsx_preflight(group) {
+        out.failed = true;
+        out.warnings.push(msg);
+        return out;
+    }
+
+    // 删空：整组消失（与 .tbl 组的语义一致）。不写一个零 sheet 的 workbook。
+    if had_any_nodes && remaining == 0 {
+        if path.is_file() {
+            let _ = std::fs::remove_file(&path);
+            out.deleted += 1;
+        }
+        if group.dir.is_dir() {
+            let _ = std::fs::remove_dir_all(&group.dir);
+        }
+        out.emptied = true;
+        return out;
+    }
+
+    let existed = path.is_file();
+    let mut book = if existed {
+        match umya_spreadsheet::reader::xlsx::lazy_read(&path) {
+            Ok(b) => b,
+            Err(e) => {
+                out.failed = true;
+                out.warnings.push(format!("[{}] 打开 {} 失败: {}", group.name, path.display(), e));
+                return out;
+            }
+        }
+    } else {
+        umya_spreadsheet::new_file()
+    };
+
+    // 空组也要能落盘（xlsx 至少要有一个 sheet），但那条占位 sheet 不该一直跟着：
+    // 组里一旦有节点，就把占位表删掉。占位表用保留名 `_empty`——段名必须大写开头，
+    // 所以它不可能和配置表撞名。
+    //
+    // **必须等新 sheet 建出来之后再删**：umya 不允许删掉最后一个 sheet，
+    // 先删后建会静默失败（实测：空 Sheet1 一直跟着走）。
+    const EMPTY_SHEET: &str = "_empty";
+    let node_names: Vec<String> = group.tables.iter().filter(|t| !t.deleted).map(|t| t.name.clone())
+        .chain(group.constants.iter().filter(|c| !c.deleted).map(|c| c.name.clone()))
+        .chain(group.enums.iter().filter(|e| !e.deleted).map(|e| e.name.clone()))
+        .collect();
+
+    let mut placeholder: Option<String> = None;
+    if !existed {
+        // `new_file()` 自带一个 Sheet1
+        let default = book.sheet_collection_no_check().first().map(|s| s.name().to_string());
+        if let Some(d) = default {
+            if node_names.is_empty() {
+                if let Ok(ws) = book.sheet_by_name_mut(&d) {
+                    ws.set_name(EMPTY_SHEET);
+                }
+            } else {
+                placeholder = Some(d);
+            }
+        }
+    } else if !node_names.is_empty()
+        && book.sheet_collection_no_check().iter().any(|s| s.name() == EMPTY_SHEET)
+    {
+        placeholder = Some(EMPTY_SHEET.to_string());
+    }
+
+    // ── 新节点的名字不能撞上策划的私有 sheet ──
+    // （新节点 `saved == false`；盘上已有同名 sheet 说明那是策划自己加的表，
+    //   直接写进去会把人家的内容盖掉。）
+    let plan: Vec<(String, String, bool)> = group.tables.iter().filter(|t| !t.deleted)
+        .map(|t| (t.original_name.clone(), t.name.clone(), t.saved))
+        .chain(group.constants.iter().filter(|c| !c.deleted)
+            .map(|c| (c.original_name.clone(), c.name.clone(), c.saved)))
+        .chain(group.enums.iter().filter(|e| !e.deleted)
+            .map(|e| (e.original_name.clone(), e.name.clone(), e.saved)))
+        .collect();
+    for (_old, new, saved) in &plan {
+        if *saved { continue; }
+        if book.sheet_collection_no_check().iter().any(|s| s.name().eq_ignore_ascii_case(new)) {
+            out.failed = true;
+            out.warnings.push(format!(
+                "[{}] 保存失败：工作簿里已有同名 sheet {:?}，但 schema 里没有对应节点；\
+                 请先改名或删掉那张表", group.name, new
+            ));
+            return out;
+        }
+    }
+
+    // ── 节点改名 = sheet 改名（先改，后面按新名找）──
+    for (old, new, _) in &plan {
+        if old == new { continue; }
+        // 改名撞上别的 sheet 同样不行（Excel 的 sheet 名大小写不敏感）
+        let clashes = book.sheet_collection_no_check().iter()
+            .any(|s| s.name().eq_ignore_ascii_case(new) && !s.name().eq_ignore_ascii_case(old));
+        if clashes {
+            out.failed = true;
+            out.warnings.push(format!(
+                "[{}] 保存失败：sheet 改名 {:?} → {:?} 撞上已有 sheet", group.name, old, new
+            ));
+            return out;
+        }
+        if let Ok(ws) = book.sheet_by_name_mut(old) {
+            ws.set_name(new);
+        }
+    }
+
+    // ── 删除节点 = 删 sheet ──
+    for (old, deleted) in group.tables.iter().map(|t| (t.original_name.clone(), t.deleted))
+        .chain(group.constants.iter().map(|c| (c.original_name.clone(), c.deleted)))
+        .chain(group.enums.iter().map(|e| (e.original_name.clone(), e.deleted)))
+    {
+        if deleted {
+            if book.sheet_collection_no_check().iter().any(|s| s.name() == old) {
+                if book.remove_sheet_by_name(&old).is_ok() {
+                    out.deleted += 1;
+                }
+            }
+        }
+    }
+
+    // ── 写脏节点 ──
+    for table in group.tables.iter_mut().filter(|t| !t.deleted && t.dirty) {
+        let name = table.name.clone();
+        let ws = match ensure_sheet(&mut book, &name) {
+            Ok(ws) => ws,
+            Err(e) => { out.failed = true; out.warnings.push(e); return out; }
+        };
+        if let Err(e) = write_table_sheet(ws, table) {
+            out.failed = true;
+            out.warnings.push(format!("[{}] 写 sheet {} 失败: {}", group.name, name, e));
+            return out;
+        }
+        table.original_records = table.records.clone();
+        table.original_fields = table.schema.fields.clone();
+        table.original_name = table.name.clone();
+        table.original_display_field = table.display_field.clone();
+        table.dirty = false;
+        table.saved = true;
+        out.written += 1;
+    }
+    for constant in group.constants.iter_mut().filter(|c| !c.deleted && c.dirty) {
+        let name = constant.name.clone();
+        let ws = match ensure_sheet(&mut book, &name) {
+            Ok(ws) => ws,
+            Err(e) => { out.failed = true; out.warnings.push(e); return out; }
+        };
+        write_constant_sheet(ws, constant);
+        constant.original_entries = constant.entries.clone();
+        constant.original_name = constant.name.clone();
+        constant.dirty = false;
+        constant.saved = true;
+        out.written += 1;
+    }
+    for enum_def in group.enums.iter_mut().filter(|e| !e.deleted && e.dirty) {
+        let name = enum_def.name.clone();
+        let ws = match ensure_sheet(&mut book, &name) {
+            Ok(ws) => ws,
+            Err(e) => { out.failed = true; out.warnings.push(e); return out; }
+        };
+        write_enum_sheet(ws, enum_def);
+        enum_def.original_entries = enum_def.entries.clone();
+        enum_def.original_name = enum_def.name.clone();
+        enum_def.original_display_field = enum_def.display_field.clone();
+        enum_def.dirty = false;
+        enum_def.saved = true;
+        out.written += 1;
+    }
+
+    // 节点 sheet 都建好了，这时候才有资格删那个占位 Sheet1。
+    if let Some(p) = placeholder {
+        if book.sheet_collection_no_check().len() > 1 {
+            let _ = book.remove_sheet_by_name(&p);
+            out.deleted += 1;
+        }
+    }
+
+    // ── 落盘：临时文件 + rename，避免半截 workbook ──
+    let tmp = group.dir.join(format!("{}.xlsx.tmp", group.name));
+    if let Err(e) = umya_spreadsheet::writer::xlsx::write(&book, &tmp) {
+        let _ = std::fs::remove_file(&tmp);
+        out.failed = true;
+        out.warnings.push(format!("[{}] 写入 {} 失败: {}", group.name, path.display(), e));
+        return out;
+    }
+    if let Err(e) = std::fs::rename(&tmp, &path) {
+        let _ = std::fs::remove_file(&tmp);
+        out.failed = true;
+        out.warnings.push(format!("[{}] 替换 {} 失败: {}", group.name, path.display(), e));
+        return out;
+    }
+
+    group.tables.retain(|t| !t.deleted);
+    group.constants.retain(|c| !c.deleted);
+    group.enums.retain(|e| !e.deleted);
+    group.original_name = group.name.clone();
+    group.is_new = false;
+    group.book_stamp = crate::project::file_stamp(&path);
+
+    out
+}
+
+/// 找到 sheet；没有就新建。名字大小写按 Excel 口径（不敏感）判重。
+fn ensure_sheet<'a>(
+    book: &'a mut umya_spreadsheet::Workbook,
+    name: &str,
+) -> Result<&'a mut umya_spreadsheet::Worksheet, String> {
+    let existing = book.sheet_collection_no_check().iter()
+        .find(|s| s.name().eq_ignore_ascii_case(name))
+        .map(|s| s.name().to_string());
+    if let Some(actual) = existing {
+        return book.sheet_by_name_mut(&actual)
+            .map_err(|e| format!("打开 sheet {} 失败: {}", actual, e));
+    }
+    book.new_sheet(name).map_err(|e| format!("新建 sheet {} 失败: {}", name, e))?;
+    book.sheet_by_name_mut(name)
+        .map_err(|e| format!("打开 sheet {} 失败: {}", name, e))
+}
+
+/// 把一个 Table 写进 sheet：4 行表头 + 数据，列按**字段名**对齐（策划的私有列原样留着）。
+fn write_table_sheet(
+    ws: &mut umya_spreadsheet::Worksheet,
+    table: &crate::model::Table,
+) -> Result<(), String> {
+    use crate::excel_sync::vo::{DATA_START, HDR_DESC, HDR_EXPORT, HDR_NAME, HDR_TYPE};
+
+    let fields = &table.schema.fields;
+    let (max_col, max_row) = ws.highest_column_and_row();
+    let mut next_col = max_col + 1;
+    let mut col_of: Vec<u32> = Vec::with_capacity(fields.len());
+    for f in fields {
+        let found = (1..=max_col).find(|&c| ws.value((c, HDR_NAME)) == f.name);
+        let c = match found {
+            Some(c) => c,
+            None => { let c = next_col; next_col += 1; c }
+        };
+        col_of.push(c);
+    }
+
+    for (i, f) in fields.iter().enumerate() {
+        let c = col_of[i];
+        ws.cell_mut((c, HDR_DESC)).set_value(f.desc.clone());
+        ws.cell_mut((c, HDR_EXPORT)).set_value(f.export.display().to_string());
+        ws.cell_mut((c, HDR_TYPE)).set_value(f.tbl_type.clone());
+        ws.cell_mut((c, HDR_NAME)).set_value(f.name.clone());
+    }
+
+    for (ri, row) in table.records.iter().enumerate() {
+        let r = DATA_START + ri as u32;
+        for (i, v) in row.iter().enumerate() {
+            if let Some(&c) = col_of.get(i) {
+                ws.cell_mut((c, r)).set_value(v.clone());
+            }
+        }
+    }
+
+    // 记录变少时清掉 schema 列里的旧数据行；私有列一概不碰。
+    let first_stale = DATA_START + table.records.len() as u32;
+    if max_row >= first_stale {
+        for r in first_stale..=max_row {
+            for &c in &col_of {
+                if !ws.value((c, r)).is_empty() {
+                    ws.cell_mut((c, r)).set_value("");
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn write_constant_sheet(ws: &mut umya_spreadsheet::Worksheet, constant: &crate::model::Constant) {
+    const HEADERS: [&str; 5] = ["name", "type", "value", "export", "desc"];
+    for (i, h) in HEADERS.iter().enumerate() {
+        ws.cell_mut((i as u32 + 1, 1)).set_value(*h);
+    }
+    for (ri, e) in constant.entries.iter().enumerate() {
+        let r = ri as u32 + 2;
+        ws.cell_mut((1, r)).set_value(e.name.clone());
+        ws.cell_mut((2, r)).set_value(e.tbl_type.clone());
+        ws.cell_mut((3, r)).set_value(e.value.clone());
+        ws.cell_mut((4, r)).set_value(e.export.display().to_string());
+        ws.cell_mut((5, r)).set_value(e.desc.clone());
+    }
+    clear_stale_rows(ws, constant.entries.len() as u32 + 2, 5);
+}
+
+fn write_enum_sheet(ws: &mut umya_spreadsheet::Worksheet, enum_def: &crate::model::EnumDef) {
+    const HEADERS: [&str; 3] = ["id", "name", "desc"];
+    for (i, h) in HEADERS.iter().enumerate() {
+        ws.cell_mut((i as u32 + 1, 1)).set_value(*h);
+    }
+    for (ri, e) in enum_def.entries.iter().enumerate() {
+        let r = ri as u32 + 2;
+        ws.cell_mut((1, r)).set_value(e.id.clone());
+        ws.cell_mut((2, r)).set_value(e.name.clone());
+        ws.cell_mut((3, r)).set_value(e.desc.clone());
+    }
+    clear_stale_rows(ws, enum_def.entries.len() as u32 + 2, 3);
+}
+
+fn clear_stale_rows(ws: &mut umya_spreadsheet::Worksheet, first_stale: u32, cols: u32) {
+    let (_, max_row) = ws.highest_column_and_row();
+    if max_row < first_stale { return; }
+    for r in first_stale..=max_row {
+        for c in 1..=cols {
+            if !ws.value((c, r)).is_empty() {
+                ws.cell_mut((c, r)).set_value("");
+            }
+        }
+    }
+}
+
+/// 一个「外部改过」的 xlsx 组。
+pub struct XlsxExternalChange {
+    pub project_id: String,
+    pub group: String,
+    /// 内存里是否有未保存改动（有就不能直接重载）。
+    pub dirty: bool,
 }
 
 pub struct ProjectEngine {
@@ -420,6 +906,9 @@ pub struct ProjectEngine {
     /// 已加载项目的 separators 各自走 schema，运行期不再读这里。
     pub default_separators: crate::types::SeparatorsSection,
     pub logs: Vec<String>,
+    /// 最近一次保存失败的原因（xlsx 组被占用 / 外部改过 …）。
+    /// 引擎日志是给 GUI 看的；CLI 需要一句能直接打给 stderr 的原因。
+    pub last_save_failure: Option<String>,
 }
 
 /// 扫描得到的 project 元数据（不持有数据）。
@@ -522,7 +1011,9 @@ impl NodeClipboard {
 
 #[derive(Clone, Debug)]
 pub enum ProjectAction {
-    NewGroup    { project_id: String, name: String },
+    /// 新建组。`storage` 决定这个组的数据落在 `.tbl` 目录还是单个 `.xlsx`
+    /// （一组一种后端，不混存，@02.27）。
+    NewGroup    { project_id: String, name: String, storage: crate::model::GroupStorage },
     NewTable    { project_id: String, group: String, name: String },
     NewConstant { project_id: String, group: String, name: String },
     NewEnum     { project_id: String, group: String, name: String },
@@ -556,6 +1047,7 @@ impl ProjectEngine {
             node_clipboard: None,
             default_separators: crate::types::SeparatorsSection::default(),
             logs: Vec::new(),
+            last_save_failure: None,
         }
     }
 
@@ -584,6 +1076,7 @@ impl ProjectEngine {
             node_clipboard: None,
             default_separators: crate::types::SeparatorsSection::default(),
             logs: Vec::new(),
+            last_save_failure: None,
         }
     }
 
@@ -614,6 +1107,7 @@ impl ProjectEngine {
             node_clipboard: None,
             default_separators: crate::types::SeparatorsSection::default(),
             logs: Vec::new(),
+            last_save_failure: None,
         }
     }
 
@@ -1569,8 +2063,14 @@ impl ProjectEngine {
             self.logs.push(format!("[保存失败] 共 {} 个验证错误", active_errs));
             return false;
         }
-        let (count, deleted, warnings) = save_project_files(self.project_mut());
-        for w in warnings { self.warn_log(w); }
+        self.last_save_failure = None;
+        let (count, deleted, warnings, failed) = save_project_files(self.project_mut());
+        for w in &warnings { self.warn_log(w.clone()); }
+        if failed {
+            self.last_save_failure = warnings.iter().find(|w| w.contains("保存失败")).cloned();
+            self.logs.push("[保存失败] 有组没能写进磁盘（见上方原因）".to_string());
+            return false;
+        }
         if count > 0 || deleted > 0 {
             self.ui_log(format!("已保存 {} 个文件, 删除 {} 个", count, deleted));
         } else {
@@ -1592,13 +2092,20 @@ impl ProjectEngine {
         let mut total_count = 0;
         let mut total_deleted = 0;
         let mut warnings = Vec::new();
+        let mut failed = false;
+        self.last_save_failure = None;
         for project in &mut self.projects {
-            let (c, d, w) = save_project_files(project);
+            let (c, d, w, f) = save_project_files(project);
             total_count += c;
             total_deleted += d;
             warnings.extend(w);
+            failed |= f;
         }
-        for w in warnings { self.warn_log(w); }
+        for w in &warnings { self.warn_log(w.clone()); }
+        if failed {
+            self.last_save_failure = warnings.iter().find(|w| w.contains("保存失败")).cloned();
+            self.logs.push("[保存失败] 有组没能写进磁盘（见上方原因）".to_string());
+        }
         if total_count > 0 || total_deleted > 0 {
             self.ui_log(format!("已保存 {} 个文件, 删除 {} 个（{} 个 Project）",
                 total_count, total_deleted, self.projects.len()));
@@ -1835,7 +2342,7 @@ impl ProjectEngine {
         } else {
             base.clone()
         };
-        let new_path = g.dir.join(format!("{}.tbl", final_name));
+        let new_path = if g.is_xlsx() { g.book_path() } else { g.dir.join(format!("{}.tbl", final_name)) };
         let kind_label = match body {
             NodeBody::Table(mut t) => {
                 t.name = final_name.clone();
@@ -1889,6 +2396,18 @@ impl ProjectEngine {
     /// - 末尾整 project revalidate
     /// 返回新 group 名。
     pub fn paste_group_to(&mut self, target_project: &str) -> Option<String> {
+        self.paste_group_as(target_project, None)
+    }
+
+    /// 粘贴整组，并**指定目标后端**（`None` = 跟源组一致）。
+    ///
+    /// 这是「一组一种后端」下唯一能把整组在 `.tbl` / `xlsx` 之间搬家的入口：
+    /// 节点在内存里两种后端同型，所以"转换"只是换一个保存写入器（@02.26.8）。
+    pub fn paste_group_as(
+        &mut self,
+        target_project: &str,
+        storage: Option<crate::model::GroupStorage>,
+    ) -> Option<String> {
         let Some(NodeClipboard::Group { snapshot, .. }) = self.node_clipboard.clone() else {
             self.warn_log("剪贴板为空或类型不匹配（需要 Group 剪贴板）".to_string());
             return None;
@@ -1902,24 +2421,31 @@ impl ProjectEngine {
         };
         let new_dir = project.data_dir().join(&final_name);
         let mut new_group = snapshot;
+        if let Some(st) = storage {
+            new_group.storage = st;
+        }
         new_group.name = final_name.clone();
         new_group.original_name = final_name.clone();
         new_group.dir = new_dir.clone();
         new_group.is_new = true;
+        // 新组盘上还没有文件；Xlsx 组的节点 path 统一指向（尚不存在的）工作簿。
+        new_group.book_stamp = None;
+        let is_xlsx = new_group.is_xlsx();
+        let book = new_dir.join(format!("{}.xlsx", new_group.name));
         for t in &mut new_group.tables {
-            t.path = new_dir.join(format!("{}.tbl", t.name));
+            t.path = if is_xlsx { book.clone() } else { new_dir.join(format!("{}.tbl", t.name)) };
             t.dirty = true;
             t.original_records.clear(); t.original_fields.clear(); t.saved = false;
             t.original_name = t.name.clone();
         }
         for c in &mut new_group.constants {
-            c.path = new_dir.join(format!("{}.tbl", c.name));
+            c.path = if is_xlsx { book.clone() } else { new_dir.join(format!("{}.tbl", c.name)) };
             c.dirty = true;
             c.original_entries.clear(); c.saved = false;
             c.original_name = c.name.clone();
         }
         for e in &mut new_group.enums {
-            e.path = new_dir.join(format!("{}.tbl", e.name));
+            e.path = if is_xlsx { book.clone() } else { new_dir.join(format!("{}.tbl", e.name)) };
             e.dirty = true;
             e.original_entries.clear(); e.saved = false;
             e.original_name = e.name.clone();
@@ -1951,7 +2477,7 @@ impl ProjectEngine {
 
     pub fn execute_action(&mut self, action: &ProjectAction) {
         match action {
-            ProjectAction::NewGroup { project_id, name } => {
+            ProjectAction::NewGroup { project_id, name, storage } => {
                 let Some(project) = self.find_project_mut(project_id) else {
                     self.ui_log(format!("Project 不存在: {}", project_id));
                     return;
@@ -1965,15 +2491,18 @@ impl ProjectEngine {
                     constants: Vec::new(),
                     enums: Vec::new(),
                     is_new: true,
+                    storage: *storage,
+                    book_stamp: None,
                 });
                 sync_schema_from_groups(project);
-                self.ui_log(format!("[{}] 新建 Group: {}", project_id, name));
+                self.ui_log(format!("[{}] 新建 Group: {}（{}）", project_id, name, storage.as_str()));
             }
             ProjectAction::NewTable { project_id, group, name } => {
                 let mut ok = false;
                 if let Some(project) = self.find_project_mut(project_id) {
                     if let Some(g) = project.groups.iter_mut().find(|g| g.name == *group) {
-                        let path = g.dir.join(format!("{}.tbl", name));
+                        // Xlsx 组没有自己的文件，path 一律指向组工作簿（只用于日志/调试）
+                        let path = if g.is_xlsx() { g.book_path() } else { g.dir.join(format!("{}.tbl", name)) };
                         g.tables.push(Table {
                             name: name.clone(),
                             original_name: name.clone(),
@@ -2011,7 +2540,8 @@ impl ProjectEngine {
                 let mut ok = false;
                 if let Some(project) = self.find_project_mut(project_id) {
                     if let Some(g) = project.groups.iter_mut().find(|g| g.name == *group) {
-                        let path = g.dir.join(format!("{}.tbl", name));
+                        // Xlsx 组没有自己的文件，path 一律指向组工作簿（只用于日志/调试）
+                        let path = if g.is_xlsx() { g.book_path() } else { g.dir.join(format!("{}.tbl", name)) };
                         g.constants.push(Constant {
                             name: name.clone(),
                             original_name: name.clone(),
@@ -2033,7 +2563,8 @@ impl ProjectEngine {
                 let mut ok = false;
                 if let Some(project) = self.find_project_mut(project_id) {
                     if let Some(g) = project.groups.iter_mut().find(|g| g.name == *group) {
-                        let path = g.dir.join(format!("{}.tbl", name));
+                        // Xlsx 组没有自己的文件，path 一律指向组工作簿（只用于日志/调试）
+                        let path = if g.is_xlsx() { g.book_path() } else { g.dir.join(format!("{}.tbl", name)) };
                         g.enums.push(EnumDef {
                             name: name.clone(),
                             original_name: name.clone(),
@@ -2067,10 +2598,19 @@ impl ProjectEngine {
                         // 同时成立——树上那个 🟡 说不清究竟是什么没保存。
                         g.name = new_name.clone();
                         g.dir = new_dir.clone();
-                        // 同步组下子节点的 path（每个 .tbl 都在 group dir 下）
-                        for t in &mut g.tables { t.path = new_dir.join(format!("{}.tbl", t.name)); }
-                        for c in &mut g.constants { c.path = new_dir.join(format!("{}.tbl", c.name)); }
-                        for e in &mut g.enums { e.path = new_dir.join(format!("{}.tbl", e.name)); }
+                        // 同步组下子节点的 path（Tbl 组每个 .tbl 在 group dir 下；
+                        // Xlsx 组统一指向工作簿，文件名在 save 时才跟着组名搬）
+                        let book = new_dir.join(format!("{}.xlsx", g.name));
+                        let is_xlsx = g.is_xlsx();
+                        for t in &mut g.tables {
+                            t.path = if is_xlsx { book.clone() } else { new_dir.join(format!("{}.tbl", t.name)) };
+                        }
+                        for c in &mut g.constants {
+                            c.path = if is_xlsx { book.clone() } else { new_dir.join(format!("{}.tbl", c.name)) };
+                        }
+                        for e in &mut g.enums {
+                            e.path = if is_xlsx { book.clone() } else { new_dir.join(format!("{}.tbl", e.name)) };
+                        }
                     }
                     sync_schema_from_groups(project);
                 }
@@ -2210,6 +2750,51 @@ impl ProjectEngine {
         None
     }
 
+    /// 工作簿被外部改过、且与内存里的快照分叉的 xlsx 组。
+    ///
+    /// GUI 用它在窗口空闲时做刷新：干净的直接重载，有未保存改动的只提醒别覆盖。
+    pub fn xlsx_external_changes(&self) -> Vec<XlsxExternalChange> {
+        let mut out = Vec::new();
+        for project in &self.projects {
+            for group in &project.groups {
+                if !group.is_xlsx() { continue; }
+                let Some(prev) = group.book_stamp else { continue };
+                if crate::project::file_stamp(&group.book_path()) != Some(prev) {
+                    out.push(XlsxExternalChange {
+                        project_id: project.schema.meta.id.clone(),
+                        group: group.name.clone(),
+                        dirty: group.is_dirty(),
+                    });
+                }
+            }
+        }
+        out
+    }
+
+    /// 重新从磁盘读一个 xlsx 组。只用于**干净**的组；有未保存改动时调用方应先问用户。
+    pub fn reload_xlsx_group(&mut self, project_id: &str, group_name: &str) -> anyhow::Result<()> {
+        let active = self.active_project_id() == Some(project_id);
+        let Some(project) = self.find_project_mut(project_id) else {
+            anyhow::bail!("Project 不存在: {}", project_id);
+        };
+        let Some(idx) = project.groups.iter().position(|g| g.name == group_name) else {
+            anyhow::bail!("Group 不存在: {}", group_name);
+        };
+        if !project.groups[idx].is_xlsx() {
+            anyhow::bail!("{} 不是 xlsx 组", group_name);
+        }
+        if project.groups[idx].is_dirty() {
+            anyhow::bail!("{} 有未保存改动，拒绝重载", group_name);
+        }
+        let fresh = crate::project::reload_xlsx_group(&project.groups[idx], &project.schema)?;
+        project.groups[idx] = fresh;
+        project.resync_schema();
+        if active {
+            self.revalidate_all();
+        }
+        Ok(())
+    }
+
     /// 保存指定 Project 的所有改动；其它 Project 不动。
     /// 不通过验证则放弃保存。
     pub fn save_project(&mut self, project_id: &str) {
@@ -2223,12 +2808,21 @@ impl ProjectEngine {
             self.logs.push(format!("[{}] [保存失败] 共 {} 个验证错误", project_id, pid_errs));
             return;
         }
-        let Some(project) = self.find_project_mut(project_id) else {
-            self.ui_log(format!("Project 不存在: {}", project_id));
-            return;
+        self.last_save_failure = None;
+        let saved = {
+            let Some(project) = self.find_project_mut(project_id) else {
+                self.ui_log(format!("Project 不存在: {}", project_id));
+                return;
+            };
+            save_project_files(project)
         };
-        let (count, deleted, warnings) = save_project_files(project);
-        for w in warnings { self.warn_log(w); }
+        let (count, deleted, warnings, failed) = saved;
+        for w in &warnings { self.warn_log(w.clone()); }
+        if failed {
+            self.last_save_failure = warnings.iter().find(|w| w.contains("保存失败")).cloned();
+            self.logs.push(format!("[{}] [保存失败] 有组没能写进磁盘（见上方原因）", project_id));
+            return;
+        }
         if count > 0 || deleted > 0 {
             self.ui_log(format!("[{}] 已保存 {} 个文件, 删除 {} 个", project_id, count, deleted));
         } else {
@@ -2571,6 +3165,7 @@ package = \"com.user.kept\"
             name: "g".to_string(),
             original_name: "g".to_string(),
             dir: gdir.clone(),
+            storage: crate::model::GroupStorage::Tbl, book_stamp: None,
             tables: vec![Table {
                 name: "T".to_string(),
                 original_name: "T".to_string(),
@@ -2675,6 +3270,7 @@ package = \"com.user.kept\"
             name: group.to_string(),
             original_name: group.to_string(),
             dir: gdir.clone(),
+            storage: crate::model::GroupStorage::Tbl, book_stamp: None,
             tables: vec![Table {
                 name: node.to_string(),
                 original_name: node.to_string(),
@@ -2771,6 +3367,7 @@ package = \"com.user.kept\"
         let pid = engine.active_project_id().unwrap().to_string();
         engine.execute_action(&ProjectAction::NewGroup {
             project_id: pid, name: "fresh".into(),
+            storage: crate::model::GroupStorage::Tbl,
         });
         assert!(engine.save_all(), "空组不该让保存失败");
 
@@ -2791,6 +3388,312 @@ package = \"com.user.kept\"
         let loaded = crate::project::load_specific_project(&dir, "p1").expect("reload");
         assert!(loaded.groups.is_empty(), "重新加载后不该再出现: {:?}",
             loaded.groups.iter().map(|g| &g.name).collect::<Vec<_>>());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ── Xlsx 组（@02.27）────────────────────────────────────────────────
+
+    /// 起一个已落盘的项目，再往里面加一个 xlsx 组 + 一张表（带数据）。
+    fn engine_with_xlsx_group(label: &str) -> (PathBuf, ProjectEngine) {
+        use crate::model::GroupStorage;
+        let (dir, mut engine) = engine_with_saved_node(label, "hero", "A");
+        let pid = engine.active_project_id().unwrap().to_string();
+        engine.execute_action(&ProjectAction::NewGroup {
+            project_id: pid.clone(), name: "xg".into(), storage: GroupStorage::Xlsx,
+        });
+        engine.execute_action(&ProjectAction::NewTable {
+            project_id: pid, group: "xg".into(), name: "Hot".into(),
+        });
+        {
+            let t = engine.find_table_mut("xg", "Hot").expect("Hot");
+            t.schema.fields.push(FieldDef {
+                name: "name".into(), desc: "名字".into(),
+                tbl_type: "str".into(), export: Export::ClientServer,
+            });
+            t.records = vec![
+                vec!["1".into(), "alpha".into()],
+                vec!["2".into(), "beta".into()],
+            ];
+            t.dirty = true;
+        }
+        (dir, engine)
+    }
+
+    fn xlsx_book(dir: &Path) -> PathBuf {
+        config_dir(dir).join("xg").join("xg.xlsx")
+    }
+
+    #[test]
+    fn xlsx_group_round_trips_data_through_a_workbook() {
+        let (dir, mut engine) = engine_with_xlsx_group("xlsx_rt");
+        assert!(engine.save_all(), "首次保存应成功");
+        assert!(xlsx_book(&dir).is_file(), "应生成 xg.xlsx");
+
+        let loaded = crate::project::load_specific_project(&dir, "p1").expect("reload");
+        let g = loaded.groups.iter().find(|g| g.name == "xg").expect("xg");
+        assert_eq!(g.storage, crate::model::GroupStorage::Xlsx);
+        let t = g.tables.iter().find(|t| t.name == "Hot").expect("Hot");
+        assert_eq!(t.schema.fields.iter().map(|f| f.name.as_str()).collect::<Vec<_>>(),
+                   vec!["id", "name"]);
+        assert_eq!(t.records, vec![
+            vec!["1".to_string(), "alpha".to_string()],
+            vec!["2".to_string(), "beta".to_string()],
+        ]);
+        // desc 以 sheet 为准（用户拍板）：schema 里那句被 sheet 带回
+        assert_eq!(t.schema.fields[1].desc, "名字");
+        assert!(!loaded.is_dirty(), "刚加载的项目不该是脏的");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// **干净的组一个字节都不许碰。** umya 每次写盘都会重打 zip + 打当前时间戳，
+    /// 所以"顺手保存"会让 git 每次多一个改动（实测见 @02.27）。
+    #[test]
+    fn xlsx_group_noop_save_does_not_touch_the_file() {
+        let (dir, mut engine) = engine_with_xlsx_group("xlsx_noop");
+        assert!(engine.save_all());
+        let book = xlsx_book(&dir);
+        let before = std::fs::read(&book).expect("read book");
+        let mtime = std::fs::metadata(&book).unwrap().modified().unwrap();
+
+        // mtime 的分辨率够细，但只要写入发生在同一时间片里就可能相同；睡一下更稳。
+        std::thread::sleep(std::time::Duration::from_millis(30));
+        assert!(engine.save_all(), "干净保存也应返回成功");
+        let after = std::fs::read(&book).expect("read book");
+        let mtime2 = std::fs::metadata(&book).unwrap().modified().unwrap();
+        assert_eq!(before, after, "干净保存把 workbook 重写了");
+        assert_eq!(mtime, mtime2, "干净保存不该碰文件（mtime 变了说明写了一次）");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 只改一张表，其它 sheet 的 zip 条目必须**逐字节不变**（lazy_read 的保真契约）。
+    #[test]
+    fn saving_one_sheet_leaves_the_other_byte_identical() {
+        let (dir, mut engine) = engine_with_xlsx_group("xlsx_isolate");
+        assert!(engine.save_all());
+        // 加第二张表，让 schema 里有两张（Hot 是 sheet1、Cold 是 sheet2）
+        let pid = engine.active_project_id().unwrap().to_string();
+        engine.execute_action(&ProjectAction::NewTable {
+            project_id: pid, group: "xg".into(), name: "Cold".into(),
+        });
+        assert!(engine.save_all());
+        let book = xlsx_book(&dir);
+
+        // **必须用另一个库重写一遍**（模拟 Excel 自己保存过）。umya 重序列化**自己的**
+        // 输出几乎是幂等的，拿 umya 造的文件测「有没有被重写」测不出来。
+        {
+            use rust_xlsxwriter::Workbook;
+            let mut wb = Workbook::new();
+            {
+                let ws = wb.add_worksheet();
+                ws.set_name("Hot").unwrap();
+                for (c, v) in ["ID", "名字"].iter().enumerate() {
+                    ws.write_string(0, c as u16, *v).unwrap();
+                }
+                for (c, v) in ["前后端", "前后端"].iter().enumerate() {
+                    ws.write_string(1, c as u16, *v).unwrap();
+                }
+                for (c, v) in ["int", "str"].iter().enumerate() {
+                    ws.write_string(2, c as u16, *v).unwrap();
+                }
+                for (c, v) in ["id", "name"].iter().enumerate() {
+                    ws.write_string(3, c as u16, *v).unwrap();
+                }
+                ws.write_string(4, 0, "1").unwrap();
+                ws.write_string(4, 1, "alpha").unwrap();
+                ws.write_string(5, 0, "2").unwrap();
+                ws.write_string(5, 1, "beta").unwrap();
+            }
+            {
+                let ws = wb.add_worksheet();
+                ws.set_name("Cold").unwrap();
+                for (c, v) in ["ID"].iter().enumerate() {
+                    ws.write_string(0, c as u16, *v).unwrap();
+                }
+                ws.write_string(1, 0, "前后端").unwrap();
+                ws.write_string(2, 0, "int").unwrap();
+                ws.write_string(3, 0, "id").unwrap();
+            }
+            std::fs::write(&book, wb.save_to_buffer().unwrap()).unwrap();
+        }
+
+        // 重新加载，此时 workbook 是「别人写的」
+        let loaded = crate::project::load_specific_project(&dir, "p1").expect("reload");
+        let mut engine = ProjectEngine::new(loaded, GlobalConfig::default());
+        let untouched = crate::excel_sync::testutil::zip_entry(&book, "xl/worksheets/sheet2.xml");
+
+        // 只改 Hot
+        {
+            let t = engine.find_table_mut("xg", "Hot").expect("Hot");
+            t.records[0][1] = "changed".into();
+            t.dirty = true;
+        }
+        assert!(engine.save_all());
+
+        let after = crate::excel_sync::testutil::zip_entry(&book, "xl/worksheets/sheet2.xml");
+        assert_eq!(untouched, after, "没改的 sheet 被重写了（lazy_read 失守）");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// schema 有 section、workbook 没有 sheet → 打不开（用户拍板：硬报错，不兜底成空表）。
+    #[test]
+    fn section_without_a_sheet_fails_the_load() {
+        let (dir, mut engine) = engine_with_xlsx_group("xlsx_missing");
+        assert!(engine.save_all());
+
+        // 手工把 schema 里加一个没有 sheet 的 section
+        let schema_path = dir.join("projects/p1").join(crate::project::PROJECT_SCHEMA_FILE);
+        let mut txt = std::fs::read_to_string(&schema_path).unwrap();
+        txt.push_str("\n[xg/Ghost] table\nid | int | cs | ID\n");
+        std::fs::write(&schema_path, txt).unwrap();
+
+        let err = crate::project::load_specific_project(&dir, "p1")
+            .expect_err("缺 sheet 应当打不开");
+        let msg = format!("{:#}", err);
+        assert!(msg.contains("Ghost"), "错误里要点名: {}", msg);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 工具开着时外部改了 workbook → 拒绝保存，别静默覆盖策划的改动。
+    #[test]
+    fn external_change_blocks_the_save() {
+        let (dir, mut engine) = engine_with_xlsx_group("xlsx_ext");
+        assert!(engine.save_all());
+        let book = xlsx_book(&dir);
+
+        // 模拟外部编辑：改内容 + 换 mtime
+        let mut bytes = std::fs::read(&book).unwrap();
+        bytes.push(0);
+        std::fs::write(&book, bytes).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(1100));
+
+        {
+            let t = engine.find_table_mut("xg", "Hot").expect("Hot");
+            t.records[0][1] = "tool-change".into();
+            t.dirty = true;
+        }
+        assert!(!engine.save_all(), "外部改过时必须拒绝保存");
+        assert!(engine.find_table("xg", "Hot").unwrap().dirty, "拒绝后节点应仍是脏的");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 外部改过、且组是干净的 → GUI 的轮询可以安全重载。
+    #[test]
+    fn an_external_change_is_detected_and_reloadable_when_clean() {
+        let (dir, mut engine) = engine_with_xlsx_group("xlsx_reload");
+        assert!(engine.save_all());
+        let book = xlsx_book(&dir);
+        {
+            // 模拟 Excel 改了一个格子（B6 = 第二条记录的 name）
+            let mut b = umya_spreadsheet::reader::xlsx::lazy_read(&book).unwrap();
+            let ws = b.sheet_by_name_mut("Hot").unwrap();
+            ws.cell_mut((2, 6)).set_value("external");
+            umya_spreadsheet::writer::xlsx::write(&b, &book).unwrap();
+        }
+
+        let changes = engine.xlsx_external_changes();
+        assert_eq!(changes.len(), 1, "应检出外部改动");
+        assert!(!changes[0].dirty, "干净组");
+
+        engine.reload_xlsx_group("p1", "xg").expect("重载应成功");
+        assert_eq!(engine.find_table("xg", "Hot").unwrap().records[1][1], "external");
+        assert!(engine.xlsx_external_changes().is_empty(), "重载后应不再有改动");
+        assert!(!engine.find_project("p1").unwrap().is_dirty(), "重载不该把项目弄脏");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 有未保存改动时拒绝重载（会把人手上的东西抽走）。
+    #[test]
+    fn reload_refuses_a_dirty_group() {
+        let (dir, mut engine) = engine_with_xlsx_group("xlsx_reload_dirty");
+        assert!(engine.save_all());
+        {
+            let t = engine.find_table_mut("xg", "Hot").unwrap();
+            t.records[0][1] = "mine".into();
+            t.dirty = true;
+        }
+        assert!(engine.reload_xlsx_group("p1", "xg").is_err(), "脏组不该被重载");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 整组粘贴到另一种后端：节点内容不变，只换保存写入器（@02.26.8）。
+    #[test]
+    fn pasting_a_group_into_the_other_backend_converts_it() {
+        use crate::model::GroupStorage;
+        let (dir, mut engine) = engine_with_saved_node("paste_backend", "hero", "A");
+        let pid = engine.active_project_id().unwrap().to_string();
+        engine.clipboard_copy_group(&pid, "hero");
+        let new_name = engine
+            .paste_group_as(&pid, Some(GroupStorage::Xlsx))
+            .expect("粘贴应成功");
+        assert!(engine.save_all());
+
+        // 新组：xlsx，工作簿里有 sheet A
+        let book = config_dir(&dir).join(&new_name).join(format!("{}.xlsx", new_name));
+        assert!(book.is_file(), "应生成 {}", book.display());
+        assert!(config_dir(&dir).join("hero").join("A.tbl").is_file(), "源组保持 tbl");
+
+        let loaded = crate::project::load_specific_project(&dir, "p1").expect("reload");
+        let pasted = loaded.groups.iter().find(|g| g.name == new_name).expect("新组");
+        assert_eq!(pasted.storage, GroupStorage::Xlsx);
+        assert_eq!(pasted.tables.len(), 1);
+        assert_eq!(pasted.tables[0].name, "A");
+        assert_eq!(pasted.tables[0].records, vec![vec!["1".to_string()]]);
+        let src = loaded.groups.iter().find(|g| g.name == "hero").expect("源组");
+        assert_eq!(src.storage, GroupStorage::Tbl);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 被拦下的保存**什么都不写**——包括 `project.tblschema`。
+    ///
+    /// schema 是 groups 的投影。先写 schema、再发现某个组写不进去，就会造出
+    /// 「schema 里有这个节点、盘上却没有它的数据」——项目当场打不开。
+    #[test]
+    fn a_blocked_xlsx_save_writes_nothing_including_the_schema() {
+        let (dir, mut engine) = engine_with_xlsx_group("xlsx_atomic");
+        assert!(engine.save_all());
+        let book_dir = config_dir(&dir).join("xg");
+        std::fs::write(book_dir.join("~$xg.xlsx"), b"lock").unwrap();
+
+        let pid = engine.active_project_id().unwrap().to_string();
+        engine.execute_action(&ProjectAction::NewTable {
+            project_id: pid, group: "xg".into(), name: "Extra".into(),
+        });
+        let schema_path = dir.join("projects/p1").join(crate::project::PROJECT_SCHEMA_FILE);
+        let before = std::fs::read_to_string(&schema_path).unwrap();
+
+        assert!(!engine.save_all(), "被占用时必须失败");
+        assert_eq!(std::fs::read_to_string(&schema_path).unwrap(), before,
+            "失败时 schema 不该被写");
+
+        // 项目仍然可加载（schema 与盘上仍然是上一次成功保存的状态）
+        std::fs::remove_file(book_dir.join("~$xg.xlsx")).unwrap();
+        crate::project::load_specific_project(&dir, "p1").expect("项目应仍可打开");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Excel 正开着（有 `~$` 锁文件）→ 拒绝保存。
+    #[test]
+    fn excel_lock_blocks_the_save() {
+        let (dir, mut engine) = engine_with_xlsx_group("xlsx_lock");
+        assert!(engine.save_all());
+        let lock = config_dir(&dir).join("xg").join("~$xg.xlsx");
+        std::fs::write(&lock, b"lock").unwrap();
+
+        {
+            let t = engine.find_table_mut("xg", "Hot").expect("Hot");
+            t.records[0][1] = "tool-change".into();
+            t.dirty = true;
+        }
+        assert!(!engine.save_all(), "被 Excel 占用时必须拒绝保存");
+
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -2850,6 +3753,7 @@ package = \"com.user.kept\"
         let mut project = make_project(dir.clone(), project_root, "p1");
         project.groups.push(Group {
             name: "hero".into(), original_name: "hero".into(), dir: gdir.clone(),
+            storage: crate::model::GroupStorage::Tbl, book_stamp: None,
             tables: vec![Table {
                 name: "T".into(), original_name: "T".into(), path: gdir.join("T.tbl"),
                 schema: TableSchema { fields: vec![id_field()] },
@@ -2971,6 +3875,7 @@ package = \"com.user.kept\"
         let mut project = make_project(dir.clone(), project_root, "p1");
         project.groups.push(Group {
             name: "hero".into(), original_name: "hero".into(), dir: gdir.clone(),
+            storage: crate::model::GroupStorage::Tbl, book_stamp: None,
             tables: vec![
                 mk("HeroBase", FieldDef { name: "leader".into(), desc: "关联英雄".into(),
                     tbl_type: "@HeroBase".into(), export: Export::ClientServer }),

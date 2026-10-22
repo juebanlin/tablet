@@ -42,17 +42,27 @@ pub(crate) fn items_for(kind: &CtxMenuKind, state: &AppState) -> Vec<CtxMenuItem
     } else {
         "粘贴节点".to_string()
     };
-    let paste_group_label = if has_group_cb {
-        format!("粘贴 Group（{}）", cb_label)
+    // 整组粘贴有两种目标后端（@02.26.8）：节点在内存里两种后端同型，粘贴时只决定
+    // 保存用哪个写入器，所以「转换」不需要额外的数据搬家。
+    let paste_group_tbl = if has_group_cb {
+        format!("粘贴为 .tbl Group（{}）", cb_label)
     } else {
-        "粘贴 Group".to_string()
+        "粘贴为 .tbl Group".to_string()
+    };
+    let paste_group_xlsx = if has_group_cb {
+        format!("粘贴为 Excel Group（{}）", cb_label)
+    } else {
+        "粘贴为 Excel Group".to_string()
     };
     match kind {
         CtxMenuKind::TreeBlank => {
             if state.engine.projects.is_empty() {
                 vec![item("新建项目", "tree.new-project", false)]
             } else {
-                vec![item("新建 Group", "tree.new-group", false)]
+                vec![
+                    item("新建 Group", "tree.new-group", false),
+                    item("新建 Excel Group", "tree.new-xlsx-group", false),
+                ]
             }
         },
         CtxMenuKind::TreeProject { project_id } => {
@@ -65,8 +75,10 @@ pub(crate) fn items_for(kind: &CtxMenuKind, state: &AppState) -> Vec<CtxMenuItem
                     item("合并 Schema...", "tree.proj-merge-schema", false),
                     sep(),
                     item("新建 Group", "tree.proj-new-group", false),
+                    item("新建 Excel Group", "tree.proj-new-xlsx-group", false),
                     item("复制(克隆)...", "tree.proj-clone", false),
-                    item_owned(paste_group_label.clone(), "tree.paste-group", !has_group_cb),
+                    item_owned(paste_group_tbl.clone(), "tree.paste-group-tbl", !has_group_cb),
+                    item_owned(paste_group_xlsx.clone(), "tree.paste-group-xlsx", !has_group_cb),
                     item("项目设置...", "tree.proj-settings", false),
                     item("删除", "tree.proj-delete", false),
                     sep(),
@@ -84,26 +96,40 @@ pub(crate) fn items_for(kind: &CtxMenuKind, state: &AppState) -> Vec<CtxMenuItem
                 ]
             }
         }
-        CtxMenuKind::TreeGroup { .. } => vec![
+        CtxMenuKind::TreeGroup { project_id, name } => {
+            // Xlsx 组：工作簿就是真相源，直接开会原文件（不经过临时本桥接）。
+            let is_xlsx = state.engine.find_project(project_id)
+                .and_then(|p| p.groups.iter().find(|g| &g.name == name))
+                .map(|g| g.is_xlsx())
+                .unwrap_or(false);
+            let mut items = vec![
             item("新建 Table", "tree.new-table", false),
             item("新建 Constant", "tree.new-constant", false),
             item("新建 Enum", "tree.new-enum", false),
             sep(),
-            // 「用 Excel 打开」：有任何 ExcelSession 进行中时禁用（@plans §5.1.2 全局锁）。
-            // tooltip / 文案不动态变，避免 items_for 复杂化；用户可从日志窗看到当前会话。
+            // 「用 Excel 打开」：Tbl 组走临时本会话，有任何 ExcelSession 进行中时禁用
+            // （@plans §5.1.2 全局锁）；Xlsx 组开的是原文件，不受那个锁约束。
             item(
-                "用 Excel 打开（整组）",
+                if is_xlsx { "用 Excel 打开（原文件）" } else { "用 Excel 打开（整组）" },
                 "tree.excel-open-group",
-                state.excel_session.is_some(),
+                !is_xlsx && state.excel_session.is_some(),
             ),
             sep(),
             item("复制 Group（含全部内容）", "tree.copy-group", false),
             item_owned(paste_node_label.clone(), "tree.paste-node", !has_node_cb),
-            item_owned(paste_group_label, "tree.paste-group", !has_group_cb),
+            item_owned(paste_group_tbl, "tree.paste-group-tbl", !has_group_cb),
+            item_owned(paste_group_xlsx, "tree.paste-group-xlsx", !has_group_cb),
             sep(),
             item("重命名", "tree.rename-group", false),
             item("删除", "tree.delete-group", false),
-        ],
+            ];
+            // xlsx 组的工作簿可能在 Excel 里被改过；给一个显式的「从磁盘重新加载」。
+            if is_xlsx {
+                items.push(sep());
+                items.push(item("从磁盘重新加载", "tree.reload-group", false));
+            }
+            items
+        },
         CtxMenuKind::TreeNode { .. } => vec![
             item("复制", "tree.copy-node", false),
             item_owned(paste_node_label, "tree.paste-node", !has_node_cb),
@@ -186,14 +212,19 @@ pub fn wire(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
                         dialogs::create_project::push(&ui_h, &s);
                     }
                 }
-                (Some(CtxMenuKind::TreeBlank), "tree.new-group") => {
+                (Some(CtxMenuKind::TreeBlank), act @ ("tree.new-group" | "tree.new-xlsx-group")) => {
                     let project_id = {
                         let st = s.borrow();
                         st.selected.as_ref().map(|sn| sn.project_id().to_string())
                             .or_else(|| st.engine.projects.first().map(|p| p.schema.meta.id.clone()))
                             .unwrap_or_default()
                     };
-                    s.borrow_mut().pending.open(PendingAction::NewGroup { project_id });
+                    let storage = if act == "tree.new-xlsx-group" {
+                        tablet_core::model::GroupStorage::Xlsx
+                    } else {
+                        tablet_core::model::GroupStorage::Tbl
+                    };
+                    s.borrow_mut().pending.open(PendingAction::NewGroup { project_id, storage });
                 }
                 (Some(CtxMenuKind::TreeProject { project_id }), action) => {
                     dialogs::pending::handle_project_root_action(&s, &project_id, action);
@@ -215,17 +246,37 @@ pub fn wire(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
                     s.borrow_mut().pending.open(PendingAction::DeleteGroup { project_id, group: name });
                 }
                 (Some(CtxMenuKind::TreeGroup { project_id, name }), "tree.excel-open-group") => {
-                    // 整组 Excel 编辑：include 空 vec → core 侧 None（@plans §5.1.2）
-                    let weak_ui = weak.clone();
-                    let result = crate::excel_bridge::launch_excel_edit(
-                        &s, weak_ui, &project_id, &name, vec![],
-                    );
-                    if let Err(e) = result {
-                        s.borrow_mut().engine.ui_log(format!("[Excel] 调起失败: {}", e));
+                    let is_xlsx = s.borrow().engine.find_project(&project_id)
+                        .and_then(|p| p.groups.iter().find(|g| g.name == name).map(|g| g.is_xlsx()))
+                        .unwrap_or(false);
+                    if is_xlsx {
+                        match crate::excel_bridge::open_native_book(&s, &project_id, &name) {
+                            Ok(()) => s.borrow_mut().engine.ui_log(
+                                format!("[Excel] 已打开组 {} 的工作簿", name)),
+                            Err(e) => s.borrow_mut().engine.error_log(
+                                format!("[Excel] 打开失败: {}", e)),
+                        }
+                    } else {
+                        // 整组 Excel 编辑：include 空 vec → core 侧 None（@plans §5.1.2）
+                        let weak_ui = weak.clone();
+                        let result = crate::excel_bridge::launch_excel_edit(
+                            &s, weak_ui, &project_id, &name, vec![],
+                        );
+                        if let Err(e) = result {
+                            s.borrow_mut().engine.ui_log(format!("[Excel] 调起失败: {}", e));
+                        }
+                        if let Some(ui_h) = weak.upgrade() {
+                            crate::excel_bridge::push(&ui_h, &s);
+                        }
                     }
                     if let Some(ui_h) = weak.upgrade() {
-                        crate::excel_bridge::push(&ui_h, &s);
+                        crate::refresh::after_log(&ui_h, &s);
                     }
+                }
+                (Some(CtxMenuKind::TreeGroup { project_id, name }), "tree.reload-group") => {
+                    s.borrow_mut().pending.open(PendingAction::ReloadXlsxGroup {
+                        project_id, group: name,
+                    });
                 }
                 (Some(CtxMenuKind::TreeGroup { project_id, name }), "tree.copy-group") => {
                     s.borrow_mut().engine.clipboard_copy_group(&project_id, &name);
@@ -236,8 +287,14 @@ pub fn wire(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
                         st.tree_expanded.insert((project_id, name));
                     }
                 }
-                (Some(CtxMenuKind::TreeGroup { project_id, .. }), "tree.paste-group") => {
-                    let new_group = s.borrow_mut().engine.paste_group_to(&project_id);
+                (Some(CtxMenuKind::TreeGroup { project_id, .. }),
+                 act @ ("tree.paste-group-tbl" | "tree.paste-group-xlsx")) => {
+                    let storage = if act == "tree.paste-group-xlsx" {
+                        tablet_core::model::GroupStorage::Xlsx
+                    } else {
+                        tablet_core::model::GroupStorage::Tbl
+                    };
+                    let new_group = s.borrow_mut().engine.paste_group_as(&project_id, Some(storage));
                     if let Some(new_group) = new_group {
                         let mut st = s.borrow_mut();
                         st.project_expanded.insert(project_id.clone());

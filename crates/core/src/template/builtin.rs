@@ -119,6 +119,7 @@ mod tests {
                     constants: Vec::new(),
                     enums: Vec::new(),
                     is_new: false,
+                    storage: crate::model::GroupStorage::Tbl, book_stamp: None,
                 });
                 match sec.mode {
                     SchemaMode::Table => {

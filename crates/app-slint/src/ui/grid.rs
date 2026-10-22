@@ -286,6 +286,23 @@ pub fn wire(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
                     return;
                 }
             };
+            // Xlsx 组：工作簿就是真相源，直接开原文件；Tbl 组走临时本桥接。
+            let is_xlsx = s.borrow().engine.find_project(&pid)
+                .and_then(|p| p.groups.iter().find(|g| g.name == group).map(|g| g.is_xlsx()))
+                .unwrap_or(false);
+            if is_xlsx {
+                match crate::excel_bridge::open_native_book(&s, &pid, &group) {
+                    Ok(()) => s.borrow_mut().engine.ui_log(
+                        format!("[Excel] 已打开组 {} 的工作簿", group)),
+                    Err(e) => s.borrow_mut().engine.error_log(
+                        format!("[Excel] 打开失败: {}", e)),
+                }
+                if let Some(ui_h) = weak.upgrade() {
+                    push(&ui_h, &s);
+                    crate::refresh::after_log(&ui_h, &s);
+                }
+                return;
+            }
             let result = crate::excel_bridge::launch_excel_edit(
                 &s, weak.clone(), &pid, &group, vec![name],
             );

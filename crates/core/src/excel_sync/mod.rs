@@ -43,7 +43,7 @@ pub mod read;
 pub mod vo;
 
 #[cfg(test)]
-mod testutil;
+pub(crate) mod testutil;
 
 pub use apply::execute;
 pub use plan::{

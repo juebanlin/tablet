@@ -112,6 +112,35 @@ fn unique_xlsx_name(group: &str) -> String {
 /// 每次会话用 [`unique_xlsx_name`] 生成独立文件名，绕开"放弃后 Excel 仍持锁导致
 /// 重新调起冲突"的问题——下次调起拿新路径，与上次的残留共存。残留由
 /// [`cleanup_all_caches_on_exit`] / [`scan_residuals_on_startup`] 兜底清。
+/// Xlsx 组的「用 Excel 打开」：先落盘（脏才写——umya 每次写都会重打整个 zip），
+/// 再用系统程序打开原工作簿。与 [`launch_excel_edit`] 的临时本流程是两条路。
+pub fn open_native_book(
+    state: &Rc<RefCell<AppState>>,
+    project_id: &str,
+    group_name: &str,
+) -> anyhow::Result<()> {
+    let (saved, book) = {
+        let mut st = state.borrow_mut();
+        // save_all 是 active 作用域的；临时切过去再切回来（口令同旧版项目设置 run()）。
+        let prev = st.engine.active_project_id().map(str::to_string);
+        st.engine.set_active_by_id(project_id);
+        let saved = st.engine.save_all();
+        if let Some(p) = prev { st.engine.set_active_by_id(&p); }
+        let book = st.engine.find_project(project_id)
+            .and_then(|p| p.groups.iter().find(|g| g.name == group_name))
+            .map(|g| g.book_path());
+        (saved, book)
+    };
+    if !saved {
+        anyhow::bail!("保存失败，未打开工作簿（原因见日志）");
+    }
+    let Some(path) = book.filter(|p| p.is_file()) else {
+        anyhow::bail!("工作簿不存在，先给这个组加一个节点");
+    };
+    open::that(&path)?;
+    Ok(())
+}
+
 pub fn launch_excel_edit(
     state: &Rc<RefCell<AppState>>,
     weak: slint::Weak<AppWindow>,

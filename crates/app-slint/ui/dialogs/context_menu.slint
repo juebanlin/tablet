@@ -35,12 +35,16 @@ export component ContextMenu inherits Rectangle {
     }
 
     if root.open: Rectangle {
-        x: root.menu-x;
-        y: root.menu-y;
-        // 宽度由内容驱动：取 VerticalLayout 自然 preferred-width（其内最长 Text + padding 决定），
-        // 再 clamp 到 [140, 280] 防止过窄/过宽。Rectangle 默认占满父容器，所以必须显式绑。
-        width: max(140px, min(280px, vlayout.preferred-width));
-        height: vlayout.preferred-height;
+        // 宽度由内容驱动：取 VerticalLayout 自然 preferred-width（其内最长 Text + padding 决定）。
+        // 上限放宽到 520px —— 带来源说明的粘贴项（"粘贴为 Excel Group（Group x（proj，T1+C0+E0））"）
+        // 很容易超过 280，之前就是被这个上限截断成省略号的。
+        property <length> menu-w: max(160px, min(520px, vlayout.preferred-width));
+        property <length> menu-h: vlayout.preferred-height;
+        // 靠近窗口右/下边缘时往回收，别让菜单跑出可视区。
+        x: max(0px, min(root.menu-x, root.width - menu-w));
+        y: max(0px, min(root.menu-y, root.height - menu-h));
+        width: menu-w;
+        height: menu-h;
         background: Theme.bg-panel;
         border-color: Theme.border;
         border-width: 1px;

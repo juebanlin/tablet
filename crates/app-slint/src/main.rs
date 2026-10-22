@@ -318,6 +318,9 @@ fn run_gui(workdir_arg: Option<PathBuf>) -> anyhow::Result<()> {
     // 启动时扫描 Excel 编辑残留（@plans §5.6）：上次崩溃 / kill 留下的 .tbl-cache/*.xlsx
     excel_bridge::scan_residuals_on_startup(&app_state);
 
+    // xlsx 组的外部改动轮询（@02.26.8）：返回的 Timer 必须活到窗口结束。
+    let _watch_timer = ui::watch::start(&app_window, &app_state);
+
     let result = app_window.run().map_err(|e| anyhow::anyhow!("{}", e));
     // 退出清理（@plans §5.7）：清掉所有 Project 的 .tbl-cache/*.xlsx
     excel_bridge::cleanup_all_caches_on_exit(&app_state);

@@ -935,6 +935,7 @@ mod tests {
         let groups = vec![Group {
             name: "g".into(), original_name: "g".into(), dir: PathBuf::from("g"),
             tables: vec![hero, skill], constants: vec![], enums: vec![], is_new: false,
+            storage: crate::model::GroupStorage::Tbl, book_stamp: None,
         }];
         let refs = RefIndex::build(&groups);
         let sep = SeparatorsSection::default();

@@ -608,6 +608,7 @@ mod tests {
             constants: vec![],
             enums: vec![],
             is_new: false,
+            storage: crate::model::GroupStorage::Tbl, book_stamp: None,
         }
     }
 
@@ -620,6 +621,7 @@ mod tests {
             constants: vec![c("c1")],
             enums: vec![e("e1")],
             is_new: false,
+            storage: crate::model::GroupStorage::Tbl, book_stamp: None,
         }
     }
 

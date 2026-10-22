@@ -75,6 +75,9 @@ fn load_panel_rows(state: &AppState) -> Vec<PanelRow> {
     }
 
     for group in &project.groups {
+        // Xlsx 组本身就是工作簿：没有「两份拷贝要同步」这回事，面板里不该出现。
+        // （它的编辑入口是「用 Excel 打开（原文件）」，不是这里的临时本流程。）
+        if group.is_xlsx() { continue; }
         let sheets = books
             .get(&group.name)
             .and_then(|p| excel_sync::read_xlsx_sheets(p, Some(group)).ok());

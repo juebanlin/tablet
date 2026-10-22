@@ -47,6 +47,7 @@ pub fn group(records: Vec<Vec<&str>>) -> Group {
         constants: vec![],
         enums: vec![],
         is_new: false,
+        storage: crate::model::GroupStorage::Tbl, book_stamp: None,
     }
 }
 

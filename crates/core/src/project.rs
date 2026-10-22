@@ -29,6 +29,7 @@ use anyhow::{Context, Result};
 
 use crate::model::*;
 use crate::tbl::{self, TblFile};
+use crate::tblschema::TblSchema;
 
 pub const PROJECTS_DIR: &str = "projects";
 pub const PROJECT_TOML_FILE: &str = "project.toml";
@@ -139,7 +140,7 @@ fn load_specific_project_impl(
 
     let data_dir = project_root.join("config");
     let mut groups = if data_dir.is_dir() {
-        load_groups_in(&data_dir)?
+        load_groups_in(&data_dir, &schema)?
     } else {
         std::fs::create_dir_all(&data_dir)?;
         println!("已创建配置目录: {}", data_dir.display());
@@ -523,7 +524,7 @@ fn read_project_created_at(project_root: &Path) -> String {
 }
 
 
-fn load_groups_in(data_dir: &Path) -> Result<Vec<Group>> {
+fn load_groups_in(data_dir: &Path, schema: &TblSchema) -> Result<Vec<Group>> {
     let mut groups = Vec::new();
     let mut entries: Vec<_> = std::fs::read_dir(data_dir)?
         .filter_map(|e| e.ok())
@@ -534,25 +535,39 @@ fn load_groups_in(data_dir: &Path) -> Result<Vec<Group>> {
     for entry in entries {
         let dir = entry.path();
         let name = entry.file_name().to_string_lossy().to_string();
-        let group = load_group(&name, &dir)?;
+        let group = load_group(&name, &dir, schema)?;
         groups.push(group);
     }
     Ok(groups)
 }
 
-fn load_group(name: &str, dir: &Path) -> Result<Group> {
+/// 一个组目录 → `Group`。**后端由目录里有什么决定**（@02.27）：
+/// 有 `<group>.xlsx` 就是 Xlsx 组，否则 Tbl 组；两者同时存在是脏状态，直接报错不猜。
+fn load_group(name: &str, dir: &Path, schema: &TblSchema) -> Result<Group> {
+    let book = dir.join(format!("{}.xlsx", name));
+    let mut tbl_files: Vec<PathBuf> = std::fs::read_dir(dir)?
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .filter(|p| p.extension().map_or(false, |ext| ext == "tbl"))
+        .collect();
+
+    if book.is_file() {
+        if !tbl_files.is_empty() {
+            anyhow::bail!(
+                "组 {} 同时存在 {} 和 .tbl 文件：一组一种后端，请先清理其中一边",
+                name, book.display()
+            );
+        }
+        return load_xlsx_group(name, dir, schema, &book);
+    }
+
     let mut tables = Vec::new();
     let mut constants = Vec::new();
     let mut enums = Vec::new();
 
-    let mut entries: Vec<_> = std::fs::read_dir(dir)?
-        .filter_map(|e| e.ok())
-        .filter(|e| e.path().extension().map_or(false, |ext| ext == "tbl"))
-        .collect();
-    entries.sort_by_key(|e| e.file_name());
+    tbl_files.sort();
 
-    for entry in entries {
-        let path = entry.path();
+    for path in tbl_files {
         // **读不懂就报错，不许静默跳过。** 以前这里是 `Err(e) => eprintln!("warn: ...")`：
         // 一个写坏的 `.tbl` 会在 stderr 留一行字，然后从项目里**整个消失**——导出少一张表，
         // 退出码还是 0。这和 `.tblschema` 那边 `Err(_) => fallback` 是同一个洞（@02.26.7）：
@@ -574,6 +589,225 @@ fn load_group(name: &str, dir: &Path) -> Result<Group> {
         constants,
         enums,
         is_new: false,
+        storage: GroupStorage::Tbl,
+        book_stamp: None,
+    })
+}
+
+/// 加载 Xlsx 组：**结构来自 `project.tblschema` 的 section，数据来自 workbook 的 sheet**
+/// （@02.27）。
+///
+/// 三条硬规则（都是「读不懂就报错」那条契约的延续）：
+/// - schema 有 section、workbook 没有同名 sheet → 报错；
+/// - section 的类型决定 sheet 怎么读（table 4 行表头 / constant、enum 1 行表头）；
+/// - workbook 里有、schema 里没有的 sheet → 忽略（策划的私有 sheet，P3 才变成"托管节点"）。
+pub(crate) fn load_xlsx_group(
+    name: &str,
+    dir: &Path,
+    schema: &TblSchema,
+    book_path: &Path,
+) -> Result<Group> {
+    use crate::model::GroupStorage;
+
+    let mut book = umya_spreadsheet::reader::xlsx::lazy_read(book_path)
+        .with_context(|| format!("打开 {}", book_path.display()))?;
+
+    let sections: Vec<&crate::tblschema::SchemaSection> =
+        schema.sections.iter().filter(|s| s.group == name).collect();
+
+    let mut tables = Vec::new();
+    let mut constants = Vec::new();
+    let mut enums = Vec::new();
+
+    for sec in sections {
+        // 存在性必须问 sheet_collection_no_check()：`sheet_by_name()` 对没反序列化的
+        // sheet 一律返回 NotDeserialized，在 lazy book 上会骗我们「这张表不存在」。
+        // 名字大小写：Excel 里 sheet 名唯一是大小写不敏感的，这里用同样口径找。
+        let actual = book.sheet_collection_no_check().iter()
+            .find(|s| s.name().eq_ignore_ascii_case(&sec.name))
+            .map(|s| s.name().to_string());
+        let Some(sheet_name) = actual else {
+            anyhow::bail!(
+                "组 {} 的 schema 里有 {}，但 {} 里没有同名 sheet",
+                name, sec.name, book_path.display()
+            );
+        };
+        let ws = book.sheet_by_name_mut(&sheet_name)
+            .map_err(|e| anyhow::anyhow!("打开 sheet {} 失败: {}", sheet_name, e))?;
+
+        match sec.mode {
+            crate::tblschema::SchemaMode::Table => {
+                tables.push(table_from_sheet(sec, ws, book_path)?);
+            }
+            crate::tblschema::SchemaMode::Constant => {
+                constants.push(constant_from_sheet(sec, ws, book_path)?);
+            }
+            crate::tblschema::SchemaMode::Enum => {
+                enums.push(enum_from_sheet(sec, ws, book_path)?);
+            }
+        }
+    }
+
+    let stamp = file_stamp(book_path);
+    Ok(Group {
+        name: name.to_string(),
+        original_name: name.to_string(),
+        dir: dir.to_path_buf(),
+        tables,
+        constants,
+        enums,
+        is_new: false,
+        storage: GroupStorage::Xlsx,
+        book_stamp: stamp,
+    })
+}
+
+/// 重新从磁盘读一个 xlsx 组（外部编辑后的刷新）。
+pub(crate) fn reload_xlsx_group(
+    group: &Group,
+    schema: &TblSchema,
+) -> Result<Group> {
+    load_xlsx_group(&group.name, &group.dir, schema, &group.book_path())
+}
+
+/// `(mtime, size)`：保存前拿来发现「文件被外部改过」。
+pub(crate) fn file_stamp(path: &Path) -> Option<(std::time::SystemTime, u64)> {
+    let meta = std::fs::metadata(path).ok()?;
+    Some((meta.modified().ok()?, meta.len()))
+}
+
+fn field_defs_from_section(sec: &crate::tblschema::SchemaSection) -> Vec<FieldDef> {
+    sec.fields.iter().map(|f| FieldDef {
+        name: f.name.clone(),
+        desc: f.desc.clone(),
+        tbl_type: f.tbl_type.clone(),
+        // 解析期已经严格校验过导出码
+        export: Export::from_input(&f.export),
+    }).collect()
+}
+
+/// Table sheet → `Table`。表头 4 行，列按**字段名**对齐（允许策划插私有列）。
+fn table_from_sheet(
+    sec: &crate::tblschema::SchemaSection,
+    ws: &umya_spreadsheet::Worksheet,
+    book_path: &Path,
+) -> Result<Table> {
+    use crate::excel_sync::vo::{Layout, HDR_DESC, HDR_NAME};
+
+    let mut fields = field_defs_from_section(sec);
+    // desc 以 sheet 为准（用户已拍板）；取不到才回落到 schema。
+    let layout = crate::excel_sync::read::detect_layout(ws, Some(&fields));
+    if layout != Layout::Modern {
+        anyhow::bail!(
+            "{} 的 sheet {} 不是 4 行表头布局（desc/export/type/字段名），无法按 schema 读取",
+            book_path.display(), sec.name
+        );
+    }
+
+    // 字段名 → 物理列号（1-based）。缺失即报错：静默丢一列比报错糟得多。
+    let (max_col, _) = ws.highest_column_and_row();
+    let mut col_of: Vec<u32> = Vec::with_capacity(fields.len());
+    for f in &fields {
+        let found = (1..=max_col).find(|&c| ws.value((c, HDR_NAME)) == f.name);
+        let Some(c) = found else {
+            anyhow::bail!(
+                "{} 的 sheet {} 缺少字段列 {:?}（表头第 {} 行）",
+                book_path.display(), sec.name, f.name, HDR_NAME
+            );
+        };
+        col_of.push(c);
+    }
+    // desc 行：sheet 里有就覆盖 schema 的
+    for (i, f) in fields.iter_mut().enumerate() {
+        let d = ws.value((col_of[i], HDR_DESC));
+        if !d.is_empty() { f.desc = d; }
+    }
+
+    let (_, max_row) = ws.highest_column_and_row();
+    let mut records: Vec<Vec<String>> = Vec::new();
+    for r in crate::excel_sync::vo::DATA_START..=max_row {
+        let cells: Vec<String> = col_of.iter().map(|&c| ws.value((c, r))).collect();
+        if cells.iter().all(|v| v.is_empty()) { continue; }
+        records.push(cells);
+    }
+
+    Ok(Table {
+        name: sec.name.clone(),
+        original_name: sec.name.clone(),
+        path: book_path.to_path_buf(),
+        schema: TableSchema { fields: fields.clone() },
+        original_records: records.clone(),
+        original_fields: fields,
+        records,
+        dirty: false,
+        deleted: false,
+        saved: true,
+        fmt_ver: crate::tbl::DEFAULT_TBL_VERSION,
+        display_field: sec.display.clone(),
+        original_display_field: sec.display.clone(),
+    })
+}
+
+/// Constant sheet → `Constant`。1 行表头 `name|type|value|export|desc`，按位置读。
+fn constant_from_sheet(
+    sec: &crate::tblschema::SchemaSection,
+    ws: &umya_spreadsheet::Worksheet,
+    book_path: &Path,
+) -> Result<Constant> {
+    let (_, max_row) = ws.highest_column_and_row();
+    let mut entries = Vec::new();
+    for r in 2..=max_row {
+        let name = ws.value((1, r));
+        if name.trim().is_empty() { continue; }
+        entries.push(ConstEntry {
+            name: name.trim().to_string(),
+            tbl_type: ws.value((2, r)).trim().to_string(),
+            value: ws.value((3, r)),
+            export: Export::from_input(&ws.value((4, r))),
+            desc: ws.value((5, r)),
+        });
+    }
+    Ok(Constant {
+        name: sec.name.clone(),
+        original_name: sec.name.clone(),
+        path: book_path.to_path_buf(),
+        original_entries: entries.clone(),
+        entries,
+        dirty: false,
+        deleted: false,
+        saved: true,
+    })
+}
+
+/// Enum sheet → `EnumDef`。1 行表头 `id|name|desc`，按位置读。
+fn enum_from_sheet(
+    sec: &crate::tblschema::SchemaSection,
+    ws: &umya_spreadsheet::Worksheet,
+    book_path: &Path,
+) -> Result<EnumDef> {
+    let (_, max_row) = ws.highest_column_and_row();
+    let mut entries = Vec::new();
+    for r in 2..=max_row {
+        let id = ws.value((1, r));
+        let name = ws.value((2, r));
+        if id.trim().is_empty() && name.trim().is_empty() { continue; }
+        entries.push(EnumEntry {
+            id: id.trim().to_string(),
+            name: name.trim().to_string(),
+            desc: ws.value((3, r)),
+        });
+    }
+    Ok(EnumDef {
+        name: sec.name.clone(),
+        original_name: sec.name.clone(),
+        path: book_path.to_path_buf(),
+        entries: entries.clone(),
+        original_entries: entries,
+        dirty: false,
+        deleted: false,
+        saved: true,
+        display_field: sec.display.clone(),
+        original_display_field: sec.display.clone(),
     })
 }
 

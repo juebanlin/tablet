@@ -432,7 +432,7 @@ impl ContextMenuState {
 /// 待执行的命名/确认型操作。需要走 InputDialog 或 ConfirmDialog 收集用户输入。
 #[derive(Clone, Debug)]
 pub enum PendingAction {
-    NewGroup { project_id: String },
+    NewGroup { project_id: String, storage: tablet_core::model::GroupStorage },
     NewTable { project_id: String, group: String },
     NewConstant { project_id: String, group: String },
     NewEnum { project_id: String, group: String },
@@ -440,6 +440,8 @@ pub enum PendingAction {
     DeleteNode { project_id: String, group: String, name: String },
     RenameGroup { project_id: String, old_name: String },
     RenameNode { project_id: String, group: String, old_name: String },
+    /// xlsx 组：从磁盘重新加载（丢弃内存里的改动，单步 ConfirmDialog）
+    ReloadXlsxGroup { project_id: String, group: String },
     /// 删除 Project：单步 ConfirmDialog
     DeleteProject { project_id: String },
     /// 关闭 dirty Project：单步 ConfirmDialog（确认放弃未保存改动）
@@ -458,11 +460,14 @@ impl PendingAction {
     pub fn needs_confirm(&self) -> bool {
         matches!(self, PendingAction::DeleteGroup { .. }
             | PendingAction::DeleteNode { .. }
+            | PendingAction::ReloadXlsxGroup { .. }
             | PendingAction::DeleteProject { .. }
             | PendingAction::CloseDirtyProject { .. })
     }
     pub fn input_title(&self) -> &'static str {
         match self {
+            PendingAction::NewGroup { storage: tablet_core::model::GroupStorage::Xlsx, .. } =>
+                "新建 Excel Group",
             PendingAction::NewGroup { .. } => "新建 Group",
             PendingAction::NewTable { .. } => "新建 Table",
             PendingAction::NewConstant { .. } => "新建 Constant",
@@ -476,6 +481,7 @@ impl PendingAction {
         match self {
             PendingAction::DeleteGroup { .. } => "确认删除",
             PendingAction::DeleteNode { .. } => "确认删除",
+            PendingAction::ReloadXlsxGroup { .. } => "重新加载组",
             PendingAction::DeleteProject { .. } => "确认删除 Project",
             PendingAction::CloseDirtyProject { .. } => "未保存的修改",
             _ => "",
@@ -487,6 +493,8 @@ impl PendingAction {
                 format!("确定删除 [{}] Group \"{}\" 及其所有内容？", project_id, group),
             PendingAction::DeleteNode { project_id, group, name } =>
                 format!("确定删除 [{}] \"{}/{}\"？", project_id, group, name),
+            PendingAction::ReloadXlsxGroup { project_id, group } =>
+                format!("将从磁盘重新读取 [{}] 的组 \"{}\"，内存里未保存的改动会丢弃。继续？", project_id, group),
             PendingAction::DeleteProject { project_id } =>
                 format!("此操作不可逆，将永久删除 projects/{}/ 目录及其全部数据。是否继续？", project_id),
             PendingAction::CloseDirtyProject { project_id } =>

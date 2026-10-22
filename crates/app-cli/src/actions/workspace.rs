@@ -13,7 +13,8 @@ pub fn run_workspace_save(engine: &mut ProjectEngine) -> Result<()> {
     }
     let errs = engine.validate();
     if errs.is_empty() {
-        anyhow::bail!("保存失败：盘上未写入");
+        let reason = engine.last_save_failure.clone().unwrap_or_else(|| "盘上未写入".to_string());
+        anyhow::bail!("保存失败：{}", reason);
     }
     anyhow::bail!(
         "保存失败：项目存在 {} 个验证错误，盘上没有任何改动\n{}",

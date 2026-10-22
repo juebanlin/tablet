@@ -303,9 +303,9 @@ fn run(cli: Cli) -> Result<i32> {
                     }
                     Ok(0)
                 }
-                SchemaAction::AddGroup { name } => {
-                    crate::actions::schema::run_schema_add_group(&mut engine, name)?;
-                    println!("已添加 Group: {}", name);
+                SchemaAction::AddGroup { name, storage } => {
+                    crate::actions::schema::run_schema_add_group(&mut engine, name, storage)?;
+                    println!("已添加 Group: {}（{}）", name, storage);
                     Ok(0)
                 }
                 SchemaAction::AddTable { group, name } => {

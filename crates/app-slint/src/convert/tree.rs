@@ -190,7 +190,7 @@ pub fn build_tree_nodes(state: &mut AppState) -> Vec<TreeNode> {
                 id: state.tree_targets.len() as i32,
                 indent: 1,
                 expanded,
-                icon: SharedString::from(ICON_GROUP),
+                icon: SharedString::from(if group.is_xlsx() { ICON_GROUP_XLSX } else { ICON_GROUP }),
                 name: SharedString::from(group.name.clone()),
                 mark: SharedString::from(group_mark),
                 mark_color: group_mark_color,

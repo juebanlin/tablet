@@ -590,6 +590,10 @@ pub fn apply_schema_to_project(
                     constants: Vec::new(),
                     enums: Vec::new(),
                     is_new: true,
+                    // 从 .tblschema 展开出来的组一律是文本后端：schema 文件里没有
+                    // 存储方式的信息（@02.27），xlsx 组只由 UI / CLI 显式新建。
+                    storage: crate::model::GroupStorage::Tbl,
+                    book_stamp: None,
                 });
                 groups.last_mut().unwrap()
             }
@@ -1414,6 +1418,7 @@ id | int | cs | x
         };
         let mut groups = vec![Group {
             name: "hero".into(), original_name: "hero".into(), dir: std::path::PathBuf::new(),
+            storage: crate::model::GroupStorage::Tbl, book_stamp: None,
             tables: vec![Table {
                 name: "HeroBase".into(), original_name: "HeroBase".into(), path: std::path::PathBuf::new(),
                 schema: TableSchema { fields: vec![] }, records: vec![],

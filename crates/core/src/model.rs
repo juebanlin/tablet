@@ -584,6 +584,33 @@ pub struct ProjectConfig {
     pub export: ExportConfig,
 }
 
+/// 一个组的数据落在什么容器里。**一组一种后端，不混存**（@02.27）。
+///
+/// | 后端 | 结构真相源 | 数据真相源 |
+/// |---|---|---|
+/// | `Tbl`  | 各 `.tbl` 自己（自描述） | 各 `.tbl` |
+/// | `Xlsx` | `project.tblschema` 的 section | `<group>.xlsx` 的 sheet |
+///
+/// 节点（`Table` / `Constant` / `EnumDef`）在内存里两种后端完全同型，
+/// 所以差别只在「加载时从哪读、保存时往哪写」，不在模型里。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum GroupStorage {
+    /// `config/<group>/<Node>.tbl`（默认，文本、可 diff）
+    #[default]
+    Tbl,
+    /// `config/<group>/<group>.xlsx`，节点 = sheet
+    Xlsx,
+}
+
+impl GroupStorage {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            GroupStorage::Tbl => "tbl",
+            GroupStorage::Xlsx => "xlsx",
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct Group {
     pub name: String,
@@ -595,9 +622,23 @@ pub struct Group {
     pub constants: Vec<Constant>,
     pub enums: Vec<EnumDef>,
     pub is_new: bool,
+    /// 存储后端（@02.27）。Tbl 组用不到 workbook 路径，Xlsx 组由 [`Group::book_path`] 推导。
+    pub storage: GroupStorage,
+    /// 加载时 workbook 的 `(mtime, size)`；保存前用来发现「外部改过」。
+    /// Tbl 组恒为 `None`。
+    pub book_stamp: Option<(std::time::SystemTime, u64)>,
 }
 
 impl Group {
+    /// Xlsx 组的工作簿路径。**推导**而不是存字段——组改名后不会留下旧路径。
+    pub fn book_path(&self) -> PathBuf {
+        self.dir.join(format!("{}.xlsx", self.name))
+    }
+
+    pub fn is_xlsx(&self) -> bool {
+        self.storage == GroupStorage::Xlsx
+    }
+
     /// 影响 `project.tblschema` 的改动：自己的名字 / 新增，或**任何子节点**。
     /// 「A.B.C 里只有 C 改了」在这里体现为 C 说 true，A 和 B 只是把它聚合上来。
     pub fn schema_changed(&self) -> bool {

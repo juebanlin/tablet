@@ -60,14 +60,24 @@ pub fn run_schema_show(engine: &ProjectEngine) -> Result<Vec<SchemaShowEntry>> {
     Ok(entries)
 }
 
-pub fn run_schema_add_group(engine: &mut ProjectEngine, name: &str) -> Result<()> {
+pub fn run_schema_add_group(
+    engine: &mut ProjectEngine,
+    name: &str,
+    storage: &str,
+) -> Result<()> {
     let pid = active_id(engine)?;
     if let Some(err) = engine.validate_group_name(name) {
         bail!("{}", err);
     }
+    let storage = match storage {
+        "tbl" => tablet_core::model::GroupStorage::Tbl,
+        "xlsx" => tablet_core::model::GroupStorage::Xlsx,
+        other => bail!("--storage 只接受 tbl / xlsx，收到 {:?}", other),
+    };
     engine.execute_action(&ProjectAction::NewGroup {
         project_id: pid.clone(),
         name: name.to_string(),
+        storage,
     });
     save_or_err(engine, "新建 Group")
 }
@@ -270,7 +280,9 @@ fn save_or_err(engine: &mut ProjectEngine, what: &str) -> Result<()> {
     }
     let errs = engine.validate();
     if errs.is_empty() {
-        bail!("{}未落盘：保存失败", what);
+        // 具体原因（被 Excel 占用 / 外部改过 / 写入失败）由 core 记在 last_save_failure
+        let reason = engine.last_save_failure.clone().unwrap_or_else(|| "保存失败".to_string());
+        bail!("{}未落盘：{}", what, reason);
     }
     bail!(
         "{}未落盘：项目存在 {} 个验证错误，盘上没有任何改动\n{}",

@@ -70,8 +70,8 @@ pub(crate) fn execute(state: &Rc<RefCell<AppState>>) {
     let action = match st.pending.action.clone() { Some(a) => a, None => return };
     let buf = st.pending.input_buffer.clone();
     let core_action = match &action {
-        PendingAction::NewGroup { project_id } =>
-            ProjectAction::NewGroup { project_id: project_id.clone(), name: buf.clone() },
+        PendingAction::NewGroup { project_id, storage } =>
+            ProjectAction::NewGroup { project_id: project_id.clone(), name: buf.clone(), storage: *storage },
         PendingAction::NewTable { project_id, group } =>
             ProjectAction::NewTable { project_id: project_id.clone(), group: group.clone(), name: buf.clone() },
         PendingAction::NewConstant { project_id, group } =>
@@ -104,6 +104,16 @@ pub(crate) fn execute(state: &Rc<RefCell<AppState>>) {
             st.pending.close();
             return;
         }
+        PendingAction::ReloadXlsxGroup { project_id, group } => {
+            match st.engine.reload_xlsx_group(project_id, group) {
+                Ok(()) => st.engine.ui_log(format!(
+                    "[Excel] {} / {} 已从磁盘重新加载", project_id, group)),
+                Err(e) => st.engine.warn_log(format!(
+                    "[Excel] 重新加载 {} / {} 失败: {}", project_id, group, e)),
+            }
+            st.pending.close();
+            return;
+        }
         PendingAction::DeleteProject { project_id } => {
             ProjectAction::DeleteProject { project_id: project_id.clone() }
         }
@@ -117,7 +127,7 @@ pub(crate) fn execute(state: &Rc<RefCell<AppState>>) {
             return;
         }
     };
-    if let PendingAction::NewGroup { project_id } = &action {
+    if let PendingAction::NewGroup { project_id, .. } = &action {
         st.tree_expanded.insert((project_id.clone(), buf.clone()));
     }
     let track_delete = matches!(action, PendingAction::DeleteProject { .. });
@@ -172,8 +182,14 @@ pub(crate) fn handle_project_root_action(state: &Rc<RefCell<AppState>>, project_
             st.schema_import = crate::state::SchemaImportState::default();
             st.schema_import.open = true;
         }
-        "tree.proj-new-group" => {
+        "tree.proj-new-group" | "tree.proj-new-xlsx-group" => {
+            let storage = if action == "tree.proj-new-xlsx-group" {
+                tablet_core::model::GroupStorage::Xlsx
+            } else {
+                tablet_core::model::GroupStorage::Tbl
+            };
             state.borrow_mut().pending.open(PendingAction::NewGroup {
+                storage,
                 project_id: project_id.to_string(),
             });
         }
@@ -239,8 +255,13 @@ pub(crate) fn handle_project_root_action(state: &Rc<RefCell<AppState>>, project_
                 let _ = open::that(&ap.root);
             }
         }
-        "tree.paste-group" => {
-            let new_group = state.borrow_mut().engine.paste_group_to(project_id);
+        "tree.paste-group-tbl" | "tree.paste-group-xlsx" => {
+            let storage = if action == "tree.paste-group-xlsx" {
+                tablet_core::model::GroupStorage::Xlsx
+            } else {
+                tablet_core::model::GroupStorage::Tbl
+            };
+            let new_group = state.borrow_mut().engine.paste_group_as(project_id, Some(storage));
             if let Some(new_group) = new_group {
                 let mut st = state.borrow_mut();
                 st.project_expanded.insert(project_id.to_string());

@@ -234,6 +234,9 @@ pub enum SchemaAction {
     AddGroup {
         #[arg(long)]
         name: String,
+        /// 存储后端：tbl（默认，每组一个目录的 .tbl）或 xlsx（一组一个工作簿，节点 = sheet）
+        #[arg(long, value_name = "tbl|xlsx", default_value = "tbl")]
+        storage: String,
     },
     /// 添加 Table
     AddTable {
