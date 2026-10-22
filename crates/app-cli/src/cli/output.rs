@@ -73,7 +73,7 @@ fn print_template_meta_cli(m: &TemplateMeta) {
 
 pub fn print_project_list_cli(projects: &[ProjectListEntry]) {
     if projects.is_empty() {
-        println!("(无 Project；可用 `tablet-cli new-project --template full --id default --name 默认项目` 创建)");
+        println!("(无 Project；可用 `tablet-cli project new --template standard --id default --name 默认项目` 创建)");
         return;
     }
     for p in projects {

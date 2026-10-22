@@ -14,10 +14,12 @@ run_cli schema add-table --group hero --name HeroSkill
 assert_exit 0
 assert_contains "已添加 Table"
 
-# group 不存在时失败
+# group 不存在 = 用错命令，必须非零退出并说清楚。
+# 以前这里 exit 0 且 println"已添加 Table" —— core 对不存在的 group 是静默 no-op，
+# 而 CLI 照样对外宣布成功（@02.26.7「读不懂就报错」同一个道理）。
 run_cli schema add-table --group nonexist --name Foo
-assert_exit 0
-# 命令本身不报错（core 层静默忽略不存在的 group），但不会创建
+assert_exit 1
+assert_stderr_contains "Group 不存在"
 
 cleanup
 end_tests

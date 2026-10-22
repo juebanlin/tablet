@@ -18,9 +18,10 @@ assert_contains "JSON"
 run_cli export data --json --group hero --node HeroBase
 assert_exit 0
 
-# 不存在的 group（仍成功但无文件生成）
+# 不存在的 group = 用错命令，不是"导出成功且为空"
 run_cli export data --json --group nonexist
-assert_exit 0
+assert_exit 1
+assert_stderr_contains "Group 不存在"
 
 cleanup
 end_tests

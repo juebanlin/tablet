@@ -42,6 +42,11 @@ pub fn run_new_project(
         anyhow::bail!("Project 已存在: {}", project_root.display());
     }
 
+    // `--from-file` 的 schema 若声明了显示名（`# @meta name:`），没给 `--name` 时就沿用它。
+    // 以前这里一律 `name.unwrap_or(project_id)`，AI 写在 schema 里的项目名被直接丢掉、
+    // 换成了 id —— 而 id 受 `[a-z0-9_-]` 限制，装不下中文名。
+    // 模板则不一样：模板的 name 是**模板**的名字，不该变成项目名。
+    let mut declared_name: Option<String> = None;
     let mut schema = match source {
         NewProjectSource::Template(template_id) => {
             let builtin = BuiltinTemplates::new();
@@ -57,13 +62,21 @@ pub fn run_new_project(
         NewProjectSource::SchemaFile(path) => {
             let text = std::fs::read_to_string(path)
                 .with_context(|| format!("读取 {} 失败", path.display()))?;
-            tablet_core::tblschema::parse_tblschema(&text)
-                .with_context(|| format!("解析 {} 失败", path.display()))?
+            let s = tablet_core::tblschema::parse_tblschema(&text)
+                .with_context(|| format!("解析 {} 失败", path.display()))?;
+            // 解析器在缺省时把 name 填成 id；"name == id" 视为没声明。
+            if !s.meta.name.is_empty() && s.meta.name != s.meta.id {
+                declared_name = Some(s.meta.name.clone());
+            }
+            s
         }
     };
 
     schema.meta.id = project_id.to_string();
-    schema.meta.name = name.unwrap_or(project_id).to_string();
+    schema.meta.name = name
+        .map(str::to_string)
+        .or(declared_name)
+        .unwrap_or_else(|| project_id.to_string());
     schema.meta.created_at = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
 
     // 走 engine：内存态建 → 验证闸门 → 立刻保存。

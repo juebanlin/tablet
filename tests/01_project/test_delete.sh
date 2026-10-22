@@ -15,6 +15,13 @@ assert_stderr_contains "confirm"
 assert_dir_exists "$WORK_DIR/projects/test"
 cleanup
 
+# ── 不存在的 id：以前照样 println"已删除 Project" + exit 0 ──
+setup_workspace "$TEMPLATE"
+run_cli project delete --id nope --confirm
+assert_exit 1
+assert_stderr_contains "Project 不存在"
+cleanup
+
 # ── 有 --confirm 删除 ──
 setup_empty_workspace
 run_cli project new --template standard --id to-delete

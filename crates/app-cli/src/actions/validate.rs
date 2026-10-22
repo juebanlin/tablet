@@ -5,6 +5,34 @@
 
 use tablet_core::ops::{format_validation_log, ProjectEngine};
 
+/// 过滤目标写错了必须吵。
+///
+/// `validate --group typoo` 以前会得到"验证通过，无错误" + exit 0 —— 空集恒真，
+/// 而调用它的脚本无从分辨"这个组没问题"和"这个组根本不存在"。
+/// `export data --group` 同理（导出 0 个文件，照样 exit 0）。
+pub fn ensure_filter_targets(
+    engine: &ProjectEngine,
+    group: Option<&str>,
+    node: Option<&str>,
+) -> anyhow::Result<()> {
+    let Some(project) = engine.active() else {
+        anyhow::bail!("没有活跃的 Project");
+    };
+    let Some(g) = group else { return Ok(()) };
+    let Some(grp) = project.groups.iter().find(|x| x.name == g) else {
+        anyhow::bail!("Group 不存在: {}", g);
+    };
+    if let Some(n) = node {
+        let ok = grp.tables.iter().any(|t| t.name == n)
+            || grp.constants.iter().any(|c| c.name == n)
+            || grp.enums.iter().any(|e| e.name == n);
+        if !ok {
+            anyhow::bail!("节点不存在: {}/{}", g, n);
+        }
+    }
+    Ok(())
+}
+
 /// 一条校验错误。
 ///
 /// `display` 与 GUI 日志同一套渲染（`tablet_core::ops::format_validation_log`），

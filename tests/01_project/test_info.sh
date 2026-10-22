@@ -24,6 +24,29 @@ assert_exit 0
 assert_contains "alpha"
 cleanup
 
+# ── --id 查一个"盘上有、但没打开"的项目 ──
+# load_workspace 只打开 opened_projects / last_project；以前 `project info --id`
+# 走 find_project（只看已打开），对存在的项目报"不存在"；`--project` 则被
+# set_active_by_id 静默忽略、报告了**另一个**项目。
+setup_empty_workspace
+run_cli project new --template standard --id first
+run_cli project new --template standard --id second   # last_project = second
+run_cli project info --id first
+assert_exit 0
+assert_contains "Project: first"
+run_cli --project first project info
+assert_exit 0
+assert_contains "Project: first"
+cleanup
+
+# ── 写坏的 .tbl：整项目打不开（不是少一张表还 exit 0） ──
+setup_workspace "$TEMPLATE"
+printf '#!tbl v99\n#mode table\n---\n' > "$WORK_DIR/projects/test/config/hero/Bad.tbl"
+run_cli project info
+assert_exit 1
+assert_stderr_contains "Bad.tbl"
+cleanup
+
 # ── 写坏的 project.tblschema：报错 + 非零退出 ──
 # 这条守的是「CLI 给 AI / 脚本调用，没有反馈等于没有发生」：解析失败原来被
 # `Err(_) => fallback` 整个吞掉，项目会静默退化成"空身份 + 默认分隔符"，

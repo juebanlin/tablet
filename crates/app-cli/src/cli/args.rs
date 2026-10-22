@@ -106,8 +106,9 @@ pub enum ProjectAction {
         /// Project 显示名（默认 = id）
         #[arg(long)]
         name: Option<String>,
-        /// 创建后切换为 last_project
-        #[arg(long, default_value_t = true)]
+        /// 创建后写 `[project] last_project`（默认 true）。
+        /// 传 `--switch-after false` 可保留原来的默认项目。
+        #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
         switch_after: bool,
     },
     /// 重命名 Project
@@ -254,6 +255,10 @@ pub enum SchemaAction {
         group: String,
         #[arg(long)]
         name: String,
+        /// 枚举条目，格式 `ID:NAME[:DESC]`，可重复。
+        /// **至少要给一个**：空枚举过不了校验，也就落不了盘。
+        #[arg(long = "entry", value_name = "ID:NAME[:DESC]", required = true)]
+        entries: Vec<String>,
     },
     /// 重命名分组
     RenameGroup {

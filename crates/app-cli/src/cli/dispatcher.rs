@@ -196,9 +196,16 @@ fn run(cli: Cli) -> Result<i32> {
                     } else {
                         output::print_export_summary_cli(&summary);
                     }
-                    Ok(0)
+                    // 逐格式失败不打断其它格式，但**退出码必须是失败**：
+                    // `export all || exit 1` 这种写法在 CI 里全靠它。
+                    Ok(if summary.has_error() { 1 } else { 0 })
                 }
                 ExportAction::Data { json, xml, group, node, output } => {
+                    // 过滤目标不存在 = 用错命令，不是"没数据"。否则脚本会把
+                    // "组名写错"当成"这个组导出成功且为空"。
+                    crate::actions::validate::ensure_filter_targets(
+                        &engine, group.as_deref(), node.as_deref(),
+                    )?;
                     if let Some(o) = output {
                         apply_data_output(&mut engine, o);
                     }
@@ -214,7 +221,7 @@ fn run(cli: Cli) -> Result<i32> {
                     } else {
                         output::print_export_summary_cli(&summary);
                     }
-                    Ok(0)
+                    Ok(if summary.has_error() { 1 } else { 0 })
                 }
                 ExportAction::Code {
                     java, go, lua, gdscript, typescript, cpp, csharp, all,
@@ -253,11 +260,14 @@ fn run(cli: Cli) -> Result<i32> {
                     } else {
                         output::print_export_summary_cli(&summary);
                     }
-                    Ok(0)
+                    Ok(if summary.has_error() { 1 } else { 0 })
                 }
             }
         }
         Command::Validate { ref group, ref node, col, row } => {
+            crate::actions::validate::ensure_filter_targets(
+                &engine, group.as_deref(), node.as_deref(),
+            )?;
             let filter = crate::actions::validate::ValidateFilter {
                 group: group.clone(), node: node.clone(), col, row,
             };
@@ -308,9 +318,9 @@ fn run(cli: Cli) -> Result<i32> {
                     println!("已添加 Constant: {}/{}", group, name);
                     Ok(0)
                 }
-                SchemaAction::AddEnum { group, name } => {
-                    crate::actions::schema::run_schema_add_enum(&mut engine, group, name)?;
-                    println!("已添加 Enum: {}/{}", group, name);
+                SchemaAction::AddEnum { group, name, entries } => {
+                    crate::actions::schema::run_schema_add_enum(&mut engine, group, name, entries)?;
+                    println!("已添加 Enum: {}/{}（{} 个条目）", group, name, entries.len());
                     Ok(0)
                 }
                 SchemaAction::RenameGroup { old, new } => {
@@ -435,11 +445,20 @@ fn dispatch_project(cli: &Cli, pa: &ProjectArgs) -> Result<i32> {
             Ok(0)
         }
         ProjectAction::Info { id } => {
-            let (mut engine, _config_fixed) = load_workspace_checked(&cli.workdir)?;
-            if let Some(pid) = cli.project.as_deref().or(id.as_deref()) {
-                engine.set_active_by_id(pid);
-            }
-            let summary = run_project_info(&engine, id.as_deref())?;
+            // 点名了项目就按 id 直接加载 —— `load_workspace` 只打开 opened_projects /
+            // last_project 那几个，`set_active_by_id` 对没打开的项目返回 false（静默），
+            // 于是 `--project X` 会报告**另一个**项目、`--id X` 会报"不存在"。
+            let target = cli.project.as_deref().or(id.as_deref());
+            let summary = match target {
+                Some(pid) => {
+                    let project = tablet_core::project::load_specific_project(&cli.workdir, pid)?;
+                    crate::actions::project_info::summarize(&project, false)
+                }
+                None => {
+                    let (engine, _config_fixed) = load_workspace_checked(&cli.workdir)?;
+                    run_project_info(&engine, None)?
+                }
+            };
             if cli.is_json() {
                 println!("{}", serde_json::to_string_pretty(&summary).unwrap_or_default());
             } else {
