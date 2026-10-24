@@ -41,10 +41,10 @@ tablet-cli project delete --id <id> --confirm
 ## schema
 
 ```bash
-tablet-cli schema show [--fmt json]
+tablet-cli schema show [--rules] [--fmt json]
 
 tablet-cli schema add-group --name <G> [--storage tbl|xlsx]
-tablet-cli schema add-table    --group <G> --name <N>
+tablet-cli schema add-table    --group <G> --name <N> [--tbl-fmt v2|v3]
 tablet-cli schema add-constant --group <G> --name <N>
 tablet-cli schema add-enum     --group <G> --name <N> --entry 1:NAME:说明 [--entry 2:OTHER]
 
@@ -59,6 +59,11 @@ tablet-cli schema delete-node  --group <G> --name <N>
 
 工作簿组对 `validate` / `export` / `schema show` 完全透明；`util` 系列是文件工具，不识别这种组。
 GUI 开着时 CLI 会被工作区锁拒绝（`util` / `list-templates` 除外）。
+
+`--tbl-fmt` 只决定新表第一次落盘用哪个 `.tbl` 版本（`v3` 块式，默认；`v2` 稀疏行）。之后以文件头为准。
+
+`schema show --rules` 在结构树每项下面列出该节点的**有效规则**（系统内置 + 用户 `# @rule`，
+系统项带 `[系统]` 标记、按 `@01.8.11` 只读）。排查「为什么这行报错」先看它。
 
 所有写命令都是 **校验 → 执行 → 落盘 → 看结果**：
 
@@ -77,7 +82,10 @@ tablet-cli validate --group hero --node HeroBase --col 2 --row 0   # 一个格�
 ```
 
 退出码：`0` 通过 / `1` 有错（或 `--group` / `--node` 指向不存在的目标）。
-警告（`# @rule` 的 `[warn]` 级）默认不影响退出码；`--strict` 时有警告也返回 `1`（CI 推荐）。
+
+**级别 → 动作由项目设置决定**（`project.toml` 的 `[validate]`，默认 `error=block`、
+`warning=report`、`info=ignore`）：`block` 计入 errors、`report` 计入 warnings、`ignore` 不输出。
+所以「警告是否失败」取决于三项设置，不是写死的；`--strict` 表示**连 warnings 也算失败**（CI 推荐）。
 
 错误行形如 `[验证] hero/HeroBase C1:[abc] -> 不是合法int`：`C` 是列字母、`1` 是数据行号；
 表头层错误写成 `表头第 4 行 B 列`。行号 / 列号都从 1 数。
@@ -88,7 +96,7 @@ tablet-cli --fmt json validate
 #             "row":0,"col":2,"message":"…","severity":"error",
 #             "display":"[验证] hero/HeroBase C1:[abc] -> …"}],
 #  "warnings":[…]}
-tablet-cli validate --strict          # 警告也算失败
+tablet-cli validate --strict          # 「仅提示」级也算失败
 tablet-cli validate --fmt json        # errors / warnings 两个数组
 ```
 

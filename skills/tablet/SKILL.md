@@ -1,6 +1,6 @@
 ---
 name: tablet
-description: 生成 / 修改 / 校验 tablet 配置表，并用 tablet-cli 跑通「建项目 → 验证 → 导出」流水线。当用户要新建或扩展 .tblschema 模板、设计字段与类型、追加 # @preset 预设数据、手改 .tbl 数据文件，或执行 tablet-cli 命令（project new / schema / validate / export / excel / workspace）时使用。涵盖 .tblschema v1 与 .tbl v3 格式、7 个基础类型 + 复合范式 + @Ref、解析器强制的命名规则、退出码约定。
+description: 生成 / 修改 / 校验 tablet 配置表，并用 tablet-cli 跑通「建项目 → 验证 → 导出」流水线。当用户要新建或扩展 .tblschema 模板、设计字段与类型、追加 # @preset 预设数据、手改 .tbl 数据文件、给列加校验规则（# @rule），或执行 tablet-cli 命令（project new / schema / validate / export / excel / workspace）时使用。涵盖 .tblschema v1 与 .tbl v3/v2 格式、7 个基础类型 + 复合范式 + @Ref、内置验证器与错误/警告分级、解析器强制的命名规则、退出码约定。
 user-invocable: true
 allowed-tools:
   - Read
@@ -30,6 +30,8 @@ allowed-tools:
 | 数据在 `.xlsx` 里的组（工作簿组） | 见 §五之二：**不要手写 xlsx**，用 GUI / Excel / schema 命令 |
 | 加一个组 / 表 / 常量 / 枚举 | `tablet-cli schema add-*`（会自动校验并落盘） |
 | 只想知道结构 | `tablet-cli schema show --fmt json` |
+| 看每个节点的有效校验规则 | `tablet-cli schema show --rules` |
+| 给某列加约束 | 在 `.tblschema` 段内写 `# @rule`（见 §五之三），或 GUI 右键「校验规则」 |
 | 打包给程序读 | `tablet-cli export all -o <dir>` |
 
 > **真相源**：两种组后端（@02.26.8）——
@@ -66,7 +68,8 @@ tablet-cli -w <workdir> --project demo export all -o artifacts/demo
 | 组名（= 目录名） | 只能是中英文、数字、下划线 | `hero` ✅ `战斗系统` ✅ `bad group!` ❌ |
 | 字段名 / 常量名 | `[a-z][a-z0-9_]*`，**不能是 Java/Go/Lua 关键字** | `max_level` ✅ `class` ❌ `type` ❌ |
 | 枚举条目名 | `[A-Z][A-Z0-9_]*`（UPPER_SNAKE），同一枚举内唯一 | `WARRIOR` ✅ `Warrior` ❌ |
-| 枚举 id | 正整数，**不能是 0**（0 = 未设置） | `1` ✅ `0` ❌ |
+| 枚举 id | 正整数，**不能是 0**（0 = 未设置）；**不要求连续**，允许跨段预留 | `1` ✅ `0` ❌ |
+| Table 的 `id` | 正整数、同表内唯一（整行全空的占位行除外） | `0` / `-1` ❌ |
 | `# @meta id` | `[a-z0-9_-]{1,32}`；不写也行，写了就必须合法 | `demo` ✅ `Bad-Id` ❌ |
 
 ### 导出列
@@ -132,6 +135,7 @@ name   | str      | cs | 名字
 kind   | @HeroType| cs | 职业
 skills | List<int>| cs | 技能
 born   | Tuple2<int,int> | cs | 坐标
+# @rule: name = unique()        ← 只写 schema，不落 .tbl
 # @preset
 1001 | 亚瑟 | 1 | 1;2;3 | 5,10
 
@@ -141,7 +145,8 @@ max_level | int | 100 | cs | 等级上限
 ```
 
 - `# @meta` / `# @sep` 只在第一个 `[段]` 之前有效，之后当注释。
-- `#` 开头是注释；三种例外是指令 `# @meta` / `# @sep` / `# @preset`。
+- `#` 开头是注释；例外是指令 `# @meta` / `# @sep` / `# @display` / `# @rule` / `# @preset`。
+- 规范顺序：段头 → 字段行 → `# @display` → `# @rule` → `# @preset`（`# @preset` 必须最后，它会打开数据模式）。
 - 井号在行中不是注释——不要写行尾注释。
 
 ## 五、改已有项目的数据（`.tbl`）
@@ -208,6 +213,53 @@ max_level|int|100|cs|等级上限
   自动落成 sheet（节点名 = sheet 名，必须 PascalCase 且 ≤31 字符）。
 - GUI 开着时 CLI 会拒绝执行（工作区锁）；`util` / `list-templates` 除外。
 
+## 五之三、校验规则（`# @rule`）
+
+规则**只写在 `project.tblschema` 的段内**（不写 `.tbl`、不进 Excel），对 Table / Enum 生效；
+Constant 不支持（`value` 逐行类型不同，写了会在解析期带行号报错）。
+
+```text
+[hero/Hero] table
+id   | int | cs | 英雄ID
+name | str | cs | 名字
+kind | int | cs | 类型（引用 HeroType）
+hp   | int | s  | 血量
+atk  | int | s  | 攻击
+# @rule: name = non_empty()
+# @rule: kind = ref_exists(HeroType.id)
+# @rule: hp = range(0, )
+# @rule: hp = required_if(kind, 2)
+# @rule: atk = compare(hp, <) [warn]
+```
+
+- 格式 `<列> = <验证器> [error|warn|info]`；一条一行，**行序即优先级**；级别缺省 `error`。
+- 一列可以有多条规则；同一目标重复会被拒绝（表单禁用 + 校验层兜底）。
+
+| 验证器 | 含义 | 适用列 |
+|---|---|---|
+| `unique()` | 非空值不重复 | 全部 |
+| `non_empty()` | 必填（整行全空占位行不算） | 全部 |
+| `ref_exists(节点.列)` | 值必须出现在目标列里 | 全部 |
+| `range(下限, 上限)` | 数值区间，留空一侧不限 | 整数 / 浮点 |
+| `len(下限, 上限)` | 字符数区间 | 文本 |
+| `one_of(a, b, c)` | 必须是候选之一 | 全部 |
+| `matches("正则")` | 匹配正则（整串用 `^...$`） | 文本 |
+| `required_if(列, 值)` | 条件必填 | 全部 |
+| `compare(列, 运算符)` | 跨列比较（两边都要是数字） | 整数 / 浮点 |
+
+**系统内置规则自动生效，不要重复声明**：table 的 `id`（唯一 / 必填 / 正整数）、
+enum 的 `id`（唯一 / 必填 / 正整数）、enum 的 `name`（唯一 / 必填 / UPPER_SNAKE）。
+system 规则只读、不落盘；再挂一遍只会得到非阻断的 `RuleRedundant` 警告。
+
+**无意义组合会直接报错**：`ref_exists` / `compare` / `required_if` 引用本列自己；
+区间两端都空；`matches("")` 空正则；列类型与验证器不匹配（复合类型列不参与）。
+
+- 改了被引用节点（`@X` 或 `ref_exists` 的目标）后，依赖它的节点会**自动重算**，不用手动全量验证。
+- 阻断保存的级别由项目策略决定（`project.toml` 的 `[validate]`：error / warning / info
+  各取 `block` / `report` / `ignore`，默认 error=block、warning=report、info=ignore）。
+  不要手写 `project.toml`，用 GUI 的「项目设置 → 校验」。
+- CI 用 `validate --strict`：所有「仅提示」级也算失败。
+
 ## 六、CLI 速查
 
 ```bash
@@ -218,9 +270,9 @@ tablet-cli [-w <workdir>] [--project <id>] [--fmt json] <命令>
 |---|---|
 | 看模板 | `list-templates` |
 | 项目 | `project list` / `info` / `new` / `rename` / `delete --confirm` / `clone` |
-| 结构 | `schema show`；`add-group --name G [--storage tbl\|xlsx]`；`add-table\|add-constant --group G --name N`；`add-enum --group G --name N --entry 1:X:说明` |
+| 结构 | `schema show [--rules]`；`add-group --name G [--storage tbl\|xlsx]`；`add-table --group G --name N [--tbl-fmt v2\|v3]`；`add-constant --group G --name N`；`add-enum --group G --name N --entry 1:X:说明` |
 | 改名 / 删除 | `schema rename-group --old A --new B`；`schema rename-node --group G --old A --new B`；`schema delete-group --name G`；`schema delete-node --group G --name N` |
-| 验证 | `validate [--group G] [--node N]` |
+| 验证 | `validate [--group G] [--node N] [--strict]` |
 | 导出 | `export data [--json\|--xml] [--group G] [--node N] [-o DIR]`；`export code --java\|--go\|--lua\|--gdscript\|--typescript\|--cpp\|--csharp\|--all [-o DIR]`；`export all [-o DIR]` |
 | Excel | `excel export --group G [-o f.xlsx]`；`excel import --group G --file f.xlsx` |
 | 保存 | `workspace save`（同时刷新 `project.tblschema`） |
@@ -247,11 +299,42 @@ tablet-cli [-w <workdir>] [--project <id>] [--fmt json] <命令>
 
 - ❌ 除了 `.tblschema` / `.tbl`，不要手写其它配置文件（`project.toml` / `tablet.toml`）；临时改配置用 `-s key=value`。
 - ❌ 不要在 `.tblschema` 里给 constant / enum 段写数据行——只能进 `# @preset`。
-- ❌ 不要用中文导出码、不要给枚举用 0 号、不要用关键字当字段名。
+- ❌ 不要用中文导出码、不要给枚举或 table 的 id 用 0 / 负数、不要用关键字当字段名。
+- ❌ 不要给系统已保证的列再挂 `unique()` / `non_empty()`（只会得到冗余警告）。
+- ❌ 不要在 constant 段写 `# @rule`（解析期直接报错）。
 - ❌ 不要为了"兼容"去猜格式：读不懂就报错是有意为之。
 - ❌ 不要跳过 `validate` 直接 `export` 交付。
 
-## 九、交付前的自检
+## 九、仓库约定（.gitignore）
+
+**必须提交**：`tablet.toml`、`projects/<id>/project.tblschema`、`projects/<id>/project.toml`（若存在）、
+`projects/<id>/config/**`（`.tbl` 文件，以及 xlsx 组的 `<group>.xlsx`）。
+
+**应忽略**（工具产生的临时物 / 派生产物）：
+
+```gitignore
+# tablet 进程锁 / 运行日志（GUI / CLI 互斥；日志写在 workdir 根）
+.tablet.lock
+tablet.log
+tablet-crash.log
+# Excel 桥接 / 编辑产生的临时工作簿（GUI 启动、退出时自动清理）
+projects/*/.excel/
+projects/*/.tbl-cache/
+# xlsx 组保存时的中间文件
+**/*.xlsx.tmp
+# Excel / LibreOffice 打开工作簿时产生的锁文件
+**/~$*.xlsx
+**/.~lock.*#
+# 导出产物（团队若要把生成代码入库，删掉这行或用 git add -f）
+projects/*/gen/
+# 系统垃圾
+.DS_Store
+Thumbs.db
+```
+
+`projects/*/gen/` 是 `export` 的产物，**不要手改**；要不要提交取决于你们是否让 CI 重新生成。
+
+## 十、交付前的自检
 
 1. `tablet-cli --project <id> validate` 退出 0。
 2. `export all` 退出 0，且日志里没有 `[警告]`。

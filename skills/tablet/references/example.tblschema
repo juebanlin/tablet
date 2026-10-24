@@ -3,7 +3,7 @@
 # @meta name: 演示项目
 # @meta category: sample
 
-# 覆盖：enum / table / constant、普通字段、List、Tuple、Map、@Ref、txt、# @display。
+# 覆盖：enum / table / constant、普通字段、List、Tuple、Map、@Ref、txt、# @display、# @rule。
 # 默认分隔符即可，所以没有 # @sep 行。
 
 [hero/HeroType] enum
@@ -25,6 +25,11 @@ born   | Tuple2<int,int> | cs | 出生坐标
 attrs  | Map<str,int>    | s  | 属性加成
 equips | List<@Equip>    | cs | 初始装备
 bio    | txt             | cs | 背景故事
+# 规则只写 schema，不落 .tbl；级别缺省 error，[warn] / [info] 受项目 [validate] 策略控制。
+# @rule: name = unique()
+# @rule: hp = range(1, )
+# @rule: atk = compare(hp, <)
+# @rule: bio = len(0, 200) [warn]
 # @preset
 1001 | 亚瑟 | 1 | 1200 | 88.5  | 1;2;3 | 5,10 | hp:200;atk:10 | 2001;2002 | 圆桌骑士团团长
 1002 | 梅林 | 2 | 700  | 120.0 | 4;5   | 0,0  | mp:300;atk:5  | 2003      | 大魔法师
@@ -33,6 +38,8 @@ bio    | txt             | cs | 背景故事
 id    | int | cs | 装备ID
 name  | str | cs | 名称
 price | int | s  | 价格
+# @rule: name = unique()
+# @rule: price = range(0, )
 # @preset
 2001 | 长剑 | 100
 2002 | 盾牌 | 80

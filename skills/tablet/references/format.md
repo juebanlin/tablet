@@ -91,7 +91,7 @@ Map_List.kv  Map_List.item  Map_List.entry
 `# @display` 写在段头之后。含义：别的表用 `@本段名` 引用时，UI / Excel 显示这一列而不是原始 id。
 只对 table / enum 有意义；列必须是 `str` / `int` / `txt` 的独立列。
 
-`# @rule` 是节点级校验规则（格式 `<列> = <验证器> [error|warn]`，一条一行，行序即优先级）：
+`# @rule` 是节点级校验规则（格式 `<列> = <验证器> [error|warn|info]`，一条一行，行序即优先级）：
 
 | 验证器 | 含义 | 适用列 |
 |---|---|---|
@@ -105,17 +105,19 @@ Map_List.kv  Map_List.item  Map_List.entry
 | `required_if(列, 值)` | 条件必填 | 全部 |
 | `compare(列, 运算符)` | 跨列比较 | 整数 / 浮点 |
 
-系统内置规则（`integer()` / `positive_int()` / `upper_snake()`，以及 id/name 上的 `unique()` / `non_empty()`）
-是只读的：不写 schema、不可编辑；再挂一遍只会得到冗余警告（@01.8.11）。
+系统内置规则（`positive_int()` / `upper_snake()`，以及 id/name 上的 `unique()` / `non_empty()`）
+是只读的：不写 schema、不可编辑、不可删除；再挂一遍只会得到冗余警告（@01.8.11）。
+查看某个节点的有效规则：`tablet-cli schema show --rules`。
 
 无意义组合直接报错：`ref_exists`/`compare`/`required_if` 不能引用本列自己；区间两端不能都空；
 `matches("")` 空正则不接受。
 
 - 只对 **Table / Enum** 有意义；**constant 段不支持**（`value` 逐行类型不同）。
 - 只对**标量列**生效（`int` / `long` / `float` / `bool` / `str` / `txt` / `@Xxx`）；`List<>` / `Map<>` / `Tuple*` 等复合类型不参与。整数列按数值比较（`01` == `1`），其余按 trim 后字符串比较。
-- 级别缺省 `error`（阻断保存）；`[warn]` 只提示。
+- 级别缺省 `error`；`[warn]` / `[info]` 是否阻断由项目策略决定（`project.toml` 的 `[validate]`，默认 warn=仅提示、info=忽略）。
 - 规则只存 `project.tblschema`，不写进 `.tbl`，也不进 Excel。
-- 一列可以有多条规则。系统已保证唯一的列（enum 的 `id`/`name`、table 的 `id`、constant 的 `name`）再挂 `unique()` 只会报一条警告。
+- 一列可以有多条规则。系统已保证的约束（table/enum 的 `id` 唯一·必填·正整数、enum 的 `name`
+  唯一·必填·UPPER_SNAKE）不要再手写，重复只会得到一条非阻断的冗余警告。
 
 ### Table 段体
 
