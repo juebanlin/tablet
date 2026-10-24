@@ -149,13 +149,15 @@ pub fn raw_cell_for(state: &AppState, r: usize, c: usize) -> String {
 /// 取 (r,c) 单元格的具体验证错误信息；当前节点不存在 / 该格无错误时返回 None。
 /// 用于 StatusBar 在选中单格时把"红框是因为什么"展示给用户，对齐文档 §5.4 实时验证 UX。
 pub(super) fn cell_validation_message(state: &AppState, r: usize, c: usize) -> Option<String> {
-    use tablet_core::validate::{validate_table, validate_constant, validate_enum, RefIndex};
+    use tablet_core::validate::{validate_table, validate_constant, validate_enum, RefIndex, RuleIndex};
     let sep = &state.engine.project().schema.separators;
+    let policy = state.engine.project().config.validate.clone();
     let errors = match &state.selected {
         Some(SelectedNode::Table { group, name, .. }) => {
             let table = state.engine.find_table(group, name)?;
             let refs = RefIndex::build(&state.engine.project().groups);
-            validate_table(table, sep, Some(&refs))
+            let cidx = RuleIndex::build(&state.engine.project().groups);
+            validate_table(table, sep, Some(&refs), Some(&cidx))
         }
         Some(SelectedNode::Constant { group, name, .. }) => {
             let constant = state.engine.find_constant(group, name)?;
@@ -166,13 +168,21 @@ pub(super) fn cell_validation_message(state: &AppState, r: usize, c: usize) -> O
         }
         Some(SelectedNode::Enum { group, name, .. }) => {
             let enum_def = state.engine.find_enum(group, name)?;
-            validate_enum(enum_def)
+            let cidx = RuleIndex::build(&state.engine.project().groups);
+            validate_enum(enum_def, Some(&cidx))
         }
         Some(SelectedNode::Project { .. }) | Some(SelectedNode::Group { .. }) | None => return None,
     };
-    errors.into_iter()
-        .find(|e| !e.is_schema() && e.row == r && e.col == c)
-        .map(|e| e.message)
+    use tablet_core::model::SeverityAction;
+    let hits: Vec<_> = errors.into_iter()
+        .filter(|e| !e.is_schema() && e.row == r && e.col == c)
+        .filter(|e| policy.action(e.severity) != SeverityAction::Ignore)
+        .collect();
+    // 同一格可能同时命中多个级别：先给阻断保存的，再给仅提示的。
+    if let Some(e) = hits.iter().find(|e| policy.action(e.severity) == SeverityAction::Block) {
+        return Some(e.message.clone());
+    }
+    hits.first().map(|e| format!("提示：{}", e.message))
 }
 
 #[cfg(test)]

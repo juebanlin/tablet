@@ -1,0 +1,518 @@
+// 校验规则面板（@01.10.7）：列优先 + 「填表 → 添加」。
+//
+// 布局：左侧列清单（占满高度）；右侧上方是当前列的规则列表（吃掉多余高度），
+// 下方是紧凑表单；底部是整宽的结果条。列表与结果都有空态占位，不留大白框。
+//
+// 规则只住在 project.tblschema；表单里改的是草稿，点「添加 / 保存」才落到节点。
+
+import { Theme } from "../theme.slint";
+import { DialogChrome } from "dialog_chrome.slint";
+import { Button, ComboBox, LineEdit, ScrollView } from "std-widgets.slint";
+
+// 行内小按钮（↑ ↓ ×）：标准 Button 有最小宽度，塞不进 22px 的列。
+component MiniButton inherits Rectangle {
+    in property <string> glyph;
+    in property <bool> enabled: true;
+    callback clicked();
+
+    width: 22px;
+    height: 18px;
+    background: ta.has-hover && root.enabled ? Theme.bg-row-hover : transparent;
+
+    Text {
+        text: root.glyph;
+        color: root.enabled ? Theme.text-primary : Theme.text-disabled;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+        font-size: Theme.fs-normal;
+    }
+
+    ta := TouchArea {
+        clicked => { if (root.enabled) { root.clicked(); } }
+    }
+}
+
+export struct RuleColumnRow {
+    name: string,
+    badge: string,          // 「2 条」/「系统唯一」/「不支持规则」/ 空
+    unsupported: bool,
+    selected: bool,
+}
+
+export struct RuleCard {
+    title: string,          // 「ref_exists(Lang.key)」
+    level: string,          // 「错误」/「警告」/「信息」
+    is-warning: bool,
+    is-info: bool,
+    selected: bool,         // 正在表单里编辑
+}
+
+export struct RuleIssueRow {
+    severity: string,       // "error" / "warning" / "info"
+    text: string,
+}
+
+export component RulesPanel inherits Rectangle {
+    in property <bool> open: false;
+    in property <string> node-label: "";
+    in property <[RuleColumnRow]> columns;
+    in property <string> column-title: "";
+
+    in property <[RuleCard]> rules;
+
+    // 表单（新增 / 编辑共用）
+    in property <string> form-title: "新增规则";
+    in property <[string]> form-kind-options;
+    in-out property <int> form-kind-index: 0;
+    in property <bool> form-has-target: false;
+    in property <[string]> form-target-node-options;
+    in-out property <int> form-target-node-index: 0;
+    in property <[string]> form-target-column-options;
+    in-out property <int> form-target-column-index: 0;
+    in-out property <int> form-level-index: 0;
+    in property <string> form-desc: "";
+    in property <bool> form-can-apply: false;
+    in property <string> form-apply-label: "添加";
+    in property <bool> form-editing: false;
+    in property <string> form-hint: "";
+    in property <bool> can-add: false;
+
+    // 通用参数编辑（按验证器类型显示不同组合）
+    in property <string> form-param-a-label: "";
+    in-out property <string> form-param-a: "";
+    in property <string> form-param-b-label: "";
+    in-out property <string> form-param-b: "";
+    in property <string> form-param-column-label: "";
+    in property <[string]> form-param-column-options;
+    in-out property <int> form-param-column-index: 0;
+    in property <[string]> form-param-op-options;
+    in-out property <int> form-param-op-index: 0;
+
+    in property <[RuleIssueRow]> issues;
+    in property <int> error-count: 0;
+    in property <int> warning-count: 0;
+    in property <int> info-count: 0;
+    in property <bool> can-confirm: true;
+
+    callback select-column(int);
+    callback add-rule();
+    callback select-rule(int);
+    callback delete-rule(int);
+    callback move-up(int);
+    callback move-down(int);
+    callback set-kind(string);
+    callback set-param-a(string);
+    callback set-param-b(string);
+    callback set-param-column(string);
+    callback set-param-op(string);
+    callback set-target-node(string);
+    callback set-target-column(string);
+    callback set-level(string);
+    callback apply();
+    callback cancel-edit();
+    callback confirm();
+    callback cancel();
+
+    visible: root.open;
+    width: 100%;
+    height: 100%;
+
+    DialogChrome {
+        title: "校验规则 — " + root.node-label;
+        dialog-w: 900px;
+        dialog-h: 620px;
+        primary-text: "确定";
+        primary-enabled: root.can-confirm;
+        primary-clicked => { root.confirm(); }
+        cancel-clicked => { root.cancel(); }
+        scrim-clicked => { root.cancel(); }
+
+        VerticalLayout {
+            padding: Theme.sp-4;
+            spacing: Theme.sp-3;
+
+            Text {
+                text: "选择一列后管理该列的规则；改动点「添加 / 保存」后生效。";
+                color: Theme.text-secondary;
+                font-size: Theme.fs-small;
+            }
+
+            HorizontalLayout {
+                vertical-stretch: 1;
+                spacing: Theme.sp-3;
+
+                // ── 左：列清单 ─────────────────────────────────────
+                Rectangle {
+                    width: 220px;
+                    border-color: Theme.border-light;
+                    border-width: 1px;
+                    background: Theme.bg-panel;
+
+                    VerticalLayout {
+                        spacing: 0;
+                        Rectangle {
+                            height: Theme.row-h;
+                            background: Theme.bg-header;
+                            Text {
+                                text: "列";
+                                color: Theme.text-secondary;
+                                vertical-alignment: center;
+                                x: Theme.sp-2;
+                                font-size: Theme.fs-small;
+                            }
+                        }
+                        ScrollView {
+                            vertical-stretch: 1;
+                            VerticalLayout {
+                                for c[i] in root.columns : Rectangle {
+                                    height: Theme.row-h;
+                                    background: c.selected ? Theme.bg-row-selected : transparent;
+
+                                    HorizontalLayout {
+                                        padding-left: Theme.sp-2;
+                                        padding-right: Theme.sp-2;
+                                        spacing: Theme.sp-1;
+                                        Text {
+                                            text: c.name;
+                                            color: c.unsupported ? Theme.text-disabled : Theme.text-primary;
+                                            vertical-alignment: center;
+                                            horizontal-stretch: 1;
+                                            overflow: elide;
+                                        }
+                                        Text {
+                                            text: c.badge;
+                                            color: c.unsupported ? Theme.text-disabled : Theme.text-secondary;
+                                            vertical-alignment: center;
+                                            font-size: Theme.fs-small;
+                                        }
+                                    }
+
+                                    TouchArea {
+                                        clicked => { root.select-column(i); }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // ── 右：规则列表 + 表单 ─────────────────────────────
+                VerticalLayout {
+                    horizontal-stretch: 1;
+                    spacing: Theme.sp-2;
+
+                    // 当前列标题条
+                    Rectangle {
+                        height: 26px;
+                        background: Theme.bg-header;
+                        HorizontalLayout {
+                            padding-left: Theme.sp-2;
+                            padding-right: Theme.sp-2;
+                            Text {
+                                text: root.column-title;
+                                color: Theme.text-primary;
+                                vertical-alignment: center;
+                                font-weight: 600;
+                                overflow: elide;
+                            }
+                        }
+                    }
+
+                    HorizontalLayout {
+                        spacing: Theme.sp-2;
+                        Text {
+                            text: "规则（优先级从上到下）";
+                            color: Theme.text-secondary;
+                            vertical-alignment: center;
+                            horizontal-stretch: 1;
+                            font-size: Theme.fs-small;
+                        }
+                        Button {
+                            text: "+ 添加规则";
+                            enabled: root.can-add;
+                            clicked => { root.add-rule(); }
+                        }
+                    }
+
+                    // 规则列表：吃掉右侧所有多余高度
+                    Rectangle {
+                        vertical-stretch: 1;
+                        border-color: Theme.border-light;
+                        border-width: 1px;
+                        background: Theme.bg-panel;
+
+                        ScrollView {
+                            VerticalLayout {
+                                if root.rules.length == 0 : HorizontalLayout {
+                                    padding: Theme.sp-3;
+                                    Text {
+                                        text: "该列还没有规则。";
+                                        color: Theme.text-secondary;
+                                        font-size: Theme.fs-small;
+                                    }
+                                }
+                                for r[i] in root.rules : Rectangle {
+                                    height: Theme.row-h;
+                                    background: r.selected ? Theme.bg-row-selected : transparent;
+
+                                    // 放在内容之前：后面的按钮要能盖在它上面接点击
+                                    TouchArea {
+                                        clicked => { root.select-rule(i); }
+                                    }
+
+                                    HorizontalLayout {
+                                        padding-left: Theme.sp-2;
+                                        padding-right: Theme.sp-2;
+                                        spacing: Theme.sp-2;
+                                        Text {
+                                            text: "\{i + 1}";
+                                            width: 20px;
+                                            color: Theme.text-secondary;
+                                            vertical-alignment: center;
+                                            font-size: Theme.fs-small;
+                                        }
+                                        Text {
+                                            text: r.title;
+                                            color: Theme.text-primary;
+                                            vertical-alignment: center;
+                                            horizontal-stretch: 1;
+                                            overflow: elide;
+                                        }
+                                        Text {
+                                            width: 40px;
+                                            text: r.level;
+                                            color: r.is-info ? Theme.text-secondary :
+                                                   (r.is-warning ? Theme.mark-modified : Theme.text-error);
+                                            vertical-alignment: center;
+                                            font-size: Theme.fs-small;
+                                        }
+                                        MiniButton {
+                                            glyph: "↑";
+                                            enabled: i > 0;
+                                            clicked => { root.move-up(i); }
+                                        }
+                                        MiniButton {
+                                            glyph: "↓";
+                                            enabled: i + 1 < root.rules.length;
+                                            clicked => { root.move-down(i); }
+                                        }
+                                        MiniButton {
+                                            glyph: "×";
+                                            clicked => { root.delete-rule(i); }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // 表单：高度由内容决定
+                    Rectangle {
+                        border-color: Theme.border-light;
+                        border-width: 1px;
+                        background: Theme.bg-toolbar;
+
+                        VerticalLayout {
+                            padding: Theme.sp-3;
+                            spacing: Theme.sp-2;
+
+                            Text {
+                                text: root.form-title;
+                                color: Theme.text-primary;
+                                font-size: Theme.fs-normal;
+                                font-weight: 600;
+                            }
+
+                            HorizontalLayout {
+                                spacing: Theme.sp-2;
+                                alignment: start;
+                                Text { text: "类型"; width: 32px; vertical-alignment: center; color: Theme.text-secondary; font-size: Theme.fs-small; }
+                                ComboBox {
+                                    width: 200px;
+                                    model: root.form-kind-options;
+                                    current-index <=> root.form-kind-index;
+                                    selected(s) => { root.set-kind(s); }
+                                }
+                                Text { text: "级别"; width: 32px; vertical-alignment: center; color: Theme.text-secondary; font-size: Theme.fs-small; }
+                                ComboBox {
+                                    width: 96px;
+                                    model: ["错误", "警告", "信息"];
+                                    current-index <=> root.form-level-index;
+                                    selected(s) => { root.set-level(s); }
+                                }
+                            }
+
+                            HorizontalLayout {
+                                visible: root.form-has-target;
+                                spacing: Theme.sp-2;
+                                alignment: start;
+                                Text { text: "目标"; width: 32px; vertical-alignment: center; color: Theme.text-secondary; font-size: Theme.fs-small; }
+                                ComboBox {
+                                    width: 190px;
+                                    model: root.form-target-node-options;
+                                    current-index <=> root.form-target-node-index;
+                                    selected(s) => { root.set-target-node(s); }
+                                }
+                                Text { text: "."; vertical-alignment: center; color: Theme.text-primary; }
+                                ComboBox {
+                                    width: 170px;
+                                    model: root.form-target-column-options;
+                                    current-index <=> root.form-target-column-index;
+                                    selected(s) => { root.set-target-column(s); }
+                                }
+                            }
+
+                            // 通用参数：range / len / one_of / matches / required_if / compare
+                            HorizontalLayout {
+                                visible: root.form-param-a-label != "";
+                                spacing: Theme.sp-2;
+                                alignment: start;
+                                Text {
+                                    text: root.form-param-a-label;
+                                    width: 96px;
+                                    vertical-alignment: center;
+                                    color: Theme.text-secondary;
+                                    font-size: Theme.fs-small;
+                                }
+                                LineEdit {
+                                    width: 180px;
+                                    text <=> root.form-param-a;
+                                    edited(s) => { root.set-param-a(s); }
+                                }
+                                Text {
+                                    visible: root.form-param-b-label != "";
+                                    text: root.form-param-b-label;
+                                    width: 40px;
+                                    vertical-alignment: center;
+                                    color: Theme.text-secondary;
+                                    font-size: Theme.fs-small;
+                                }
+                                LineEdit {
+                                    visible: root.form-param-b-label != "";
+                                    width: 180px;
+                                    text <=> root.form-param-b;
+                                    edited(s) => { root.set-param-b(s); }
+                                }
+                            }
+
+                            HorizontalLayout {
+                                visible: root.form-param-column-label != "";
+                                spacing: Theme.sp-2;
+                                alignment: start;
+                                Text {
+                                    text: root.form-param-column-label;
+                                    width: 96px;
+                                    vertical-alignment: center;
+                                    color: Theme.text-secondary;
+                                    font-size: Theme.fs-small;
+                                }
+                                ComboBox {
+                                    width: 190px;
+                                    model: root.form-param-column-options;
+                                    current-index <=> root.form-param-column-index;
+                                    selected(s) => { root.set-param-column(s); }
+                                }
+                                Text {
+                                    visible: root.form-param-op-options.length > 0;
+                                    text: "运算符";
+                                    width: 48px;
+                                    vertical-alignment: center;
+                                    color: Theme.text-secondary;
+                                    font-size: Theme.fs-small;
+                                }
+                                ComboBox {
+                                    visible: root.form-param-op-options.length > 0;
+                                    width: 96px;
+                                    model: root.form-param-op-options;
+                                    current-index <=> root.form-param-op-index;
+                                    selected(s) => { root.set-param-op(s); }
+                                }
+                            }
+
+                            Text {
+                                text: root.form-desc;
+                                color: Theme.text-info;
+                                font-size: Theme.fs-small;
+                                overflow: elide;
+                            }
+                            Text {
+                                visible: root.form-hint != "";
+                                text: root.form-hint;
+                                color: Theme.mark-modified;
+                                font-size: Theme.fs-small;
+                                overflow: elide;
+                            }
+
+                            HorizontalLayout {
+                                alignment: end;
+                                spacing: Theme.sp-2;
+                                Button {
+                                    text: "取消编辑";
+                                    visible: root.form-editing;
+                                    clicked => { root.cancel-edit(); }
+                                }
+                                Button {
+                                    text: root.form-apply-label;
+                                    enabled: root.form-can-apply;
+                                    clicked => { root.apply(); }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // ── 结果（整宽） ────────────────────────────────────────
+            HorizontalLayout {
+                spacing: Theme.sp-2;
+                Text {
+                    text: "本节点校验结果";
+                    color: Theme.text-secondary;
+                    vertical-alignment: center;
+                    font-size: Theme.fs-small;
+                }
+                Text {
+                    text: "错误 \{root.error-count} · 警告 \{root.warning-count} · 信息 \{root.info-count}";
+                    color: root.error-count > 0 ? Theme.text-error : Theme.text-secondary;
+                    vertical-alignment: center;
+                    font-size: Theme.fs-small;
+                }
+            }
+
+            Rectangle {
+                height: 88px;
+                border-color: Theme.border-light;
+                border-width: 1px;
+                background: Theme.bg-panel;
+
+                ScrollView {
+                    VerticalLayout {
+                        if root.issues.length == 0 : HorizontalLayout {
+                            padding: Theme.sp-3;
+                            Text {
+                                text: "没有校验问题。";
+                                color: Theme.text-secondary;
+                                font-size: Theme.fs-small;
+                            }
+                        }
+                        for it in root.issues : Rectangle {
+                            height: Theme.row-h;
+                            HorizontalLayout {
+                                padding-left: Theme.sp-2;
+                                padding-right: Theme.sp-2;
+                                Text {
+                                    text: it.text;
+                                    color: it.severity == "error" ? Theme.text-error :
+                                           (it.severity == "warning" ? Theme.mark-modified : Theme.text-secondary);
+                                    vertical-alignment: center;
+                                    overflow: elide;
+                                    font-size: Theme.fs-small;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

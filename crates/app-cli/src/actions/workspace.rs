@@ -11,7 +11,7 @@ pub fn run_workspace_save(engine: &mut ProjectEngine) -> Result<()> {
     if engine.save_all() {
         return Ok(());
     }
-    let errs = engine.validate();
+    let errs = engine.validate_error_logs();
     if errs.is_empty() {
         let reason = engine.last_save_failure.clone().unwrap_or_else(|| "盘上未写入".to_string());
         anyhow::bail!("保存失败：{}", reason);

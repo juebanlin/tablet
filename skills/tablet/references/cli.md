@@ -77,6 +77,7 @@ tablet-cli validate --group hero --node HeroBase --col 2 --row 0   # 一个格�
 ```
 
 退出码：`0` 通过 / `1` 有错（或 `--group` / `--node` 指向不存在的目标）。
+警告（`# @rule` 的 `[warn]` 级）默认不影响退出码；`--strict` 时有警告也返回 `1`（CI 推荐）。
 
 错误行形如 `[验证] hero/HeroBase C1:[abc] -> 不是合法int`：`C` 是列字母、`1` 是数据行号；
 表头层错误写成 `表头第 4 行 B 列`。行号 / 列号都从 1 数。
@@ -84,7 +85,11 @@ tablet-cli validate --group hero --node HeroBase --col 2 --row 0   # 一个格�
 ```bash
 tablet-cli --fmt json validate
 # {"errors":[{"project_id":"demo","group":"hero","node":"HeroBase",
-#             "row":0,"col":2,"message":"…","display":"[验证] hero/HeroBase C1:[abc] -> …"}]}
+#             "row":0,"col":2,"message":"…","severity":"error",
+#             "display":"[验证] hero/HeroBase C1:[abc] -> …"}],
+#  "warnings":[…]}
+tablet-cli validate --strict          # 警告也算失败
+tablet-cli validate --fmt json        # errors / warnings 两个数组
 ```
 
 ## export

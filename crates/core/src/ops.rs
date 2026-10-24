@@ -10,22 +10,27 @@ use crate::validate::*;
 /// - Constant/Enum 表头：`[验证] group/node 表头X列:[field] -> message`
 /// - 数据行：`[验证] group/node X<row>:[value] -> message`，value 过长截断为 `xxx...`
 pub fn format_validation_log(group: &str, node: &str, err: &ValidationError) -> String {
+    let tag = match err.severity {
+        Severity::Error => "[验证]",
+        Severity::Warning => "[警告]",
+        Severity::Info => "[信息]",
+    };
     if err.is_schema() {
         let col = col_letter(err.col);
         let field = if err.field.is_empty() { "?".to_string() } else { err.field.clone() };
         match err.header_row {
             Some(hr) => {
                 let n = hr as usize;
-                format!("[验证] {}/{} 表头第{}行{}列:[{}] -> {}", group, node, n, col, field, err.message)
+                format!("{} {}/{} 表头第{}行{}列:[{}] -> {}", tag, group, node, n, col, field, err.message)
             }
             None => {
-                format!("[验证] {}/{} 表头{}列:[{}] -> {}", group, node, col, field, err.message)
+                format!("{} {}/{} 表头{}列:[{}] -> {}", tag, group, node, col, field, err.message)
             }
         }
     } else {
         let pos = format!("{}{}", col_letter(err.col), err.row + 1);
         let display = truncate_display(&err.value, 16);
-        format!("[验证] {}/{} {}:[{}] -> {}", group, node, pos, display, err.message)
+        format!("{} {}/{} {}:[{}] -> {}", tag, group, node, pos, display, err.message)
     }
 }
 
@@ -115,6 +120,7 @@ fn rewrite_refs_after_rename(project: &mut Project, old: &str, new: &str) -> usi
                     n += 1;
                 }
             }
+            n += rename_rule_targets(&mut t.rules, old, new);
             // 类型串变了 → original_fields 对不上 → 该表自己要写盘
             t.update_dirty();
         }
@@ -126,6 +132,26 @@ fn rewrite_refs_after_rename(project: &mut Project, old: &str, new: &str) -> usi
                 }
             }
             c.update_dirty();
+        }
+        // 枚举没有类型串，但可能有 ref_exists 规则（错误码 ↔ 多语言就是这种）。
+        for e in &mut g.enums {
+            if rename_rule_targets(&mut e.rules, old, new) > 0 {
+                e.update_dirty();
+            }
+        }
+    }
+    n
+}
+
+/// 节点改名后，把规则里 `ref_exists(Old.列)` 的目标节点改写成 `New`。返回改写条数。
+fn rename_rule_targets(rules: &mut [Rule], old: &str, new: &str) -> usize {
+    let mut n = 0;
+    for r in rules {
+        if let RuleKind::RefExists { target_node, .. } = &mut r.kind {
+            if target_node == old {
+                *target_node = new.to_string();
+                n += 1;
+            }
         }
     }
     n
@@ -327,10 +353,11 @@ fn save_project_files(project: &mut Project) -> (usize, usize, Vec<String>, bool
     // 于是"新建项目首次保存"会把从全局拷来的配置静默重置掉，@02.26.3）。
     if project.toml_changed() {
         let path = project.project_root.join(crate::project::PROJECT_TOML_FILE);
-        match crate::project::project_toml_text(&project.config.export) {
+        match crate::project::project_toml_text(&project.config.export, &project.config.validate) {
             Ok(txt) => match std::fs::write(&path, txt) {
                 Ok(()) => {
                     project.original_export = project.config.export.clone();
+                    project.original_validate = project.config.validate.clone();
                     count += 1;
                 }
                 Err(e) => eprintln!(
@@ -406,6 +433,8 @@ fn save_project_files(project: &mut Project) -> (usize, usize, Vec<String>, bool
                 if std::fs::write(&table.path, &content).is_ok() {
                     table.original_records = table.records.clone();
                     table.original_fields = table.schema.fields.clone();
+                    table.original_display_field = table.display_field.clone();
+                    table.original_rules = table.rules.clone();
                     // 落盘后「盘上叫什么」才追上新名字
                     table.original_name = table.name.clone();
                     table.dirty = false;
@@ -442,6 +471,8 @@ fn save_project_files(project: &mut Project) -> (usize, usize, Vec<String>, bool
                 if std::fs::write(&enum_def.path, &content).is_ok() {
                     enum_def.original_entries = enum_def.entries.clone();
                     enum_def.original_name = enum_def.name.clone();
+                    enum_def.original_display_field = enum_def.display_field.clone();
+                    enum_def.original_rules = enum_def.rules.clone();
                     enum_def.dirty = false;
                     enum_def.saved = true;
                     count += 1;
@@ -700,6 +731,7 @@ fn save_xlsx_group(group: &mut crate::model::Group) -> XlsxSaveOutcome {
         table.original_fields = table.schema.fields.clone();
         table.original_name = table.name.clone();
         table.original_display_field = table.display_field.clone();
+        table.original_rules = table.rules.clone();
         table.dirty = false;
         table.saved = true;
         out.written += 1;
@@ -727,6 +759,7 @@ fn save_xlsx_group(group: &mut crate::model::Group) -> XlsxSaveOutcome {
         enum_def.original_entries = enum_def.entries.clone();
         enum_def.original_name = enum_def.name.clone();
         enum_def.original_display_field = enum_def.display_field.clone();
+        enum_def.original_rules = enum_def.rules.clone();
         enum_def.dirty = false;
         enum_def.saved = true;
         out.written += 1;
@@ -899,6 +932,10 @@ pub struct ProjectEngine {
     /// 全部 Project 的验证错误集，key=(project_id, group, name, row, col)。
     /// `revalidate_all` 扫描所有 Project 重建；UI 在树上做 `!` 聚合时按 project_id 过滤。
     pub validation_errors: HashSet<(String, String, String, usize, usize)>,
+    /// 全 Project 的**警告**集（只 Warning），key=(project_id, group, name)。
+    /// 与 `validation_errors` 并行维护：警告不进保存闸门 / 树 `!` / 红框，
+    /// 只在保存成功时打进日志、在状态栏提示。
+    pub validation_warnings: Vec<(String, String, String, ValidationError)>,
     /// 进程内剪贴板：tree 面板复制粘贴的载体。不持久化，关闭/退出随 engine drop。
     pub node_clipboard: Option<NodeClipboard>,
     /// 启动时从 workspace `tablet.toml [separators]` 读到的"程序级默认分隔符"；
@@ -1044,6 +1081,7 @@ impl ProjectEngine {
             projects: vec![project],
             active_idx: Some(0),
             validation_errors: HashSet::new(),
+            validation_warnings: Vec::new(),
             node_clipboard: None,
             default_separators: crate::types::SeparatorsSection::default(),
             logs: Vec::new(),
@@ -1073,6 +1111,7 @@ impl ProjectEngine {
             projects,
             active_idx,
             validation_errors: HashSet::new(),
+            validation_warnings: Vec::new(),
             node_clipboard: None,
             default_separators: crate::types::SeparatorsSection::default(),
             logs: Vec::new(),
@@ -1104,6 +1143,7 @@ impl ProjectEngine {
             projects: opened,
             active_idx,
             validation_errors: HashSet::new(),
+            validation_warnings: Vec::new(),
             node_clipboard: None,
             default_separators: crate::types::SeparatorsSection::default(),
             logs: Vec::new(),
@@ -1215,6 +1255,7 @@ impl ProjectEngine {
         };
         self.projects.remove(idx);
         self.validation_errors.retain(|(p, _, _, _, _)| p != project_id);
+        self.validation_warnings.retain(|(p, _, _, _)| p != project_id);
         // active_idx 维护
         match self.active_idx {
             Some(active) if active == idx => {
@@ -1256,6 +1297,7 @@ impl ProjectEngine {
         // 从全局配置拷贝初始配置（新项目时的种子）
         let config = ProjectConfig {
             export: self.global_config.export.clone().unwrap_or_default(),
+            validate: crate::model::ValidateConfig::default(),
         };
         let config_export = config.export.clone();
 
@@ -1269,6 +1311,7 @@ impl ProjectEngine {
             original_separators: Default::default(),
             // 盘上没有 project.toml，而加载缺省时 export 是从全局继承的 → 现值就是"盘上值"
             original_export: config_export,
+            original_validate: crate::model::ValidateConfig::default(),
             groups: Vec::new(),
             state: crate::model::ProjectState::Pending,
         };
@@ -1310,7 +1353,13 @@ impl ProjectEngine {
         let with_preset = schema.meta.has_preset;
         let id = self.create_project_in_memory_with(schema, with_preset)?;
 
-        let errs = self.validate_project(&id);
+        // 警告（如「多语言表还没建」）不阻创建；只有 Error 才撤回。
+        let issues = self.validate_project_issues(&id);
+        let policy = ValidateConfig::default(); // 新项目还没有自定义策略
+        let errs: Vec<String> = issues.iter()
+            .filter(|(_, _, e)| policy.action(e.severity) == crate::model::SeverityAction::Block)
+            .map(|(g, n, e)| format_validation_log(g, n, e))
+            .collect();
         if !errs.is_empty() {
             self.close_project(&id);
             self.available_projects.retain(|a| a.id != id);
@@ -1354,6 +1403,7 @@ impl ProjectEngine {
         new_project.original_meta = crate::tblschema::SchemaMetadata::default();
         new_project.original_separators = Default::default();
         new_project.original_export = new_project.config.export.clone();
+        new_project.original_validate = new_project.config.validate.clone();
         new_project.state = crate::model::ProjectState::Pending;
 
         let new_data_dir = new_project.data_dir();
@@ -1366,6 +1416,7 @@ impl ProjectEngine {
                 t.dirty = true;
                 t.original_records.clear();
                 t.original_fields.clear();
+                t.original_rules.clear();
                 t.saved = false;
                 t.original_name = t.name.clone();
             }
@@ -1379,6 +1430,7 @@ impl ProjectEngine {
                 e.path = g.dir.join(format!("{}.tbl", e.name));
                 e.dirty = true;
                 e.original_entries.clear(); e.saved = false;
+                e.original_rules.clear();
                 e.original_name = e.name.clone();
             }
         }
@@ -1521,6 +1573,95 @@ impl ProjectEngine {
             .find(|g| g.name == group)?
             .enums.iter_mut()
             .find(|e| e.name == name)
+    }
+
+    /// 取节点的模式与规则（规则面板 / 校验用）。节点不存在返回 None。
+    pub fn node_rules(&self, group: &str, name: &str) -> Option<(NodeMode, Vec<Rule>)> {
+        let g = self.project().groups.iter().find(|g| g.name == group)?;
+        if let Some(t) = g.tables.iter().find(|t| t.name == name) {
+            return Some((NodeMode::Table, t.rules.clone()));
+        }
+        // 常量不支持规则（@01.8.8）
+        if let Some(e) = g.enums.iter().find(|e| e.name == name) {
+            return Some((NodeMode::Enum, e.rules.clone()));
+        }
+        None
+    }
+
+    /// 写回节点规则（顺序即优先级）。返回是否找到节点。
+    pub fn set_node_rules(&mut self, group: &str, name: &str, rules: Vec<Rule>) -> bool {
+        let g = match self.project_mut().groups.iter_mut().find(|g| g.name == group) {
+            Some(g) => g,
+            None => return false,
+        };
+        if let Some(t) = g.tables.iter_mut().find(|t| t.name == name) {
+            t.rules = rules;
+            t.update_dirty();
+            return true;
+        }
+        if let Some(e) = g.enums.iter_mut().find(|e| e.name == name) {
+            e.rules = rules;
+            e.update_dirty();
+            return true;
+        }
+        false
+    }
+
+    /// 节点可挂规则的列名（顺序与字段声明一致）。
+    pub fn node_columns(&self, group: &str, name: &str) -> Vec<String> {
+        let g = match self.project().groups.iter().find(|g| g.name == group) {
+            Some(g) => g,
+            None => return Vec::new(),
+        };
+        if let Some(t) = g.tables.iter().find(|t| t.name == name) {
+            return t.schema.fields.iter().map(|f| f.name.clone()).collect();
+        }
+        // 常量不支持规则（@01.8.8）
+        if g.enums.iter().any(|e| e.name == name) {
+            return ENUM_RULE_COLUMNS.iter().map(|s| s.to_string()).collect();
+        }
+        Vec::new()
+    }
+
+    /// 节点各列的值类（规则可用性判断）。`None` = 该列类型不支持规则。
+    pub fn node_column_classes(&self, group: &str, name: &str) -> Vec<(String, Option<ValueClass>)> {
+        let g = match self.project().groups.iter().find(|g| g.name == group) {
+            Some(g) => g,
+            None => return Vec::new(),
+        };
+        if let Some(t) = g.tables.iter().find(|t| t.name == name) {
+            return table_column_specs(t);
+        }
+        if g.constants.iter().any(|c| c.name == name) {
+            // 常量不支持规则（@01.8.8）
+            return Vec::new();
+        }
+        if g.enums.iter().any(|e| e.name == name) {
+            return enum_column_specs();
+        }
+        Vec::new()
+    }
+
+    /// 按节点名取列规格（节点名项目内唯一）。目标节点下拉用。
+    pub fn node_column_classes_by_name(&self, name: &str) -> Vec<(String, Option<ValueClass>)> {
+        for g in &self.project().groups {
+            if g.tables.iter().any(|t| t.name == name)
+                || g.constants.iter().any(|c| c.name == name)
+                || g.enums.iter().any(|e| e.name == name) {
+                return self.node_column_classes(&g.name, name);
+            }
+        }
+        Vec::new()
+    }
+
+    /// 项目内可作为 `ref_exists` 目标的节点名（Table / Enum，不含已删）。
+    pub fn rule_target_nodes(&self) -> Vec<String> {
+        let mut out = Vec::new();
+        for g in &self.project().groups {
+            for t in &g.tables { if !t.deleted { out.push(t.name.clone()); } }
+            for e in &g.enums { if !e.deleted { out.push(e.name.clone()); } }
+        }
+        out
     }
 
     pub fn mark_enum_dirty(&mut self, group: &str, name: &str) {
@@ -1750,6 +1891,7 @@ impl ProjectEngine {
         let mut keyword_err = None;
         if let Some(g) = self.project_mut().groups.iter_mut().find(|g| g.name == group) {
             if let Some(t) = g.tables.iter_mut().find(|t| t.name == name) {
+                let mut renamed_from: Option<String> = None;
                 if let Some(field) = t.schema.fields.get_mut(col) {
                     match header_row {
                         0 => field.desc = val,
@@ -1758,12 +1900,21 @@ impl ProjectEngine {
                         3 => {
                             let v = val.trim().to_string();
                             if !is_reserved_keyword(&v) {
-                                field.name = v;
+                                renamed_from = Some(std::mem::replace(&mut field.name, v));
                             } else {
                                 keyword_err = Some(val);
                             }
                         }
                         _ => {}
+                    }
+                }
+                // 字段改名 → 本表规则里的列名跟着改，否则规则会指向一个不存在的列。
+                if let Some(old) = renamed_from {
+                    let now = t.schema.fields[col].name.clone();
+                    if old != now {
+                        for r in t.rules.iter_mut() {
+                            if r.column == old { r.column = now.clone(); }
+                        }
                     }
                 }
                 t.update_dirty();
@@ -1950,14 +2101,16 @@ impl ProjectEngine {
     /// CLI 要拿 `header_row` / `field` / `message` 做定位与过滤，拼字符串的版本拿不到。
     pub fn validate_errors(&self) -> Vec<(String, String, ValidationError)> {
         let mut out = Vec::new();
+        let policy = self.project().config.validate.clone();
         let sep = &self.project().schema.separators;
         let refs = RefIndex::build(&self.project().groups);
+        let cidx = RuleIndex::build(&self.project().groups);
         let allow_ref = self.global_config.ui.as_ref()
             .map_or(true, |u| u.constant_ref_allowed);
         for group in &self.project().groups {
             for table in &group.tables {
                 if table.deleted { continue; }
-                for err in validate_table(table, sep, Some(&refs)) {
+                for err in validate_table(table, sep, Some(&refs), Some(&cidx)) {
                     out.push((group.name.clone(), table.name.clone(), err));
                 }
             }
@@ -1969,12 +2122,19 @@ impl ProjectEngine {
             }
             for enum_def in &group.enums {
                 if enum_def.deleted { continue; }
-                for err in validate_enum(enum_def) {
+                for err in validate_enum(enum_def, Some(&cidx)) {
                     out.push((group.name.clone(), enum_def.name.clone(), err));
                 }
             }
         }
+        // 被策略忽略的级别不产生任何结果
+        out.retain(|(_, _, e)| policy.action(e.severity) != crate::model::SeverityAction::Ignore);
         out
+    }
+
+    /// 当前 active project 的校验策略。
+    pub fn validate_policy(&self) -> crate::model::ValidateConfig {
+        self.active().map(|p| p.config.validate.clone()).unwrap_or_default()
     }
 
     /// 校验并渲染成 GUI 日志同款文本（`format_validation_log`）。
@@ -1987,34 +2147,43 @@ impl ProjectEngine {
     pub fn revalidate(&mut self, group: &str, name: &str) {
         let Some(pid) = self.active_project_id().map(str::to_string) else { return; };
         self.validation_errors.retain(|(p, g, n, _, _)| p != &pid || g != group || n != name);
+        self.validation_warnings.retain(|(p, g, n, _)| p != &pid || g != group || n != name);
         let sep = self.project().schema.separators.clone();
         let refs = RefIndex::build(&self.project().groups);
+        let cidx = RuleIndex::build(&self.project().groups);
         let allow_ref = self.global_config.ui.as_ref()
             .map_or(true, |u| u.constant_ref_allowed);
-        let mut new_errs: Vec<(usize, usize)> = Vec::new();
+        let mut new_issues: Vec<ValidationError> = Vec::new();
         {
             let g = match self.project().groups.iter().find(|g| g.name == group) { Some(g) => g, None => return };
             if let Some(table) = g.tables.iter().find(|t| t.name == name) {
                 if table.deleted { return; }
-                for err in validate_table(table, &sep, Some(&refs)) {
-                    new_errs.push((err.row, err.col));
-                }
+                new_issues.extend(validate_table(table, &sep, Some(&refs), Some(&cidx)));
             }
             if let Some(constant) = g.constants.iter().find(|c| c.name == name) {
                 if constant.deleted { return; }
-                for err in validate_constant(constant, &sep, allow_ref, Some(&refs)) {
-                    new_errs.push((err.row, err.col));
-                }
+                new_issues.extend(validate_constant(constant, &sep, allow_ref, Some(&refs)));
             }
             if let Some(enum_def) = g.enums.iter().find(|e| e.name == name) {
                 if enum_def.deleted { return; }
-                for err in validate_enum(enum_def) {
-                    new_errs.push((err.row, err.col));
-                }
+                new_issues.extend(validate_enum(enum_def, Some(&cidx)));
             }
         }
-        for (r, c) in new_errs {
-            self.validation_errors.insert((pid.clone(), group.to_string(), name.to_string(), r, c));
+        let policy = self.project().config.validate.clone();
+        for err in new_issues {
+            match policy.action(err.severity) {
+                crate::model::SeverityAction::Block => {
+                    self.validation_errors.insert(
+                        (pid.clone(), group.to_string(), name.to_string(), err.row, err.col)
+                    );
+                }
+                crate::model::SeverityAction::Report => {
+                    self.validation_warnings.push(
+                        (pid.clone(), group.to_string(), name.to_string(), err)
+                    );
+                }
+                crate::model::SeverityAction::Ignore => {}
+            }
         }
     }
 
@@ -2022,6 +2191,7 @@ impl ProjectEngine {
     pub fn revalidate_all(&mut self) {
         let Some(pid) = self.active_project_id().map(str::to_string) else { return; };
         self.validation_errors.retain(|(p, _, _, _, _)| p != &pid);
+        self.validation_warnings.retain(|(p, _, _, _)| p != &pid);
         let groups: Vec<_> = self.project().groups.iter()
             .map(|g| (
                 g.name.clone(),
@@ -2041,6 +2211,7 @@ impl ProjectEngine {
     /// 临时切换 active_idx 以复用现有 active-scope 逻辑，最后恢复。
     pub fn revalidate_all_projects(&mut self) {
         self.validation_errors.clear();
+        self.validation_warnings.clear();
         let original = self.active_idx;
         for idx in 0..self.projects.len() {
             self.active_idx = Some(idx);
@@ -2073,6 +2244,7 @@ impl ProjectEngine {
             self.logs.push(format!("[保存失败] 共 {} 个验证错误", active_errs));
             return false;
         }
+        self.log_pending_warnings(&pid);
         self.last_save_failure = None;
         let (count, deleted, warnings, failed) = save_project_files(self.project_mut());
         for w in &warnings { self.warn_log(w.clone()); }
@@ -2099,6 +2271,8 @@ impl ProjectEngine {
             self.logs.push(format!("[保存失败] 共 {} 个验证错误", self.validation_errors.len()));
             return;
         }
+        let pids: Vec<String> = self.projects.iter().map(|p| p.schema.meta.id.clone()).collect();
+        for pid in &pids { self.log_pending_warnings(pid); }
         let mut total_count = 0;
         let mut total_deleted = 0;
         let mut warnings = Vec::new();
@@ -2161,6 +2335,7 @@ impl ProjectEngine {
                 self.global_config = new_engine.global_config;
                 self.default_separators = new_engine.default_separators;
                 self.validation_errors.clear();
+                self.validation_warnings.clear();
                 self.ui_log(format!("重新加载完成，共 {} 个 Project / {} 个 Group", pcount, group_total));
                 // 打不开的项目要吵：reload 是显式动作，静静少一个项目比报错更难查
                 for f in &failed {
@@ -2200,6 +2375,7 @@ impl ProjectEngine {
         // 删除/标删后，该 group 下所有节点的 validation_errors 不应再被 UI 聚合
         let Some(pid) = self.active_project_id().map(str::to_string) else { return; };
         self.validation_errors.retain(|(p, g, _, _, _)| !(p == &pid && g == group_name));
+        self.validation_warnings.retain(|(p, g, _, _)| !(p == &pid && g == group_name));
     }
 
     pub fn delete_node(&mut self, group_name: &str, node_name: &str) {
@@ -2217,6 +2393,7 @@ impl ProjectEngine {
         sync_schema_from_groups(self.project_mut());
         let Some(pid) = self.active_project_id().map(str::to_string) else { return; };
         self.validation_errors.retain(|(p, g, n, _, _)| !(p == &pid && g == group_name && n == node_name));
+        self.validation_warnings.retain(|(p, g, n, _)| !(p == &pid && g == group_name && n == node_name));
         self.ui_log(format!("已标记删除: {}/{}", group_name, node_name));
     }
 
@@ -2359,6 +2536,7 @@ impl ProjectEngine {
                 t.path = new_path;
                 t.dirty = true;
                 t.original_records.clear(); t.original_fields.clear(); t.saved = false;
+                t.original_rules.clear();
                 // 新节点盘上还不存在 → 原名就是新名（不是源节点在盘上的名字）
                 t.original_name = final_name.clone();
                 g.tables.push(t);
@@ -2378,6 +2556,7 @@ impl ProjectEngine {
                 e.path = new_path;
                 e.dirty = true;
                 e.original_entries.clear(); e.saved = false;
+                e.original_rules.clear();
                 e.original_name = final_name.clone();
                 g.enums.push(e);
                 "Enum"
@@ -2446,6 +2625,7 @@ impl ProjectEngine {
             t.path = if is_xlsx { book.clone() } else { new_dir.join(format!("{}.tbl", t.name)) };
             t.dirty = true;
             t.original_records.clear(); t.original_fields.clear(); t.saved = false;
+            t.original_rules.clear();
             t.original_name = t.name.clone();
         }
         for c in &mut new_group.constants {
@@ -2458,6 +2638,7 @@ impl ProjectEngine {
             e.path = if is_xlsx { book.clone() } else { new_dir.join(format!("{}.tbl", e.name)) };
             e.dirty = true;
             e.original_entries.clear(); e.saved = false;
+            e.original_rules.clear();
             e.original_name = e.name.clone();
         }
         let summary = format!(
@@ -2537,6 +2718,8 @@ impl ProjectEngine {
                             fmt_ver: DEFAULT_TBL_VERSION,
                             display_field: None,
                             original_display_field: None,
+                            rules: Vec::new(),
+                            original_rules: Vec::new(),
                         });
                         ok = true;
                     }
@@ -2585,6 +2768,8 @@ impl ProjectEngine {
                             original_entries: Vec::new(), saved: false,
                             display_field: None,
                             original_display_field: None,
+                            rules: Vec::new(),
+                            original_rules: Vec::new(),
                         });
                         ok = true;
                     }
@@ -2632,6 +2817,9 @@ impl ProjectEngine {
                 for (_, _, n, r, c) in migrated {
                     self.validation_errors.insert((project_id.clone(), new_name.clone(), n, r, c));
                 }
+                for w in self.validation_warnings.iter_mut() {
+                    if w.0 == *project_id && w.1 == *old_name { w.1 = new_name.clone(); }
+                }
                 self.ui_log(format!("[{}] 重命名 Group: {} → {}", project_id, old_name, new_name));
             }
             ProjectAction::RenameNode { project_id, group, old_name, new_name } => {
@@ -2674,6 +2862,11 @@ impl ProjectEngine {
                 for entry in &migrated { self.validation_errors.remove(entry); }
                 for (_, g, _, r, c) in migrated {
                     self.validation_errors.insert((project_id.clone(), g, new_name.clone(), r, c));
+                }
+                for w in self.validation_warnings.iter_mut() {
+                    if w.0 == *project_id && w.1 == *group && w.2 == *old_name {
+                        w.2 = new_name.clone();
+                    }
                 }
                 self.ui_log(format!("[{}] 重命名: {}/{} → {}", project_id, group, old_name, new_name));
             }
@@ -2735,8 +2928,10 @@ impl ProjectEngine {
         }
         // 从 available 移除
         self.available_projects.retain(|a| a.id != project_id);
-        // 清掉 validation_errors
+        // 清掉 validation_errors / validation_warnings
         self.validation_errors.retain(|(p, _, _, _, _)| p != project_id);
+        self.validation_warnings.retain(|(p, _, _, _)| p != project_id);
+        self.validation_warnings.retain(|(p, _, _, _)| p != project_id);
         self.ui_log(format!("已删除 Project: {}", project_id));
     }
 
@@ -2818,6 +3013,8 @@ impl ProjectEngine {
             self.logs.push(format!("[{}] [保存失败] 共 {} 个验证错误", project_id, pid_errs));
             return;
         }
+        let pid_for_log = project_id.to_string();
+        self.log_pending_warnings(&pid_for_log);
         self.last_save_failure = None;
         let saved = {
             let Some(project) = self.find_project_mut(project_id) else {
@@ -2841,34 +3038,65 @@ impl ProjectEngine {
     }
 
     /// 收集指定 Project 全部验证错误的格式化日志（仅打日志，不入索引）。
-    pub fn validate_project(&self, project_id: &str) -> Vec<String> {
+    /// 结构化版本：调用方要按级别分流（只有 Error 算失败）时用它。
+    pub fn validate_project_issues(&self, project_id: &str)
+        -> Vec<(String, String, ValidationError)>
+    {
         let Some(project) = self.find_project(project_id) else { return Vec::new(); };
-        let mut errors = Vec::new();
+        let policy = project.config.validate.clone();
+        let mut issues = Vec::new();
         let sep = &project.schema.separators;
         let refs = RefIndex::build(&project.groups);
+        let cidx = RuleIndex::build(&project.groups);
         let allow_ref = self.global_config.ui.as_ref()
             .map_or(true, |u| u.constant_ref_allowed);
         for group in &project.groups {
             for table in &group.tables {
                 if table.deleted { continue; }
-                for err in validate_table(table, sep, Some(&refs)) {
-                    errors.push(format_validation_log(&group.name, &table.name, &err));
+                for err in validate_table(table, sep, Some(&refs), Some(&cidx)) {
+                    issues.push((group.name.clone(), table.name.clone(), err));
                 }
             }
             for constant in &group.constants {
                 if constant.deleted { continue; }
                 for err in validate_constant(constant, sep, allow_ref, Some(&refs)) {
-                    errors.push(format_validation_log(&group.name, &constant.name, &err));
+                    issues.push((group.name.clone(), constant.name.clone(), err));
                 }
             }
             for enum_def in &group.enums {
                 if enum_def.deleted { continue; }
-                for err in validate_enum(enum_def) {
-                    errors.push(format_validation_log(&group.name, &enum_def.name, &err));
+                for err in validate_enum(enum_def, Some(&cidx)) {
+                    issues.push((group.name.clone(), enum_def.name.clone(), err));
                 }
             }
         }
-        errors
+        issues.retain(|(_, _, e)| policy.action(e.severity) != crate::model::SeverityAction::Ignore);
+        issues
+    }
+
+    /// 把某个 Project 当前缓存的警告打进日志。警告不阻断任何流程。
+    pub fn log_pending_warnings(&mut self, project_id: &str) {
+        let msgs: Vec<String> = self.validation_warnings.iter()
+            .filter(|(p, _, _, _)| p == project_id)
+            .map(|(_, g, n, e)| format_validation_log(g, n, e))
+            .collect();
+        for m in msgs { self.warn_log(m); }
+    }
+
+    /// 只含 Error 的日志行。保存失败时用它——警告不构成失败原因。
+    pub fn validate_error_logs(&self) -> Vec<String> {
+        let policy = self.validate_policy();
+        self.validate_errors().iter()
+            .filter(|(_, _, e)| policy.action(e.severity) == crate::model::SeverityAction::Block)
+            .map(|(g, n, e)| format_validation_log(g, n, e))
+            .collect()
+    }
+
+    /// 兼容旧调用：拼成日志文本（含警告）。
+    pub fn validate_project(&self, project_id: &str) -> Vec<String> {
+        self.validate_project_issues(project_id).iter()
+            .map(|(g, n, e)| format_validation_log(g, n, e))
+            .collect()
     }
 
     pub fn clear_all_config(&mut self) {
@@ -3081,6 +3309,7 @@ mod project_toml_template_tests {
         schema.meta.name = id.to_string();
         let config = ProjectConfig::default();
         let original_export = config.export.clone();
+        let original_validate = config.validate.clone();
         Project {
             workdir,
             project_root,
@@ -3089,6 +3318,7 @@ mod project_toml_template_tests {
             original_meta: crate::tblschema::SchemaMetadata::default(),
             original_separators: Default::default(),
             original_export,
+            original_validate,
             groups: Vec::new(),
             state: crate::model::ProjectState::Pending,
         }
@@ -3190,6 +3420,9 @@ package = \"com.user.kept\"
                 saved: false, fmt_ver: crate::tbl::DEFAULT_TBL_VERSION,
                 display_field: Some("name".to_string()),
                 original_display_field: None,
+
+                rules: Vec::new(),
+                original_rules: Vec::new(),
             }],
             constants: Vec::new(),
             enums: vec![EnumDef {
@@ -3201,6 +3434,9 @@ package = \"com.user.kept\"
                 original_entries: Vec::new(), saved: false,
                 display_field: Some("desc".to_string()),
                 original_display_field: None,
+
+                rules: Vec::new(),
+                original_rules: Vec::new(),
             }],
             is_new: true,
         });
@@ -3291,6 +3527,9 @@ package = \"com.user.kept\"
                 original_records: Vec::new(), original_fields: Vec::new(),
                 saved: false, fmt_ver: crate::tbl::DEFAULT_TBL_VERSION, display_field: None,
             original_display_field: None,
+
+                rules: Vec::new(),
+                original_rules: Vec::new(),
             }],
             constants: vec![], enums: vec![], is_new: true,
         });
@@ -3306,6 +3545,72 @@ package = \"com.user.kept\"
 
     fn config_dir(dir: &Path) -> PathBuf {
         dir.join("projects").join("p1").join("config")
+    }
+
+    #[test]
+    fn rules_survive_reload_and_warnings_do_not_block_save() {
+        let (_dir, mut engine) = engine_with_saved_node("rules_roundtrip", "g", "T");
+        // 对 id 挂 unique()：系统已保证唯一 → 只产生一条警告，不阻断保存
+        assert!(engine.set_node_rules("g", "T", vec![
+            Rule { column: "id".into(), kind: RuleKind::Unique, level: Severity::Error },
+        ]));
+        engine.revalidate("g", "T");
+        assert!(engine.validation_errors.is_empty(), "警告不该进错误索引");
+        assert_eq!(engine.validation_warnings.len(), 1);
+        assert!(engine.save_all(), "警告不该阻断保存");
+
+        engine.reload();
+        let (_, rules) = engine.node_rules("g", "T").expect("节点还在");
+        assert_eq!(rules.len(), 1, "规则必须从 project.tblschema 读回来");
+        assert_eq!(rules[0].kind, RuleKind::Unique);
+        assert!(!engine.find_table("g", "T").unwrap().dirty, "重新加载后规则不该让节点变脏");
+    }
+
+    #[test]
+    fn validation_policy_controls_blocking() {
+        let (_dir, mut engine) = engine_with_saved_node("policy_block", "g", "T");
+        engine.set_node_rules("g", "T", vec![
+            Rule {
+                column: "id".into(),
+                kind: RuleKind::RefExists { target_node: "Lang".into(), target_column: "key".into() },
+                level: Severity::Warning,
+            },
+        ]);
+        engine.revalidate("g", "T");
+        // 默认策略：warn → report，不阻断
+        assert!(engine.validation_errors.is_empty());
+        assert_eq!(engine.validation_warnings.len(), 1);
+        assert!(engine.save_all());
+
+        // 把 warning 改成 block → 同一条问题开始拦保存
+        engine.project_mut().config.validate.warning = SeverityAction::Block;
+        engine.revalidate("g", "T");
+        assert_eq!(engine.validation_errors.len(), 1, "warning 被提升为阻断");
+        assert!(engine.validation_warnings.is_empty());
+        assert!(!engine.save_all(), "阻断级存在时保存必须失败");
+
+        // 改成 ignore → 什么都不产生
+        engine.project_mut().config.validate.warning = SeverityAction::Ignore;
+        engine.revalidate("g", "T");
+        assert!(engine.validation_errors.is_empty());
+        assert!(engine.validation_warnings.is_empty());
+        assert!(engine.save_all());
+    }
+
+    #[test]
+    fn warn_level_rule_with_missing_target_does_not_block_save() {
+        let (_dir, mut engine) = engine_with_saved_node("rules_warn", "g", "T");
+        assert!(engine.set_node_rules("g", "T", vec![
+            Rule {
+                column: "id".into(),
+                kind: RuleKind::RefExists { target_node: "Lang".into(), target_column: "key".into() },
+                level: Severity::Warning,
+            },
+        ]));
+        engine.revalidate("g", "T");
+        assert!(engine.validation_errors.is_empty(), "warn 级规则的目标缺失只算警告");
+        assert_eq!(engine.validation_warnings.len(), 1);
+        assert!(engine.save_all());
     }
 
     #[test]
@@ -3794,6 +4099,9 @@ package = \"com.user.kept\"
                 original_records: Vec::new(), original_fields: Vec::new(),
                 saved: false, fmt_ver: crate::tbl::DEFAULT_TBL_VERSION, display_field: None,
             original_display_field: None,
+
+                rules: Vec::new(),
+                original_rules: Vec::new(),
             }],
             constants: vec![], enums: vec![], is_new: true,
         });
@@ -3903,6 +4211,9 @@ package = \"com.user.kept\"
             original_records: Vec::new(), original_fields: Vec::new(),
             saved: false, fmt_ver: crate::tbl::DEFAULT_TBL_VERSION, display_field: None,
             original_display_field: None,
+
+            rules: Vec::new(),
+            original_rules: Vec::new(),
         };
         let mut project = make_project(dir.clone(), project_root, "p1");
         project.groups.push(Group {

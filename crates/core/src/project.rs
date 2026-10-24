@@ -64,12 +64,14 @@ pub fn write_default_global_config(workdir: &Path) -> Result<()> {
 /// `tablet.toml` 继承；文件只在用户真的在「项目设置」里改过 export 时才生成。
 /// 所以这里序列化的是项目**当前的**配置，不是默认值——写默认值会让"新建项目
 /// 首次保存"把从全局拷来的配置静默重置掉（@02.26.3）。
-pub fn project_toml_text(export: &ExportConfig) -> Result<String> {
+pub fn project_toml_text(export: &ExportConfig, validate: &ValidateConfig) -> Result<String> {
     #[derive(serde::Serialize)]
-    struct ExportRoot<'a> {
+    struct ProjectRoot<'a> {
         export: &'a ExportConfig,
+        #[serde(skip_serializing_if = "ValidateConfig::is_default")]
+        validate: &'a ValidateConfig,
     }
-    Ok(toml::to_string(&ExportRoot { export })?)
+    Ok(toml::to_string(&ProjectRoot { export, validate })?)
 }
 
 /// 加载 Project（默认走 last_project 或扫描第一个）。
@@ -148,9 +150,12 @@ fn load_specific_project_impl(
     };
     // 被引用展示列（@10）：.tbl 不含该信息，从 project.tblschema 段回填到节点。
     crate::tblschema::apply_display_to_groups(&mut groups, &schema);
+    // 节点级校验规则（@01.10.7）：同上，规则只住在 project.tblschema。
+    crate::tblschema::apply_rules_to_groups(&mut groups, &schema);
 
     // 刚从盘上读进来，盘上的就是它自己
     let original_export = config.export.clone();
+    let original_validate = config.validate.clone();
     Ok(Project {
         workdir: workdir.to_path_buf(),
         project_root: project_root.to_path_buf(),
@@ -158,6 +163,7 @@ fn load_specific_project_impl(
         original_meta: schema.meta.clone(),
         original_separators: schema.separators.clone(),
         original_export,
+        original_validate,
         schema,
         groups,
         state: crate::model::ProjectState::Loaded,
@@ -187,17 +193,28 @@ fn parse_project_config(project_text: Option<&str>, global: &GlobalConfig) -> Re
         // 无 project.toml，从全局拷贝
         return Ok(ProjectConfig {
             export: global_export,
+            validate: ValidateConfig::default(),
         });
     };
 
-    // 只取 [export] 段，其它段忽略
+    // [export] / [validate] 两段；其它段忽略
     let proj_val: toml::Value = toml::from_str(text)
         .map_err(|e| anyhow::anyhow!("{} 不是合法 TOML: {}", PROJECT_TOML_FILE, e))?;
+
+    // 校验策略：缺省 = 默认策略；写了就必须合法（拼错的键同样报错）
+    let validate = match proj_val.get("validate") {
+        Some(v) => v.clone().try_into::<ValidateConfig>().map_err(|e| anyhow::anyhow!(
+            "{} 的 [validate] 段不合法: {}（只接受 error / warning / info = block | report | ignore）",
+            PROJECT_TOML_FILE, e
+        ))?,
+        None => ValidateConfig::default(),
+    };
 
     let proj_export_val = match proj_val.get("export") {
         Some(v) => v.clone(),
         None => return Ok(ProjectConfig {
             export: global_export,
+            validate,
         }),
     };
 
@@ -218,7 +235,7 @@ fn parse_project_config(project_text: Option<&str>, global: &GlobalConfig) -> Re
             PROJECT_TOML_FILE, e
         ))?;
 
-    Ok(ProjectConfig { export })
+    Ok(ProjectConfig { export, validate })
 }
 
 /// 深度合并 toml::Value（overlay 覆盖 base）。
@@ -745,6 +762,8 @@ fn table_from_sheet(
         fmt_ver: crate::tbl::DEFAULT_TBL_VERSION,
         display_field: sec.display.clone(),
         original_display_field: sec.display.clone(),
+        rules: sec.rules.clone(),
+        original_rules: sec.rules.clone(),
     })
 }
 
@@ -808,6 +827,8 @@ fn enum_from_sheet(
         saved: true,
         display_field: sec.display.clone(),
         original_display_field: sec.display.clone(),
+        rules: sec.rules.clone(),
+        original_rules: sec.rules.clone(),
     })
 }
 
@@ -1286,9 +1307,47 @@ mod tests {
     }
 
     #[test]
+    fn validate_section_parses_and_rejects_bad_values() {
+        let global = GlobalConfig::default();
+        let ok = parse_project_config(Some(
+            "[validate]
+error = \"report\"
+warning = \"block\"
+info = \"report\"
+"
+        ), &global).expect("合法策略");
+        assert_eq!(ok.validate.error, SeverityAction::Report);
+        assert_eq!(ok.validate.warning, SeverityAction::Block);
+        assert_eq!(ok.validate.info, SeverityAction::Report);
+
+        // 缺省的键按默认值补齐
+        let partial = parse_project_config(Some("[validate]
+error = \"ignore\"
+"), &global)
+            .expect("缺省键可补");
+        assert_eq!(partial.validate.error, SeverityAction::Ignore);
+        assert_eq!(partial.validate.warning, SeverityAction::Report);
+
+        // 非法值 / 拼错的键必须报错
+        let err = parse_project_config(Some("[validate]
+error = \"nope\"
+"), &global)
+            .unwrap_err();
+        assert!(format!("{:#}", err).contains("[validate]"));
+        let err = parse_project_config(Some("[validate]
+mistyped = \"block\"
+"), &global)
+            .unwrap_err();
+        assert!(format!("{:#}", err).contains("[validate]"));
+    }
+
+    #[test]
     fn project_toml_text_is_comment_free_export_only() {
         // 项目级 toml 仅含 [export] 段、无注释——[ui]/[project]/[separators] 都是工作区级。
-        let txt = project_toml_text(&ExportConfig::default()).expect("text");
+        let txt = project_toml_text(&ExportConfig::default(), &ValidateConfig::default())
+            .expect("text");
+        // 默认校验策略不写出来，保持老文件形状不变
+        assert!(!txt.contains("[validate]"), "默认策略不该写进 project.toml");
         let _: GlobalConfig = toml::from_str(&txt)
             .expect("project.toml default must parse as GlobalConfig");
         assert!(!txt.lines().any(|l| l.trim_start().starts_with('#')), "project.toml 不应带注释");

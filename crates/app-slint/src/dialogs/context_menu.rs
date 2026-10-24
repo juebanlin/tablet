@@ -130,13 +130,22 @@ pub(crate) fn items_for(kind: &CtxMenuKind, state: &AppState) -> Vec<CtxMenuItem
             }
             items
         },
-        CtxMenuKind::TreeNode { .. } => vec![
+        CtxMenuKind::TreeNode { kind, .. } => {
+            let mut items = Vec::new();
+            // 常量不支持节点级规则（@01.8.8）
+            if !matches!(kind, tablet_core::ops::NodeKind::Constant) {
+                items.push(item("校验规则...", "tree.rules", false));
+                items.push(sep());
+            }
+            items.extend([
             item("复制", "tree.copy-node", false),
             item_owned(paste_node_label, "tree.paste-node", !has_node_cb),
             sep(),
             item("重命名", "tree.rename-node", false),
             item("删除", "tree.delete-node", false),
-        ],
+            ]);
+            items
+        },
         CtxMenuKind::GridCol { col } => {
             // 第 0 列是系统 id 列：不能在它左边插列，也不能删它（@01 §5.5）。
             let is_id = *col == 0;
@@ -308,6 +317,10 @@ pub fn wire(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
                         st.project_expanded.insert(project_id.clone());
                         st.tree_expanded.insert((project_id, new_group));
                     }
+                }
+                (Some(CtxMenuKind::TreeNode { group, name, .. }), "tree.rules") => {
+                    dialogs::rules_panel::open_for_node(&s, &group, &name);
+                    if let Some(ui_h) = weak.upgrade() { dialogs::rules_panel::push(&ui_h, &s); }
                 }
                 (Some(CtxMenuKind::TreeNode { project_id, group, name, kind }), "tree.copy-node") => {
                     s.borrow_mut().engine.clipboard_copy_node(&project_id, &group, &name, kind);

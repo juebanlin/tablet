@@ -61,6 +61,9 @@ pub enum Command {
         /// 验证指定行，从 0 开始（依赖 --col）
         #[arg(long, requires = "col")]
         row: Option<u32>,
+        /// 把警告也当成失败（有警告时退出码为 1）。CI 用。
+        #[arg(long)]
+        strict: bool,
     },
     /// Excel 桥接
     Excel(ExcelArgs),

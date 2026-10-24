@@ -274,7 +274,7 @@ fn run(cli: Cli) -> Result<i32> {
                 }
             }
         }
-        Command::Validate { ref group, ref node, col, row } => {
+        Command::Validate { ref group, ref node, col, row, strict } => {
             crate::actions::validate::ensure_filter_targets(
                 &engine, group.as_deref(), node.as_deref(),
             )?;
@@ -287,7 +287,8 @@ fn run(cli: Cli) -> Result<i32> {
             } else {
                 output::print_validate_summary_cli(&summary);
             }
-            Ok(if summary.is_pass() { 0 } else { 1 })
+            let pass = if strict { summary.is_pass_strict() } else { summary.is_pass() };
+            Ok(if pass { 0 } else { 1 })
         }
         Command::Excel(ea) => match ea.action {
             ExcelAction::Export { group, include, output: out } => {

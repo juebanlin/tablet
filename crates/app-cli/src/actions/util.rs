@@ -115,13 +115,13 @@ pub fn run_validate_tbl(
     let tbl = parse_tbl(path)?;
     let errors = match &tbl {
         TblFile::Table(t) => {
-            tablet_core::validate::validate_table(t, &sep, None)
+            tablet_core::validate::validate_table(t, &sep, None, None)
         }
         TblFile::Constant(c) => {
             tablet_core::validate::validate_constant(c, &sep, false, None)
         }
         TblFile::Enum(e) => {
-            tablet_core::validate::validate_enum(e)
+            tablet_core::validate::validate_enum(e, None)
         }
     };
     let msgs: Vec<String> = errors.iter().map(|e| e.message.clone()).collect();

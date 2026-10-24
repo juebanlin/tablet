@@ -3,6 +3,7 @@
 //! 支持五级粒度过滤：project → group → node → col → cell。
 //! 不 process::exit；CLI 调用方自己根据 `is_pass()` 决定 exit code。
 
+use tablet_core::model::SeverityAction;
 use tablet_core::ops::{format_validation_log, ProjectEngine};
 
 /// 过滤目标写错了必须吵。
@@ -49,16 +50,24 @@ pub struct ValidationIssue {
     pub message: String,
     /// 渲染好的定位 + 消息，CLI 直接打印这一行。
     pub display: String,
+    /// `error` / `warning`（@01.10.7）。
+    pub severity: String,
 }
 
 #[derive(Debug, Default, serde::Serialize)]
 pub struct ValidationSummary {
     pub errors: Vec<ValidationIssue>,
+    pub warnings: Vec<ValidationIssue>,
 }
 
 impl ValidationSummary {
+    /// 通过 = 没有错误。警告不构成失败（`--strict` 才把警告也算上）。
     pub fn is_pass(&self) -> bool { self.errors.is_empty() }
+    pub fn is_pass_strict(&self) -> bool {
+        self.errors.is_empty() && self.warnings.is_empty()
+    }
     pub fn error_count(&self) -> usize { self.errors.len() }
+    pub fn warning_count(&self) -> usize { self.warnings.len() }
 }
 
 pub struct ValidateFilter {
@@ -76,9 +85,11 @@ pub fn run_validate_filtered(engine: &mut ProjectEngine, filter: &ValidateFilter
     // revalidate_all 仍要跑：它刷新引擎里的错误索引，供 GUI 的红框 / `!` 聚合用。
     engine.revalidate_all();
     let project_id = engine.active_project_id().unwrap_or_default().to_string();
+    // 级别 → 动作由项目级「验证设置」决定（@01.10.7）；Ignore 的级别已被引擎过滤掉。
+    let policy = engine.validate_policy();
 
     // 用 validate_errors 而不是错误索引——索引里只有位置，没有消息与表头行号
-    let errors = engine.validate_errors().into_iter()
+    let issues = engine.validate_errors().into_iter()
         .filter(|(_group, node, err)| {
             if let Some(ref fg) = filter.group {
                 if _group != fg { return false; }
@@ -94,16 +105,34 @@ pub fn run_validate_filtered(engine: &mut ProjectEngine, filter: &ValidateFilter
             }
             true
         })
-        .map(|(group, node, err)| ValidationIssue {
-            project_id: project_id.clone(),
-            display: format_validation_log(&group, &node, &err),
-            group,
-            node,
-            row: err.row,
-            col: err.col,
-            message: err.message,
+        .map(|(group, node, err)| {
+            let action = policy.action(err.severity);
+            let issue = ValidationIssue {
+                project_id: project_id.clone(),
+                display: format_validation_log(&group, &node, &err),
+                group,
+                node,
+                row: err.row,
+                col: err.col,
+                severity: match err.severity {
+                    tablet_core::model::Severity::Error => "error",
+                    tablet_core::model::Severity::Warning => "warning",
+                    tablet_core::model::Severity::Info => "info",
+                }.to_string(),
+                message: err.message,
+            };
+            (action, issue)
         })
-        .collect();
+        .collect::<Vec<_>>();
 
-    ValidationSummary { errors }
+    let mut errors = Vec::new();
+    let mut warnings = Vec::new();
+    for (action, issue) in issues {
+        match action {
+            SeverityAction::Block => errors.push(issue),
+            SeverityAction::Report => warnings.push(issue),
+            SeverityAction::Ignore => {}
+        }
+    }
+    ValidationSummary { errors, warnings }
 }

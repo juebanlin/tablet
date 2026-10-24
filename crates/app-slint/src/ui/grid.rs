@@ -183,6 +183,14 @@ pub fn push(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
     // 「还原」按钮（@02.26）：把当前节点恢复成盘上的样子。
     // 只管编辑，不管存在性 —— 新建未保存的节点没有「盘上的样子」可还原，置灰。
     ui_h.set_revert_enabled(selected_revertable(&state.borrow()));
+    // 「校验规则」：只有 Table / Enum 有节点级规则（常量不支持，@01.8.8）。
+    {
+        let st = state.borrow();
+        ui_h.set_rules_enabled(matches!(
+            st.selected,
+            Some(SelectedNode::Table { .. } | SelectedNode::Enum { .. })
+        ));
+    }
     ui_h.set_grid_col_count(snap.col_count);
     ui_h.set_grid_header_rows(slint::ModelRc::new(slint::VecModel::from(
         snap.header_rows.into_iter()
@@ -263,6 +271,17 @@ pub fn wire(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
     // 「Excel 编辑」按钮：选中叶节点（Table/Constant/Enum）时调起单 sheet xlsx
     // 编辑流程（@docs/06-Excel桥接.md §1）。等价于
     // `ExcelTarget::Group { name: 节点所属 group, include: vec![当前节点 name] }`。
+    {
+        let s = state.clone();
+        let weak = ui_h.as_weak();
+        ui_h.on_rules_clicked(move || {
+            crate::dialogs::rules_panel::open_for_selected(&s);
+            if let Some(ui_h) = weak.upgrade() {
+                crate::dialogs::rules_panel::push(&ui_h, &s);
+            }
+        });
+    }
+
     {
         let s = state.clone();
         let weak = ui_h.as_weak();

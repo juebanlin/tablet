@@ -17,7 +17,10 @@ export component GridRibbon inherits Rectangle {
     // 只管**编辑**（内容 / 结构 / 身份），不管存在性——新建未保存的节点压根没有
     // 「盘上的样子」可还原，那时按钮置灰。
     in property <bool> revert-enabled: false;
+    /// 「校验规则」按钮可用（选中 Table / Constant / Enum 时）。
+    in property <bool> rules-enabled: false;
     callback show-ref-name-toggled(bool);
+    callback rules-clicked();
     callback display-field-selected(string);
     callback excel-edit-clicked();
     callback revert-clicked();
@@ -42,6 +45,11 @@ export component GridRibbon inherits Rectangle {
             text: "Excel 编辑";
             enabled: root.excel-edit-enabled;
             clicked => { root.excel-edit-clicked(); }
+        }
+        Button {
+            text: "校验规则";
+            enabled: root.rules-enabled;
+            clicked => { root.rules-clicked(); }
         }
         CheckBox {
             text: "显示引用名称";

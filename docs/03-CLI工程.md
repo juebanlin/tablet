@@ -115,6 +115,14 @@ Group 名仅在工具内部使用，不进生成代码路径，因此允许中�
 
 **配置分层与合并规则**：
 - **export**：Project 的 `[export]` 段按 **field-level deep-merge** 覆盖全局；缺失字段回退到全局（例如：项目只写 `[export.server.cpp]`，其它语言用全局配置）
+- **validate**：Project 的 `[validate]` 段是**项目级**的校验策略（@01.10.7），不参与工作区继承；没写 = 默认策略
+  ```toml
+  [validate]
+  error   = "block"    # 阻断保存
+  warning = "report"   # 仅提示
+  info    = "ignore"   # 完全忽略
+  ```
+  可选值 `block` / `report` / `ignore`；拼错的键或非法值直接报错，不静默回退。
 - **ui**：直接用全局，Project 级不允许覆盖（UI 偏好是用户级，不应按项目切换）
 - **separators**：用 Project 自身 schema 的 `# @sep` 行（优先级最高）；仅在「新建空项目」时从全局拷贝初值（@01.7.4 / §4.9）
 
@@ -805,6 +813,7 @@ tablet-cli --project slg-prod export all
 | `--node <n>` | 验证指定节点 | 依赖 --group |
 | `--col <c>` | 验证指定列（从 0 开始） | 依赖 --node |
 | `--row <r>` | 验证指定行（从 0 开始） | 依赖 --col |
+| `--strict` | 把**警告**也算作失败（有警告时 exit 1）。CI 用 | — |
 
 ```bash
 # 全项目验证
@@ -839,7 +848,7 @@ tablet-cli --fmt json validate --group hero
 
 每行就是 `tablet_core::ops::format_validation_log` 的输出——**与 GUI 日志同一套渲染**，含定位（数据格是 `C6` 这种列字母+行号，表头层是「表头第 4 行 G 列」）、单元格原值与消息。表头层错误不要看 `row` 字段，那是 `SCHEMA_ROW` 哨兵值。
 
-`--fmt json` 输出的是对象数组，字段为 `project_id` / `group` / `node` / `row` / `col` / `message` / `display`（`display` 即上面那行文本）：
+`--fmt json` 输出的是对象，含 `errors` 与 `warnings` 两个数组，每项字段为 `project_id` / `group` / `node` / `row` / `col` / `message` / `display` / `severity`（`display` 即上面那行文本）：
 
 ```json
 {
@@ -848,13 +857,25 @@ tablet-cli --fmt json validate --group hero
       "project_id": "col", "group": "item", "node": "Item",
       "row": 0, "col": 5,
       "message": "不是合法int, 示例: 1",
-      "display": "[验证] item/Item F1:[abc] -> 不是合法int, 示例: 1"
+      "display": "[验证] item/Item F1:[abc] -> 不是合法int, 示例: 1",
+      "severity": "error"
+    }
+  ],
+  "warnings": [
+    {
+      "project_id": "col", "group": "error", "node": "ErrorCode",
+      "row": 18446744073709551615, "col": 1,
+      "message": "ref_exists 的目标节点 \"Lang\" 不存在",
+      "display": "[警告] error/ErrorCode 表头B列:[name] -> ref_exists 的目标节点 \"Lang\" 不存在",
+      "severity": "warning"
     }
   ]
 }
 ```
 
-退出码：通过 → 0；任一错误 → 1。
+输出分两段：先「发现 N 个验证错误」，再「M 条警告」（`[警告]` 前缀）。
+
+退出码：通过（无错误）→ 0；任一错误 → 1。警告默认不影响退出码；`--strict` 时有警告也返回 1。
 
 **`--group` / `--node` 指到不存在的东西也是 1**（"Group 不存在: xxx" / "节点不存在: g/n"）。
 空集恒真：以前 `--group typo` 会返回"验证通过"+0，脚本无从分辨"这个组没问题"和"根本没有这个组"。

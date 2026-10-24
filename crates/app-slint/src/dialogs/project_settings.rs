@@ -18,7 +18,7 @@ use std::rc::Rc;
 use slint::ComponentHandle;
 use tablet_core::enums::{CppJsonLib, Encoding, JsonEmptyAs, LineEnding, XmlEmptyAs};
 use tablet_core::export_keys::ExportKey;
-use tablet_core::model::Project;
+use tablet_core::model::{Project, SeverityAction};
 use tablet_core::types::SepKey;
 
 use crate::state::AppState;
@@ -99,6 +99,7 @@ pub fn push(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
         0 => push_identity(ui_h, p),
         1 => push_sep(ui_h, p),
         2 => push_export(ui_h, p),
+        3 => push_validate(ui_h, p),
         _ => {}
     }
 }
@@ -195,6 +196,13 @@ fn push_combo(
 }
 
 /// 导出 tab：29 个叶子。值 / 下标 / 布尔三态，成对推「值 + 改没改」。
+fn push_validate(ui_h: &AppWindow, p: &Project) {
+    let v = &p.config.validate;
+    ui_h.set_ps_validate_error_index(v.error.to_index());
+    ui_h.set_ps_validate_warning_index(v.warning.to_index());
+    ui_h.set_ps_validate_info_index(v.info.to_index());
+}
+
 fn push_export(ui_h: &AppWindow, p: &Project) {
     let (live, orig) = (&p.config.export, &p.original_export);
     let v = |k: ExportKey| k.get(live);
@@ -391,6 +399,34 @@ pub fn wire(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
                     }
                 }
                 None => s.borrow_mut().engine.error_log(format!("[项目设置] 不认识的分隔符字段: {}", key)),
+            }
+            if let Some(ui_h) = weak.upgrade() { push(&ui_h, &s); }
+        });
+    }
+
+    // 校验策略（@01.10.7）：级别 → 动作
+    {
+        let s = state.clone();
+        let weak = ui_h.as_weak();
+        ui_h.on_ps_validate_field_edited(move |level, label| {
+            let action = match label.as_str() {
+                "仅提示" => SeverityAction::Report,
+                "忽略" => SeverityAction::Ignore,
+                _ => SeverityAction::Block,
+            };
+            {
+                let mut st = s.borrow_mut();
+                let id = st.project_settings.project_id.clone();
+                if let Some(p) = st.engine.find_project_mut(&id) {
+                    match level.as_str() {
+                        "error" => p.config.validate.error = action,
+                        "warning" => p.config.validate.warning = action,
+                        "info" => p.config.validate.info = action,
+                        _ => {}
+                    }
+                }
+                // 策略变了 → block / report 的分流要重算（对话框是模态的，重算一次即可）
+                st.engine.revalidate_all();
             }
             if let Some(ui_h) = weak.upgrade() { push(&ui_h, &s); }
         });

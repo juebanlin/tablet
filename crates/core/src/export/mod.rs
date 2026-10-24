@@ -538,6 +538,9 @@ pub(crate) mod test_fixtures {
             fmt_ver: crate::tbl::TblVersion::V3,
             display_field: None,
             original_display_field: None,
+
+            rules: Vec::new(),
+            original_rules: Vec::new(),
         }
     }
 

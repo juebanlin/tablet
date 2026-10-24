@@ -41,11 +41,21 @@ fn print_export_result_cli(label: &str, result: &ExportResult) {
 
 pub fn print_validate_summary_cli(summary: &ValidationSummary) {
     if summary.is_pass() {
-        println!("验证通过，无错误");
+        if summary.warning_count() == 0 {
+            println!("验证通过，无错误");
+        } else {
+            println!("验证通过，无错误（{} 条警告）", summary.warning_count());
+        }
     } else {
         println!("发现 {} 个验证错误:", summary.error_count());
         // display 已含定位（表头层会渲染成「表头第 N 行 F 列」）与消息，直接整行打印
         for issue in &summary.errors {
+            println!("  {}", issue.display);
+        }
+    }
+    if summary.warning_count() > 0 {
+        println!("{} 条警告:", summary.warning_count());
+        for issue in &summary.warnings {
             println!("  {}", issue.display);
         }
     }

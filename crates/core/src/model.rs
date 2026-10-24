@@ -49,6 +49,8 @@ pub struct Project {
     /// 上次落盘时的 `[export]`（住在 `project.toml`，与 `project.tblschema` 是两个文件）。
     /// 语义同上：只在 load / save 两个点写。
     pub original_export: ExportConfig,
+    /// 上次落盘时的 `[validate]`。语义同 `original_export`。
+    pub original_validate: ValidateConfig,
     pub groups: Vec<Group>,
     /// 项目状态：Loaded（已落盘）或 Pending（待保存）。
     /// save 时 Pending 项目会先 create_dir_all，然后切换为 Loaded。
@@ -117,6 +119,7 @@ impl Project {
     /// 工作区 `tablet.toml` 继承（@02.26.3）。
     pub fn toml_changed(&self) -> bool {
         self.config.export != self.original_export
+            || self.config.validate != self.original_validate
     }
 
     /// 项目的「自己的属性」有没有偏离盘上——`meta` / `separators`（进 `project.tblschema`）
@@ -139,6 +142,7 @@ impl Project {
         self.schema.meta = self.original_meta.clone();
         self.schema.separators = self.original_separators.clone();
         self.config.export = self.original_export.clone();
+        self.config.validate = self.original_validate.clone();
     }
 }
 
@@ -572,6 +576,97 @@ pub struct ProjectManagementConfig {
     pub project_order: Vec<String>,
 }
 
+/// 校验级别的处理方式（项目级「验证设置」，@01.10.7）。
+///
+/// 照 EDA 的 DRC 思路：级别本身只表达「多严重」，**要不要拦保存是策略**。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SeverityAction {
+    /// 阻断保存；同时进红框 / 树上 `!`。
+    #[default]
+    Block,
+    /// 只提示：进日志、状态栏、工具栏计数，不拦保存。
+    Report,
+    /// 完全忽略：不产生任何结果。
+    Ignore,
+}
+
+impl SeverityAction {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            SeverityAction::Block => "block",
+            SeverityAction::Report => "report",
+            SeverityAction::Ignore => "ignore",
+        }
+    }
+
+    /// UI 下拉用的中文标签。
+    pub fn label(self) -> &'static str {
+        match self {
+            SeverityAction::Block => "阻断保存",
+            SeverityAction::Report => "仅提示",
+            SeverityAction::Ignore => "忽略",
+        }
+    }
+
+    pub fn from_index(i: i32) -> Self {
+        match i {
+            1 => SeverityAction::Report,
+            2 => SeverityAction::Ignore,
+            _ => SeverityAction::Block,
+        }
+    }
+
+    pub fn to_index(self) -> i32 {
+        match self {
+            SeverityAction::Block => 0,
+            SeverityAction::Report => 1,
+            SeverityAction::Ignore => 2,
+        }
+    }
+}
+
+/// 项目级校验策略：每个级别一个动作。
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct ValidateConfig {
+    pub error: SeverityAction,
+    pub warning: SeverityAction,
+    pub info: SeverityAction,
+}
+
+impl Default for ValidateConfig {
+    fn default() -> Self {
+        Self {
+            error: SeverityAction::Block,
+            warning: SeverityAction::Report,
+            info: SeverityAction::Ignore,
+        }
+    }
+}
+
+impl ValidateConfig {
+    pub fn action(&self, severity: Severity) -> SeverityAction {
+        match severity {
+            Severity::Error => self.error,
+            Severity::Warning => self.warning,
+            Severity::Info => self.info,
+        }
+    }
+
+    /// 是否与默认策略一致（序列化时默认不输出）。
+    pub fn is_default(&self) -> bool { self == &ValidateConfig::default() }
+
+    /// 给 UI 用的三项（级别, 动作）。
+    pub fn entries(&self) -> [(Severity, SeverityAction); 3] {
+        [
+            (Severity::Error, self.error),
+            (Severity::Warning, self.warning),
+            (Severity::Info, self.info),
+        ]
+    }
+}
+
 /// 项目级配置（来自 project.toml）。
 /// 包含项目的导出配置，新建项目时从全局配置拷贝初始值，之后独立维护。
 ///
@@ -582,6 +677,9 @@ pub struct ProjectManagementConfig {
 pub struct ProjectConfig {
     #[serde(default)]
     pub export: ExportConfig,
+    /// 校验策略（@01.10.7）：每个级别是阻断保存 / 仅提示 / 忽略。
+    #[serde(default)]
+    pub validate: ValidateConfig,
 }
 
 /// 一个组的数据落在什么容器里。**一组一种后端，不混存**（@02.27）。
@@ -667,6 +765,183 @@ fn node_pending(deleted: bool, saved: bool, changed: bool) -> bool {
     if deleted { saved } else { changed }
 }
 
+/// 校验级别（@01.10.7）：错误拦保存，警告只提示。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum Severity {
+    /// 阻断保存（现有所有校验码默认都是这一级）。
+    #[default]
+    Error,
+    /// 只提示，不阻断保存；出现在日志与状态栏，不进红框 / 树 `!`。
+    Warning,
+    /// 信息级：默认不显示（由项目级「验证设置」决定是忽略 / 提示 / 阻断）。
+    Info,
+}
+
+impl Severity {
+    /// 序列化用短码：`error` / `warn`。
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Severity::Error => "error",
+            Severity::Warning => "warn",
+            Severity::Info => "info",
+        }
+    }
+
+    /// 严格解析：只认 `error` / `warn`（大小写不敏感）。
+    pub fn parse(s: &str) -> Option<Self> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "error" => Some(Severity::Error),
+            "warn" | "warning" => Some(Severity::Warning),
+            "info" => Some(Severity::Info),
+            _ => None,
+        }
+    }
+}
+
+/// 节点模式。规则去重与列访问都要按模式区分。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NodeMode {
+    Table,
+    Constant,
+    Enum,
+}
+
+/// 一条节点级校验规则（@01.10.7）。**列表顺序即优先级**：报告与展示按此顺序。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Rule {
+    /// 本节点的列名：Table 是字段名；Enum 是 `id`/`name`/`desc`；Constant 是
+    /// `name`/`type`/`value`/`export`/`desc`。
+    pub column: String,
+    pub kind: RuleKind,
+    pub level: Severity,
+}
+
+impl Rule {
+    /// 表达式形态（磁盘与 UI 摘要共用）：`unique()` / `ref_exists(Lang.key)`。
+    pub fn expr_string(&self) -> String {
+        self.kind.expr_string()
+    }
+
+    /// 是否与系统硬编码的校验重复（重复时规则不生效，只报一条非阻断警告）。
+    pub fn conflicts_with_builtin(&self, mode: NodeMode) -> bool {
+        self.kind.conflicts_with_builtin(mode, &self.column)
+    }
+}
+
+/// 规则种类。v1 只有两个内置声明式验证器（S25 第 2 层）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RuleKind {
+    /// 本列非空值在节点内不重复。
+    Unique,
+    /// 本列每个非空值都必须出现在目标节点的目标列里。
+    RefExists { target_node: String, target_column: String },
+    /// 数值区间 `range(min, max)`；空串表示该侧不限。
+    Range { min: String, max: String },
+    /// 必填：非空。
+    NonEmpty,
+    /// 文本长度区间 `len(min, max)`（按字符数）；空串表示该侧不限。
+    Len { min: String, max: String },
+    /// 值必须是给定集合之一 `one_of(a, b, c)`。
+    OneOf { values: Vec<String> },
+    /// 文本必须匹配正则 `matches("...")`。
+    Matches { pattern: String },
+    /// 条件必填：当本行 `column` 的值等于 `value` 时，本列必须有值。
+    RequiredIf { column: String, value: String },
+    /// 跨列比较：本列与 `column` 按 `op` 比较（如 `min_level <= max_level`）。
+    Compare { column: String, op: CompareOp },
+}
+
+/// 跨列比较运算符。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CompareOp {
+    Lt,
+    Le,
+    Gt,
+    Ge,
+    Eq,
+    Ne,
+}
+
+impl CompareOp {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            CompareOp::Lt => "<",
+            CompareOp::Le => "<=",
+            CompareOp::Gt => ">",
+            CompareOp::Ge => ">=",
+            CompareOp::Eq => "==",
+            CompareOp::Ne => "!=",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<Self> {
+        match s.trim() {
+            "<" => Some(CompareOp::Lt),
+            "<=" => Some(CompareOp::Le),
+            ">" => Some(CompareOp::Gt),
+            ">=" => Some(CompareOp::Ge),
+            "==" | "=" => Some(CompareOp::Eq),
+            "!=" | "<>" => Some(CompareOp::Ne),
+            _ => None,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            CompareOp::Lt => "小于",
+            CompareOp::Le => "小于等于",
+            CompareOp::Gt => "大于",
+            CompareOp::Ge => "大于等于",
+            CompareOp::Eq => "等于",
+            CompareOp::Ne => "不等于",
+        }
+    }
+}
+
+/// 把参数值写成表达式里的形态：含逗号 / 引号 / 括号或首尾空格时加引号。
+fn quote_arg(s: &str) -> String {
+    let needs = s.contains(',') || s.contains('"') || s.contains('\\') || s.contains('(')
+        || s.contains(')') || s.trim() != s;
+    if needs {
+        format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\""))
+    } else {
+        s.to_string()
+    }
+}
+
+impl RuleKind {
+    pub fn expr_string(&self) -> String {
+        match self {
+            RuleKind::Unique => "unique()".to_string(),
+            RuleKind::RefExists { target_node, target_column } =>
+                format!("ref_exists({}.{})", target_node, target_column),
+            RuleKind::Range { min, max } => format!("range({}, {})", min, max),
+            RuleKind::NonEmpty => "non_empty()".to_string(),
+            RuleKind::Len { min, max } => format!("len({}, {})", min, max),
+            RuleKind::OneOf { values } =>
+                format!("one_of({})", values.iter().map(|v| quote_arg(v)).collect::<Vec<_>>().join(", ")),
+            RuleKind::Matches { pattern } => format!("matches({})", quote_arg(pattern)),
+            RuleKind::RequiredIf { column, value } =>
+                format!("required_if({}, {})", column, quote_arg(value)),
+            RuleKind::Compare { column, op } =>
+                format!("compare({}, {})", column, op.as_str()),
+        }
+    }
+
+    /// 系统已经硬编码保证的校验（见 validate.rs 的 DuplicateId / DuplicateName）：
+    /// 规则与它重复时不再跑，只报 `RuleRedundant` 警告。
+    pub fn conflicts_with_builtin(&self, mode: NodeMode, column: &str) -> bool {
+        match self {
+            RuleKind::Unique => match mode {
+                NodeMode::Table => column == "id",
+                NodeMode::Constant => column == "name",
+                NodeMode::Enum => column == "id" || column == "name",
+            },
+            _ => false,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct Table {
     pub name: String,
@@ -697,6 +972,10 @@ pub struct Table {
     /// 上次落盘时的 `display_field`。`# @display` 写在 project.tblschema 里，
     /// 所以要进 `schema_changed()`（@02.26.2）。
     pub original_display_field: Option<String>,
+    /// 节点级校验规则（@01.10.7）。顺序即优先级；只存 project.tblschema，不写 `.tbl`。
+    pub rules: Vec<Rule>,
+    /// 上次落盘时的 `rules` 快照。语义同 `original_display_field`。
+    pub original_rules: Vec<Rule>,
 }
 
 impl Table {
@@ -709,6 +988,7 @@ impl Table {
         self.original_name != self.name
             || self.schema.fields != self.original_fields
             || self.original_display_field != self.display_field
+            || self.rules != self.original_rules
     }
 
     /// 这个 `.tbl` 现在写盘会和盘上不一样吗。UI 树节点行 🟡 就是它。
@@ -728,6 +1008,7 @@ impl Table {
         self.schema.fields = self.original_fields.clone();
         self.name = self.original_name.clone();
         self.display_field = self.original_display_field.clone();
+        self.rules = self.original_rules.clone();
         self.update_dirty();
     }
 
@@ -772,6 +1053,9 @@ pub struct Constant {
 
 impl Constant {
     /// 影响 `project.tblschema` 的改动：只有名字（常量段在 schema 里只剩段头）。
+    ///
+    /// 常量**不支持** `# @rule`：`value` 列每行的类型可以不同，列级规则无法定义
+    /// 统一的比较口径；`name` 唯一这类约束也已经由内置校验覆盖（@01.8.8）。
     pub fn schema_changed(&self) -> bool {
         self.original_name != self.name
     }
@@ -826,13 +1110,18 @@ pub struct EnumDef {
     pub display_field: Option<String>,
     /// 上次落盘时的 `display_field`。语义同 `Table::original_display_field`。
     pub original_display_field: Option<String>,
+    /// 节点级校验规则（@01.10.7）。顺序即优先级；只存 project.tblschema。
+    pub rules: Vec<Rule>,
+    /// 上次落盘时的 `rules` 快照。语义同 `Table::original_rules`。
+    pub original_rules: Vec<Rule>,
 }
 
 impl EnumDef {
-    /// 影响 `project.tblschema` 的改动：名字 + `# @display`（**不含 entries**）。
+    /// 影响 `project.tblschema` 的改动：名字 + `# @display` + 规则（**不含 entries**）。
     pub fn schema_changed(&self) -> bool {
         self.original_name != self.name
             || self.original_display_field != self.display_field
+            || self.rules != self.original_rules
     }
 
     pub fn update_dirty(&mut self) {
@@ -844,6 +1133,7 @@ impl EnumDef {
         self.entries = self.original_entries.clone();
         self.name = self.original_name.clone();
         self.display_field = self.original_display_field.clone();
+        self.rules = self.original_rules.clone();
         self.update_dirty();
     }
 

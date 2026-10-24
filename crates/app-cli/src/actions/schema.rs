@@ -278,7 +278,7 @@ fn save_or_err(engine: &mut ProjectEngine, what: &str) -> Result<()> {
     if engine.save_all() {
         return Ok(());
     }
-    let errs = engine.validate();
+    let errs = engine.validate_error_logs();
     if errs.is_empty() {
         // 具体原因（被 Excel 占用 / 外部改过 / 写入失败）由 core 记在 last_save_failure
         let reason = engine.last_save_failure.clone().unwrap_or_else(|| "保存失败".to_string());

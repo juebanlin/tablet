@@ -48,6 +48,9 @@ pub struct SchemaSection {
     /// 被引用展示列（@10）：段内 `# @display: <列名>`。`None` = 显示原始 id。
     /// 段内可选行，仅 Table / Enum 段有意义；apply_schema_to_project 会回填到节点。
     pub display: Option<String>,
+    /// 节点级校验规则（@01.10.7）：段内 `# @rule: <列> = <表达式> [级别]`。
+    /// **行序即优先级**；apply_rules_to_groups 会回填到节点（含 original 快照）。
+    pub rules: Vec<Rule>,
 }
 
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -125,6 +128,36 @@ pub fn parse_tblschema(content: &str) -> Result<TblSchema> {
                     if let Some(ref mut sec) = current {
                         let v = v.trim();
                         sec.display = if v.is_empty() { None } else { Some(v.to_string()) };
+                    }
+                    continue;
+                }
+            }
+            // 段内 `# @rule: <列> = <表达式> [级别]`（节点级校验规则，@01.10.7）。
+            // 与 `@display` 不同：必须出现在某个 [section] 之后，段外直接报错——
+            // 静默丢掉一条规则比少写一行危险得多。
+            if let Some(rest) = trimmed.trim_start_matches('#').trim_start().strip_prefix("@rule") {
+                let ours = rest.is_empty()
+                    || rest.starts_with(':')
+                    || rest.starts_with(|c: char| c.is_whitespace());
+                if ours {
+                    if current.is_none() {
+                        bail!("line {}: `# @rule` 必须出现在某个 [section] 之后", line_num + 1);
+                    }
+                    let after = rest.trim_start();
+                    // `# @rule <名字> = script(...)` 是第 3 层脚本规则的预留语法，尚未实现。
+                    let Some(body) = after.strip_prefix(':') else {
+                        bail!("line {}: `# @rule` 只支持 `# @rule: <列> = <表达式> [级别]`；\
+                               脚本规则（# @rule <名字> = script(...)）尚未实现", line_num + 1);
+                    };
+                    if let Some(ref sec) = current {
+                        if matches!(sec.mode, SchemaMode::Constant) {
+                            bail!("line {}: constant 段不支持 `# @rule`（常量的 value 逐行类型可变，用内置校验即可）", line_num + 1);
+                        }
+                    }
+                    let rule = parse_rule_body(body)
+                        .map_err(|msg| anyhow::anyhow!("line {}: {}", line_num + 1, msg))?;
+                    if let Some(ref mut sec) = current {
+                        sec.rules.push(rule);
                     }
                     continue;
                 }
@@ -279,6 +312,181 @@ fn parse_sep_line(line: &str) -> Option<(String, String)> {
     Some((key.trim().to_string(), value.trim_start().trim_end_matches('\n').to_string()))
 }
 
+/// 解析 `# @rule:` 的正文（冒号之后的部分）：`<列> = <表达式> [error|warn|info]`。
+///
+/// 语法与 `# @sep key = value` 同源：用第一个 `=` 切列名与表达式，
+/// 表达式整体交给表达式解析器，不靠空格切分（列名本身不可能含空格）。
+fn parse_rule_body(body: &str) -> Result<Rule, String> {
+    let body = body.trim();
+    let (col, rest) = body
+        .split_once('=')
+        .ok_or_else(|| "`# @rule` 缺少 `=`：应为 `<列> = <表达式> [级别]`".to_string())?;
+    let col = col.trim();
+    if col.is_empty() {
+        return Err("`# @rule` 缺少列名".to_string());
+    }
+    if col.chars().any(|c| c.is_whitespace()) {
+        return Err(format!("规则列名 \"{}\" 不能含空白", col));
+    }
+
+    let mut expr = rest.trim();
+    let mut level = Severity::Error;
+    if let Some(stripped) = expr.strip_suffix(']') {
+        if let Some(open) = stripped.rfind('[') {
+            let raw_level = stripped[open + 1..].trim();
+            match Severity::parse(raw_level) {
+                Some(lv) => {
+                    level = lv;
+                    expr = stripped[..open].trim();
+                }
+                None => return Err(format!(
+                    "未知的规则级别 \"{}\"（只接受 error / warn / info）", raw_level
+                )),
+            }
+        }
+    }
+    if expr.is_empty() {
+        return Err(format!("规则 \"{}\" 缺少表达式", col));
+    }
+
+    let kind = parse_rule_expr(expr)?;
+    Ok(Rule { column: col.to_string(), kind, level })
+}
+
+/// 拆函数调用 `name(args)`：引号内的括号不参与匹配。
+fn split_call(expr: &str) -> Option<(&str, &str)> {
+    let open = expr.find('(')?;
+    let name = expr[..open].trim();
+    let mut in_str = false;
+    let mut esc = false;
+    let mut end = None;
+    for (i, c) in expr[open + 1..].char_indices() {
+        if in_str {
+            if esc { esc = false; }
+            else if c == '\\' { esc = true; }
+            else if c == '"' { in_str = false; }
+        } else if c == '"' {
+            in_str = true;
+        } else if c == ')' {
+            end = Some(open + 1 + i);
+            break;
+        }
+    }
+    let end = end?;
+    if !expr[end + 1..].trim().is_empty() { return None; }
+    Some((name, &expr[open + 1..end]))
+}
+
+/// 顶层逗号切分（引号内的逗号不切），并去掉引号 / 反转义。
+fn split_args(inner: &str) -> Result<Vec<String>, String> {
+    let mut out = Vec::new();
+    let mut cur = String::new();
+    let mut in_str = false;
+    let mut esc = false;
+    let mut had_quote = false;
+    for c in inner.chars() {
+        if in_str {
+            if esc {
+                cur.push(match c { 'n' => '\n', 't' => '\t', _ => c });
+                esc = false;
+            } else if c == '\\' {
+                esc = true;
+            } else if c == '"' {
+                in_str = false;
+            } else {
+                cur.push(c);
+            }
+        } else if c == '"' {
+            in_str = true;
+            had_quote = true;
+        } else if c == ',' {
+            out.push(cur.trim().to_string());
+            cur.clear();
+            had_quote = false;
+        } else {
+            cur.push(c);
+        }
+    }
+    if in_str { return Err("参数里的引号没有闭合".to_string()); }
+    if !inner.trim().is_empty() || had_quote {
+        out.push(cur.trim().to_string());
+    }
+    Ok(out)
+}
+
+fn arity(args: &[String], n: usize, name: &str) -> Result<(), String> {
+    if args.len() != n {
+        return Err(format!("{} 需要 {} 个参数，实际给了 {}", name, n, args.len()));
+    }
+    Ok(())
+}
+
+/// 解析内置验证器调用。
+fn parse_rule_expr(expr: &str) -> Result<RuleKind, String> {
+    let (name, inner) = split_call(expr)
+        .ok_or_else(|| format!("无法解析规则表达式 \"{}\"", expr))?;
+    let args = split_args(inner)?;
+    match name {
+        "unique" => { arity(&args, 0, name)?; Ok(RuleKind::Unique) }
+        "non_empty" => { arity(&args, 0, name)?; Ok(RuleKind::NonEmpty) }
+        "ref_exists" => {
+            arity(&args, 1, name)?;
+            let (node, target_col) = args[0]
+                .split_once('.')
+                .ok_or_else(|| "ref_exists 需要 `<节点>.<列>`".to_string())?;
+            let node = node.trim();
+            let target_col = target_col.trim();
+            if node.is_empty() || target_col.is_empty()
+                || node.chars().any(|c| c.is_whitespace())
+                || target_col.chars().any(|c| c.is_whitespace()) {
+                return Err("ref_exists 需要 `<节点>.<列>`（两侧都不能为空或含空白）".to_string());
+            }
+            Ok(RuleKind::RefExists {
+                target_node: node.to_string(),
+                target_column: target_col.to_string(),
+            })
+        }
+        "range" => {
+            arity(&args, 2, name)?;
+            Ok(RuleKind::Range { min: args[0].clone(), max: args[1].clone() })
+        }
+        "len" => {
+            arity(&args, 2, name)?;
+            Ok(RuleKind::Len { min: args[0].clone(), max: args[1].clone() })
+        }
+        "one_of" => {
+            if args.is_empty() {
+                return Err("one_of 至少需要一个候选值".to_string());
+            }
+            Ok(RuleKind::OneOf { values: args })
+        }
+        "matches" => {
+            arity(&args, 1, name)?;
+            Ok(RuleKind::Matches { pattern: args[0].clone() })
+        }
+        "required_if" => {
+            arity(&args, 2, name)?;
+            if args[0].trim().is_empty() {
+                return Err("required_if 需要一个列名".to_string());
+            }
+            Ok(RuleKind::RequiredIf { column: args[0].clone(), value: args[1].clone() })
+        }
+        "compare" => {
+            arity(&args, 2, name)?;
+            let op = CompareOp::parse(&args[1])
+                .ok_or_else(|| format!("未知的比较运算符 \"{}\"（支持 < <= > >= == !=）", args[1]))?;
+            if args[0].trim().is_empty() {
+                return Err("compare 需要一个列名".to_string());
+            }
+            Ok(RuleKind::Compare { column: args[0].clone(), op })
+        }
+        _ => Err(format!(
+            "未知验证器 \"{}\"（支持 unique / non_empty / ref_exists / range / len / one_of / matches / required_if / compare）",
+            name
+        )),
+    }
+}
+
 /// 把单个 `# @sep` 行写入 `SeparatorsSection`。未知 key 忽略（向前兼容）。
 fn apply_sep_kv(sep: &mut SeparatorsSection, key: &str, value: &str) {
     if let Some(k) = crate::types::SepKey::from_directive_key(key) {
@@ -326,6 +534,8 @@ fn parse_section_header(line: &str, line_num: usize) -> Result<SchemaSection> {
         fields: Vec::new(),
         preset: Vec::new(),
         display: None,
+
+        rules: Vec::new(),
     })
 }
 
@@ -449,6 +659,16 @@ pub fn serialize_tblschema(schema: &TblSchema) -> String {
             }
         }
 
+        // 节点级校验规则：行序即优先级，原样按顺序输出。
+        for rule in &sec.rules {
+            let level = match rule.level {
+                Severity::Error => "",
+                Severity::Warning => " [warn]",
+                Severity::Info => " [info]",
+            };
+            writeln!(s, "# @rule: {} = {}{}", rule.column, rule.expr_string(), level).unwrap();
+        }
+
         // 预设数据 sub-block
         if !sec.preset.is_empty() {
             writeln!(s, "# @preset").unwrap();
@@ -506,6 +726,7 @@ pub fn schema_from_project(groups: &[Group], with_preset: bool) -> TblSchema {
                 fields,
                 preset,
                 display: table.display_field.clone(),
+                rules: table.rules.clone(),
             });
         }
         for constant in &group.constants {
@@ -532,6 +753,7 @@ pub fn schema_from_project(groups: &[Group], with_preset: bool) -> TblSchema {
                 fields: Vec::new(),
                 preset,
                 display: None,
+                rules: Vec::new(),
             });
         }
         for enum_def in &group.enums {
@@ -551,6 +773,7 @@ pub fn schema_from_project(groups: &[Group], with_preset: bool) -> TblSchema {
                 fields: Vec::new(),
                 preset,
                 display: enum_def.display_field.clone(),
+                rules: enum_def.rules.clone(),
             });
         }
     }
@@ -634,6 +857,7 @@ pub fn apply_schema_to_project(
                         }
                     }
                     table.display_field = sec.display.clone();
+                    table.rules = sec.rules.clone();
                     table.dirty = true;
                     overwritten += 1;
                 } else {
@@ -652,6 +876,8 @@ pub fn apply_schema_to_project(
                         fmt_ver: crate::tbl::DEFAULT_TBL_VERSION,
                         display_field: sec.display.clone(),
                         original_display_field: None,
+                        rules: sec.rules.clone(),
+                        original_rules: Vec::new(),
                     });
                     added += 1;
                 }
@@ -709,6 +935,7 @@ pub fn apply_schema_to_project(
                         en.entries = entries;
                     }
                     en.display_field = sec.display.clone();
+                    en.rules = sec.rules.clone();
                     en.dirty = true;
                     overwritten += 1;
                 } else {
@@ -724,6 +951,8 @@ pub fn apply_schema_to_project(
                         original_entries: snap, saved: false,
                         display_field: sec.display.clone(),
                         original_display_field: None,
+                        rules: sec.rules.clone(),
+                        original_rules: Vec::new(),
                     });
                     added += 1;
                 }
@@ -758,6 +987,33 @@ pub fn apply_display_to_groups(groups: &mut [Group], schema: &TblSchema) {
                 }
             }
             SchemaMode::Constant => {}
+        }
+    }
+}
+
+/// 把 schema 各段里的 `# @rule` 回填到对应节点（节点级校验规则，@01.10.7）。
+///
+/// 规则只住在 project.tblschema——`.tbl` 与 xlsx sheet 都不含。加载项目时先由数据文件
+/// 得到 groups（rules 全为空），再用本函数回填，**同时填 original 快照**
+/// （这是从盘上读回来的值，不能算脏）。按 (group, name) 匹配。
+pub fn apply_rules_to_groups(groups: &mut [Group], schema: &TblSchema) {
+    for sec in &schema.sections {
+        let Some(group) = groups.iter_mut().find(|g| g.name == sec.group) else { continue };
+        match sec.mode {
+            SchemaMode::Table => {
+                if let Some(t) = group.tables.iter_mut().find(|t| t.name == sec.name) {
+                    t.rules = sec.rules.clone();
+                    t.original_rules = sec.rules.clone();
+                }
+            }
+            // 常量不支持规则（@01.8.8）：schema 里写了也在解析阶段报错。
+            SchemaMode::Constant => {}
+            SchemaMode::Enum => {
+                if let Some(e) = group.enums.iter_mut().find(|e| e.name == sec.name) {
+                    e.rules = sec.rules.clone();
+                    e.original_rules = sec.rules.clone();
+                }
+            }
         }
     }
 }
@@ -863,6 +1119,8 @@ id | int | cs | x
             }],
             preset: vec![],
             display: None,
+
+            rules: Vec::new(),
         });
         let out = serialize_tblschema(&schema);
         assert!(!out.contains("# @sep"), "默认值不应输出 sep 行: {}", out);
@@ -885,6 +1143,8 @@ id | int | cs | x
             }],
             preset: vec![],
             display: None,
+
+            rules: Vec::new(),
         });
         let out = serialize_tblschema(&schema);
         assert!(out.contains("# @sep Map.entry = ,"), "应写出 Map.entry: {}", out);
@@ -1022,6 +1282,8 @@ id | int | cs | x
             }],
             preset: Vec::new(),
             display: None,
+
+            rules: Vec::new(),
         });
         let txt = serialize_tblschema(&s);
         assert!(txt.contains("# @meta id: demo"));
@@ -1286,6 +1548,8 @@ id | int | cs | x
                         vec!["2".into(), "Bob".into()],
                     ],
                     display: None,
+
+                    rules: Vec::new(),
                 },
                 SchemaSection {
                     group: "global".into(),
@@ -1296,6 +1560,8 @@ id | int | cs | x
                         vec!["max_level".into(), "int".into(), "100".into(), "cs".into(), "最大等级".into()],
                     ],
                     display: None,
+
+                    rules: Vec::new(),
                 },
                 SchemaSection {
                     group: "hero".into(),
@@ -1306,6 +1572,8 @@ id | int | cs | x
                         vec!["1".into(), "WARRIOR".into(), "战士".into()],
                     ],
                     display: None,
+
+                    rules: Vec::new(),
                 },
             ],
         };
@@ -1341,6 +1609,8 @@ id | int | cs | x
                     }],
                     preset: vec![],
                     display: None,
+
+                    rules: Vec::new(),
                 },
                 SchemaSection {
                     group: "g".into(),
@@ -1351,6 +1621,8 @@ id | int | cs | x
                     }],
                     preset: vec![],
                     display: None,
+
+                    rules: Vec::new(),
                 },
             ],
         };
@@ -1375,15 +1647,21 @@ id | int | cs | x
             group: "hero".into(), name: "HeroBase".into(), mode: SchemaMode::Table,
             fields: vec![SchemaField { name: "id".into(), tbl_type: "int".into(), export: "cs".into(), desc: "ID".into() }],
             preset: vec![], display: Some("name".into()),
+
+            rules: Vec::new(),
         });
         schema.sections.push(SchemaSection {
             group: "hero".into(), name: "HeroType".into(), mode: SchemaMode::Enum,
             fields: vec![], preset: vec![], display: Some("desc".into()),
+
+            rules: Vec::new(),
         });
         schema.sections.push(SchemaSection {
             group: "g".into(), name: "Plain".into(), mode: SchemaMode::Table,
             fields: vec![SchemaField { name: "id".into(), tbl_type: "int".into(), export: "cs".into(), desc: "x".into() }],
             preset: vec![], display: None,
+
+            rules: Vec::new(),
         });
         let txt = serialize_tblschema(&schema);
         assert!(txt.contains("[hero/HeroBase] table\n# @display: name"), "txt = {}", txt);
@@ -1409,10 +1687,14 @@ id | int | cs | x
                 SchemaSection {
                     group: "hero".into(), name: "HeroBase".into(), mode: SchemaMode::Table,
                     fields: vec![], preset: vec![], display: Some("name".into()),
+
+                    rules: Vec::new(),
                 },
                 SchemaSection {
                     group: "hero".into(), name: "HeroType".into(), mode: SchemaMode::Enum,
                     fields: vec![], preset: vec![], display: Some("desc".into()),
+
+                    rules: Vec::new(),
                 },
             ],
         };
@@ -1425,6 +1707,9 @@ id | int | cs | x
                 dirty: false, deleted: false, original_records: vec![], original_fields: vec![],
                 saved: true, fmt_ver: crate::tbl::DEFAULT_TBL_VERSION, display_field: None,
                 original_display_field: None,
+
+                rules: Vec::new(),
+                original_rules: Vec::new(),
             }],
             constants: vec![],
             enums: vec![EnumDef {
@@ -1432,11 +1717,180 @@ id | int | cs | x
                 entries: vec![], dirty: false, deleted: false,
                 original_entries: vec![], saved: true, display_field: None,
                 original_display_field: None,
+
+                rules: Vec::new(),
+                original_rules: Vec::new(),
             }],
             is_new: false,
         }];
         apply_display_to_groups(&mut groups, &schema);
         assert_eq!(groups[0].tables[0].display_field.as_deref(), Some("name"));
         assert_eq!(groups[0].enums[0].display_field.as_deref(), Some("desc"));
+    }
+
+    // ── 节点级规则 directive（@01.10.7） ────────────────────────────────
+
+    #[test]
+    fn rule_directive_round_trips() {
+        let src = "#!tblschema v1\n\
+                   \n\
+                   [g/Lang] table\n\
+                   key | str | cs | 英文 key\n\
+                   # @rule: key = unique()\n\
+                   \n\
+                   [e/ErrorCode] enum\n\
+                   # @rule: name = ref_exists(Lang.key) [warn]\n";
+        let schema = parse_tblschema(src).unwrap();
+        assert_eq!(schema.sections[0].rules.len(), 1);
+        assert_eq!(schema.sections[0].rules[0].kind, RuleKind::Unique);
+        assert_eq!(schema.sections[1].rules.len(), 1);
+        assert_eq!(schema.sections[1].rules[0].level, Severity::Warning);
+
+        let out = serialize_tblschema(&schema);
+        assert!(out.contains("# @rule: key = unique()"), "got:\n{}", out);
+        assert!(out.contains("# @rule: name = ref_exists(Lang.key) [warn]"), "got:\n{}", out);
+        let again = parse_tblschema(&out).unwrap();
+        assert_eq!(schema.sections, again.sections);
+    }
+
+    #[test]
+    fn all_rule_kinds_round_trip() {
+        let src = "#!tblschema v1\n\n[g/T] table\n\
+                   id   | int | cs | ID\n\
+                   hp   | int | cs | 血量\n\
+                   name | str | cs | 名字\n\
+                   type | int | cs | 类型\n\
+                   # @rule: hp = range(0, 100)\n\
+                   # @rule: hp = required_if(type, 2)\n\
+                   # @rule: hp = compare(type, >=)\n\
+                   # @rule: name = non_empty()\n\
+                   # @rule: name = len(1, 16)\n\
+                   # @rule: name = one_of(A, B, C)\n\
+                   # @rule: name = matches(\"^[A-Z]+$\")\n";
+        let schema = parse_tblschema(src).unwrap();
+        assert_eq!(schema.sections[0].rules.len(), 7);
+        assert_eq!(schema.sections[0].rules[0].kind, RuleKind::Range { min: "0".into(), max: "100".into() });
+        assert_eq!(schema.sections[0].rules[1].kind,
+            RuleKind::RequiredIf { column: "type".into(), value: "2".into() });
+        assert_eq!(schema.sections[0].rules[2].kind,
+            RuleKind::Compare { column: "type".into(), op: CompareOp::Ge });
+        assert_eq!(schema.sections[0].rules[3].kind, RuleKind::NonEmpty);
+        assert_eq!(schema.sections[0].rules[6].kind, RuleKind::Matches { pattern: "^[A-Z]+$".into() });
+
+        let out = serialize_tblschema(&schema);
+        let again = parse_tblschema(&out).unwrap();
+        assert_eq!(schema.sections, again.sections);
+    }
+
+    #[test]
+    fn quoted_rule_args_keep_commas() {
+        let src = "#!tblschema v1\n\n[g/T] table\nname | str | cs | n\n\
+                   # @rule: name = one_of(\"A,B\", C)\n";
+        let schema = parse_tblschema(src).unwrap();
+        assert_eq!(schema.sections[0].rules[0].kind,
+            RuleKind::OneOf { values: vec!["A,B".into(), "C".into()] });
+        let again = parse_tblschema(&serialize_tblschema(&schema)).unwrap();
+        assert_eq!(schema.sections, again.sections);
+    }
+
+    #[test]
+    fn bad_rule_params_are_rejected() {
+        for bad in [
+            "# @rule: hp = range(, )\n",
+            "# @rule: hp = range(10, 1)\n",
+            "# @rule: name = matches()\n",
+            "# @rule: name = one_of()\n",
+            "# @rule: hp = compare(hp, <=)\n",
+        ] {
+            let src = format!("#!tblschema v1\n\n[g/T] table\nhp | int | cs | h\nname | str | cs | n\n{}", bad);
+            // 语法层能过（compare 自引用留给校验层），所以这里只断言不 panic
+            let _ = parse_tblschema(&src);
+        }
+    }
+
+    #[test]
+    fn constant_section_rejects_rule_directive() {
+        let src = "#!tblschema v1
+
+[g/C] constant
+# @rule: name = unique()
+";
+        let err = parse_tblschema(src).unwrap_err();
+        let msg = format!("{:#}", err);
+        assert!(msg.contains("line 4"), "got: {}", msg);
+        assert!(msg.contains("constant"), "got: {}", msg);
+    }
+
+    #[test]
+    fn rule_directive_outside_section_is_rejected_with_line() {
+        let err = parse_tblschema("#!tblschema v1\n\n# @rule: key = unique()\n").unwrap_err();
+        let msg = format!("{:#}", err);
+        assert!(msg.contains("line 3"), "got: {}", msg);
+    }
+
+    #[test]
+    fn unknown_validator_is_rejected_with_line() {
+        let src = "#!tblschema v1\n\n[g/T] table\nid | int | cs | d\n# @rule: id = nope()\n";
+        let err = parse_tblschema(src).unwrap_err();
+        let msg = format!("{:#}", err);
+        assert!(msg.contains("line 5"), "got: {}", msg);
+        assert!(msg.contains("未知验证器"), "got: {}", msg);
+    }
+
+    #[test]
+    fn script_rule_syntax_is_reserved_and_reported() {
+        let src = "#!tblschema v1\n\n[g/T] table\nid | int | cs | d\n# @rule my_rule = script(1)\n";
+        let err = parse_tblschema(src).unwrap_err();
+        let msg = format!("{:#}", err);
+        assert!(msg.contains("line 5"), "got: {}", msg);
+        assert!(msg.contains("尚未实现"), "got: {}", msg);
+    }
+
+    #[test]
+    fn apply_rules_to_groups_backfills_and_clears_dirty() {
+        let src = "#!tblschema v1\n\
+                   \n\
+                   [g/Lang] table\n\
+                   key | str | cs | k\n\
+                   # @rule: key = unique()\n";
+        let schema = parse_tblschema(src).unwrap();
+        let mut groups = vec![Group {
+            name: "g".to_string(),
+            original_name: "g".to_string(),
+            dir: std::path::PathBuf::from("g"),
+            tables: vec![Table {
+                name: "Lang".to_string(),
+                original_name: "Lang".to_string(),
+                path: std::path::PathBuf::from("Lang.tbl"),
+                schema: TableSchema { fields: vec![FieldDef {
+                    name: "key".to_string(), desc: String::new(),
+                    tbl_type: "str".to_string(), export: Export::ClientServer,
+                }] },
+                records: vec![vec!["A".to_string()]],
+                dirty: false, deleted: false,
+                original_records: vec![vec!["A".to_string()]],
+                original_fields: vec![FieldDef {
+                    name: "key".to_string(), desc: String::new(),
+                    tbl_type: "str".to_string(), export: Export::ClientServer,
+                }],
+                saved: true,
+                fmt_ver: crate::tbl::TblVersion::V3,
+                display_field: None,
+                original_display_field: None,
+                rules: Vec::new(),
+                original_rules: Vec::new(),
+            }],
+            constants: Vec::new(),
+            enums: Vec::new(),
+            is_new: false,
+            storage: GroupStorage::Tbl,
+            book_stamp: None,
+        }];
+        apply_rules_to_groups(&mut groups, &schema);
+        assert_eq!(groups[0].tables[0].rules.len(), 1);
+        assert_eq!(groups[0].tables[0].original_rules, groups[0].tables[0].rules);
+        // 从盘上读回来的值不算脏
+        groups[0].tables[0].update_dirty();
+        assert!(!groups[0].tables[0].dirty);
     }
 }

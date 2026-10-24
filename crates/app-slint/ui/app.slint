@@ -26,6 +26,7 @@ import { GridArea, HeaderCell, DataCell, DataRow, CellKind } from "components/gr
 import { BottomPanel } from "components/bottom_panel.slint";
 import { TypeSelector, RefItem, TsParamSlot } from "dialogs/type_selector.slint";
 import { RefPicker, RefRow, RefHeader } from "dialogs/ref_picker.slint";
+import { RulesPanel, RuleColumnRow, RuleCard, RuleIssueRow } from "dialogs/rules_panel.slint";
 import { ExportDialog } from "dialogs/export_dialog.slint";
 import { SchemaExportDialog, SchemaImportDialog, SchemaItem } from "dialogs/schema_dialog.slint";
 import { NewProjectDialog, TemplateItem } from "dialogs/template_dialog.slint";
@@ -133,6 +134,9 @@ export component AppWindow inherits Window {
     in property <bool> excel-edit-enabled: false;
     /// 还原到已保存（@02.26）：当前节点和盘上不一样、且盘上确实有它
     in property <bool> revert-enabled: false;
+    /// 「校验规则」按钮可用（选中 Table / Constant / Enum 时）。
+    in property <bool> rules-enabled: false;
+    callback rules-clicked();
     callback show-ref-name-toggled(bool);
     callback display-field-selected(string);
     callback excel-edit-clicked();
@@ -258,6 +262,59 @@ export component AppWindow inherits Window {
     callback rp-search-edited(string);
     callback rp-strategy-changed(int);
     callback rp-manual-edited(string);
+
+    // ── Dialog: 校验规则（@01.10.7） ────────────────────────
+    in-out property <bool> dlg-rules-open: false;
+    in property <string> ru-node-label: "";
+    in property <[RuleColumnRow]> ru-columns;
+    in property <string> ru-column-title: "";
+    in property <[RuleCard]> ru-rules;
+    in property <string> ru-form-title: "新增规则";
+    in property <[string]> ru-form-kind-options;
+    in-out property <int> ru-form-kind-index: 0;
+    in property <bool> ru-form-has-target: false;
+    in property <[string]> ru-form-target-node-options;
+    in-out property <int> ru-form-target-node-index: 0;
+    in property <[string]> ru-form-target-column-options;
+    in-out property <int> ru-form-target-column-index: 0;
+    in-out property <int> ru-form-level-index: 0;
+    in property <string> ru-form-desc: "";
+    in property <bool> ru-form-can-apply: false;
+    in property <string> ru-form-apply-label: "添加";
+    in property <bool> ru-form-editing: false;
+    in property <string> ru-form-hint: "";
+    in property <bool> ru-can-add: false;
+    in property <string> ru-form-param-a-label: "";
+    in-out property <string> ru-form-param-a: "";
+    in property <string> ru-form-param-b-label: "";
+    in-out property <string> ru-form-param-b: "";
+    in property <string> ru-form-param-column-label: "";
+    in property <[string]> ru-form-param-column-options;
+    in-out property <int> ru-form-param-column-index: 0;
+    in property <[string]> ru-form-param-op-options;
+    in-out property <int> ru-form-param-op-index: 0;
+    in property <[RuleIssueRow]> ru-issues;
+    in property <int> ru-error-count: 0;
+    in property <int> ru-warning-count: 0;
+    in property <int> ru-info-count: 0;
+    in property <bool> ru-can-confirm: true;
+    callback ru-select-column(int);
+    callback ru-select-rule(int);
+    callback ru-delete-rule(int);
+    callback ru-move-up(int);
+    callback ru-move-down(int);
+    callback ru-set-kind(string);
+    callback ru-set-param-a(string);
+    callback ru-set-param-b(string);
+    callback ru-set-param-column(string);
+    callback ru-set-param-op(string);
+    callback ru-set-target-node(string);
+    callback ru-set-target-column(string);
+    callback ru-set-level(string);
+    callback ru-apply();
+    callback ru-cancel-edit();
+    callback ru-confirm();
+    callback ru-cancel();
 
     // ── Dialog: 数据导出 ────────────────────────────────────
     in-out property <bool> dlg-export-open: false;
@@ -388,6 +445,9 @@ export component AppWindow inherits Window {
 
     // 身份：id 只读（它在新建/克隆对话框里定，之后不可改）
     in property <string> ps-id;
+    in-out property <int> ps-validate-error-index: 0;
+    in-out property <int> ps-validate-warning-index: 1;
+    in-out property <int> ps-validate-info-index: 2;
     in-out property <string> ps-name;
     in property <bool> ps-name-modified: false;
     in-out property <string> ps-category;
@@ -523,6 +583,7 @@ export component AppWindow inherits Window {
     callback ps-sep-edited(string, string);
     /// (key, value) —— key 与 `ExportKey::as_str()` 一致
     callback ps-export-field-edited(string, string);
+    callback ps-validate-field-edited(string, string);
     /// 单字段还原：把 original_* 的对应叶子写回（@02.26）
     callback ps-identity-revert(string);
     callback ps-sep-revert(string);
@@ -854,6 +915,8 @@ export component AppWindow inherits Window {
                 display-field-enabled: root.display-field-enabled;
                 excel-edit-enabled: root.excel-edit-enabled;
                 revert-enabled: root.revert-enabled;
+                rules-enabled: root.rules-enabled;
+                rules-clicked => { root.rules-clicked(); }
                 show-ref-name-toggled(c) => { root.show-ref-name-toggled(c); }
                 display-field-selected(s) => { root.display-field-selected(s); }
                 excel-edit-clicked => { root.excel-edit-clicked(); }
@@ -995,6 +1058,60 @@ export component AppWindow inherits Window {
         confirm => { root.rp-confirm(); root.dlg-ref-open = false; }
         clear => { root.rp-clear(); root.dlg-ref-open = false; }
         cancel => { root.rp-cancel(); root.dlg-ref-open = false; }
+    }
+
+    RulesPanel {
+        open: root.dlg-rules-open;
+        node-label: root.ru-node-label;
+        columns: root.ru-columns;
+        column-title: root.ru-column-title;
+        rules: root.ru-rules;
+        form-title: root.ru-form-title;
+        form-kind-options: root.ru-form-kind-options;
+        form-kind-index <=> root.ru-form-kind-index;
+        form-has-target: root.ru-form-has-target;
+        form-target-node-options: root.ru-form-target-node-options;
+        form-target-node-index <=> root.ru-form-target-node-index;
+        form-target-column-options: root.ru-form-target-column-options;
+        form-target-column-index <=> root.ru-form-target-column-index;
+        form-level-index <=> root.ru-form-level-index;
+        form-desc: root.ru-form-desc;
+        form-can-apply: root.ru-form-can-apply;
+        form-apply-label: root.ru-form-apply-label;
+        form-editing: root.ru-form-editing;
+        form-hint: root.ru-form-hint;
+        can-add: root.ru-can-add;
+        form-param-a-label: root.ru-form-param-a-label;
+        form-param-a <=> root.ru-form-param-a;
+        form-param-b-label: root.ru-form-param-b-label;
+        form-param-b <=> root.ru-form-param-b;
+        form-param-column-label: root.ru-form-param-column-label;
+        form-param-column-options: root.ru-form-param-column-options;
+        form-param-column-index <=> root.ru-form-param-column-index;
+        form-param-op-options: root.ru-form-param-op-options;
+        form-param-op-index <=> root.ru-form-param-op-index;
+        issues: root.ru-issues;
+        error-count: root.ru-error-count;
+        warning-count: root.ru-warning-count;
+        info-count: root.ru-info-count;
+        can-confirm: root.ru-can-confirm;
+        select-column(i) => { root.ru-select-column(i); }
+        select-rule(i) => { root.ru-select-rule(i); }
+        delete-rule(i) => { root.ru-delete-rule(i); }
+        move-up(i) => { root.ru-move-up(i); }
+        move-down(i) => { root.ru-move-down(i); }
+        set-kind(s) => { root.ru-set-kind(s); }
+        set-param-a(s) => { root.ru-set-param-a(s); }
+        set-param-b(s) => { root.ru-set-param-b(s); }
+        set-param-column(s) => { root.ru-set-param-column(s); }
+        set-param-op(s) => { root.ru-set-param-op(s); }
+        set-target-node(s) => { root.ru-set-target-node(s); }
+        set-target-column(s) => { root.ru-set-target-column(s); }
+        set-level(s) => { root.ru-set-level(s); }
+        apply => { root.ru-apply(); }
+        cancel-edit => { root.ru-cancel-edit(); }
+        confirm => { root.ru-confirm(); root.dlg-rules-open = false; }
+        cancel => { root.ru-cancel(); root.dlg-rules-open = false; }
     }
 
     ExportDialog {
@@ -1269,6 +1386,10 @@ export component AppWindow inherits Window {
         version-edited(s) => { root.ps-version-edited(s); }
         sep-edited(k, v) => { root.ps-sep-edited(k, v); }
         export-field-edited(k, v) => { root.ps-export-field-edited(k, v); }
+        ps-validate-error-index <=> root.ps-validate-error-index;
+        ps-validate-warning-index <=> root.ps-validate-warning-index;
+        ps-validate-info-index <=> root.ps-validate-info-index;
+        validate-field-edited(k, v) => { root.ps-validate-field-edited(k, v); }
         identity-revert(k) => { root.ps-identity-revert(k); }
         sep-revert(k) => { root.ps-sep-revert(k); }
         export-revert(k) => { root.ps-export-revert(k); }

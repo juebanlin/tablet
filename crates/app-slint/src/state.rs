@@ -918,6 +918,8 @@ pub struct AppState {
     pub type_selector: TypeSelectorState,
     /// 引用选择器当前状态
     pub ref_picker: RefPickerState,
+    /// 校验规则面板状态（@01.10.7）
+    pub rules_panel: crate::dialogs::rules_panel::RulesPanelState,
     /// 右键菜单
     pub ctx_menu: ContextMenuState,
     /// 待执行的 New/Rename/Delete 操作（Input/Confirm 对话框收集输入）
@@ -987,8 +989,11 @@ impl AppState {
         engine.ui_log(format!("已加载 {} 个 Group", group_count));
         // 加载即跑一遍全 Project 验证：让所有 project 的红框/`!` 标记打开就可见。
         engine.revalidate_all_projects();
-        if !engine.validation_errors.is_empty() {
-            engine.error_log(format!("[验证] 加载后发现 {} 个错误", engine.validation_errors.len()));
+        if !engine.validation_errors.is_empty() || !engine.validation_warnings.is_empty() {
+            engine.error_log(format!(
+                "[验证] 加载后发现 {} 个错误 / {} 条警告",
+                engine.validation_errors.len(), engine.validation_warnings.len()
+            ));
         }
         Ok((Self {
             engine,
@@ -1016,6 +1021,7 @@ impl AppState {
             editing_header_col: -1,
             type_selector: TypeSelectorState::new(),
             ref_picker: RefPickerState::new(),
+            rules_panel: crate::dialogs::rules_panel::RulesPanelState::new(),
             ctx_menu: ContextMenuState::default(),
             pending: PendingActionState::default(),
             data_export: DataExportState::default(),

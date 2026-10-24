@@ -388,6 +388,9 @@ mod tests {
             dirty: false, deleted: false, original_entries: Vec::new(), saved: true,
             display_field: None,
             original_display_field: None,
+
+            rules: Vec::new(),
+            original_rules: Vec::new(),
         };
         let out = gen_enum_class(&e, "com.game.config", "hero", false);
         assert!(out.contains("public int getId() { return id; }"), "got:\n{}", out);
@@ -413,6 +416,9 @@ mod tests {
             dirty: false, deleted: false, original_entries: Vec::new(), saved: true,
             display_field: None,
             original_display_field: None,
+
+            rules: Vec::new(),
+            original_rules: Vec::new(),
         };
         let out = gen_enum_class(&e, "com.game.config", "hero", false);
         // 注释里不能有裸换行，也不能出现会闭合 /** */ 的 */

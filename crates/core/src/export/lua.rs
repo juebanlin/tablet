@@ -401,6 +401,9 @@ mod tests {
             dirty: false, deleted: false, original_entries: Vec::new(), saved: true,
             display_field: None,
             original_display_field: None,
+
+            rules: Vec::new(),
+            original_rules: Vec::new(),
         };
         let out = export_enum_lua(&e);
         assert!(out.contains("names = {"), "got:\n{}", out);

@@ -125,6 +125,9 @@ GridArea 单元格 / 选区支持 Excel 风格的复制粘贴：
 
 ## 6. 已知限制 / 后置项
 
+
+- **节点级校验规则（`# @rule`，@01.10.7）不参与 Excel 往返**：规则只住 `project.tblschema`，Excel 表头里没有 rule 列，编辑数据不会改动规则；xlsx 组重新加载时按 schema 回填规则。
+
 - **行颜色标记（S14-Color）**：tbl 行尾 `#@c:RRGGBB` ↔ xlsx 行背景色双向映射。需要扩 .tbl 文本格式 + UI 行号区色块渲染 + xlsx 写出/读回背景色，是横切改动，独立排期。
 - **Constant value 浮点精度**：策划在 Excel 里填 `1.5`，calamine 按 f64 解，转回字符串可能出 `1.5000000000000002`。当前 `cell_to_string` 对 `Float` 整数化处理（`1.0 → "1"`）能解决整数被误读的常见情况；非整数浮点的精度边界尚未验证。建议 Constant `value` 列 .tbl 类型用 `str` 包装数字字面量规避。
 - **Excel 启动瞬间窗口期**：`open::that()` 返回到 Excel 真正持锁有几百 ms 间隙，期间监控线程的 [`xlsx_is_released`] 可能立即误判为"已关闭"。已通过监控线程启动后 sleep 3s 缓解，仍是 best-effort。

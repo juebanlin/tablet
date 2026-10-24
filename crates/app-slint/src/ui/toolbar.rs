@@ -74,8 +74,9 @@ pub(crate) fn reset_view_after_reload(state: &Rc<RefCell<AppState>>) {
     }
     // 跑一遍全 Project 验证，让所有节点的红框/`!` 标记可见。
     st.engine.revalidate_all_projects();
-    if !st.engine.validation_errors.is_empty() {
-        let n = st.engine.validation_errors.len();
-        st.engine.error_log(format!("[验证] 共 {} 个错误", n));
+    let n_err = st.engine.validation_errors.len();
+    let n_warn = st.engine.validation_warnings.len();
+    if n_err > 0 || n_warn > 0 {
+        st.engine.error_log(format!("[验证] 共 {} 个错误 / {} 条警告", n_err, n_warn));
     }
 }

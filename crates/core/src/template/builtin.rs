@@ -144,6 +144,9 @@ mod tests {
                             fmt_ver: crate::tbl::DEFAULT_TBL_VERSION,
                             display_field: sec.display.clone(),
                             original_display_field: None,
+
+                            rules: Vec::new(),
+                            original_rules: Vec::new(),
                         });
                     }
                     SchemaMode::Constant => {
@@ -184,6 +187,9 @@ mod tests {
                             original_entries: snap, saved: true,
                             display_field: sec.display.clone(),
                             original_display_field: None,
+
+                            rules: Vec::new(),
+                            original_rules: Vec::new(),
                         });
                     }
                 }
@@ -194,7 +200,7 @@ mod tests {
             // 跑 validate_*；任何错误都连同模板 id 一起 panic 出来。
             for g in &groups {
                 for t in &g.tables {
-                    let errs = validate_table(t, &sep, Some(&refs));
+                    let errs = validate_table(t, &sep, Some(&refs), None);
                     assert!(errs.is_empty(),
                         "[{}] table {}/{} 校验失败: {:?}", tpl.id, g.name, t.name, errs);
                 }
@@ -204,7 +210,7 @@ mod tests {
                         "[{}] constant {}/{} 校验失败: {:?}", tpl.id, g.name, c.name, errs);
                 }
                 for e in &g.enums {
-                    let errs = validate_enum(e);
+                    let errs = validate_enum(e, None);
                     assert!(errs.is_empty(),
                         "[{}] enum {}/{} 校验失败: {:?}", tpl.id, g.name, e.name, errs);
                 }

@@ -568,6 +568,9 @@ mod tests {
             fmt_ver: DEFAULT_TBL_VERSION,
             display_field: None,
             original_display_field: None,
+
+            rules: Vec::new(),
+            original_rules: Vec::new(),
         }
     }
 
@@ -596,6 +599,9 @@ mod tests {
             dirty: false, deleted: false, original_entries: vec![EnumEntry { id: "1".into(), name: "RED".into(), desc: "红".into() }], saved: false,
             display_field: None,
             original_display_field: None,
+
+            rules: Vec::new(),
+            original_rules: Vec::new(),
         }
     }
 

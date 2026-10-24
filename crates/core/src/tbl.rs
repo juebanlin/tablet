@@ -92,6 +92,8 @@ impl TableCodec for V2Codec {
             records, dirty: false, deleted: false, saved: true, fmt_ver: TblVersion::V2,
             display_field: None,
             original_display_field: None,
+            rules: Vec::new(),
+            original_rules: Vec::new(),
         })
     }
 
@@ -240,6 +242,8 @@ impl TableCodec for V3Codec {
             records, dirty: false, deleted: false, saved: true, fmt_ver: TblVersion::V3,
             display_field: None,
             original_display_field: None,
+            rules: Vec::new(),
+            original_rules: Vec::new(),
         })
     }
 
@@ -407,6 +411,8 @@ fn parse_enum(path: &Path, data_lines: &[&str]) -> Result<TblFile> {
         dirty: false, deleted: false, saved: true,
         display_field: None,
         original_display_field: None,
+        rules: Vec::new(),
+        original_rules: Vec::new(),
     }))
 }
 
@@ -470,6 +476,9 @@ mod tests {
             original_records: vec![], original_fields: f,
             saved: true, fmt_ver: TblVersion::V3,
             display_field: None, original_display_field: None,
+
+            rules: Vec::new(),
+            original_rules: Vec::new(),
         }
     }
 

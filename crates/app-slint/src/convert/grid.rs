@@ -194,8 +194,11 @@ fn build_table_grid(state: &AppState, group: &str, name: &str) -> GridSnapshot {
         use tablet_core::validate::validate_table_schema_with_refs;
         let sep = &state.engine.project().schema.separators;
         let refs = tablet_core::validate::RefIndex::build(&state.engine.project().groups);
+        let policy = state.engine.project().config.validate.clone();
         for err in validate_table_schema_with_refs(table, sep, Some(&refs)) {
             if !err.is_schema() { continue; }
+            // 红框只表达「阻断保存」的级别；仅提示 / 忽略的走状态栏 / 日志。
+            if policy.action(err.severity) != tablet_core::model::SeverityAction::Block { continue; }
             if let Some(hr) = err.header_row {
                 header_errors.insert((hr.row(), err.col));
             }

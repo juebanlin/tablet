@@ -58,6 +58,18 @@ component TabBar inherits Rectangle {
             }
             TouchArea { clicked => { root.changed(2); } }
         }
+        Rectangle {
+            width: 96px;
+            background: root.current == 3 ? Theme.bg-row-selected : transparent;
+            Text {
+                text: "校验";
+                font-size: Theme.fs-normal;
+                color: Theme.text-primary;
+                vertical-alignment: center;
+                horizontal-alignment: center;
+            }
+            TouchArea { clicked => { root.changed(3); } }
+        }
     }
 }
 
@@ -71,6 +83,11 @@ export component ProjectSettingsDialog inherits Rectangle {
     // `*-modified` = 「这个字段和盘上不一样吗」，由后端按 `Project::original_*` 算好推上来
     // （@02.26.2）。这里不做比较：`None` 与 `Some(默认值)` 的差别在渲染值上看不出来。
     in property <string> ps-id;
+    // 校验策略（@01.10.7）：每个级别的动作 0=阻断保存 1=仅提示 2=忽略
+    in-out property <int> ps-validate-error-index: 0;
+    in-out property <int> ps-validate-warning-index: 1;
+    in-out property <int> ps-validate-info-index: 2;
+    callback validate-field-edited(string, string);
     in property <bool> ps-can-revert-all: false;
     in-out property <string> ps-name;
     in property <bool> ps-name-modified: false;
@@ -936,6 +953,65 @@ export component ProjectSettingsDialog inherits Rectangle {
 
                     Text {
                         text: "提示：导出配置点确定后更新内存，需保存项目才写盘。";
+                        color: Theme.text-secondary;
+                        font-size: Theme.fs-tiny;
+                        wrap: word-wrap;
+                    }
+                    Rectangle { vertical-stretch: 1; }
+                }
+            }
+
+            // 校验设置 tab（@01.10.7）：每个级别一个动作，照 EDA 的 DRC 思路
+            if root.tab == 3: Rectangle {
+                vertical-stretch: 1;
+                VerticalLayout {
+                    padding: Theme.sp-4;
+                    spacing: Theme.sp-3;
+
+                    Text { text: "校验策略"; color: Theme.text-secondary; font-size: Theme.fs-small; font-weight: 600; }
+                    Text {
+                        text: "每个级别决定它会不会阻断保存：「忽略」不产生结果，「阻断保存」会画红框、树上打 !，并阻止保存。";
+                        color: Theme.text-secondary;
+                        font-size: Theme.fs-tiny;
+                        wrap: word-wrap;
+                    }
+
+                    HorizontalLayout {
+                        spacing: Theme.sp-3;
+                        alignment: start;
+                        Text { text: "错误（error）:"; width: 140px; vertical-alignment: center; color: Theme.text-primary; }
+                        ComboBox {
+                            model: ["阻断保存", "仅提示", "忽略"];
+                            current-index <=> root.ps-validate-error-index;
+                            width: 180px;
+                            selected(s) => { root.validate-field-edited("error", s); }
+                        }
+                    }
+                    HorizontalLayout {
+                        spacing: Theme.sp-3;
+                        alignment: start;
+                        Text { text: "警告（warn）:"; width: 140px; vertical-alignment: center; color: Theme.text-primary; }
+                        ComboBox {
+                            model: ["阻断保存", "仅提示", "忽略"];
+                            current-index <=> root.ps-validate-warning-index;
+                            width: 180px;
+                            selected(s) => { root.validate-field-edited("warning", s); }
+                        }
+                    }
+                    HorizontalLayout {
+                        spacing: Theme.sp-3;
+                        alignment: start;
+                        Text { text: "信息（info）:"; width: 140px; vertical-alignment: center; color: Theme.text-primary; }
+                        ComboBox {
+                            model: ["阻断保存", "仅提示", "忽略"];
+                            current-index <=> root.ps-validate-info-index;
+                            width: 180px;
+                            selected(s) => { root.validate-field-edited("info", s); }
+                        }
+                    }
+
+                    Text {
+                        text: "提示：策略改动点确定后更新内存，需保存项目才写进 project.toml。";
                         color: Theme.text-secondary;
                         font-size: Theme.fs-tiny;
                         wrap: word-wrap;

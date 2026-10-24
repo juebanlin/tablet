@@ -616,6 +616,8 @@ camelCase 撞名等价于 PascalCase 撞名（源名必以小写字母开头，�
 | row | name 已填但 value 为空 → "name已填但value为空" |
 | schema | name 不重复；类型可解析；`@Xxx` 引用类型受 `[ui] constant_ref_allowed` 开关控制（默认开启；关闭时报 schema 非法） |
 
+**常量不支持 `# @rule`**：`value` 列每行的类型可以不同，列级规则没有统一的比较口径；它需要的约束（name 唯一、类型可解析、值按类型验证）已经全部由上面的内置校验覆盖。schema 里写了 `# @rule` 会在解析阶段带行号报错。
+
 ### 8.9 Enum 验证
 
 | 层级 | 规则 |
@@ -624,7 +626,30 @@ camelCase 撞名等价于 PascalCase 撞名（源名必以小写字母开头，�
 | row | name 已填但 id 为空 → "name已填但id为空" |
 | schema | 至少一个条目；id/name 不重复 |
 
-### 8.10 待办（已规划未实现）
+### 8.10 节点级规则验证
+
+`# @rule` 声明的规则（@10.7）在节点级校验里执行，和 id/name 等内置检查并列：
+
+适用于 Table / Enum（常量不参与，见 @8.8）。
+
+| 层级 | 规则 |
+|------|------|
+| schema | 本地列不存在 → `RuleColumnMissing`；本地列是复合类型 → `RuleTypeIncompatible`；`ref_exists` 的目标节点不存在 / 重名 / 目标列不存在 / 目标列是复合类型 → `RuleTargetMissing` / `RuleTargetAmbiguous` / `RuleTargetColumnMissing` / `RuleTypeIncompatible` |
+| row | `unique()` 报重复（指向后出现的那一行，消息带首次行号）；`ref_exists()` 报缺失值 |
+| 通用 | 空值一律跳过；级别取规则自己的级别 |
+
+**类型与比较口径**：
+
+- 只有**标量列**参与规则：`int` / `long` / `float` / `bool` / `str` / `txt` / `@Xxx`。
+  `List<>` / `Set<>` / `Map<>` / `Tuple*` / `MapList` 等复合并列表不支持（报 `RuleTypeIncompatible`）。
+- 值比较：**两端都是整数列**时按数值比较（`01` 与 `1` 相同）；其余按 trim 后原字符串比较。
+  `ref_exists` 以目标列的值类为准。
+
+- 与系统内置校验重复的规则**不执行**，只报一条警告级的 `RuleRedundant`（例如给 enum 的 `name` 再挂 `unique()`）。
+- 级别（`error` / `warn` / `info`）只表达严重程度；**要不要阻断保存由项目级策略决定**（`project.toml` 的 `[validate]`，默认 error=阻断、warn=提示、info=忽略）。完整口径见 @02.21.3。
+- 规则只在本项目内解析，不递归展开（`ref_exists` 是值集成员检查）。
+
+### 8.11 待办（已规划未实现）
 
 - Set 值不重复约束
 
@@ -794,11 +819,70 @@ title | str | cs | 标题
 - 缺省（不写该行）= 用类型默认（枚举 → `name`，表 → 原始 id）；序列化时默认不输出
 - 该信息**只住在 schema**，不写进 .tbl 数据；加载项目时由 schema 段回填到节点（详见 @10.4）
 
-### 10.7 注释与空行
+### 10.7 节点级规则 directive `# @rule`
 
-`#` 开头行 = 注释（除 `# @meta` / `# @sep` / `# @preset` / `# @display` 四种 directive）。空行 = 忽略。
+格式（段内，`[group/Name] mode` 段头之后）：
 
-### 10.8 多文件合并
+```
+# @rule: <列名> = <内置验证器调用> [error|warn]
+```
+
+- 只对 **Table / Enum** 有意义：Table 用字段名，Enum 用 `id` / `name` / `desc`。
+  Constant 不支持（`value` 列逐行类型不同，没有统一比较口径；见 @8.8），写了会在解析阶段带行号报错。
+- 一列可以有多条规则，一行一条；**行序即优先级**（决定报告与展示顺序）。
+- 级别缺省 `error`：命中即阻断保存；`warn` 只提示，不阻断。
+- 规则**只住在 `project.tblschema`**：不写进 `.tbl`、不进 Excel / xlsx sheet。
+
+v1 内置验证器：
+
+| 验证器 | 含义 | 适用列 |
+|--------|------|--------|
+| `unique()` | 该列非空值在节点内不重复 | 全部 |
+| `non_empty()` | 该列必须有值（整行全空的占位行不算） | 全部 |
+| `ref_exists(节点.列)` | 每个非空值都必须出现在目标列里 | 全部 |
+| `range(下限, 上限)` | 数值必须落在区间内；留空一侧表示不限 | 整数 / 浮点 |
+| `len(下限, 上限)` | 按字符数限制长度；留空一侧表示不限 | 文本 |
+| `one_of(a, b, c)` | 值必须是候选之一（含逗号的值用引号包起来） | 全部 |
+| `matches("正则")` | 文本必须匹配正则；整串匹配请写 `^...$` | 文本 |
+| `required_if(列, 值)` | 本行该列等于值时，本列必须有值 | 全部 |
+| `compare(列, 运算符)` | 与另一列按 `< <= > >= == !=` 比较（两边都要是数字） | 整数 / 浮点 |
+
+适用列：只有标量列（`int` / `long` / `float` / `bool` / `str` / `txt` / `@Xxx`）；复合并列表不参与。
+整数类按整数比较（`01` == `1`）、浮点按浮点比较（`1.0` == `1`），其余按 trim 后字符串比较。
+
+**没有意义的组合会被拒绝**（schema 错误，不是静默跳过）：
+
+- `ref_exists` 的目标不能是**本列自己**（同节点同列）；同表不同列的自引用（`prereq_lord -> Building.id`）是允许的。
+- `compare` / `required_if` 引用的列不能是本列自己。
+- `range` / `len` 两端都留空 = 没有规则；下限大于上限同样报错。
+- `matches("")` 空正则匹配一切，等于没写，直接报错。
+- 系统已保证唯一的列（table 的 `id`、enum 的 `id`/`name`）挂 `unique()` 只会得到一条非阻断的 `RuleRedundant` 警告。
+
+```
+[lang/Lang] table
+id  | int | cs | 多语言ID
+key | str | cs | 英文 key
+# @rule: key = unique()
+
+[error/ErrorCode] enum
+# @display: name
+# @rule: name = ref_exists(Lang.key) [warn]
+# @rule: name = unique()
+```
+
+约束：
+
+- **必须在某个 `[section]` 之后**；段外报错（带行号），不静默忽略。
+- 缺 `=`、未知验证器、未知级别都会报错（带行号）。
+- 规范输出顺序：段头 → 字段行 → `# @display` → `# @rule` → `# @preset`。解析与位置无关，只有序列化端按此输出。
+- `# @rule <名字> = script(...)` 是第 3 层脚本规则的预留语法，当前会报「尚未实现」。
+- 未知 `#` 行仍按注释忽略（前向兼容）。
+
+### 10.8 注释与空行
+
+`#` 开头行 = 注释（除 `# @meta` / `# @sep` / `# @preset` / `# @display` / `# @rule` 五种 directive）。空行 = 忽略。
+
+### 10.9 多文件合并
 
 | 规则 | 处理 |
 |------|------|
@@ -808,7 +892,7 @@ title | str | cs | 标题
 | 不同 section 同字段名 | 允许 |
 | metadata / separators | 合并产物清空（多文件无单一来源），调用方按需重填 |
 
-### 10.8 内置测试 schema
+### 10.10 内置测试 schema
 
 工具内置多套 .tblschema 用于回归测试与新建项目模板，位于 `crates/core/schemas/`：
 

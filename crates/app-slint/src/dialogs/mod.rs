@@ -7,6 +7,7 @@ pub mod context_menu;
 pub mod pending;
 pub mod type_selector;
 pub mod ref_picker;
+pub mod rules_panel;
 pub mod data_export;
 pub mod schema_io;
 pub mod create_project;

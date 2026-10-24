@@ -29,6 +29,9 @@ export component GridSection inherits Rectangle {
     in property <bool> excel-edit-enabled: false;
     /// 还原到已保存（@02.26）：当前节点和盘上不一样、且盘上确实有它
     in property <bool> revert-enabled: false;
+    /// 「校验规则」按钮可用（选中 Table / Constant / Enum 时）。
+    in property <bool> rules-enabled: false;
+    callback rules-clicked();
     callback show-ref-name-toggled(bool);
     callback display-field-selected(string);
     callback excel-edit-clicked();
@@ -108,6 +111,8 @@ export component GridSection inherits Rectangle {
             display-field-enabled: root.display-field-enabled;
             excel-edit-enabled: root.excel-edit-enabled;
             revert-enabled: root.revert-enabled;
+            rules-enabled: root.rules-enabled;
+            rules-clicked => { root.rules-clicked(); }
             show-ref-name-toggled(c) => { root.show-ref-name-toggled(c); }
             display-field-selected(s) => { root.display-field-selected(s); }
             excel-edit-clicked => { root.excel-edit-clicked(); }
