@@ -859,9 +859,7 @@ pub enum RuleKind {
     RequiredIf { column: String, value: String },
     /// 跨列比较：本列与 `column` 按 `op` 比较（如 `min_level <= max_level`）。
     Compare { column: String, op: CompareOp },
-    // ── 以下三种只由 builtin_rules 生成，schema 里写不出来 ──
-    /// 必须是整数。
-    Integer,
+    // ── 以下两种只由 builtin_rules 生成，schema 里写不出来 ──
     /// 必须是正整数（> 0）。
     PositiveInt,
     /// 必须是 UPPER_SNAKE_CASE。
@@ -942,7 +940,6 @@ impl RuleKind {
                 format!("required_if({}, {})", column, quote_arg(value)),
             RuleKind::Compare { column, op } =>
                 format!("compare({}, {})", column, op.as_str()),
-            RuleKind::Integer => "integer()".to_string(),
             RuleKind::PositiveInt => "positive_int()".to_string(),
             RuleKind::UpperSnake => "upper_snake()".to_string(),
         }
@@ -950,7 +947,7 @@ impl RuleKind {
 
     /// 这条规则是不是只由系统生成（schema 里不允许出现）。
     pub fn is_builtin_only(&self) -> bool {
-        matches!(self, RuleKind::Integer | RuleKind::PositiveInt | RuleKind::UpperSnake)
+        matches!(self, RuleKind::PositiveInt | RuleKind::UpperSnake)
     }
 
     /// 这条用户规则是否与系统内置规则重复（重复时不执行，只报 `RuleRedundant`）。

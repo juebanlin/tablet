@@ -480,7 +480,7 @@ fn parse_rule_expr(expr: &str) -> Result<RuleKind, String> {
             }
             Ok(RuleKind::Compare { column: args[0].clone(), op })
         }
-        "integer" | "positive_int" | "upper_snake" => Err(format!(
+        "positive_int" | "upper_snake" => Err(format!(
             "{}() 是系统内置规则（见 @01.8.11），不需要也不能在 schema 里声明", name
         )),
         _ => Err(format!(
@@ -1813,7 +1813,7 @@ id | int | cs | x
 
     #[test]
     fn builtin_only_validators_cannot_be_declared() {
-        for name in ["integer", "positive_int", "upper_snake"] {
+        for name in ["positive_int", "upper_snake"] {
             let src = format!("#!tblschema v1
 
 [g/T] table

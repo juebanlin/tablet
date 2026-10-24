@@ -61,7 +61,6 @@ fn kind_key(kind: &RuleKind) -> &'static str {
         RuleKind::RequiredIf { .. } => "required_if",
         RuleKind::Compare { .. } => "compare",
         // 内置只读种类：不会出现在用户规则里，给个稳定 key 只为穷尽匹配
-        RuleKind::Integer => "integer",
         RuleKind::PositiveInt => "positive_int",
         RuleKind::UpperSnake => "upper_snake",
     }
@@ -531,7 +530,7 @@ pub fn push(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
             if class.is_some() { desc = DESC_COMPARE.to_string(); }
         }
         // 内置只读种类不会成为草稿；给个说明即可。
-        RuleKind::Integer | RuleKind::PositiveInt | RuleKind::UpperSnake => {
+        RuleKind::PositiveInt | RuleKind::UpperSnake => {
             desc = "系统内置规则，不可编辑。".to_string();
         }
     }

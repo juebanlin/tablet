@@ -1025,8 +1025,7 @@ fn is_numeric(c: ValueClass) -> bool {
 /// 这条规则能不能挂在这种类型的列上。UI 下拉与校验层共用。
 pub fn rule_kind_applies(kind: &RuleKind, class: ValueClass) -> bool {
     match kind {
-        RuleKind::Range { .. } | RuleKind::Compare { .. }
-        | RuleKind::Integer | RuleKind::PositiveInt => is_numeric(class),
+        RuleKind::Range { .. } | RuleKind::Compare { .. } | RuleKind::PositiveInt => is_numeric(class),
         RuleKind::Len { .. } | RuleKind::Matches { .. } | RuleKind::UpperSnake =>
             class == ValueClass::Text,
         _ => true,
@@ -1441,9 +1440,6 @@ fn validate_rule_rows(
                 }
             }
             // 只由 builtin_rules 生成。
-            RuleKind::Integer => {
-                // 字段类型检查已经保证是整数，这里不重复报。
-            }
             RuleKind::PositiveInt => {
                 for row in 0..row_count {
                     let v = match cell(row, &rule.column) { Some(v) => v, None => continue };

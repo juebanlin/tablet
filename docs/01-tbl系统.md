@@ -653,6 +653,7 @@ camelCase 撞名等价于 PascalCase 撞名（源名必以小写字母开头，�
 - 值比较：**两端都是整数列**时按数值比较（`01` 与 `1` 相同）；其余按 trim 后原字符串比较。
   `ref_exists` 以目标列的值类为准。
 
+- **跨节点联动**：改了某个节点（数据或规则）后，凡是依赖它的节点都会被连带重算——依赖来源是字段/常量类型里的 `@本节点`，以及规则里的 `ref_exists(本节点.列)`。用固定点迭代，自引用与 A→B→A 的环都能收敛。
 - 与系统内置校验重复的规则**不执行**，只报一条警告级的 `RuleRedundant`（例如给 enum 的 `name` 再挂 `unique()`）。
 - 级别（`error` / `warn` / `info`）只表达严重程度；**要不要阻断保存由项目级策略决定**（`project.toml` 的 `[validate]`，默认 error=阻断、warn=提示、info=忽略）。完整口径见 @02.21.3。
 - 规则只在本项目内解析，不递归展开（`ref_exists` 是值集成员检查）。
@@ -669,7 +670,7 @@ camelCase 撞名等价于 PascalCase 撞名（源名必以小写字母开头，�
 | constant | — | 不支持节点级规则（@8.8） |
 
 - 这些规则**不写进** `project.tblschema`，**不可编辑、不可删除**；规则面板以「系统」标出，CLI 用 `schema show --rules` 查看。
-- `integer()` / `positive_int()` / `upper_snake()` 只由系统生成，写在 schema 里会被拒绝。
+- `positive_int()` / `upper_snake()` 只由系统生成，写在 schema 里会被拒绝。
 - 与内置规则重复的用户规则**不执行**，只报一条非阻断的 `RuleRedundant`：enum 的 `name` 上再挂 `unique()` / `non_empty()`；enum 的 `id` 上挂 `range(1, )`（只加下限且 ≤1）。
 - **内置规则由规则引擎执行**（不再有硬编码的 id/name 检查）：改约束只需要改 `builtin_rules`，
   UI 徽标、CLI 输出、冗余判断、校验行为会一起跟上。
@@ -883,7 +884,7 @@ v1 内置验证器：
 - `matches("")` 空正则匹配一切，等于没写，直接报错。
 - 系统已保证的约束（见 @8.11）再挂一遍只会得到一条非阻断的 `RuleRedundant` 警告：
   `unique()` / `non_empty()` 与内置规则重复；enum 的 `id` 上挂 `range(1, )` 也算重复。
-- `integer()` / `positive_int()` / `upper_snake()` 是系统只读规则，写进 schema 会被拒绝。
+- `positive_int()` / `upper_snake()` 是系统只读规则，写进 schema 会被拒绝。
 
 ```
 [lang/Lang] table

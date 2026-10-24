@@ -948,6 +948,33 @@ pub struct ProjectEngine {
     pub last_save_failure: Option<String>,
 }
 
+/// 表是否依赖 `names` 里任一节点（类型 `@Xxx` 或规则的 `ref_exists`）。
+fn table_depends_on(t: &Table, names: &std::collections::HashSet<String>) -> bool {
+    t.schema.fields.iter().any(|f| type_refs_any(&f.tbl_type, names))
+        || t.rules.iter().any(|r| rule_refs_any(r, names))
+}
+
+/// 常量是否依赖 `names` 里任一节点（条目类型 `@Xxx`）。
+fn constant_depends_on(c: &Constant, names: &std::collections::HashSet<String>) -> bool {
+    c.entries.iter().any(|e| type_refs_any(&e.tbl_type, names))
+}
+
+/// 枚举是否依赖 `names` 里任一节点（规则的 `ref_exists`）。
+fn enum_depends_on(e: &EnumDef, names: &std::collections::HashSet<String>) -> bool {
+    e.rules.iter().any(|r| rule_refs_any(r, names))
+}
+
+fn type_refs_any(tbl_type: &str, names: &std::collections::HashSet<String>) -> bool {
+    match crate::types::TblType::parse(tbl_type) {
+        Some(t) => t.ref_targets().iter().any(|r| names.contains(*r)),
+        None => false,
+    }
+}
+
+fn rule_refs_any(r: &Rule, names: &std::collections::HashSet<String>) -> bool {
+    matches!(&r.kind, RuleKind::RefExists { target_node, .. } if names.contains(target_node))
+}
+
 /// 扫描得到的 project 元数据（不持有数据）。
 #[derive(Clone, Debug)]
 pub struct AvailableProject {
@@ -2144,42 +2171,118 @@ impl ProjectEngine {
             .collect()
     }
 
+    /// 重算一个节点，并**连带重算依赖它结果的节点**。
+    ///
+    /// 依赖来源（@01.8.10 / @01.10.7）：
+    /// - 字段 / 常量值的类型里写了 `@本节点`；
+    /// - 规则的 `ref_exists(本节点.列)`。
+    ///
+    /// 用固定点迭代，自引用与环（A→B→A）都能收敛。
     pub fn revalidate(&mut self, group: &str, name: &str) {
         let Some(pid) = self.active_project_id().map(str::to_string) else { return; };
-        self.validation_errors.retain(|(p, g, n, _, _)| p != &pid || g != group || n != name);
-        self.validation_warnings.retain(|(p, g, n, _)| p != &pid || g != group || n != name);
+        let _ = group;
+        let targets = self.dependency_closure(name);
         let sep = self.project().schema.separators.clone();
         let refs = RefIndex::build(&self.project().groups);
         let cidx = RuleIndex::build(&self.project().groups);
         let allow_ref = self.global_config.ui.as_ref()
             .map_or(true, |u| u.constant_ref_allowed);
-        let mut new_issues: Vec<ValidationError> = Vec::new();
-        {
-            let g = match self.project().groups.iter().find(|g| g.name == group) { Some(g) => g, None => return };
-            if let Some(table) = g.tables.iter().find(|t| t.name == name) {
-                if table.deleted { return; }
-                new_issues.extend(validate_table(table, &sep, Some(&refs), Some(&cidx)));
+        let policy = self.project().config.validate.clone();
+        for (g, n) in targets {
+            self.revalidate_exact(&pid, &g, &n, &sep, &refs, &cidx, allow_ref, &policy);
+        }
+    }
+
+    /// 改了 `changed` 之后，校验结果会变的节点（含自身）。
+    fn dependency_closure(&self, changed: &str) -> Vec<(String, String)> {
+        use std::collections::HashSet;
+        let mut names: HashSet<String> = HashSet::new();
+        names.insert(changed.to_string());
+        loop {
+            let mut grew = false;
+            for g in &self.project().groups {
+                for t in &g.tables {
+                    if t.deleted || names.contains(&t.name) { continue; }
+                    if table_depends_on(t, &names) {
+                        names.insert(t.name.clone());
+                        grew = true;
+                    }
+                }
+                for c in &g.constants {
+                    if c.deleted || names.contains(&c.name) { continue; }
+                    if constant_depends_on(c, &names) {
+                        names.insert(c.name.clone());
+                        grew = true;
+                    }
+                }
+                for e in &g.enums {
+                    if e.deleted || names.contains(&e.name) { continue; }
+                    if enum_depends_on(e, &names) {
+                        names.insert(e.name.clone());
+                        grew = true;
+                    }
+                }
             }
-            if let Some(constant) = g.constants.iter().find(|c| c.name == name) {
-                if constant.deleted { return; }
-                new_issues.extend(validate_constant(constant, &sep, allow_ref, Some(&refs)));
+            if !grew { break; }
+        }
+        let mut out = Vec::new();
+        for g in &self.project().groups {
+            for t in &g.tables {
+                if !t.deleted && names.contains(&t.name) { out.push((g.name.clone(), t.name.clone())); }
             }
-            if let Some(enum_def) = g.enums.iter().find(|e| e.name == name) {
-                if enum_def.deleted { return; }
-                new_issues.extend(validate_enum(enum_def, Some(&cidx)));
+            for c in &g.constants {
+                if !c.deleted && names.contains(&c.name) { out.push((g.name.clone(), c.name.clone())); }
+            }
+            for e in &g.enums {
+                if !e.deleted && names.contains(&e.name) { out.push((g.name.clone(), e.name.clone())); }
             }
         }
-        let policy = self.project().config.validate.clone();
-        for err in new_issues {
+        out
+    }
+
+    /// 精确重算一个节点的错误 / 警告索引（依赖集合与全量重算都走这里）。
+    fn revalidate_exact(
+        &mut self,
+        pid: &str,
+        group: &str,
+        name: &str,
+        sep: &crate::types::SeparatorsSection,
+        refs: &RefIndex,
+        cidx: &RuleIndex,
+        allow_ref: bool,
+        policy: &ValidateConfig,
+    ) {
+        self.validation_errors.retain(|(p, g, n, _, _)| p != pid || g != group || n != name);
+        self.validation_warnings.retain(|(p, g, n, _)| p != pid || g != group || n != name);
+        let mut issues: Vec<ValidationError> = Vec::new();
+        {
+            let Some(g) = self.project().groups.iter().find(|g| g.name == group) else { return };
+            if let Some(table) = g.tables.iter().find(|t| t.name == name) {
+                if !table.deleted {
+                    issues.extend(validate_table(table, sep, Some(refs), Some(cidx)));
+                }
+            }
+            if let Some(constant) = g.constants.iter().find(|c| c.name == name) {
+                if !constant.deleted {
+                    issues.extend(validate_constant(constant, sep, allow_ref, Some(refs)));
+                }
+            }
+            if let Some(enum_def) = g.enums.iter().find(|e| e.name == name) {
+                if !enum_def.deleted {
+                    issues.extend(validate_enum(enum_def, Some(cidx)));
+                }
+            }
+        }
+        for err in issues {
             match policy.action(err.severity) {
                 crate::model::SeverityAction::Block => {
                     self.validation_errors.insert(
-                        (pid.clone(), group.to_string(), name.to_string(), err.row, err.col)
+                        (pid.to_string(), group.to_string(), name.to_string(), err.row, err.col)
                     );
                 }
                 crate::model::SeverityAction::Report => {
                     self.validation_warnings.push(
-                        (pid.clone(), group.to_string(), name.to_string(), err)
+                        (pid.to_string(), group.to_string(), name.to_string(), err)
                     );
                 }
                 crate::model::SeverityAction::Ignore => {}
@@ -2195,15 +2298,27 @@ impl ProjectEngine {
         let groups: Vec<_> = self.project().groups.iter()
             .map(|g| (
                 g.name.clone(),
-                g.tables.iter().map(|t| t.name.clone()).collect::<Vec<_>>(),
-                g.constants.iter().map(|c| c.name.clone()).collect::<Vec<_>>(),
-                g.enums.iter().map(|e| e.name.clone()).collect::<Vec<_>>(),
+                g.tables.iter().filter(|t| !t.deleted).map(|t| t.name.clone()).collect::<Vec<_>>(),
+                g.constants.iter().filter(|c| !c.deleted).map(|c| c.name.clone()).collect::<Vec<_>>(),
+                g.enums.iter().filter(|e| !e.deleted).map(|e| e.name.clone()).collect::<Vec<_>>(),
             ))
             .collect();
+        let sep = self.project().schema.separators.clone();
+        let refs = RefIndex::build(&self.project().groups);
+        let cidx = RuleIndex::build(&self.project().groups);
+        let allow_ref = self.global_config.ui.as_ref()
+            .map_or(true, |u| u.constant_ref_allowed);
+        let policy = self.project().config.validate.clone();
         for (gname, tables, constants, enums) in &groups {
-            for tname in tables { self.revalidate(gname, tname); }
-            for cname in constants { self.revalidate(gname, cname); }
-            for ename in enums { self.revalidate(gname, ename); }
+            for tname in tables {
+                self.revalidate_exact(&pid, gname, tname, &sep, &refs, &cidx, allow_ref, &policy);
+            }
+            for cname in constants {
+                self.revalidate_exact(&pid, gname, cname, &sep, &refs, &cidx, allow_ref, &policy);
+            }
+            for ename in enums {
+                self.revalidate_exact(&pid, gname, ename, &sep, &refs, &cidx, allow_ref, &policy);
+            }
         }
     }
 
@@ -3564,6 +3679,175 @@ package = \"com.user.kept\"
         assert_eq!(rules.len(), 1, "规则必须从 project.tblschema 读回来");
         assert_eq!(rules[0].kind, RuleKind::Unique);
         assert!(!engine.find_table("g", "T").unwrap().dirty, "重新加载后规则不该让节点变脏");
+    }
+
+    /// 改目标节点后，只重算目标本身也要连带刷新依赖它的节点（@01.8.10）。
+    #[test]
+    fn editing_a_target_refreshes_dependent_nodes() {
+        let dir = unique_tmp("dep_refresh");
+        let mut project = make_project(
+            dir.clone(), dir.join("projects").join("p1"), "p1",
+        );
+        let key_field = FieldDef {
+            name: "key".into(), desc: String::new(),
+            tbl_type: "str".into(), export: Export::ClientServer,
+        };
+        let lang = Table {
+            name: "Lang".into(), original_name: "Lang".into(),
+            path: dir.join("Lang.tbl"),
+            schema: TableSchema { fields: vec![id_field(), key_field.clone()] },
+            records: vec![vec!["1".into(), "A".into()]],
+            dirty: false, deleted: false,
+            original_records: vec![vec!["1".into(), "A".into()]],
+            original_fields: vec![id_field(), key_field],
+            saved: true, fmt_ver: crate::tbl::DEFAULT_TBL_VERSION,
+            display_field: None, original_display_field: None,
+            rules: Vec::new(), original_rules: Vec::new(),
+        };
+        let code = EnumDef {
+            name: "ErrorCode".into(), original_name: "ErrorCode".into(),
+            path: dir.join("ErrorCode.tbl"),
+            entries: vec![EnumEntry { id: "10001".into(), name: "A".into(), desc: String::new() }],
+            dirty: false, deleted: false,
+            original_entries: vec![EnumEntry { id: "10001".into(), name: "A".into(), desc: String::new() }],
+            saved: true,
+            display_field: None, original_display_field: None,
+            rules: vec![Rule {
+                column: "name".into(),
+                kind: RuleKind::RefExists { target_node: "Lang".into(), target_column: "key".into() },
+                level: Severity::Warning,
+                source: RuleSource::User,
+            }],
+            original_rules: Vec::new(),
+        };
+        project.groups.push(Group {
+            name: "g".into(), original_name: "g".into(),
+            dir: dir.join("g"),
+            tables: vec![lang], constants: Vec::new(), enums: vec![code],
+            is_new: false, storage: crate::model::GroupStorage::Tbl, book_stamp: None,
+        });
+
+        let mut engine = ProjectEngine::new(project, GlobalConfig::default());
+        engine.revalidate_all();
+        assert!(engine.validation_warnings.is_empty(), "初始 key=A，绑定成立");
+
+        // 只改 Lang 的数据，然后**只**重算 Lang
+        if let Some(t) = engine.find_table_mut("g", "Lang") {
+            t.records[0][1] = "B".into();
+            t.update_dirty();
+        }
+        engine.revalidate("g", "Lang");
+        assert_eq!(engine.validation_warnings.len(), 1,
+            "依赖 Lang.key 的 ErrorCode 必须被连带重算");
+    }
+
+    /// 跨存储的引用与规则：tbl 组的表引用 xlsx 组的表，索引与联动都不看存储后端。
+    #[test]
+    fn cross_storage_refs_and_rules_are_validated() {
+        let dir = unique_tmp("cross_storage");
+        let mut project = make_project(
+            dir.clone(), dir.join("projects").join("p1"), "p1",
+        );
+
+        // xlsx 组：目标表 B
+        let b = Table {
+            name: "B".into(), original_name: "B".into(),
+            path: dir.join("xg.xlsx"),
+            schema: TableSchema { fields: vec![id_field()] },
+            records: vec![vec!["1".into()]],
+            dirty: false, deleted: false,
+            original_records: vec![vec!["1".into()]],
+            original_fields: vec![id_field()],
+            saved: true, fmt_ver: crate::tbl::DEFAULT_TBL_VERSION,
+            display_field: None, original_display_field: None,
+            rules: Vec::new(), original_rules: Vec::new(),
+        };
+        project.groups.push(Group {
+            name: "xg".into(), original_name: "xg".into(),
+            dir: dir.join("xg"),
+            tables: vec![b], constants: Vec::new(), enums: Vec::new(),
+            is_new: false, storage: crate::model::GroupStorage::Xlsx, book_stamp: None,
+        });
+
+        // tbl 组：表 A 的 ref 列引用 B，并挂一条 ref_exists(B.id)
+        let ref_field = FieldDef {
+            name: "ref".into(), desc: String::new(),
+            tbl_type: "@B".into(), export: Export::ClientServer,
+        };
+        let a = Table {
+            name: "A".into(), original_name: "A".into(),
+            path: dir.join("A.tbl"),
+            schema: TableSchema { fields: vec![id_field(), ref_field.clone()] },
+            records: vec![vec!["1".into(), "1".into()]],
+            dirty: false, deleted: false,
+            original_records: vec![vec!["1".into(), "1".into()]],
+            original_fields: vec![id_field(), ref_field],
+            saved: true, fmt_ver: crate::tbl::DEFAULT_TBL_VERSION,
+            display_field: None, original_display_field: None,
+            rules: vec![Rule {
+                column: "ref".into(),
+                kind: RuleKind::RefExists { target_node: "B".into(), target_column: "id".into() },
+                level: Severity::Error,
+                source: RuleSource::User,
+            }],
+            original_rules: Vec::new(),
+        };
+        project.groups.push(Group {
+            name: "tg".into(), original_name: "tg".into(),
+            dir: dir.join("tg"),
+            tables: vec![a], constants: Vec::new(), enums: Vec::new(),
+            is_new: false, storage: crate::model::GroupStorage::Tbl, book_stamp: None,
+        });
+
+        let mut engine = ProjectEngine::new(project, GlobalConfig::default());
+        engine.revalidate_all();
+        assert!(engine.validation_errors.is_empty(), "ref=1 能在 xlsx 的 B.id 里找到");
+
+        // 改 xlsx 组的 B.id，然后只重算 B —— A 的 @B 与 ref_exists 都应被连带刷新
+        if let Some(t) = engine.find_table_mut("xg", "B") {
+            t.records[0][0] = "9".into();
+            t.update_dirty();
+        }
+        engine.revalidate("xg", "B");
+        assert!(!engine.validation_errors.is_empty(),
+            "跨存储依赖：B 改了，tbl 组的 A 必须重新判定");
+    }
+
+    /// 校验不区分存储后端：xlsx 组与 tbl 组走同一套规则（@02.27）。
+    #[test]
+    fn xlsx_group_uses_the_same_rule_validation() {
+        let dir = unique_tmp("xlsx_parity");
+        let mut project = make_project(
+            dir.clone(), dir.join("projects").join("p1"), "p1",
+        );
+        let t = Table {
+            name: "XT".into(), original_name: "XT".into(),
+            path: dir.join("xg.xlsx"),
+            schema: TableSchema { fields: vec![id_field()] },
+            records: vec![vec!["99".into()]],
+            dirty: false, deleted: false,
+            original_records: vec![vec!["99".into()]],
+            original_fields: vec![id_field()],
+            saved: true, fmt_ver: crate::tbl::DEFAULT_TBL_VERSION,
+            display_field: None, original_display_field: None,
+            rules: vec![Rule {
+                column: "id".into(),
+                kind: RuleKind::Range { min: "1".into(), max: "10".into() },
+                level: Severity::Error,
+                source: RuleSource::User,
+            }],
+            original_rules: Vec::new(),
+        };
+        project.groups.push(Group {
+            name: "xg".into(), original_name: "xg".into(),
+            dir: dir.join("xg"),
+            tables: vec![t], constants: Vec::new(), enums: Vec::new(),
+            is_new: false, storage: crate::model::GroupStorage::Xlsx, book_stamp: None,
+        });
+        let mut engine = ProjectEngine::new(project, GlobalConfig::default());
+        engine.revalidate_all();
+        assert_eq!(engine.validation_errors.len(), 1,
+            "xlsx 组的规则与 tbl 组走同一套校验");
     }
 
     #[test]
