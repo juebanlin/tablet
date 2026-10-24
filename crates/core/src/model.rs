@@ -809,11 +809,21 @@ pub enum NodeMode {
 /// 一条节点级校验规则（@01.10.7）。**列表顺序即优先级**：报告与展示按此顺序。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Rule {
-    /// 本节点的列名：Table 是字段名；Enum 是 `id`/`name`/`desc`；Constant 是
-    /// `name`/`type`/`value`/`export`/`desc`。
+    /// 本节点的列名：Table 是字段名；Enum 是 `id`/`name`/`desc`。
     pub column: String,
     pub kind: RuleKind,
     pub level: Severity,
+    /// 来源。内置规则由 [`builtin_rules`] 生成：不落盘、不可编辑、不可删除。
+    pub source: RuleSource,
+}
+
+/// 规则来源。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RuleSource {
+    /// 用户写在 `project.tblschema` 里的。
+    User,
+    /// 系统内置（`builtin_rules`），只读。
+    Builtin,
 }
 
 impl Rule {
@@ -849,6 +859,13 @@ pub enum RuleKind {
     RequiredIf { column: String, value: String },
     /// 跨列比较：本列与 `column` 按 `op` 比较（如 `min_level <= max_level`）。
     Compare { column: String, op: CompareOp },
+    // ── 以下三种只由 builtin_rules 生成，schema 里写不出来 ──
+    /// 必须是整数。
+    Integer,
+    /// 必须是正整数（> 0）。
+    PositiveInt,
+    /// 必须是 UPPER_SNAKE_CASE。
+    UpperSnake,
 }
 
 /// 跨列比较运算符。
@@ -925,21 +942,69 @@ impl RuleKind {
                 format!("required_if({}, {})", column, quote_arg(value)),
             RuleKind::Compare { column, op } =>
                 format!("compare({}, {})", column, op.as_str()),
+            RuleKind::Integer => "integer()".to_string(),
+            RuleKind::PositiveInt => "positive_int()".to_string(),
+            RuleKind::UpperSnake => "upper_snake()".to_string(),
         }
     }
 
-    /// 系统已经硬编码保证的校验（见 validate.rs 的 DuplicateId / DuplicateName）：
-    /// 规则与它重复时不再跑，只报 `RuleRedundant` 警告。
-    pub fn conflicts_with_builtin(&self, mode: NodeMode, column: &str) -> bool {
-        match self {
-            RuleKind::Unique => match mode {
-                NodeMode::Table => column == "id",
-                NodeMode::Constant => column == "name",
-                NodeMode::Enum => column == "id" || column == "name",
-            },
-            _ => false,
-        }
+    /// 这条规则是不是只由系统生成（schema 里不允许出现）。
+    pub fn is_builtin_only(&self) -> bool {
+        matches!(self, RuleKind::Integer | RuleKind::PositiveInt | RuleKind::UpperSnake)
     }
+
+    /// 这条用户规则是否与系统内置规则重复（重复时不执行，只报 `RuleRedundant`）。
+    pub fn conflicts_with_builtin(&self, mode: NodeMode, column: &str) -> bool {
+        builtin_rules(mode).iter().any(|b| {
+            b.column == column && match (&b.kind, self) {
+                (RuleKind::Unique, RuleKind::Unique) => true,
+                (RuleKind::NonEmpty, RuleKind::NonEmpty) => true,
+                // 枚举 id 已保证 > 0：只加下限且下限 ≤ 1 时，整条规则不带来新约束。
+                (RuleKind::PositiveInt, RuleKind::Range { min, max }) =>
+                    max.trim().is_empty()
+                        && min.trim().parse::<f64>().map_or(false, |v| v <= 1.0),
+                _ => false,
+            }
+        })
+    }
+}
+
+/// 系统内置规则（只读）：由内置校验生成，**不落盘、不可编辑、不可删除**。
+///
+/// **这是「哪些列已被系统保证」的唯一真相源**：规则面板的只读行、
+/// CLI 的有效规则输出、`conflicts_with_builtin` 的冗余判断都读它。
+/// 内置校验本身目前仍在 validate.rs 里硬编码（第二步再迁到规则引擎）；
+/// 两边必须保持一致。
+pub fn builtin_rules(mode: NodeMode) -> Vec<Rule> {
+    let mk = |column: &str, kind: RuleKind| Rule {
+        column: column.to_string(),
+        kind,
+        level: Severity::Error,
+        source: RuleSource::Builtin,
+    };
+    match mode {
+        NodeMode::Table => vec![
+            mk("id", RuleKind::Unique),
+            mk("id", RuleKind::NonEmpty),
+            mk("id", RuleKind::PositiveInt),
+        ],
+        NodeMode::Enum => vec![
+            mk("id", RuleKind::Unique),
+            mk("id", RuleKind::NonEmpty),
+            mk("id", RuleKind::PositiveInt),
+            mk("name", RuleKind::Unique),
+            mk("name", RuleKind::NonEmpty),
+            mk("name", RuleKind::UpperSnake),
+        ],
+        NodeMode::Constant => Vec::new(),
+    }
+}
+
+/// 有效规则 = 系统内置（只读，排在前）+ 用户规则。
+pub fn effective_rules(mode: NodeMode, user: &[Rule]) -> Vec<Rule> {
+    let mut out = builtin_rules(mode);
+    out.extend(user.iter().cloned());
+    out
 }
 
 #[derive(Debug, Clone)]

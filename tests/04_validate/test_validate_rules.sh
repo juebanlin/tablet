@@ -81,6 +81,27 @@ assert_stderr_contains "NOT_THERE"
 cleanup
 rm -f "$MISS"
 
+# ── table id 必须是正整数（0 与负数都拦） ──
+ID0=$(mktemp)
+cat > "$ID0" <<'EOF'
+#!tblschema v1
+# @meta id: idzero
+# @meta has_preset: true
+
+[g/T] table
+id | int | cs | ID
+name | str | cs | 名字
+# @preset
+0|zero
+EOF
+
+setup_empty_workspace
+run_cli project new --from-file "$ID0" --id test
+assert_exit 1
+assert_stderr_contains "正整数"
+cleanup
+rm -f "$ID0"
+
 # ── constant 段不接受 # @rule ──
 CONST=$(mktemp)
 cat > "$CONST" <<'EOF'

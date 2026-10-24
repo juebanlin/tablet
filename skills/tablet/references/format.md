@@ -105,6 +105,9 @@ Map_List.kv  Map_List.item  Map_List.entry
 | `required_if(列, 值)` | 条件必填 | 全部 |
 | `compare(列, 运算符)` | 跨列比较 | 整数 / 浮点 |
 
+系统内置规则（`integer()` / `positive_int()` / `upper_snake()`，以及 id/name 上的 `unique()` / `non_empty()`）
+是只读的：不写 schema、不可编辑；再挂一遍只会得到冗余警告（@01.8.11）。
+
 无意义组合直接报错：`ref_exists`/`compare`/`required_if` 不能引用本列自己；区间两端不能都空；
 `matches("")` 空正则不接受。
 

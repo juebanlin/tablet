@@ -156,6 +156,10 @@ pub fn print_schema_show_cli(entries: &[crate::actions::schema::SchemaShowEntry]
             let is_last = ni == g.nodes.len() - 1;
             let prefix = if is_last { "  └── " } else { "  ├── " };
             println!("{}{:<16}({}, {})", prefix, n.name, n.kind, n.detail);
+            for rule in &n.rules {
+                let indent = if is_last { "      " } else { "  │   " };
+                println!("{}· {}", indent, rule);
+            }
         }
         if gi < entries.len() - 1 {
             println!();

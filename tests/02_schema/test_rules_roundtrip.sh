@@ -53,6 +53,12 @@ else
     _pass "保存后规则仍在"
 fi
 
+# ── schema show --rules：系统内置规则也列出来 ──
+run_cli schema show --rules
+assert_exit 0
+assert_contains "unique()"
+assert_contains "系统"
+
 cleanup
 rm -f "$SCHEMA"
 end_tests

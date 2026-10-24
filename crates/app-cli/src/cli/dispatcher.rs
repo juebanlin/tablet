@@ -305,8 +305,8 @@ fn run(cli: Cli) -> Result<i32> {
         },
         Command::Schema(ref sa) => {
             match &sa.action {
-                SchemaAction::Show => {
-                    let entries = crate::actions::schema::run_schema_show(&engine)?;
+                SchemaAction::Show { rules: show_rules } => {
+                    let entries = crate::actions::schema::run_schema_show(&engine, *show_rules)?;
                     if cli.is_json() {
                         println!("{}", serde_json::to_string_pretty(&entries).unwrap_or_default());
                     } else {

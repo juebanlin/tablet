@@ -350,7 +350,7 @@ fn parse_rule_body(body: &str) -> Result<Rule, String> {
     }
 
     let kind = parse_rule_expr(expr)?;
-    Ok(Rule { column: col.to_string(), kind, level })
+    Ok(Rule { column: col.to_string(), kind, level, source: RuleSource::User })
 }
 
 /// 拆函数调用 `name(args)`：引号内的括号不参与匹配。
@@ -480,6 +480,9 @@ fn parse_rule_expr(expr: &str) -> Result<RuleKind, String> {
             }
             Ok(RuleKind::Compare { column: args[0].clone(), op })
         }
+        "integer" | "positive_int" | "upper_snake" => Err(format!(
+            "{}() 是系统内置规则（见 @01.8.11），不需要也不能在 schema 里声明", name
+        )),
         _ => Err(format!(
             "未知验证器 \"{}\"（支持 unique / non_empty / ref_exists / range / len / one_of / matches / required_if / compare）",
             name
@@ -1805,6 +1808,21 @@ id | int | cs | x
             let src = format!("#!tblschema v1\n\n[g/T] table\nhp | int | cs | h\nname | str | cs | n\n{}", bad);
             // 语法层能过（compare 自引用留给校验层），所以这里只断言不 panic
             let _ = parse_tblschema(&src);
+        }
+    }
+
+    #[test]
+    fn builtin_only_validators_cannot_be_declared() {
+        for name in ["integer", "positive_int", "upper_snake"] {
+            let src = format!("#!tblschema v1
+
+[g/T] table
+id | int | cs | d
+# @rule: id = {}()
+", name);
+            let err = parse_tblschema(&src).unwrap_err();
+            let msg = format!("{:#}", err);
+            assert!(msg.contains("系统内置"), "{} -> {}", name, msg);
         }
     }
 

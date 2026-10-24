@@ -8,7 +8,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use slint::{ComponentHandle, ModelRc, SharedString, VecModel};
-use tablet_core::model::{CompareOp, NodeMode, Rule, RuleKind, Severity};
+use tablet_core::model::{builtin_rules, CompareOp, NodeMode, Rule, RuleKind, RuleSource, Severity};
 use tablet_core::ops::format_validation_log;
 use tablet_core::validate::{
     rule_kind_applies, rule_params_valid, validate_enum, validate_table, RefIndex, RuleIndex,
@@ -60,6 +60,10 @@ fn kind_key(kind: &RuleKind) -> &'static str {
         RuleKind::Matches { .. } => "matches",
         RuleKind::RequiredIf { .. } => "required_if",
         RuleKind::Compare { .. } => "compare",
+        // 内置只读种类：不会出现在用户规则里，给个稳定 key 只为穷尽匹配
+        RuleKind::Integer => "integer",
+        RuleKind::PositiveInt => "positive_int",
+        RuleKind::UpperSnake => "upper_snake",
     }
 }
 
@@ -107,7 +111,7 @@ impl RulesPanelState {
             original: Vec::new(),
             column: None,
             editing: None,
-            draft: Rule { column: String::new(), kind: RuleKind::Unique, level: Severity::Error },
+            draft: Rule { column: String::new(), kind: RuleKind::Unique, level: Severity::Error , source: RuleSource::User },
         }
     }
 }
@@ -184,6 +188,19 @@ fn target_columns(st: &AppState, node: &str) -> Vec<String> {
         .collect()
 }
 
+/// 列表里第 i 行（含系统内置只读行）对应的用户规则全局下标。
+fn user_global_at(st: &AppState, i: usize) -> Option<usize> {
+    let group = &st.rules_panel.group;
+    let name = &st.rules_panel.name;
+    let column = st.rules_panel.column.clone().unwrap_or_default();
+    let mode = node_mode(st, group, name);
+    let builtin = mode.map(|m| builtin_rules(m).iter().filter(|r| r.column == column).count())
+        .unwrap_or(0);
+    if i < builtin { return None; }
+    let rules = node_rules(st, group, name);
+    column_rule_indices(&rules, &column).get(i - builtin).copied()
+}
+
 fn index_of(list: &[String], value: &str) -> i32 {
     list.iter().position(|x| x == value).map(|i| i as i32).unwrap_or(0)
 }
@@ -235,13 +252,15 @@ fn default_rule(state: &AppState, column: &str) -> Rule {
     let mode = node_mode(state, &state.rules_panel.group, &state.rules_panel.name);
     let unique_redundant = mode.map_or(false, |m| Rule {
         column: column.to_string(), kind: RuleKind::Unique, level: Severity::Error,
+
+        source: RuleSource::User,
     }.conflicts_with_builtin(m));
     let kind = if unique_redundant {
         default_kind("ref_exists", state, column)
     } else {
         RuleKind::Unique
     };
-    Rule { column: column.to_string(), kind, level: Severity::Error }
+    Rule { column: column.to_string(), kind, level: Severity::Error , source: RuleSource::User }
 }
 
 /// 草稿是否与已有规则等价（编辑时排除自己）。
@@ -316,7 +335,7 @@ pub fn open_for_node(state: &Rc<RefCell<AppState>>, group: &str, name: &str) {
     st.rules_panel.editing = None;
     st.rules_panel.draft = match &column {
         Some(c) => default_rule(&st, c),
-        None => Rule { column: String::new(), kind: RuleKind::Unique, level: Severity::Error },
+        None => Rule { column: String::new(), kind: RuleKind::Unique, level: Severity::Error , source: RuleSource::User },
     };
 }
 
@@ -347,6 +366,8 @@ pub fn push(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
         let count = rules.iter().filter(|r| &r.column == col).count();
         let system_unique = mode.map_or(false, |m| Rule {
             column: col.clone(), kind: RuleKind::Unique, level: Severity::Error,
+
+            source: RuleSource::User,
         }.conflicts_with_builtin(m));
         let badge = if class.is_none() {
             "不支持规则".to_string()
@@ -371,18 +392,37 @@ pub fn push(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
         "列 \"{}\"  ·  {}", selected_column, class_label(class)
     )));
 
-    // ── 右：本列规则 ──
+    // ── 右：本列规则（系统内置只读行在前，用户规则在后）──
     let indices = column_rule_indices(&rules, &selected_column);
-    let cards: Vec<RuleCard> = indices.iter().map(|gi| {
+    let mode_rules = mode.map(builtin_rules).unwrap_or_default();
+    let mut cards: Vec<RuleCard> = Vec::new();
+    for b in mode_rules.iter().filter(|r| r.column == selected_column) {
+        cards.push(RuleCard {
+            num: SharedString::from("·"),
+            title: SharedString::from(b.expr_string()),
+            level: SharedString::from("系统"),
+            is_warning: false,
+            is_info: false,
+            selected: false,
+            is_builtin: true,
+            can_up: false,
+            can_down: false,
+        });
+    }
+    for (pos, gi) in indices.iter().enumerate() {
         let r = &rules[*gi];
-        RuleCard {
+        cards.push(RuleCard {
+            num: SharedString::from((pos + 1).to_string()),
             title: SharedString::from(r.expr_string()),
             level: SharedString::from(level_label(r.level)),
             is_warning: r.level == Severity::Warning,
             is_info: r.level == Severity::Info,
             selected: st.rules_panel.editing == Some(*gi),
-        }
-    }).collect();
+            is_builtin: false,
+            can_up: pos > 0,
+            can_down: pos + 1 < indices.len(),
+        });
+    }
     ui_h.set_ru_rules(ModelRc::new(VecModel::from(cards)));
 
     // ── 结果区 ──
@@ -402,7 +442,15 @@ pub fn push(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
     // ── 表单：验证器目录 ──
     let mut options: Vec<(&'static str, &'static str)> = VALIDATORS.iter()
         .filter(|(k, _)| {
-            class.map_or(false, |c| rule_kind_applies(&probe_kind(k), c)) || *k == draft_key
+            let applies = class.map_or(false, |c| rule_kind_applies(&probe_kind(k), c));
+            // 系统已保证的约束不再出现在下拉里（例如 id 列不提供 unique / non_empty）
+            let redundant = mode.map_or(false, |m| Rule {
+                column: selected_column.clone(),
+                kind: probe_kind(k),
+                level: Severity::Error,
+                source: RuleSource::User,
+            }.conflicts_with_builtin(m));
+            (applies && !redundant) || *k == draft_key
         })
         .cloned()
         .collect();
@@ -481,6 +529,10 @@ pub fn push(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
             param_op_options = OP_LABELS.iter().map(|s| s.to_string()).collect();
             param_op_idx = OP_LABELS.iter().position(|s| *s == op.as_str()).unwrap_or(0) as i32;
             if class.is_some() { desc = DESC_COMPARE.to_string(); }
+        }
+        // 内置只读种类不会成为草稿；给个说明即可。
+        RuleKind::Integer | RuleKind::PositiveInt | RuleKind::UpperSnake => {
+            desc = "系统内置规则，不可编辑。".to_string();
         }
     }
 
@@ -574,7 +626,7 @@ fn reset_form_to_add(state: &Rc<RefCell<AppState>>) {
     st.rules_panel.editing = None;
     st.rules_panel.draft = match st.rules_panel.column.clone() {
         Some(c) => default_rule(&st, &c),
-        None => Rule { column: String::new(), kind: RuleKind::Unique, level: Severity::Error },
+        None => Rule { column: String::new(), kind: RuleKind::Unique, level: Severity::Error , source: RuleSource::User },
     };
 }
 
@@ -614,14 +666,13 @@ pub fn wire(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
         let s = state.clone();
         let weak = ui_h.as_weak();
         ui_h.on_ru_select_rule(move |i| {
-            let (column, rules) = {
+            let (Some(gi), rules) = ({
                 let st = s.borrow();
-                (st.rules_panel.column.clone().unwrap_or_default(),
-                 node_rules(&st, &st.rules_panel.group, &st.rules_panel.name))
-            };
-            let idx = column_rule_indices(&rules, &column);
-            let Some(gi) = idx.get(i.max(0) as usize).copied() else { return };
-            let rule = rules[gi].clone();
+                let gi = if i < 0 { None } else { user_global_at(&st, i as usize) };
+                (gi, st.engine.node_rules(&st.rules_panel.group, &st.rules_panel.name)
+                    .map(|(_, r)| r).unwrap_or_default())
+            }) else { return };
+            let rule = match rules.get(gi) { Some(r) => r.clone(), None => return };
             {
                 let mut st = s.borrow_mut();
                 st.rules_panel.editing = Some(gi);
@@ -636,13 +687,8 @@ pub fn wire(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
         let s = state.clone();
         let weak = ui_h.as_weak();
         ui_h.on_ru_delete_rule(move |i| {
-            let (column, rules) = {
-                let st = s.borrow();
-                (st.rules_panel.column.clone().unwrap_or_default(),
-                 node_rules(&st, &st.rules_panel.group, &st.rules_panel.name))
-            };
-            let idx = column_rule_indices(&rules, &column);
-            let Some(gi) = idx.get(i.max(0) as usize).copied() else { return };
+            let Some(gi) = (if i < 0 { None } else { user_global_at(&s.borrow(), i as usize) })
+                else { return };
             edit_rules(&s, |rules| { if gi < rules.len() { rules.remove(gi); } });
             if s.borrow().rules_panel.editing == Some(gi) {
                 reset_form_to_add(&s);
@@ -886,7 +932,15 @@ fn move_rule(
     };
     let order = column_rule_indices(&rules, &column);
     if i < 0 { return; }
-    let pos = i as usize;
+    let mode = {
+        let st = state.borrow();
+        st.engine.node_rules(&st.rules_panel.group, &st.rules_panel.name).map(|(m, _)| m)
+    };
+    let builtin = mode.map(|m| builtin_rules(m).iter().filter(|r| r.column == column).count())
+        .unwrap_or(0);
+    let display = i as usize;
+    if display < builtin { return; }
+    let pos = display - builtin;
     if pos >= order.len() { return; }
     let other_pos = if up {
         if pos == 0 { return; }

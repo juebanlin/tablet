@@ -25,9 +25,12 @@ pub struct SchemaNodeInfo {
     pub name: String,
     pub kind: &'static str,
     pub detail: String,
+    /// 有效校验规则（仅 `schema show --rules` 时填充）。
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub rules: Vec<String>,
 }
 
-pub fn run_schema_show(engine: &ProjectEngine) -> Result<Vec<SchemaShowEntry>> {
+pub fn run_schema_show(engine: &ProjectEngine, with_rules: bool) -> Result<Vec<SchemaShowEntry>> {
     let project = engine.active()
         .ok_or_else(|| anyhow::anyhow!("没有活跃的 Project"))?;
 
@@ -39,6 +42,9 @@ pub fn run_schema_show(engine: &ProjectEngine) -> Result<Vec<SchemaShowEntry>> {
                 name: t.name.clone(),
                 kind: "table",
                 detail: format!("{} fields, {} rows", t.schema.fields.len(), t.records.len()),
+                rules: if with_rules {
+                    rule_lines(tablet_core::model::NodeMode::Table, &t.rules)
+                } else { Vec::new() },
             });
         }
         for c in &g.constants {
@@ -46,6 +52,8 @@ pub fn run_schema_show(engine: &ProjectEngine) -> Result<Vec<SchemaShowEntry>> {
                 name: c.name.clone(),
                 kind: "constant",
                 detail: format!("{} entries", c.entries.len()),
+                // 常量不支持节点级规则
+                rules: Vec::new(),
             });
         }
         for e in &g.enums {
@@ -53,11 +61,30 @@ pub fn run_schema_show(engine: &ProjectEngine) -> Result<Vec<SchemaShowEntry>> {
                 name: e.name.clone(),
                 kind: "enum",
                 detail: format!("{} entries", e.entries.len()),
+                rules: if with_rules {
+                    rule_lines(tablet_core::model::NodeMode::Enum, &e.rules)
+                } else { Vec::new() },
             });
         }
         entries.push(SchemaShowEntry { group: g.name.clone(), nodes });
     }
     Ok(entries)
+}
+
+/// 规则的一行文本：`列 = 表达式 [系统|错误|警告|信息]`。
+fn rule_lines(mode: tablet_core::model::NodeMode, user: &[tablet_core::model::Rule]) -> Vec<String> {
+    use tablet_core::model::{effective_rules, RuleSource, Severity};
+    effective_rules(mode, user).into_iter().map(|r| {
+        let tag = match r.source {
+            RuleSource::Builtin => "系统",
+            RuleSource::User => match r.level {
+                Severity::Error => "错误",
+                Severity::Warning => "警告",
+                Severity::Info => "信息",
+            },
+        };
+        format!("{} = {} [{}]", r.column, r.kind.expr_string(), tag)
+    }).collect()
 }
 
 pub fn run_schema_add_group(

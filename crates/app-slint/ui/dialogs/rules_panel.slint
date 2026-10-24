@@ -40,11 +40,15 @@ export struct RuleColumnRow {
 }
 
 export struct RuleCard {
+    num: string,            // 用户规则序号；内置规则为「·」
     title: string,          // 「ref_exists(Lang.key)」
-    level: string,          // 「错误」/「警告」/「信息」
+    level: string,          // 「错误」/「警告」/「信息」；内置规则为「系统」
     is-warning: bool,
     is-info: bool,
     selected: bool,         // 正在表单里编辑
+    is-builtin: bool,       // 系统内置：只读、不可删、不可调序
+    can-up: bool,
+    can-down: bool,
 }
 
 export struct RuleIssueRow {
@@ -257,7 +261,7 @@ export component RulesPanel inherits Rectangle {
 
                                     // 放在内容之前：后面的按钮要能盖在它上面接点击
                                     TouchArea {
-                                        clicked => { root.select-rule(i); }
+                                        clicked => { if (!r.is-builtin) { root.select-rule(i); } }
                                     }
 
                                     HorizontalLayout {
@@ -265,7 +269,7 @@ export component RulesPanel inherits Rectangle {
                                         padding-right: Theme.sp-2;
                                         spacing: Theme.sp-2;
                                         Text {
-                                            text: "\{i + 1}";
+                                            text: r.num;
                                             width: 20px;
                                             color: Theme.text-secondary;
                                             vertical-alignment: center;
@@ -273,7 +277,7 @@ export component RulesPanel inherits Rectangle {
                                         }
                                         Text {
                                             text: r.title;
-                                            color: Theme.text-primary;
+                                            color: r.is-builtin ? Theme.text-secondary : Theme.text-primary;
                                             vertical-alignment: center;
                                             horizontal-stretch: 1;
                                             overflow: elide;
@@ -281,22 +285,26 @@ export component RulesPanel inherits Rectangle {
                                         Text {
                                             width: 40px;
                                             text: r.level;
-                                            color: r.is-info ? Theme.text-secondary :
-                                                   (r.is-warning ? Theme.mark-modified : Theme.text-error);
+                                            color: r.is-builtin ? Theme.text-secondary :
+                                                   (r.is-info ? Theme.text-secondary :
+                                                   (r.is-warning ? Theme.mark-modified : Theme.text-error));
                                             vertical-alignment: center;
                                             font-size: Theme.fs-small;
                                         }
                                         MiniButton {
+                                            visible: !r.is-builtin;
                                             glyph: "↑";
-                                            enabled: i > 0;
+                                            enabled: r.can-up;
                                             clicked => { root.move-up(i); }
                                         }
                                         MiniButton {
+                                            visible: !r.is-builtin;
                                             glyph: "↓";
-                                            enabled: i + 1 < root.rules.length;
+                                            enabled: r.can-down;
                                             clicked => { root.move-down(i); }
                                         }
                                         MiniButton {
+                                            visible: !r.is-builtin;
                                             glyph: "×";
                                             clicked => { root.delete-rule(i); }
                                         }

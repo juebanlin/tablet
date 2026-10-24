@@ -232,7 +232,11 @@ pub struct SchemaArgs {
 #[derive(Subcommand, Debug)]
 pub enum SchemaAction {
     /// 显示项目结构树
-    Show,
+    Show {
+        /// 同时列出每个节点的有效校验规则（系统内置 + 用户规则）
+        #[arg(long)]
+        rules: bool,
+    },
     /// 添加分组
     AddGroup {
         #[arg(long)]

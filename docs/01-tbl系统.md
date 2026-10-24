@@ -180,9 +180,10 @@ gm_password|str            |xxx  |s  |GM密码
 
 ### 5.2 主键约束
 
-- **Table**：第一列固定为 `id`（int），不可改名/移动/删除；数据行中 id 列值不能重复且不能为空（除非整行为空）
+- **Table**：第一列固定为 `id`（int），不可改名/移动/删除；id 必须是**正整数且不为 0**（0 保留给「未设置」语义，与枚举一致），同表内不能重复，整行为空的占位行除外
 - **Constant**：无主键概念，但 name 列在同表内不重复
-- **Enum**：第一列 id 必须是**正整数且不为 0**（0 保留给「未设置」语义）；id 在同枚举内不重复
+- **Enum**：第一列 id 必须是**正整数且不为 0**（0 保留给「未设置」语义）；id 在同枚举内不重复。
+  **不要求连续**：`1, 2, 3, 10, 11, 22` 是合法的。会增长的枚举建议按号段预留（@8.11 的 `range` 规则可以钉住号段），已废弃的 id 不要复用
 
 ### 5.3 导出标记
 
@@ -496,15 +497,16 @@ camelCase 撞名等价于 PascalCase 撞名（源名必以小写字母开头，�
 
 | 层级 | 规则 | 错误信息 |
 |------|------|----------|
-| cell | id 列必须是整数 | "ID必须是数字" |
+| cell | id 列必须是整数（非数字由类型检查报） | "不是合法int, 示例: 1" |
 | cell | 其它字段值按 [TblFieldType](#7-tblfieldtype-类型系统) 验证（详见 @8.3） | 视类型而定 |
-| row | 非 id 列有值但 id 为空 | "有数据但ID为空" |
 | schema | 字段列表非空 | "表没有定义任何字段" |
 | schema | 第一列必须是 `id` | "第一列必须是主键 id" |
 | schema | 字段名合法且不重复（同表内） | 见 @8.1 |
 | schema | 类型字符串可被解析 | "类型 \"X\" 不合法" |
 | schema | 引用类型有效（被引用项存在且非 constant） | 见 @8.5 |
-| project | 主键 id 在同表内不重复 | "第N行主键值 \"X\" 重复" |
+
+**id 列的约束已全部由内置规则执行**（@8.11）：`id = unique()`（同表不重复）、`id = non_empty()`（有数据但 id 为空）、`id = positive_int()`（> 0）。
+报错位置是具体数据格，消息是规则引擎的通用文案（"值 \"1\" 与第 1 行重复" / "该列必填，不能为空" / "值 0 必须是正整数"）。
 
 ### 8.3 类型值验证
 
@@ -622,9 +624,15 @@ camelCase 撞名等价于 PascalCase 撞名（源名必以小写字母开头，�
 
 | 层级 | 规则 |
 |------|------|
-| cell | id 是正整数且非 0；name 符合 UPPER_SNAKE_CASE |
-| row | name 已填但 id 为空 → "name已填但id为空" |
-| schema | 至少一个条目；id/name 不重复 |
+| schema | 至少一个条目（`EnumEmpty`）——唯一的结构性检查 |
+| cell | name 不能是 Java/Go/Lua 关键字（`FieldNameKeyword`；这不是列值约束） |
+
+**id / name 的列约束已全部由内置规则执行**（@8.11）：
+
+- `id = unique()` / `non_empty()` / `positive_int()`（正整数、0 与负数都报错、非数字也报错）；
+- `name = unique()` / `non_empty()` / `upper_snake()`。
+
+报错定位从原来的**表头级**改成了具体数据格（`B1` 这种），同一格的关键字错误优先于格式错误，不重复报。
 
 ### 8.10 节点级规则验证
 
@@ -649,7 +657,24 @@ camelCase 撞名等价于 PascalCase 撞名（源名必以小写字母开头，�
 - 级别（`error` / `warn` / `info`）只表达严重程度；**要不要阻断保存由项目级策略决定**（`project.toml` 的 `[validate]`，默认 error=阻断、warn=提示、info=忽略）。完整口径见 @02.21.3。
 - 规则只在本项目内解析，不递归展开（`ref_exists` 是值集成员检查）。
 
-### 8.11 待办（已规划未实现）
+### 8.11 系统内置规则
+
+系统对部分列已有硬编码校验。为了让 UI、CLI 与文档共用同一份真相，这些约束同时以**只读规则**的形式暴露（`crates/core/src/model.rs::builtin_rules`）：
+
+| 模式 | 列 | 内置规则 |
+|------|----|----------|
+| table | `id` | `unique()`、`non_empty()`、`positive_int()` |
+| enum | `id` | `unique()`、`non_empty()`、`positive_int()` |
+| enum | `name` | `unique()`、`non_empty()`、`upper_snake()` |
+| constant | — | 不支持节点级规则（@8.8） |
+
+- 这些规则**不写进** `project.tblschema`，**不可编辑、不可删除**；规则面板以「系统」标出，CLI 用 `schema show --rules` 查看。
+- `integer()` / `positive_int()` / `upper_snake()` 只由系统生成，写在 schema 里会被拒绝。
+- 与内置规则重复的用户规则**不执行**，只报一条非阻断的 `RuleRedundant`：enum 的 `name` 上再挂 `unique()` / `non_empty()`；enum 的 `id` 上挂 `range(1, )`（只加下限且 ≤1）。
+- **内置规则由规则引擎执行**（不再有硬编码的 id/name 检查）：改约束只需要改 `builtin_rules`，
+  UI 徽标、CLI 输出、冗余判断、校验行为会一起跟上。
+
+### 8.12 待办（已规划未实现）
 
 - Set 值不重复约束
 
@@ -856,7 +881,9 @@ v1 内置验证器：
 - `compare` / `required_if` 引用的列不能是本列自己。
 - `range` / `len` 两端都留空 = 没有规则；下限大于上限同样报错。
 - `matches("")` 空正则匹配一切，等于没写，直接报错。
-- 系统已保证唯一的列（table 的 `id`、enum 的 `id`/`name`）挂 `unique()` 只会得到一条非阻断的 `RuleRedundant` 警告。
+- 系统已保证的约束（见 @8.11）再挂一遍只会得到一条非阻断的 `RuleRedundant` 警告：
+  `unique()` / `non_empty()` 与内置规则重复；enum 的 `id` 上挂 `range(1, )` 也算重复。
+- `integer()` / `positive_int()` / `upper_snake()` 是系统只读规则，写进 schema 会被拒绝。
 
 ```
 [lang/Lang] table

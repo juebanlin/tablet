@@ -613,11 +613,23 @@ tablet-cli project clone --source slg-prod --id slg-hotfix --name "SLG 热修复
 
 ```bash
 tablet-cli schema show
-
 tablet-cli --project slg-test schema show
-
+tablet-cli schema show --rules          # 同时列出每个节点的有效校验规则
 tablet-cli --fmt json schema show
 ```
+
+`--rules` 会在每个 table / enum 节点下追加**有效规则**（系统内置在前、用户规则在后）：
+
+```
+hero/
+  └── HeroBase      (table, 5 fields, 120 rows)
+      · id = unique() [系统]
+      · id = non_empty() [系统]
+      · id = integer() [系统]
+      · name = matches(^[A-Z][A-Z0-9_]*$) [警告]
+```
+
+内置规则不落盘、不可编辑（@01.8.11）；`--fmt json` 时节点对象多一个 `rules` 数组。
 
 输出示例：
 ```

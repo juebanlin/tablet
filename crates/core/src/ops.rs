@@ -3552,7 +3552,7 @@ package = \"com.user.kept\"
         let (_dir, mut engine) = engine_with_saved_node("rules_roundtrip", "g", "T");
         // 对 id 挂 unique()：系统已保证唯一 → 只产生一条警告，不阻断保存
         assert!(engine.set_node_rules("g", "T", vec![
-            Rule { column: "id".into(), kind: RuleKind::Unique, level: Severity::Error },
+            Rule { column: "id".into(), kind: RuleKind::Unique, level: Severity::Error , source: RuleSource::User },
         ]));
         engine.revalidate("g", "T");
         assert!(engine.validation_errors.is_empty(), "警告不该进错误索引");
@@ -3574,6 +3574,8 @@ package = \"com.user.kept\"
                 column: "id".into(),
                 kind: RuleKind::RefExists { target_node: "Lang".into(), target_column: "key".into() },
                 level: Severity::Warning,
+
+                source: RuleSource::User,
             },
         ]);
         engine.revalidate("g", "T");
@@ -3605,6 +3607,8 @@ package = \"com.user.kept\"
                 column: "id".into(),
                 kind: RuleKind::RefExists { target_node: "Lang".into(), target_column: "key".into() },
                 level: Severity::Warning,
+
+                source: RuleSource::User,
             },
         ]));
         engine.revalidate("g", "T");
