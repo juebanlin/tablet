@@ -251,6 +251,9 @@ pub enum SchemaAction {
         group: String,
         #[arg(long)]
         name: String,
+        /// 文件格式版本：v3（默认，块式）或 v2（稀疏行）
+        #[arg(long, value_name = "v2|v3", default_value = "v3")]
+        tbl_fmt: String,
     },
     /// 添加 Constant
     AddConstant {

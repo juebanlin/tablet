@@ -74,8 +74,13 @@ pub(crate) fn execute(state: &Rc<RefCell<AppState>>) {
     let core_action = match &action {
         PendingAction::NewGroup { project_id, storage } =>
             ProjectAction::NewGroup { project_id: project_id.clone(), name: buf.clone(), storage: *storage },
-        PendingAction::NewTable { project_id, group } =>
-            ProjectAction::NewTable { project_id: project_id.clone(), group: group.clone(), name: buf.clone() },
+        PendingAction::NewTable { project_id, group, fmt_ver } =>
+            ProjectAction::NewTable {
+                project_id: project_id.clone(),
+                group: group.clone(),
+                name: buf.clone(),
+                fmt_ver: *fmt_ver,
+            },
         PendingAction::NewConstant { project_id, group } =>
             ProjectAction::NewConstant { project_id: project_id.clone(), group: group.clone(), name: buf.clone() },
         PendingAction::NewEnum { project_id, group } =>

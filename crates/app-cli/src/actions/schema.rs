@@ -109,12 +109,17 @@ pub fn run_schema_add_group(
     save_or_err(engine, "新建 Group")
 }
 
-pub fn run_schema_add_table(engine: &mut ProjectEngine, group: &str, name: &str) -> Result<()> {
-    add_node(engine, group, name, NodeKind::Table)
+pub fn run_schema_add_table(
+    engine: &mut ProjectEngine,
+    group: &str,
+    name: &str,
+    fmt_ver: tablet_core::tbl::TblVersion,
+) -> Result<()> {
+    add_node(engine, group, name, NodeKind::Table, fmt_ver)
 }
 
 pub fn run_schema_add_constant(engine: &mut ProjectEngine, group: &str, name: &str) -> Result<()> {
-    add_node(engine, group, name, NodeKind::Constant)
+    add_node(engine, group, name, NodeKind::Constant, tablet_core::tbl::DEFAULT_TBL_VERSION)
 }
 
 /// 新建 Enum。条目在**同一条命令里**给全 —— 空枚举过不了 `validate_enum`
@@ -256,7 +261,13 @@ impl std::fmt::Display for NodeKind {
 }
 
 /// 新建节点三条命令共用的前置检查：活跃项目 / 组存在 / 名字合法。
-fn add_node(engine: &mut ProjectEngine, group: &str, name: &str, kind: NodeKind) -> Result<()> {
+fn add_node(
+    engine: &mut ProjectEngine,
+    group: &str,
+    name: &str,
+    kind: NodeKind,
+    fmt_ver: tablet_core::tbl::TblVersion,
+) -> Result<()> {
     let pid = active_id(engine)?;
     ensure_group(engine, group)?;
     // `validate_node_name` 查两件事：符合 Java 类名规则（大写开头）+ 全项目唯一
@@ -270,6 +281,7 @@ fn add_node(engine: &mut ProjectEngine, group: &str, name: &str, kind: NodeKind)
             project_id: pid,
             group: group.to_string(),
             name: name.to_string(),
+            fmt_ver,
         },
         NodeKind::Constant => ProjectAction::NewConstant {
             project_id: pid,

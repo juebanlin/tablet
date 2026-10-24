@@ -433,7 +433,7 @@ impl ContextMenuState {
 #[derive(Clone, Debug)]
 pub enum PendingAction {
     NewGroup { project_id: String, storage: tablet_core::model::GroupStorage },
-    NewTable { project_id: String, group: String },
+    NewTable { project_id: String, group: String, fmt_ver: tablet_core::tbl::TblVersion },
     NewConstant { project_id: String, group: String },
     NewEnum { project_id: String, group: String },
     DeleteGroup { project_id: String, group: String },

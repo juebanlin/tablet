@@ -319,8 +319,10 @@ fn run(cli: Cli) -> Result<i32> {
                     println!("已添加 Group: {}（{}）", name, storage);
                     Ok(0)
                 }
-                SchemaAction::AddTable { group, name } => {
-                    crate::actions::schema::run_schema_add_table(&mut engine, group, name)?;
+                SchemaAction::AddTable { group, name, tbl_fmt } => {
+                    let fmt_ver = tablet_core::tbl::TblVersion::parse_label(tbl_fmt)
+                        .ok_or_else(|| anyhow::anyhow!("--tbl-fmt 只接受 v2 / v3，收到 {:?}", tbl_fmt))?;
+                    crate::actions::schema::run_schema_add_table(&mut engine, group, name, fmt_ver)?;
                     println!("已添加 Table: {}/{}", group, name);
                     Ok(0)
                 }

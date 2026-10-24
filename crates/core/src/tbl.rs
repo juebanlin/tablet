@@ -24,6 +24,22 @@ impl TblVersion {
             TblVersion::V3 => "#!tbl v3",
         }
     }
+
+    /// CLI / UI 输入里的版本标签（`v2` / `v3`，也接受裸数字）。
+    pub fn parse_label(s: &str) -> Option<Self> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "v2" | "2" => Some(Self::V2),
+            "v3" | "3" => Some(Self::V3),
+            _ => None,
+        }
+    }
+
+    pub fn label(&self) -> &'static str {
+        match self {
+            TblVersion::V2 => "v2",
+            TblVersion::V3 => "v3",
+        }
+    }
 }
 
 /// 新建表的默认格式版本。

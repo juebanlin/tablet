@@ -14,176 +14,299 @@ use crate::state::{
 use crate::{dialogs, refresh, ui, AppWindow, CtxMenuItem};
 
 /// 计算当前 ctx_menu.kind 应展示的菜单项列表。
-pub(crate) fn items_for(kind: &CtxMenuKind, state: &AppState) -> Vec<CtxMenuItem> {
-    let sep = || CtxMenuItem {
+/// 右键菜单里的全部动作。**这是菜单的唯一清单**：
+/// - [`sections_for`] 决定「什么层级、什么顺序、怎么分组」；
+/// - [`entry`] 决定「当前状态下这一项出不出现、显示什么文案」。
+///
+/// 不可用的项直接不出现（用户要求：不再展示置灰项），所以菜单项不再有 disabled。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MenuAction {
+    // 树空白
+    NewProject,
+    NewGroup,
+    NewXlsxGroup,
+    // 项目
+    SaveProject,
+    ExportProject,
+    ExportSchema,
+    ExportTemplate,
+    MergeSchema,
+    NewGroupInProject,
+    NewXlsxGroupInProject,
+    CloneProject,
+    ProjectSettings,
+    DeleteProject,
+    CloseProject,
+    OpenProject,
+    OpenProjectDir,
+    // 组 / 节点
+    NewTableV3,
+    NewTableV2,
+    NewConstant,
+    NewEnum,
+    ExcelOpenGroup,
+    ReloadGroup,
+    CopyGroup,
+    CopyNode,
+    PasteNode,
+    PasteNodeV3,
+    PasteNodeV2,
+    PasteGroupTbl,
+    PasteGroupXlsx,
+    Rules,
+    RenameGroup,
+    RenameNode,
+    DeleteGroup,
+    DeleteNode,
+    // 表格区
+    ColInsertLeft,
+    ColInsertRight,
+    ColDelete,
+    RowInsertAbove,
+    RowInsertBelow,
+    RowDelete,
+    CellPick,
+    CellCopy,
+    CellCut,
+    CellPaste,
+    CellClear,
+}
+
+impl MenuAction {
+    /// 分发用的稳定 id（与 `wire()` 里的 match 一一对应）。
+    pub fn id(self) -> &'static str {
+        use MenuAction::*;
+        match self {
+            NewProject => "tree.new-project",
+            NewGroup => "tree.new-group",
+            NewXlsxGroup => "tree.new-xlsx-group",
+            SaveProject => "tree.proj-save",
+            ExportProject => "tree.proj-export",
+            ExportSchema => "tree.proj-export-schema",
+            ExportTemplate => "tree.proj-export-template",
+            MergeSchema => "tree.proj-merge-schema",
+            NewGroupInProject => "tree.proj-new-group",
+            NewXlsxGroupInProject => "tree.proj-new-xlsx-group",
+            CloneProject => "tree.proj-clone",
+            ProjectSettings => "tree.proj-settings",
+            DeleteProject => "tree.proj-delete",
+            CloseProject => "tree.proj-close",
+            OpenProject => "tree.proj-open",
+            OpenProjectDir => "tree.proj-open-dir",
+            NewTableV3 => "tree.new-table",
+            NewTableV2 => "tree.new-table-v2",
+            NewConstant => "tree.new-constant",
+            NewEnum => "tree.new-enum",
+            ExcelOpenGroup => "tree.excel-open-group",
+            ReloadGroup => "tree.reload-group",
+            CopyGroup => "tree.copy-group",
+            CopyNode => "tree.copy-node",
+            PasteNode => "tree.paste-node",
+            PasteNodeV3 => "tree.paste-node-v3",
+            PasteNodeV2 => "tree.paste-node-v2",
+            PasteGroupTbl => "tree.paste-group-tbl",
+            PasteGroupXlsx => "tree.paste-group-xlsx",
+            Rules => "tree.rules",
+            RenameGroup => "tree.rename-group",
+            RenameNode => "tree.rename-node",
+            DeleteGroup => "tree.delete-group",
+            DeleteNode => "tree.delete-node",
+            ColInsertLeft => "grid.col-insert-left",
+            ColInsertRight => "grid.col-insert-right",
+            ColDelete => "grid.col-delete",
+            RowInsertAbove => "grid.row-insert-above",
+            RowInsertBelow => "grid.row-insert-below",
+            RowDelete => "grid.row-delete",
+            CellPick => "grid.cell-pick",
+            CellCopy => "grid.cell-copy",
+            CellCut => "grid.cell-cut",
+            CellPaste => "grid.cell-paste",
+            CellClear => "grid.cell-clear",
+        }
+    }
+}
+
+fn separator() -> CtxMenuItem {
+    CtxMenuItem {
         label: slint::SharedString::new(),
         action_id: slint::SharedString::new(),
         is_separator: true,
-        disabled: false,
-    };
-    let item = |label: &str, id: &str, disabled: bool| CtxMenuItem {
-        label: label.into(),
-        action_id: id.into(),
-        is_separator: false,
-        disabled,
-    };
-    let item_owned = |label: String, id: &str, disabled: bool| CtxMenuItem {
-        label: label.into(),
-        action_id: id.into(),
-        is_separator: false,
-        disabled,
-    };
-    let cb = state.engine.node_clipboard.as_ref();
-    let cb_label = cb.map(tablet_core::ops::NodeClipboard::label).unwrap_or_default();
-    let has_node_cb = cb.map_or(false, tablet_core::ops::NodeClipboard::is_node);
-    let has_group_cb = cb.map_or(false, tablet_core::ops::NodeClipboard::is_group);
-    let paste_node_label = if has_node_cb {
-        format!("粘贴节点（{}）", cb_label)
-    } else {
-        "粘贴节点".to_string()
-    };
-    // 整组粘贴有两种目标后端（@02.26.8）：节点在内存里两种后端同型，粘贴时只决定
-    // 保存用哪个写入器，所以「转换」不需要额外的数据搬家。
-    let paste_group_tbl = if has_group_cb {
-        format!("粘贴为 .tbl Group（{}）", cb_label)
-    } else {
-        "粘贴为 .tbl Group".to_string()
-    };
-    let paste_group_xlsx = if has_group_cb {
-        format!("粘贴为 Excel Group（{}）", cb_label)
-    } else {
-        "粘贴为 Excel Group".to_string()
-    };
+    }
+}
+
+/// 每个层级要展示哪些动作、按什么顺序、怎么分组（外层 = 分组，组间自动加分隔线）。
+fn sections_for(kind: &CtxMenuKind, state: &AppState) -> Vec<Vec<MenuAction>> {
+    use MenuAction::*;
     match kind {
         CtxMenuKind::TreeBlank => {
             if state.engine.projects.is_empty() {
-                vec![item("新建项目", "tree.new-project", false)]
+                vec![vec![NewProject]]
             } else {
-                vec![
-                    item("新建 Group", "tree.new-group", false),
-                    item("新建 Excel Group", "tree.new-xlsx-group", false),
-                ]
+                vec![vec![NewGroup, NewXlsxGroup]]
             }
-        },
+        }
         CtxMenuKind::TreeProject { project_id } => {
             if state.engine.is_opened(project_id) {
                 vec![
-                    item("保存", "tree.proj-save", false),
-                    item("导出...", "tree.proj-export", false),
-                    item("导出 Schema...", "tree.proj-export-schema", false),
-                    item("导出为本地模板...", "tree.proj-export-template", false),
-                    item("合并 Schema...", "tree.proj-merge-schema", false),
-                    sep(),
-                    item("新建 Group", "tree.proj-new-group", false),
-                    item("新建 Excel Group", "tree.proj-new-xlsx-group", false),
-                    item("复制(克隆)...", "tree.proj-clone", false),
-                    item_owned(paste_group_tbl.clone(), "tree.paste-group-tbl", !has_group_cb),
-                    item_owned(paste_group_xlsx.clone(), "tree.paste-group-xlsx", !has_group_cb),
-                    item("项目设置...", "tree.proj-settings", false),
-                    item("删除", "tree.proj-delete", false),
-                    sep(),
-                    item("关闭", "tree.proj-close", false),
-                    sep(),
-                    item("在文件管理器打开", "tree.proj-open-dir", false),
+                    vec![SaveProject, ExportProject, ExportSchema, ExportTemplate, MergeSchema],
+                    vec![NewGroupInProject, NewXlsxGroupInProject, CloneProject],
+                    vec![PasteGroupTbl, PasteGroupXlsx],
+                    vec![ProjectSettings, DeleteProject],
+                    vec![CloseProject],
+                    vec![OpenProjectDir],
                 ]
             } else {
                 vec![
-                    item("打开", "tree.proj-open", false),
-                    sep(),
-                    item("在文件管理器打开", "tree.proj-open-dir", false),
-                    item("项目设置...", "tree.proj-settings", false),
-                    item("删除", "tree.proj-delete", false),
+                    vec![OpenProject],
+                    vec![OpenProjectDir, ProjectSettings, DeleteProject],
                 ]
             }
         }
-        CtxMenuKind::TreeGroup { project_id, name } => {
-            // Xlsx 组：工作簿就是真相源，直接开会原文件（不经过临时本桥接）。
-            let is_xlsx = state.engine.find_project(project_id)
-                .and_then(|p| p.groups.iter().find(|g| &g.name == name))
-                .map(|g| g.is_xlsx())
-                .unwrap_or(false);
-            let mut items = vec![
-            item("新建 Table", "tree.new-table", false),
-            item("新建 Constant", "tree.new-constant", false),
-            item("新建 Enum", "tree.new-enum", false),
-            sep(),
-            // 「用 Excel 打开」：Tbl 组走临时本会话，有任何 ExcelSession 进行中时禁用
-            // （@plans §5.1.2 全局锁）；Xlsx 组开的是原文件，不受那个锁约束。
-            item(
-                if is_xlsx { "用 Excel 打开（原文件）" } else { "用 Excel 打开（整组）" },
-                "tree.excel-open-group",
-                !is_xlsx && state.excel_session.is_some(),
-            ),
-            sep(),
-            item("复制 Group（含全部内容）", "tree.copy-group", false),
-            item_owned(paste_node_label.clone(), "tree.paste-node", !has_node_cb),
-            item_owned(paste_group_tbl, "tree.paste-group-tbl", !has_group_cb),
-            item_owned(paste_group_xlsx, "tree.paste-group-xlsx", !has_group_cb),
-            sep(),
-            item("重命名", "tree.rename-group", false),
-            item("删除", "tree.delete-group", false),
-            ];
-            // xlsx 组的工作簿可能在 Excel 里被改过；给一个显式的「从磁盘重新加载」。
-            if is_xlsx {
-                items.push(sep());
-                items.push(item("从磁盘重新加载", "tree.reload-group", false));
-            }
-            items
-        },
-        CtxMenuKind::TreeNode { kind, .. } => {
-            let mut items = Vec::new();
-            // 常量不支持节点级规则（@01.8.8）
-            if !matches!(kind, tablet_core::ops::NodeKind::Constant) {
-                items.push(item("校验规则...", "tree.rules", false));
-                items.push(sep());
-            }
-            items.extend([
-            item("复制", "tree.copy-node", false),
-            item_owned(paste_node_label, "tree.paste-node", !has_node_cb),
-            sep(),
-            item("重命名", "tree.rename-node", false),
-            item("删除", "tree.delete-node", false),
-            ]);
-            items
-        },
-        CtxMenuKind::GridCol { col } => {
-            // 第 0 列是系统 id 列：不能在它左边插列，也不能删它（@01 §5.5）。
-            let is_id = *col == 0;
-            let mut items = Vec::new();
-            if !is_id {
-                items.push(item("左侧插入列", "grid.col-insert-left", false));
-            }
-            items.push(item("右侧插入列", "grid.col-insert-right", false));
-            if !is_id {
-                items.push(item("删除列", "grid.col-delete", false));
-            }
-            items
-        },
-        CtxMenuKind::GridRow { .. } => vec![
-            item("上方插入行", "grid.row-insert-above", false),
-            item("下方插入行", "grid.row-insert-below", false),
-            item("删除行", "grid.row-delete", false),
+        CtxMenuKind::TreeGroup { .. } => vec![
+            vec![NewTableV3, NewTableV2, NewConstant, NewEnum],
+            vec![ExcelOpenGroup],
+            vec![
+                CopyGroup, PasteNode, PasteNodeV3, PasteNodeV2,
+                PasteGroupTbl, PasteGroupXlsx,
+            ],
+            vec![RenameGroup, DeleteGroup, ReloadGroup],
         ],
-        CtxMenuKind::GridCell { row, col } => {
-            let mut items = Vec::new();
-            // picker 类首项：差异化文案；多选状态下不显示首项（避免误以为支持批量）
-            let single_cell = matches!(state.grid_selection, GridSelection::Cell(_, _));
-            if single_cell {
-                let kind = ui::grid_actions::effective_column_kind_at(state, *row, *col);
-                if let Some(label) = kind.as_ref().and_then(|k| k.picker_action_label()) {
-                    items.push(item(label, "grid.cell-pick", false));
-                    items.push(sep());
-                }
-            }
-            items.extend([
-                item("复制", "grid.cell-copy", false),
-                item("剪切", "grid.cell-cut", false),
-                item("粘贴", "grid.cell-paste", false),
-                item("删除内容", "grid.cell-clear", false),
-            ]);
-            items
+        CtxMenuKind::TreeNode { .. } => vec![
+            vec![Rules],
+            vec![CopyNode, PasteNode, PasteNodeV3, PasteNodeV2],
+            vec![RenameNode, DeleteNode],
+        ],
+        CtxMenuKind::GridCol { .. } => vec![vec![ColInsertLeft, ColInsertRight, ColDelete]],
+        CtxMenuKind::GridRow { .. } => vec![vec![RowInsertAbove, RowInsertBelow, RowDelete]],
+        CtxMenuKind::GridCell { .. } => {
+            vec![vec![CellPick], vec![CellCopy, CellCut, CellPaste, CellClear]]
         }
     }
+}
+
+/// 判断一个动作在当前层级 / 状态下是否可用，并给出文案（不可用返回 None）。
+fn entry(action: MenuAction, kind: &CtxMenuKind, state: &AppState) -> Option<CtxMenuItem> {
+    use tablet_core::ops::{NodeBody, NodeClipboard, NodeKind};
+
+    let cb = state.engine.node_clipboard.as_ref();
+    let has_node_cb = cb.map_or(false, NodeClipboard::is_node);
+    let has_group_cb = cb.map_or(false, NodeClipboard::is_group);
+    let cb_is_table = matches!(
+        cb,
+        Some(NodeClipboard::Node { body: NodeBody::Table(_), .. })
+    );
+
+    let group = match kind {
+        CtxMenuKind::TreeGroup { project_id, name } => state.engine
+            .find_project(project_id)
+            .and_then(|p| p.groups.iter().find(|g| &g.name == name)),
+        _ => None,
+    };
+    let is_xlsx = group.map_or(false, |g| g.is_xlsx());
+    let node_is_constant = matches!(
+        kind,
+        CtxMenuKind::TreeNode { kind: NodeKind::Constant, .. }
+    );
+
+    // 可用性：数据相关的条件集中在这里
+    let available = match action {
+        MenuAction::PasteNode => has_node_cb,
+        MenuAction::PasteNodeV3 | MenuAction::PasteNodeV2 => cb_is_table,
+        MenuAction::PasteGroupTbl | MenuAction::PasteGroupXlsx => has_group_cb,
+        // Tbl 组走临时本会话，有 Excel 会话进行中时不可用；Xlsx 组开原文件，不受限。
+        MenuAction::ExcelOpenGroup => is_xlsx || state.excel_session.is_none(),
+        MenuAction::ReloadGroup => is_xlsx,
+        MenuAction::Rules => !node_is_constant,
+        MenuAction::ColInsertLeft | MenuAction::ColDelete =>
+            matches!(kind, CtxMenuKind::GridCol { col } if *col != 0),
+        _ => true,
+    };
+    if !available {
+        return None;
+    }
+
+    // 文案：只有少数动作依赖上下文
+    let label: String = match action {
+        MenuAction::NewProject => "新建项目".into(),
+        MenuAction::NewGroup | MenuAction::NewGroupInProject => "新建 Group".into(),
+        MenuAction::NewXlsxGroup | MenuAction::NewXlsxGroupInProject => "新建 Excel Group".into(),
+        MenuAction::SaveProject => "保存".into(),
+        MenuAction::ExportProject => "导出...".into(),
+        MenuAction::ExportSchema => "导出 Schema...".into(),
+        MenuAction::ExportTemplate => "另存为模板...".into(),
+        MenuAction::MergeSchema => "合并 Schema...".into(),
+        MenuAction::CloneProject => "克隆项目...".into(),
+        MenuAction::ProjectSettings => "项目设置...".into(),
+        MenuAction::DeleteProject => "删除".into(),
+        MenuAction::CloseProject => "关闭".into(),
+        MenuAction::OpenProject => "打开".into(),
+        MenuAction::OpenProjectDir => "打开所在目录".into(),
+        MenuAction::NewTableV3 => "新建 Table（v3）".into(),
+        MenuAction::NewTableV2 => "新建 Table（v2）".into(),
+        MenuAction::NewConstant => "新建 Constant".into(),
+        MenuAction::NewEnum => "新建 Enum".into(),
+        MenuAction::ExcelOpenGroup => if is_xlsx {
+            "用 Excel 打开（原文件）".into()
+        } else {
+            "用 Excel 打开（整组）".into()
+        },
+        MenuAction::ReloadGroup => "重新加载".into(),
+        MenuAction::CopyGroup => "复制 Group".into(),
+        MenuAction::CopyNode => "复制".into(),
+        MenuAction::PasteNode => "粘贴节点".into(),
+        MenuAction::PasteNodeV3 => "粘贴为 v3".into(),
+        MenuAction::PasteNodeV2 => "粘贴为 v2".into(),
+        MenuAction::PasteGroupTbl => "粘贴为 .tbl Group".into(),
+        MenuAction::PasteGroupXlsx => "粘贴为 Excel Group".into(),
+        MenuAction::Rules => "校验规则...".into(),
+        MenuAction::RenameGroup | MenuAction::RenameNode => "重命名".into(),
+        MenuAction::DeleteGroup | MenuAction::DeleteNode => "删除".into(),
+        MenuAction::ColInsertLeft => "左侧插入列".into(),
+        MenuAction::ColInsertRight => "右侧插入列".into(),
+        MenuAction::ColDelete => "删除列".into(),
+        MenuAction::RowInsertAbove => "上方插入行".into(),
+        MenuAction::RowInsertBelow => "下方插入行".into(),
+        MenuAction::RowDelete => "删除行".into(),
+        MenuAction::CellPick => {
+            let CtxMenuKind::GridCell { row, col } = kind else { return None };
+            if !matches!(state.grid_selection, GridSelection::Cell(_, _)) {
+                return None;
+            }
+            ui::grid_actions::effective_column_kind_at(state, *row, *col)
+                .as_ref()
+                .and_then(|k| k.picker_action_label())
+                .map(|s| s.to_string())?
+        }
+        MenuAction::CellCopy => "复制".into(),
+        MenuAction::CellCut => "剪切".into(),
+        MenuAction::CellPaste => "粘贴".into(),
+        MenuAction::CellClear => "清空内容".into(),
+    };
+
+    Some(CtxMenuItem {
+        label: label.into(),
+        action_id: action.id().into(),
+        is_separator: false,
+    })
+}
+
+/// 计算当前 ctx_menu.kind 应展示的菜单项列表：分组 → 过滤不可用 → 组间加分隔线。
+pub(crate) fn items_for(kind: &CtxMenuKind, state: &AppState) -> Vec<CtxMenuItem> {
+    let mut out: Vec<CtxMenuItem> = Vec::new();
+    for section in sections_for(kind, state) {
+        let mut part: Vec<CtxMenuItem> = section
+            .into_iter()
+            .filter_map(|a| entry(a, kind, state))
+            .collect();
+        if part.is_empty() {
+            continue;
+        }
+        if !out.is_empty() {
+            out.push(separator());
+        }
+        out.append(&mut part);
+    }
+    out
 }
 
 pub fn push(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
@@ -195,9 +318,18 @@ pub fn push(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
         return;
     }
     let kind = match &cm.kind { Some(k) => k, None => return };
+    let items = items_for(kind, &st);
+    // 全被隐藏（例如剪贴板为空时的粘贴项）→ 不弹空菜单
+    if items.is_empty() {
+        drop(st);
+        state.borrow_mut().ctx_menu.open = false;
+        ui_h.set_ctx_menu_open(false);
+        ui_h.set_ctx_menu_items(slint::ModelRc::new(slint::VecModel::from(Vec::<CtxMenuItem>::new())));
+        return;
+    }
     ui_h.set_ctx_menu_x(cm.x);
     ui_h.set_ctx_menu_y(cm.y);
-    ui_h.set_ctx_menu_items(slint::ModelRc::new(slint::VecModel::from(items_for(kind, &st))));
+    ui_h.set_ctx_menu_items(slint::ModelRc::new(slint::VecModel::from(items)));
 }
 
 pub fn wire(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
@@ -247,7 +379,16 @@ pub fn wire(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
                     dialogs::pending::handle_project_root_action(&s, &project_id, action);
                 }
                 (Some(CtxMenuKind::TreeGroup { project_id, name }), "tree.new-table") => {
-                    s.borrow_mut().pending.open(PendingAction::NewTable { project_id, group: name });
+                    s.borrow_mut().pending.open(PendingAction::NewTable {
+                        project_id, group: name,
+                        fmt_ver: tablet_core::tbl::TblVersion::V3,
+                    });
+                }
+                (Some(CtxMenuKind::TreeGroup { project_id, name }), "tree.new-table-v2") => {
+                    s.borrow_mut().pending.open(PendingAction::NewTable {
+                        project_id, group: name,
+                        fmt_ver: tablet_core::tbl::TblVersion::V2,
+                    });
                 }
                 (Some(CtxMenuKind::TreeGroup { project_id, name }), "tree.new-constant") => {
                     s.borrow_mut().pending.open(PendingAction::NewConstant { project_id, group: name });
@@ -298,9 +439,14 @@ pub fn wire(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
                 (Some(CtxMenuKind::TreeGroup { project_id, name }), "tree.copy-group") => {
                     s.borrow_mut().engine.clipboard_copy_group(&project_id, &name);
                 }
-                (Some(CtxMenuKind::TreeGroup { project_id, name }), "tree.paste-node") => {
+                (Some(CtxMenuKind::TreeGroup { project_id, name }), action @ ("tree.paste-node" | "tree.paste-node-v3" | "tree.paste-node-v2")) => {
+                    let fmt_ver = match action {
+                        "tree.paste-node-v3" => Some(tablet_core::tbl::TblVersion::V3),
+                        "tree.paste-node-v2" => Some(tablet_core::tbl::TblVersion::V2),
+                        _ => None,
+                    };
                     let mut st = s.borrow_mut();
-                    if st.engine.paste_node_to(&project_id, &name).is_some() {
+                    if st.engine.paste_node_to(&project_id, &name, fmt_ver).is_some() {
                         st.tree_expanded.insert((project_id, name));
                     }
                 }
@@ -325,9 +471,14 @@ pub fn wire(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
                 (Some(CtxMenuKind::TreeNode { project_id, group, name, kind }), "tree.copy-node") => {
                     s.borrow_mut().engine.clipboard_copy_node(&project_id, &group, &name, kind);
                 }
-                (Some(CtxMenuKind::TreeNode { project_id, group, .. }), "tree.paste-node") => {
+                (Some(CtxMenuKind::TreeNode { project_id, group, .. }), action @ ("tree.paste-node" | "tree.paste-node-v3" | "tree.paste-node-v2")) => {
+                    let fmt_ver = match action {
+                        "tree.paste-node-v3" => Some(tablet_core::tbl::TblVersion::V3),
+                        "tree.paste-node-v2" => Some(tablet_core::tbl::TblVersion::V2),
+                        _ => None,
+                    };
                     let mut st = s.borrow_mut();
-                    if st.engine.paste_node_to(&project_id, &group).is_some() {
+                    if st.engine.paste_node_to(&project_id, &group, fmt_ver).is_some() {
                         st.tree_expanded.insert((project_id, group));
                     }
                 }

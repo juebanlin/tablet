@@ -662,6 +662,8 @@ tablet-cli schema add-group --name xg --storage xlsx
 
 ```bash
 tablet-cli schema add-table --group hero --name HeroLevel
+# 新建表可选文件格式：v3（默认，块式）/ v2（稀疏行）
+tablet-cli schema add-table --group hero --name HeroLegacy --tbl-fmt v2
 tablet-cli schema add-constant --group global --name ServerConfig
 
 # 枚举条目必须同一条命令给全：空枚举过不了校验，也就落不了盘
@@ -669,6 +671,7 @@ tablet-cli schema add-enum --group hero --name HeroRarity \
   --entry 1:COMMON:普通 --entry 2:RARE:稀有
 ```
 
+`--tbl-fmt` 只接受 `v2` / `v3`，缺省 `v3`；xlsx 组不落 `.tbl`，该参数无效果。
 `--entry` 格式 `ID:NAME[:DESC]`，可重复；id 必须是正整数（0 保留给"未设置"），name 必须 UPPER_SNAKE_CASE。
 
 > **schema 写命令一律「先校验、再动手、最后看落盘结果」**：

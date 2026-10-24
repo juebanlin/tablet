@@ -1,7 +1,6 @@
 ﻿use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use crate::model::*;
-use crate::tbl::DEFAULT_TBL_VERSION;
 use crate::validate::*;
 
 /// 把一条 ValidationError 格式化为日志行（统一 B 格式：`位置:[内容] -> 原因`）：
@@ -1078,7 +1077,7 @@ pub enum ProjectAction {
     /// 新建组。`storage` 决定这个组的数据落在 `.tbl` 目录还是单个 `.xlsx`
     /// （一组一种后端，不混存，@02.27）。
     NewGroup    { project_id: String, name: String, storage: crate::model::GroupStorage },
-    NewTable    { project_id: String, group: String, name: String },
+    NewTable    { project_id: String, group: String, name: String, fmt_ver: crate::tbl::TblVersion },
     NewConstant { project_id: String, group: String, name: String },
     NewEnum     { project_id: String, group: String, name: String },
     RenameGroup { project_id: String, old_name: String, new_name: String },
@@ -2623,7 +2622,14 @@ impl ProjectEngine {
     /// - dirty=true，original=""，is_new 在 Group 层面已独立标识，节点本身不需要
     /// - 末尾对该节点跑一次 revalidate（active 状态下生效；非 active 暂不需要红框）
     /// 返回新节点名（成功时）。
-    pub fn paste_node_to(&mut self, target_project: &str, target_group: &str) -> Option<String> {
+    /// `fmt_ver` = Some(v) 时把粘贴出来的表改成该文件格式（v2/v3 只是序列化差异，
+    /// 内存模型相同，不需要搬数据）；None = 保持源文件的格式。
+    pub fn paste_node_to(
+        &mut self,
+        target_project: &str,
+        target_group: &str,
+        fmt_ver: Option<crate::tbl::TblVersion>,
+    ) -> Option<String> {
         let Some(NodeClipboard::Node { body, .. }) = self.node_clipboard.clone() else {
             self.warn_log("剪贴板为空或类型不匹配（需要节点剪贴板）".to_string());
             return None;
@@ -2649,6 +2655,7 @@ impl ProjectEngine {
             NodeBody::Table(mut t) => {
                 t.name = final_name.clone();
                 t.path = new_path;
+                if let Some(v) = fmt_ver { t.fmt_ver = v; }
                 t.dirty = true;
                 t.original_records.clear(); t.original_fields.clear(); t.saved = false;
                 t.original_rules.clear();
@@ -2803,7 +2810,7 @@ impl ProjectEngine {
                 sync_schema_from_groups(project);
                 self.ui_log(format!("[{}] 新建 Group: {}（{}）", project_id, name, storage.as_str()));
             }
-            ProjectAction::NewTable { project_id, group, name } => {
+            ProjectAction::NewTable { project_id, group, name, fmt_ver } => {
                 let mut ok = false;
                 if let Some(project) = self.find_project_mut(project_id) {
                     if let Some(g) = project.groups.iter_mut().find(|g| g.name == *group) {
@@ -2830,7 +2837,7 @@ impl ProjectEngine {
                                 tbl_type: "int".to_string(), export: Export::ClientServer,
                             }],
                             saved: false,
-                            fmt_ver: DEFAULT_TBL_VERSION,
+                            fmt_ver: *fmt_ver,
                             display_field: None,
                             original_display_field: None,
                             rules: Vec::new(),
@@ -2994,7 +3001,7 @@ impl ProjectEngine {
         // 临时 set_active 跑 revalidate（active scope），结束后恢复。
         match action {
             ProjectAction::NewGroup { .. } => {}
-            ProjectAction::NewTable { project_id, group, name }
+            ProjectAction::NewTable { project_id, group, name, .. }
             | ProjectAction::NewConstant { project_id, group, name }
             | ProjectAction::NewEnum { project_id, group, name } => {
                 let prev = self.active_idx;
@@ -3681,6 +3688,23 @@ package = \"com.user.kept\"
         assert!(!engine.find_table("g", "T").unwrap().dirty, "重新加载后规则不该让节点变脏");
     }
 
+    /// 粘贴可以顺手换格式：v2/v3 只是序列化差异，数据不用搬。
+    #[test]
+    fn paste_node_can_convert_table_format() {
+        let (_dir, mut engine) = engine_with_saved_node("paste_fmt", "g", "T");
+        let pid = engine.active_project_id().unwrap().to_string();
+        engine.clipboard_copy_node(&pid, "g", "T", NodeKind::Table);
+
+        let converted = engine.paste_node_to(&pid, "g", Some(crate::tbl::TblVersion::V2))
+            .expect("粘贴成功");
+        let t = engine.find_table("g", &converted).expect("节点存在");
+        assert_eq!(t.fmt_ver, crate::tbl::TblVersion::V2, "指定 v2 应转换格式");
+
+        let kept = engine.paste_node_to(&pid, "g", None).expect("再次粘贴");
+        let t2 = engine.find_table("g", &kept).expect("节点存在");
+        assert_eq!(t2.fmt_ver, crate::tbl::TblVersion::V3, "不指定则保持源格式");
+    }
+
     /// 改目标节点后，只重算目标本身也要连带刷新依赖它的节点（@01.8.10）。
     #[test]
     fn editing_a_target_refreshes_dependent_nodes() {
@@ -4006,6 +4030,7 @@ package = \"com.user.kept\"
         });
         engine.execute_action(&ProjectAction::NewTable {
             project_id: pid, group: "xg".into(), name: "Hot".into(),
+            fmt_ver: crate::tbl::DEFAULT_TBL_VERSION,
         });
         {
             let t = engine.find_table_mut("xg", "Hot").expect("Hot");
@@ -4079,6 +4104,7 @@ package = \"com.user.kept\"
         let pid = engine.active_project_id().unwrap().to_string();
         engine.execute_action(&ProjectAction::NewTable {
             project_id: pid, group: "xg".into(), name: "Cold".into(),
+            fmt_ver: crate::tbl::DEFAULT_TBL_VERSION,
         });
         assert!(engine.save_all());
         let book = xlsx_book(&dir);
@@ -4289,6 +4315,7 @@ package = \"com.user.kept\"
         let pid = engine.active_project_id().unwrap().to_string();
         engine.execute_action(&ProjectAction::NewTable {
             project_id: pid, group: "xg".into(), name: "Extra".into(),
+            fmt_ver: crate::tbl::DEFAULT_TBL_VERSION,
         });
         let schema_path = dir.join("projects/p1").join(crate::project::PROJECT_SCHEMA_FILE);
         let before = std::fs::read_to_string(&schema_path).unwrap();
@@ -4750,6 +4777,7 @@ package = \"com.user.kept\"
         let pid = engine.active_project_id().unwrap().to_string();
         engine.execute_action(&ProjectAction::NewTable {
             project_id: pid, group: "hero".into(), name: "Fresh".into(),
+            fmt_ver: crate::tbl::DEFAULT_TBL_VERSION,
         });
 
         assert!(!engine.find_table("hero", "Fresh").unwrap().revertable(), "没落过盘的节点不该可还原");
