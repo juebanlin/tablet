@@ -458,7 +458,7 @@ pub fn wire(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
                     } else {
                         tablet_core::model::GroupStorage::Tbl
                     };
-                    let new_group = s.borrow_mut().engine.paste_group_as(&project_id, Some(storage));
+                    let new_group = crate::dialogs::paste_group::request(&s, &project_id, storage);
                     if let Some(new_group) = new_group {
                         let mut st = s.borrow_mut();
                         st.project_expanded.insert(project_id.clone());

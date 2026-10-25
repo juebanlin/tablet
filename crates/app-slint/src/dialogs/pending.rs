@@ -276,7 +276,7 @@ pub(crate) fn handle_project_root_action(state: &Rc<RefCell<AppState>>, project_
             } else {
                 tablet_core::model::GroupStorage::Tbl
             };
-            let new_group = state.borrow_mut().engine.paste_group_as(project_id, Some(storage));
+            let new_group = crate::dialogs::paste_group::request(state, project_id, storage);
             if let Some(new_group) = new_group {
                 let mut st = state.borrow_mut();
                 st.project_expanded.insert(project_id.to_string());

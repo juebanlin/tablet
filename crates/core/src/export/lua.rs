@@ -323,6 +323,7 @@ pub fn export_enum_lua(enum_def: &EnumDef) -> String {
 }
 
 pub fn export_all_lua(project: &Project) -> Result<super::ExportResult> {
+    super::check_project_node_name_collisions(project)?;
     let export_cfg = &project.config.export;
     let client = export_cfg.client.as_ref();
     let lua = client.and_then(|c| c.lua.as_ref());

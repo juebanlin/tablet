@@ -432,9 +432,33 @@ pub fn check_key_collision<'a>(
     Ok(())
 }
 
+/// 项目级节点名唯一性：Table / Constant / Enum 共用一个平铺命名空间。
+/// 这层是导出前的最后兜底；正常应已被 validate 阻断保存。
+pub fn check_project_node_name_collisions(project: &crate::model::Project) -> anyhow::Result<()> {
+    let mut seen: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+    for group in &project.groups {
+        let mut check = |name: &str| -> anyhow::Result<()> {
+            let key = name.to_lowercase();
+            let current = format!("{}/{}", group.name, name);
+            if let Some(prev) = seen.insert(key, current.clone()) {
+                anyhow::bail!(
+                    "节点名 \"{}\" 在项目内重复（{} 与 {}）；导出会平铺为同名文件/类",
+                    name, prev, current
+                );
+            }
+            Ok(())
+        };
+        for t in &group.tables { if !t.deleted { check(&t.name)?; } }
+        for c in &group.constants { if !c.deleted { check(&c.name)?; } }
+        for e in &group.enums { if !e.deleted { check(&e.name)?; } }
+    }
+    Ok(())
+}
+
 /// 全项目扫一遍撞名（表用字段名，常量集用条目名）。
 /// 五个做大小写转换的导出器都在入口调它一次。
 pub fn check_project_key_collisions(project: &crate::model::Project) -> anyhow::Result<()> {
+    check_project_node_name_collisions(project)?;
     for group in &project.groups {
         for table in &group.tables {
             if table.deleted { continue; }

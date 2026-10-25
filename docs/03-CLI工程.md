@@ -670,7 +670,7 @@ global/
 tablet-cli schema add-group --name skill
 tablet-cli --project rpg-demo schema add-group --name quest
 
-# 工作簿形态的组（节点 = sheet，数据落在 <group>.xlsx）
+# 工作簿形态的组（节点 = sheet，数据落在 config/<group>.xlsx）
 tablet-cli schema add-group --name xg --storage xlsx
 ```
 

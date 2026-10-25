@@ -113,6 +113,7 @@ mod tests {
 }
 
 pub fn export_all_xml(project: &Project) -> Result<super::ExportResult> {
+    super::check_project_node_name_collisions(project)?;
     let export_cfg = &project.config.export;
 
     let data_output = export_cfg.server.as_ref()
@@ -156,6 +157,7 @@ pub fn export_all_xml(project: &Project) -> Result<super::ExportResult> {
 }
 
 pub fn export_xml_filtered(project: &Project, filter: &super::DataFilter) -> Result<super::ExportResult> {
+    super::check_project_node_name_collisions(project)?;
     let export_cfg = &project.config.export;
 
     let data_output = export_cfg.server.as_ref()

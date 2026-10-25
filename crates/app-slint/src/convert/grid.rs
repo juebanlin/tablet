@@ -617,7 +617,14 @@ mod tests {
     /// 建一个临时仓库，里面有一张表，desc（txt 列）带真实换行 / 制表符。
     /// 返回 (临时目录, AppState)。目录保留到调用方 drop 后手动清理。
     fn workspace_with_multiline_cell() -> (std::path::PathBuf, AppState) {
-        let dir = std::env::temp_dir().join(format!("tablet-oneline-test-{}", std::process::id()));
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        static COUNTER: AtomicUsize = AtomicUsize::new(0);
+        let n = COUNTER.fetch_add(1, Ordering::SeqCst);
+        let dir = std::env::temp_dir().join(format!(
+            "tablet-oneline-test-{}-{}",
+            std::process::id(),
+            n
+        ));
         let _ = std::fs::remove_dir_all(&dir);
         let proj = dir.join("projects").join("demo");
         std::fs::create_dir_all(proj.join("config").join("enums")).unwrap();

@@ -542,41 +542,77 @@ fn read_project_created_at(project_root: &Path) -> String {
 
 
 fn load_groups_in(data_dir: &Path, schema: &TblSchema) -> Result<Vec<Group>> {
-    let mut groups = Vec::new();
-    let mut entries: Vec<_> = std::fs::read_dir(data_dir)?
-        .filter_map(|e| e.ok())
-        .filter(|e| e.path().is_dir())
-        .collect();
-    entries.sort_by_key(|e| e.file_name());
+    // config/ 下现在混放两种组：
+    //   config/<group>/        Tbl 组（目录）
+    //   config/<group>.xlsx    Xlsx 组（单个工作簿；sheet = 节点）
+    // 旧布局 config/<group>/<group>.xlsx 不再兼容，读到直接在下面报错。
+    let mut dirs: Vec<PathBuf> = Vec::new();
+    let mut books: Vec<PathBuf> = Vec::new();
+    for entry in std::fs::read_dir(data_dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        if path.is_dir() {
+            dirs.push(path);
+        } else if path
+            .extension()
+            .map_or(false, |ext| ext.eq_ignore_ascii_case("xlsx"))
+        {
+            let stem = path.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
+            if !stem.starts_with("~$") {
+                books.push(path);
+            }
+        }
+    }
+    dirs.sort();
+    books.sort();
 
-    for entry in entries {
-        let dir = entry.path();
-        let name = entry.file_name().to_string_lossy().to_string();
-        let group = load_group(&name, &dir, schema)?;
-        groups.push(group);
+    // 同名目录 + 工作簿 = 一组两种后端，属于脏状态，不猜。
+    let names = |paths: &[PathBuf]| -> Vec<String> {
+        paths
+            .iter()
+            .map(|p| {
+                if p.is_dir() {
+                    p.file_name().unwrap_or_default().to_string_lossy().to_string()
+                } else {
+                    p.file_stem().unwrap_or_default().to_string_lossy().to_string()
+                }
+            })
+            .collect()
+    };
+    let dir_names = names(&dirs);
+    let book_names = names(&books);
+    if let Some(dup) = dir_names.iter().find(|n| book_names.iter().any(|b| b == *n)) {
+        anyhow::bail!(
+            "组 {} 同时存在目录和 {}.xlsx：一组一种后端，请先清理其中一边",
+            dup, dup
+        );
+    }
+
+    let mut groups = Vec::new();
+    for (name, dir) in dir_names.into_iter().zip(dirs) {
+        groups.push(load_tbl_group(&name, &dir)?);
+    }
+    for (name, book) in book_names.into_iter().zip(books) {
+        groups.push(load_xlsx_group(&name, data_dir, schema, &book)?);
     }
     Ok(groups)
 }
 
-/// 一个组目录 → `Group`。**后端由目录里有什么决定**（@02.27）：
-/// 有 `<group>.xlsx` 就是 Xlsx 组，否则 Tbl 组；两者同时存在是脏状态，直接报错不猜。
-fn load_group(name: &str, dir: &Path, schema: &TblSchema) -> Result<Group> {
-    let book = dir.join(format!("{}.xlsx", name));
+/// Tbl 组目录 → `Group`。xlsx 组已经由根级 `<group>.xlsx` 直接加载。
+fn load_tbl_group(name: &str, dir: &Path) -> Result<Group> {
+    let old_book = dir.join(format!("{}.xlsx", name));
+    if old_book.is_file() {
+        anyhow::bail!(
+            "组 {} 使用了旧布局 {}；xlsx 组现在必须是 config/{}.xlsx（不兼容旧目录布局）",
+            name, old_book.display(), name
+        );
+    }
+
     let mut tbl_files: Vec<PathBuf> = std::fs::read_dir(dir)?
         .filter_map(|e| e.ok())
         .map(|e| e.path())
         .filter(|p| p.extension().map_or(false, |ext| ext == "tbl"))
         .collect();
-
-    if book.is_file() {
-        if !tbl_files.is_empty() {
-            anyhow::bail!(
-                "组 {} 同时存在 {} 和 .tbl 文件：一组一种后端，请先清理其中一边",
-                name, book.display()
-            );
-        }
-        return load_xlsx_group(name, dir, schema, &book);
-    }
 
     let mut tables = Vec::new();
     let mut constants = Vec::new();
@@ -585,10 +621,7 @@ fn load_group(name: &str, dir: &Path, schema: &TblSchema) -> Result<Group> {
     tbl_files.sort();
 
     for path in tbl_files {
-        // **读不懂就报错，不许静默跳过。** 以前这里是 `Err(e) => eprintln!("warn: ...")`：
-        // 一个写坏的 `.tbl` 会在 stderr 留一行字，然后从项目里**整个消失**——导出少一张表，
-        // 退出码还是 0。这和 `.tblschema` 那边 `Err(_) => fallback` 是同一个洞（@02.26.7）：
-        // CLI 主要由 AI / 脚本驱动，没有反馈等于没有发生。
+        // **读不懂就报错，不许静默跳过。**
         match tbl::parse_tbl(&path) {
             Ok(TblFile::Table(t)) => tables.push(t),
             Ok(TblFile::Constant(c)) => constants.push(c),

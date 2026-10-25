@@ -1,0 +1,129 @@
+// 粘贴 Group 命名确认：只有项目/组内出现同名子项时才弹出。
+// 组名和每个子项都可以在粘贴前一次改好；确认后由 Rust 一次性完成改名 + 引用改写。
+
+import { Theme } from "../theme.slint";
+import { DialogChrome } from "dialog_chrome.slint";
+import { LineEdit, ScrollView } from "std-widgets.slint";
+
+export struct PasteGroupRow {
+    kind: string,
+    old-name: string,
+    new-name: string,
+}
+
+export component PasteGroupDialog inherits Rectangle {
+    in property <bool> open: false;
+    in property <string> target-project: "";
+    in-out property <string> group-name: "";
+    in property <string> error-text: "";
+    in property <[PasteGroupRow]> rows;
+
+    callback set-group-name(string);
+    callback set-node-name(int, string);
+    callback confirm();
+    callback cancel();
+
+    visible: root.open;
+    width: 100%;
+    height: 100%;
+
+    // 子项区域固定行高，最多露 8 行；只有一个子项时对话框也跟着变矮，
+    // 不会让唯一的输入框拉满整块区域。
+    property <int> visible-rows: min(root.rows.length, 8);
+    property <length> rows-height: root.visible-rows * 32px;
+
+    DialogChrome {
+        title: "粘贴 Group";
+        dialog-w: 620px;
+        dialog-h: 200px + root.rows-height + (root.error-text != "" ? 24px : 0px);
+        primary-text: "粘贴";
+        primary-enabled: true;
+        primary-clicked => { root.confirm(); }
+        cancel-clicked => { root.cancel(); }
+        scrim-clicked => { root.cancel(); }
+
+        VerticalLayout {
+            padding: Theme.sp-4;
+            spacing: Theme.sp-3;
+
+            Text {
+                text: "目标项目：\{root.target-project}";
+                font-size: Theme.fs-small;
+                color: Theme.text-secondary;
+            }
+
+            HorizontalLayout {
+                spacing: Theme.sp-2;
+                alignment: stretch;
+                Text {
+                    text: "组名:";
+                    font-size: Theme.fs-small;
+                    color: Theme.text-primary;
+                    vertical-alignment: center;
+                    width: 52px;
+                }
+                LineEdit {
+                    // 双向：Rust 推入预填名，用户输入也直接写回 root.group-name。
+                    // changed（而不是 edited）保证直接点「粘贴」时最后一段输入已经进 Rust 状态。
+                    horizontal-stretch: 1;
+                    text <=> root.group-name;
+                    changed text => { root.set-group-name(self.text); }
+                }
+            }
+
+            Text {
+                text: "子项（项目内唯一；冲突项已预填 _copy，可直接修改）:";
+                font-size: Theme.fs-tiny;
+                color: Theme.text-secondary;
+            }
+
+            ScrollView {
+                height: root.rows-height;
+                VerticalLayout {
+                    spacing: 0;
+                    for row[i] in root.rows: HorizontalLayout {
+                        height: 32px;
+                        spacing: Theme.sp-2;
+                        alignment: stretch;
+                        Text {
+                            text: row.kind;
+                            font-size: Theme.fs-tiny;
+                            color: Theme.text-secondary;
+                            vertical-alignment: center;
+                            width: 58px;
+                        }
+                        Text {
+                            text: row.old-name;
+                            font-size: Theme.fs-tiny;
+                            color: Theme.text-secondary;
+                            vertical-alignment: center;
+                            width: 140px;
+                            overflow: elide;
+                        }
+                        Text {
+                            text: "→";
+                            font-size: Theme.fs-tiny;
+                            color: Theme.text-secondary;
+                            vertical-alignment: center;
+                            width: 16px;
+                        }
+                        LineEdit {
+                            // 模型元素不能双向绑定；用 changed 让每次输入立刻写回 Rust，
+                            // 这样直接点「粘贴」也不会丢掉最后一段输入。
+                            horizontal-stretch: 1;
+                            text: row.new-name;
+                            changed text => { root.set-node-name(i, self.text); }
+                        }
+                    }
+                }
+            }
+
+            if root.error-text != "": Text {
+                text: root.error-text;
+                font-size: Theme.fs-tiny;
+                color: Theme.text-error;
+                wrap: word-wrap;
+            }
+        }
+    }
+}

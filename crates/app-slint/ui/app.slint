@@ -38,8 +38,9 @@ import { InputDialog } from "dialogs/input_dialog.slint";
 import { ConfirmDialog } from "dialogs/confirm_dialog.slint";
 import { AlertDialog } from "dialogs/alert_dialog.slint";
 import { ExcelSyncDialog, EsRow, EsOp } from "dialogs/excel_sync_dialog.slint";
+import { PasteGroupDialog, PasteGroupRow } from "dialogs/paste_group_dialog.slint";
 
-export { TreeNode, HeaderCell, DataCell, DataRow, CellKind, RefItem, TsParamSlot, RefRow, RefHeader, SchemaItem, CtxMenuItem, TemplateItem }
+export { TreeNode, HeaderCell, DataCell, DataRow, CellKind, RefItem, TsParamSlot, RefRow, RefHeader, SchemaItem, CtxMenuItem, TemplateItem, PasteGroupRow }
 
 export component AppWindow inherits Window {
     /// 窗口标题：`tablet vX — main`。Rust 端在加载 / 重载后写入（含版本与版本库分支）。
@@ -788,6 +789,17 @@ export component AppWindow inherits Window {
     in property <[CtxMenuItem]> ctx-menu-items;
     callback ctx-menu-action(string);
     callback ctx-menu-dismiss();
+
+    // ── Dialog: 粘贴 Group 命名确认 ─────────────────────────
+    in-out property <bool> dlg-paste-group-open: false;
+    in property <string> pg-target-project: "";
+    in-out property <string> pg-group-name: "";
+    in property <string> pg-error-text: "";
+    in property <[PasteGroupRow]> pg-rows;
+    callback pg-set-group-name(string);
+    callback pg-set-node-name(int, string);
+    callback pg-confirm();
+    callback pg-cancel();
 
     in property <bool> dlg-input-open: false;
     in property <string> dlg-input-title: "输入";
@@ -1597,6 +1609,18 @@ export component AppWindow inherits Window {
         reset-clicked => { root.gs-reset-clicked(); }
         confirm => { root.gs-confirm(); }
         cancel => { root.gs-cancel(); }
+    }
+
+    PasteGroupDialog {
+        open: root.dlg-paste-group-open;
+        target-project: root.pg-target-project;
+        group-name <=> root.pg-group-name;
+        error-text: root.pg-error-text;
+        rows: root.pg-rows;
+        set-group-name(s) => { root.pg-set-group-name(s); }
+        set-node-name(i, s) => { root.pg-set-node-name(i, s); }
+        confirm => { root.pg-confirm(); }
+        cancel => { root.pg-cancel(); }
     }
 
     InputDialog {

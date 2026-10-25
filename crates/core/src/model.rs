@@ -688,7 +688,7 @@ pub struct ProjectConfig {
 /// | 后端 | 结构真相源 | 数据真相源 |
 /// |---|---|---|
 /// | `Tbl`  | 各 `.tbl` 自己（自描述） | 各 `.tbl` |
-/// | `Xlsx` | `project.tblschema` 的 section | `<group>.xlsx` 的 sheet |
+/// | `Xlsx` | `project.tblschema` 的 section | `config/<group>.xlsx` 的 sheet |
 ///
 /// 节点（`Table` / `Constant` / `EnumDef`）在内存里两种后端完全同型，
 /// 所以差别只在「加载时从哪读、保存时往哪写」，不在模型里。
@@ -697,7 +697,7 @@ pub enum GroupStorage {
     /// `config/<group>/<Node>.tbl`（默认，文本、可 diff）
     #[default]
     Tbl,
-    /// `config/<group>/<group>.xlsx`，节点 = sheet
+    /// `config/<group>.xlsx`（config 根级文件），节点 = sheet
     Xlsx,
 }
 
@@ -729,7 +729,8 @@ pub struct Group {
 }
 
 impl Group {
-    /// Xlsx 组的工作簿路径。**推导**而不是存字段——组改名后不会留下旧路径。
+    /// Xlsx 组的工作簿路径 `dir/<name>.xlsx`。Xlsx 组的 `dir` 是 `config` 根；
+    /// Tbl 组的 `dir` 是自己的组目录。
     pub fn book_path(&self) -> PathBuf {
         self.dir.join(format!("{}.xlsx", self.name))
     }

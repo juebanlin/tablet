@@ -78,6 +78,8 @@ pub enum ValidationCode {
     FieldNameInvalid,
     FieldNameKeyword,
     FieldNameDuplicate,
+    /// 项目内节点名重复（Table / Constant / Enum 共用平铺命名空间）。
+    NodeNameDuplicate,
     /// 转换后键名撞车（表字段 / 常量条目共用）：`stack_` 与 `stack` 转出来都是 `stack`，
     /// 生成到 Java/Go/C++/C#/TS 时会变成两个同名成员。规则见 @01.8.1。
     NameCollision,
@@ -538,6 +540,59 @@ impl RuleIndex {
             .map(|v| v.iter().map(|(c, _)| c.clone()).collect())
             .unwrap_or_default()
     }
+}
+
+/// 项目级节点名唯一性：Table / Constant / Enum 共用同一个平铺命名空间。
+/// 返回每个重复节点的 `(group, node, error)`；调用方决定按项目策略过滤。
+pub fn validate_project_node_names(groups: &[Group]) -> Vec<(String, String, ValidationError)> {
+    let mut by_name: std::collections::HashMap<String, Vec<(String, String)>> =
+        std::collections::HashMap::new();
+    for group in groups {
+        for table in &group.tables {
+            if !table.deleted {
+                by_name.entry(table.name.to_lowercase()).or_default()
+                    .push((group.name.clone(), table.name.clone()));
+            }
+        }
+        for constant in &group.constants {
+            if !constant.deleted {
+                by_name.entry(constant.name.to_lowercase()).or_default()
+                    .push((group.name.clone(), constant.name.clone()));
+            }
+        }
+        for enum_def in &group.enums {
+            if !enum_def.deleted {
+                by_name.entry(enum_def.name.to_lowercase()).or_default()
+                    .push((group.name.clone(), enum_def.name.clone()));
+            }
+        }
+    }
+
+    let mut out = Vec::new();
+    for occurrences in by_name.values() {
+        if occurrences.len() < 2 {
+            continue;
+        }
+        let labels = occurrences
+            .iter()
+            .map(|(g, n)| format!("{}/{}", g, n))
+            .collect::<Vec<_>>()
+            .join("、");
+        for (group, node) in occurrences {
+            let err = ValidationError::schema(
+                ValidationCode::NodeNameDuplicate,
+                format!(
+                    "节点名 \"{}\" 在项目内重复（{}）；导出会平铺为同名文件/类",
+                    node, labels
+                ),
+                0,
+                None,
+            )
+            .with_field(node);
+            out.push((group.clone(), node.clone(), err));
+        }
+    }
+    out
 }
 
 /// 校验字段类型的引用目标（schema 层，不看具体值）。

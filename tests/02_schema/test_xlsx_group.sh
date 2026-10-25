@@ -6,17 +6,13 @@ begin_test "schema/xlsx-group"
 
 TEMPLATE="standard"
 
-# ── 建组：目录里应当出现 <group>.xlsx，而不是一堆 .tbl ──
+# ── 建组：config 根应当出现 <group>.xlsx，而不是同名目录 / .tbl ──
 setup_workspace "$TEMPLATE"
 run_cli schema add-group --name xg --storage xlsx
 assert_exit 0
 assert_contains "xg"
-assert_file_exists "$WORK_DIR/projects/test/config/xg/xg.xlsx"
-if ls "$WORK_DIR/projects/test/config/xg/"*.tbl >/dev/null 2>&1; then
-    _fail "xlsx 组不该有 .tbl 文件"
-else
-    _pass "xlsx 组没有 .tbl 文件"
-fi
+assert_file_exists "$WORK_DIR/projects/test/config/xg.xlsx"
+assert_dir_not_exists "$WORK_DIR/projects/test/config/xg"
 
 # ── 加 Table / Constant / Enum 都落成 sheet（不落 .tbl） ──
 run_cli schema add-table --group xg --name Hot
@@ -31,8 +27,8 @@ assert_exit 0
 assert_contains '"name": "Hot"'
 assert_contains '"name": "Cfg"'
 assert_contains '"name": "Kind"'
-if ls "$WORK_DIR/projects/test/config/xg/"*.tbl >/dev/null 2>&1; then
-    _fail "xlsx 组不该写出 .tbl"
+if [ -d "$WORK_DIR/projects/test/config/xg" ] || ls "$WORK_DIR/projects/test/config/xg/"*.tbl >/dev/null 2>&1; then
+    _fail "xlsx 组不该生成同名目录 / .tbl"
 else
     _pass "节点都落在工作簿里"
 fi
@@ -47,10 +43,10 @@ assert_exit 0
 assert_file_exists "$WORK_DIR/out/json/Hot.json"
 
 # ── 干净的组再保存：一个字节都不许碰 ──
-before=$(sha256sum "$WORK_DIR/projects/test/config/xg/xg.xlsx" | cut -d' ' -f1)
+before=$(sha256sum "$WORK_DIR/projects/test/config/xg.xlsx" | cut -d' ' -f1)
 run_cli workspace save
 assert_exit 0
-after=$(sha256sum "$WORK_DIR/projects/test/config/xg/xg.xlsx" | cut -d' ' -f1)
+after=$(sha256sum "$WORK_DIR/projects/test/config/xg.xlsx" | cut -d' ' -f1)
 if [ "$before" = "$after" ]; then
     _pass "干净保存没有重写工作簿"
 else

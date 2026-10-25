@@ -205,7 +205,7 @@ max_level|int|100|cs|等级上限
 
 ## 五之二、Xlsx 组（工作簿组）
 
-有的项目把数据放在 `<group>.xlsx` 里：**一个组一个工作簿，节点 = sheet**。工具把它当普通组用——
+有的项目把数据放在 `config/<group>.xlsx` 里：**一个组一个工作簿，节点 = sheet**。工具把它当普通组用——
 `validate` / `export` / `schema show` 完全一样，导出结果和 `.tbl` 组没有区别。
 
 - **结构仍然在 `project.tblschema`**：字段名 / 类型 / export / 顺序以 section 为准；sheet 只是数据。
@@ -340,7 +340,7 @@ tablet-cli -w <config仓库根> --project game export code --csharp-unity
 ## 九、仓库约定（.gitignore）
 
 **必须提交**：`tablet.toml`、`projects/<id>/project.tblschema`、`projects/<id>/project.toml`（若存在）、
-`projects/<id>/config/**`（`.tbl` 文件，以及 xlsx 组的 `<group>.xlsx`）。
+`projects/<id>/config/**`（`.tbl` 文件，以及 xlsx 组的 `config/<group>.xlsx`）。
 
 **应忽略**（工具产生的临时物 / 派生产物）：
 

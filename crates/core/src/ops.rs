@@ -15,6 +15,10 @@ pub fn format_validation_log(group: &str, node: &str, err: &ValidationError) -> 
         Severity::Warning => "[警告]",
         Severity::Info => "[信息]",
     };
+    if err.code == ValidationCode::NodeNameDuplicate {
+        // 节点名是项目级错误，没有表头/单元格位置，不要伪装成“表头A列”。
+        return format!("{} {}/{} -> {}", tag, group, node, err.message);
+    }
     if err.is_schema() {
         let col = col_letter(err.col);
         let field = if err.field.is_empty() { "?".to_string() } else { err.field.clone() };
@@ -46,12 +50,14 @@ fn truncate_display(s: &str, max: usize) -> String {
 /// 在 existing 集合里找一个不冲突的名字：先试 `<base>_copy`，再 `_copy2`、`_copy3` …
 /// 直到 1000 次还没找到就返回 `<base>_copy_<timestamp_ms>` 兜底。
 fn dedupe_name<'a, I: IntoIterator<Item = &'a str>>(base: &str, existing: I) -> String {
-    let set: std::collections::HashSet<&str> = existing.into_iter().collect();
+    // 组名唯一性按忽略大小写判定（与 validate_group_name 一致）。
+    let set: std::collections::HashSet<String> =
+        existing.into_iter().map(str::to_lowercase).collect();
     let first = format!("{}_copy", base);
-    if !set.contains(first.as_str()) { return first; }
+    if !set.contains(&first.to_lowercase()) { return first; }
     for n in 2..1000 {
         let candidate = format!("{}_copy{}", base, n);
-        if !set.contains(candidate.as_str()) { return candidate; }
+        if !set.contains(&candidate.to_lowercase()) { return candidate; }
     }
     format!("{}_copy_{}", base, chrono::Local::now().timestamp_millis())
 }
@@ -66,6 +72,112 @@ fn dedupe_name<'a, I: IntoIterator<Item = &'a str>>(base: &str, existing: I) -> 
 fn sync_schema_from_groups(project: &mut Project) {
     // sync 永远不带 preset：project.tblschema 是「结构骨架」，行数据归项目里的 .tbl
     project.resync_schema();
+}
+
+/// 项目内全部未删除节点名（Table / Constant / Enum 平铺命名空间）。
+fn all_project_node_names(project: &Project) -> Vec<String> {
+    let mut out = Vec::new();
+    for g in &project.groups {
+        out.extend(g.tables.iter().filter(|t| !t.deleted).map(|t| t.name.clone()));
+        out.extend(g.constants.iter().filter(|c| !c.deleted).map(|c| c.name.clone()));
+        out.extend(g.enums.iter().filter(|e| !e.deleted).map(|e| e.name.clone()));
+    }
+    out
+}
+
+/// 节点名冲突判定：项目级唯一，忽略大小写（与输入校验一致）。
+fn node_name_taken(names: &[String], candidate: &str) -> bool {
+    names.iter().any(|n| n.eq_ignore_ascii_case(candidate))
+}
+
+/// 在项目级节点名集合里取一个不冲突的名字，并把它加入集合。
+/// 先试 `<base>_copy`，再 `_copy2`…，与组重名规则一致。
+fn dedupe_node_name(base: &str, names: &mut Vec<String>) -> String {
+    if !node_name_taken(names, base) {
+        names.push(base.to_string());
+        return base.to_string();
+    }
+    for n in 1..1000 {
+        let candidate = if n == 1 {
+            format!("{}_copy", base)
+        } else {
+            format!("{}_copy{}", base, n)
+        };
+        if !node_name_taken(names, &candidate) {
+            names.push(candidate.clone());
+            return candidate;
+        }
+    }
+    let fallback = format!("{}_copy_{}", base, chrono::Local::now().timestamp_millis());
+    names.push(fallback.clone());
+    fallback
+}
+
+/// 把组内所有 `@Old` 类型引用 / `ref_exists(Old, ...)` 规则改写到映射后的名字。
+fn rewrite_group_refs(group: &mut Group, mapping: &HashMap<String, String>) {
+    if mapping.is_empty() {
+        return;
+    }
+    for t in &mut group.tables {
+        for f in &mut t.schema.fields {
+            for (old, new) in mapping {
+                if let Some(txt) = rename_ref_in_type(&f.tbl_type, old, new) {
+                    f.tbl_type = txt;
+                }
+            }
+        }
+        rewrite_rule_refs(&mut t.rules, mapping);
+    }
+    for c in &mut group.constants {
+        for e in &mut c.entries {
+            for (old, new) in mapping {
+                if let Some(txt) = rename_ref_in_type(&e.tbl_type, old, new) {
+                    e.tbl_type = txt;
+                }
+            }
+        }
+    }
+    for e in &mut group.enums {
+        rewrite_rule_refs(&mut e.rules, mapping);
+    }
+}
+
+fn rewrite_node_body_refs(body: &mut NodeBody, mapping: &HashMap<String, String>) {
+    if mapping.is_empty() {
+        return;
+    }
+    match body {
+        NodeBody::Table(t) => {
+            for f in &mut t.schema.fields {
+                for (old, new) in mapping {
+                    if let Some(txt) = rename_ref_in_type(&f.tbl_type, old, new) {
+                        f.tbl_type = txt;
+                    }
+                }
+            }
+            rewrite_rule_refs(&mut t.rules, mapping);
+        }
+        NodeBody::Constant(c) => {
+            for e in &mut c.entries {
+                for (old, new) in mapping {
+                    if let Some(txt) = rename_ref_in_type(&e.tbl_type, old, new) {
+                        e.tbl_type = txt;
+                    }
+                }
+            }
+        }
+        NodeBody::Enum(e) => rewrite_rule_refs(&mut e.rules, mapping),
+    }
+}
+
+fn rewrite_rule_refs(rules: &mut [Rule], mapping: &HashMap<String, String>) {
+    for r in rules {
+        if let RuleKind::RefExists { target_node, .. } = &mut r.kind {
+            if let Some(new) = mapping.get(target_node) {
+                *target_node = new.clone();
+            }
+        }
+    }
 }
 
 /// 取一个节点的完整快照，给撤销栈用。找不到返回 None。
@@ -247,7 +359,34 @@ fn apply_pending_renames(project: &mut Project) -> Vec<String> {
         // 记住改名前盘上的名字：组改名块之后 `original_name` 就被就地更新了，
         // 而工作簿文件还叫旧名（目录搬完，里面的文件不会跟着改）。
         let old_group_name = group.original_name.clone();
-        // ── 组目录 ──
+
+        // Xlsx 组：根级 `<group>.xlsx`，没有组目录。改名只搬工作簿文件。
+        if group.is_xlsx() {
+            group.dir = data_dir.clone();
+            let old_book = data_dir.join(format!("{}.xlsx", old_group_name));
+            let new_book = data_dir.join(format!("{}.xlsx", group.name));
+            let mut final_book = new_book.clone();
+            if old_group_name != group.name && old_book.is_file() {
+                match std::fs::rename(&old_book, &new_book) {
+                    Ok(()) => {}
+                    Err(e) => {
+                        warnings.push(format!(
+                            "重命名工作簿 {} → {} 失败，保留原名: {}",
+                            old_book.display(), new_book.display(), e
+                        ));
+                        group.name = old_group_name.clone();
+                        final_book = old_book;
+                    }
+                }
+            }
+            for t in &mut group.tables { t.path = final_book.clone(); }
+            for c in &mut group.constants { c.path = final_book.clone(); }
+            for e in &mut group.enums { e.path = final_book.clone(); }
+            group.original_name = group.name.clone();
+            continue;
+        }
+
+        // ── 组目录（仅 Tbl 组）──
         if group.original_name != group.name {
             let old_dir = data_dir.join(&group.original_name);
             let new_dir = data_dir.join(&group.name);
@@ -278,26 +417,6 @@ fn apply_pending_renames(project: &mut Project) -> Vec<String> {
         }
         // 组目录定下来后重算子节点 path：`dir` 变了，叶子名没变的也得跟着改
         let dir = group.dir.clone();
-
-        // Xlsx 组：工作簿文件名跟着组名走，节点没有自己的文件；节点改名在
-        // `save_xlsx_group` 里落成 sheet 改名（那边才知道 original_name）。
-        if group.is_xlsx() {
-            let book = group.book_path();
-            let old_book = dir.join(format!("{}.xlsx", old_group_name));
-            if old_book != book && old_book.is_file() {
-                if let Err(e) = std::fs::rename(&old_book, &book) {
-                    warnings.push(format!(
-                        "重命名工作簿 {} → {} 失败: {}",
-                        old_book.display(), book.display(), e
-                    ));
-                }
-            }
-            for t in &mut group.tables { t.path = book.clone(); }
-            for c in &mut group.constants { c.path = book.clone(); }
-            for e in &mut group.enums { e.path = book.clone(); }
-            group.original_name = group.name.clone();
-            continue;
-        }
 
         for t in &mut group.tables { t.path = dir.join(format!("{}.tbl", t.name)); }
         for c in &mut group.constants { c.path = dir.join(format!("{}.tbl", c.name)); }
@@ -379,14 +498,16 @@ fn save_project_files(project: &mut Project) -> (usize, usize, Vec<String>, bool
         // （应对"项目设置"修改 id 的场景：id 改了、project_root 更新了，但子节点路径还是旧的）
         let new_data_dir = project.data_dir();
         for group in &mut project.groups {
-            group.dir = new_data_dir.join(&group.name);
-            let book = group.book_path();
             if group.is_xlsx() {
+                // Xlsx 组：工作簿直接在 config 根，没有组目录。
+                group.dir = new_data_dir.clone();
+                let book = group.book_path();
                 for table in &mut group.tables { table.path = book.clone(); }
                 for constant in &mut group.constants { constant.path = book.clone(); }
                 for enum_def in &mut group.enums { enum_def.path = book.clone(); }
                 continue;
             }
+            group.dir = new_data_dir.join(&group.name);
             for table in &mut group.tables {
                 table.path = group.dir.join(format!("{}.tbl", table.name));
             }
@@ -718,9 +839,7 @@ fn save_xlsx_group(group: &mut crate::model::Group) -> XlsxSaveOutcome {
             let _ = std::fs::remove_file(&path);
             out.deleted += 1;
         }
-        if group.dir.is_dir() {
-            let _ = std::fs::remove_dir_all(&group.dir);
-        }
+        // Xlsx 组的 dir 是 config 根，绝不能 remove_dir_all；只删工作簿本身。
         out.emptied = true;
         return out;
     }
@@ -1134,6 +1253,24 @@ pub enum NodeKind {
     Table,
     Constant,
     Enum,
+}
+
+/// 粘贴组预览里的一行。
+#[derive(Clone, Debug)]
+pub struct PasteNodePreview {
+    pub kind: NodeKind,
+    pub old_name: String,
+    pub new_name: String,
+    pub conflict: bool,
+}
+
+/// 粘贴组前的只读预览：用于「有冲突才弹命名确认」。
+#[derive(Clone, Debug)]
+pub struct PasteGroupPreview {
+    pub group_name: String,
+    pub group_conflict: bool,
+    pub nodes: Vec<PasteNodePreview>,
+    pub has_conflict: bool,
 }
 
 /// 跨 project 复制粘贴的节点载荷（深拷贝）。
@@ -1558,9 +1695,36 @@ impl ProjectEngine {
 
         let new_data_dir = new_project.data_dir();
         for g in &mut new_project.groups {
-            g.dir = new_data_dir.join(&g.name);
             g.original_name = g.name.clone();
             g.is_new = true;
+            if g.is_xlsx() {
+                g.dir = new_data_dir.clone();
+                let book = g.book_path();
+                for t in &mut g.tables {
+                    t.path = book.clone();
+                    t.dirty = true;
+                    t.original_records.clear();
+                    t.original_fields.clear();
+                    t.original_rules.clear();
+                    t.saved = false;
+                    t.original_name = t.name.clone();
+                }
+                for c in &mut g.constants {
+                    c.path = book.clone();
+                    c.dirty = true;
+                    c.original_entries.clear(); c.saved = false;
+                    c.original_name = c.name.clone();
+                }
+                for e in &mut g.enums {
+                    e.path = book.clone();
+                    e.dirty = true;
+                    e.original_entries.clear(); e.saved = false;
+                    e.original_rules.clear();
+                    e.original_name = e.name.clone();
+                }
+                continue;
+            }
+            g.dir = new_data_dir.join(&g.name);
             for t in &mut g.tables {
                 t.path = g.dir.join(format!("{}.tbl", t.name));
                 t.dirty = true;
@@ -2693,6 +2857,7 @@ impl ProjectEngine {
                 }
             }
         }
+        out.extend(validate_project_node_names(&self.project().groups));
         // 被策略忽略的级别不产生任何结果
         out.retain(|(_, _, e)| policy.action(e.severity) != crate::model::SeverityAction::Ignore);
         out
@@ -2812,6 +2977,13 @@ impl ProjectEngine {
                 }
             }
         }
+        // 节点名是项目级平铺命名空间：每次重算本节点时也刷新它的重名错误。
+        issues.extend(
+            validate_project_node_names(&self.project().groups)
+                .into_iter()
+                .filter(|(g, n, _)| g == group && n == name)
+                .map(|(_, _, e)| e),
+        );
         for err in issues {
             match policy.action(err.severity) {
                 crate::model::SeverityAction::Block => {
@@ -3201,22 +3373,25 @@ impl ProjectEngine {
                 engine.warn_log("剪贴板为空或类型不匹配（需要节点剪贴板）".to_string());
                 return None;
             };
-            let project = engine.find_project_mut(target_project)?;
-            let g = project.groups.iter_mut().find(|g| g.name == target_group)?;
-            let mut existing: Vec<String> = Vec::new();
-            existing.extend(g.tables.iter().map(|t| t.name.clone()));
-            existing.extend(g.constants.iter().map(|c| c.name.clone()));
-            existing.extend(g.enums.iter().map(|e| e.name.clone()));
             let base = match &body {
                 NodeBody::Table(t) => t.name.clone(),
                 NodeBody::Constant(c) => c.name.clone(),
                 NodeBody::Enum(e) => e.name.clone(),
             };
-            let final_name = if existing.iter().any(|n| n == &base) {
-                dedupe_name(&base, existing.iter().map(String::as_str))
-            } else {
-                base.clone()
-            };
+            // 节点名是项目级平铺命名空间：不能只查目标 Group。
+            let mut existing = engine
+                .find_project(target_project)
+                .map(all_project_node_names)
+                .unwrap_or_default();
+            let final_name = dedupe_node_name(&base, &mut existing);
+            let mut body = body;
+            if final_name != base {
+                let mut mapping = HashMap::new();
+                mapping.insert(base, final_name.clone());
+                rewrite_node_body_refs(&mut body, &mapping);
+            }
+            let project = engine.find_project_mut(target_project)?;
+            let g = project.groups.iter_mut().find(|g| g.name == target_group)?;
             let new_path = if g.is_xlsx() { g.book_path() } else { g.dir.join(format!("{}.tbl", final_name)) };
             let kind_label = match body {
                 NodeBody::Table(mut t) => {
@@ -3268,6 +3443,44 @@ impl ProjectEngine {
         })
     }
 
+    /// 只读预览：计算整组粘贴后的组名 / 子项名，以及是否存在项目级命名冲突。
+    /// 不修改任何数据；调用方据此决定直接粘贴还是打开命名确认对话框。
+    pub fn preview_paste_group(&self, target_project: &str) -> Option<PasteGroupPreview> {
+        let NodeClipboard::Group { snapshot, .. } = self.node_clipboard.clone()? else {
+            return None;
+        };
+        let project = self.find_project(target_project)?;
+        let existing_groups: Vec<String> = project.groups.iter().map(|g| g.name.clone()).collect();
+        let group_conflict = existing_groups.iter().any(|n| n.eq_ignore_ascii_case(&snapshot.name));
+        let group_name = if group_conflict {
+            dedupe_name(&snapshot.name, existing_groups.iter().map(String::as_str))
+        } else {
+            snapshot.name.clone()
+        };
+        let mut used = all_project_node_names(project);
+        let mut nodes = Vec::new();
+        let mut any_conflict = group_conflict;
+        for t in &snapshot.tables {
+            let old = t.name.clone();
+            let new = dedupe_node_name(&old, &mut used);
+            any_conflict |= new != old;
+            nodes.push(PasteNodePreview { kind: NodeKind::Table, old_name: old, new_name: new.clone(), conflict: new != t.name });
+        }
+        for c in &snapshot.constants {
+            let old = c.name.clone();
+            let new = dedupe_node_name(&old, &mut used);
+            any_conflict |= new != old;
+            nodes.push(PasteNodePreview { kind: NodeKind::Constant, old_name: old, new_name: new.clone(), conflict: new != c.name });
+        }
+        for e in &snapshot.enums {
+            let old = e.name.clone();
+            let new = dedupe_node_name(&old, &mut used);
+            any_conflict |= new != old;
+            nodes.push(PasteNodePreview { kind: NodeKind::Enum, old_name: old, new_name: new.clone(), conflict: new != e.name });
+        }
+        Some(PasteGroupPreview { group_name, group_conflict, nodes, has_conflict: any_conflict })
+    }
+
     /// 粘贴整组到目标 project，作为兄弟 Group。
     /// - group 名字冲突走 `_copy` / `_copy2`
     /// - group.dir 重写到 `<project.data_dir()>/<final_name>`，is_new=true（save 时建目录）
@@ -3287,29 +3500,120 @@ impl ProjectEngine {
         target_project: &str,
         storage: Option<crate::model::GroupStorage>,
     ) -> Option<String> {
+        self.paste_group_impl(target_project, storage, None).ok()
+    }
+
+    /// 粘贴整组，使用调用方在「粘贴命名」对话框里确认过的组名 / 子项名。
+    /// 确认时仍会按项目级唯一性再校验一次，失败不落任何数据。
+    pub fn paste_group_as_with_names(
+        &mut self,
+        target_project: &str,
+        storage: Option<crate::model::GroupStorage>,
+        group_name: &str,
+        node_names: &std::collections::BTreeMap<String, String>,
+    ) -> Result<String, String> {
+        self.paste_group_impl(target_project, storage, Some((group_name, node_names)))
+    }
+
+    fn paste_group_impl(
+        &mut self,
+        target_project: &str,
+        storage: Option<crate::model::GroupStorage>,
+        plan: Option<(&str, &std::collections::BTreeMap<String, String>)>,
+    ) -> Result<String, String> {
         self.with_project_tx(target_project, "粘贴 Group", |engine| {
             let Some(NodeClipboard::Group { snapshot, .. }) = engine.node_clipboard.clone() else {
-                engine.warn_log("剪贴板为空或类型不匹配（需要 Group 剪贴板）".to_string());
-                return None;
+                let msg = "剪贴板为空或类型不匹配（需要 Group 剪贴板）".to_string();
+                engine.warn_log(msg.clone());
+                return Err(msg);
             };
-            let project = engine.find_project_mut(target_project)?;
-            let existing: Vec<String> = project.groups.iter().map(|g| g.name.clone()).collect();
-            let final_name = if existing.iter().any(|n| n == &snapshot.name) {
-                dedupe_name(&snapshot.name, existing.iter().map(String::as_str))
-            } else {
-                snapshot.name.clone()
+            let project = engine
+                .find_project_mut(target_project)
+                .ok_or_else(|| format!("Project 不存在: {}", target_project))?;
+            let existing_groups: Vec<String> = project.groups.iter().map(|g| g.name.clone()).collect();
+            let data_dir = project.data_dir();
+
+            let final_group = match plan {
+                Some((name, _)) => {
+                    if !crate::validate::is_valid_group_name(name) {
+                        return Err("组名只能包含中英文数字下划线".to_string());
+                    }
+                    if existing_groups.iter().any(|n| n.eq_ignore_ascii_case(name)) {
+                        return Err(format!("组名重复（忽略大小写）: {}", name));
+                    }
+                    name.to_string()
+                }
+                None => {
+                    if existing_groups.iter().any(|n| n.eq_ignore_ascii_case(&snapshot.name)) {
+                        dedupe_name(&snapshot.name, existing_groups.iter().map(String::as_str))
+                    } else {
+                        snapshot.name.clone()
+                    }
+                }
             };
-            let new_dir = project.data_dir().join(&final_name);
+
             let mut new_group = snapshot;
             if let Some(st) = storage {
                 new_group.storage = st;
             }
-            new_group.name = final_name.clone();
-            new_group.original_name = final_name.clone();
+            let new_dir = if new_group.is_xlsx() {
+                data_dir
+            } else {
+                data_dir.join(&final_group)
+            };
+            new_group.name = final_group.clone();
             new_group.dir = new_dir.clone();
             new_group.is_new = true;
-            // 新组盘上还没有文件；Xlsx 组的节点 path 统一指向（尚不存在的）工作簿。
             new_group.book_stamp = None;
+
+            // 子项是项目级平铺命名空间：按项目现有节点去重/校验，并记录旧名 → 新名。
+            let mut used_nodes = all_project_node_names(project);
+            let mut mapping: HashMap<String, String> = HashMap::new();
+            let mut apply_name = |old: &str,
+                                  kind: NodeKind,
+                                  used: &mut Vec<String>|
+             -> Result<String, String> {
+                let new = match plan {
+                    Some((_, names)) => names.get(old).cloned().unwrap_or_else(|| old.to_string()),
+                    None => dedupe_node_name(old, used),
+                };
+                if plan.is_some() {
+                    if !crate::validate::is_valid_node_name(&new) {
+                        return Err(format!(
+                            "{} {} 的名字不符合 Java 类名规则（大写开头，英文数字下划线）",
+                            match kind {
+                                NodeKind::Table => "Table",
+                                NodeKind::Constant => "Constant",
+                                NodeKind::Enum => "Enum",
+                            },
+                            new
+                        ));
+                    }
+                    if node_name_taken(used, &new) {
+                        return Err(format!("节点名已存在（项目内唯一，忽略大小写）: {}", new));
+                    }
+                    used.push(new.clone());
+                }
+                if new != old {
+                    mapping.insert(old.to_string(), new.clone());
+                }
+                Ok(new)
+            };
+
+            for t in &mut new_group.tables {
+                let old = t.name.clone();
+                t.name = apply_name(&old, NodeKind::Table, &mut used_nodes)?;
+            }
+            for c in &mut new_group.constants {
+                let old = c.name.clone();
+                c.name = apply_name(&old, NodeKind::Constant, &mut used_nodes)?;
+            }
+            for e in &mut new_group.enums {
+                let old = e.name.clone();
+                e.name = apply_name(&old, NodeKind::Enum, &mut used_nodes)?;
+            }
+            rewrite_group_refs(&mut new_group, &mapping);
+
             let is_xlsx = new_group.is_xlsx();
             let book = new_dir.join(format!("{}.xlsx", new_group.name));
             for t in &mut new_group.tables {
@@ -3338,16 +3642,17 @@ impl ProjectEngine {
                 new_group.constants.len(),
                 new_group.enums.len(),
             );
+            new_group.original_name = final_group.clone();
             project.groups.push(new_group);
             sync_schema_from_groups(project);
-            engine.ui_log(format!("已粘贴 Group 到 {}/{}（{}）", target_project, final_name, summary));
+            engine.ui_log(format!("已粘贴 Group 到 {}/{}（{}）", target_project, final_group, summary));
             let prev = engine.active_idx;
             if let Some(idx) = engine.projects.iter().position(|p| p.schema.meta.id == target_project) {
                 engine.active_idx = Some(idx);
                 engine.revalidate_all();
                 engine.active_idx = prev;
             }
-            Some(final_name)
+            Ok(final_group)
         })
     }
 
@@ -3388,7 +3693,10 @@ impl ProjectEngine {
                     self.ui_log(format!("Project 不存在: {}", project_id));
                     return;
                 };
-                let dir = project.data_dir().join(name);
+                let dir = match storage {
+                    GroupStorage::Xlsx => project.data_dir(),
+                    GroupStorage::Tbl => project.data_dir().join(name),
+                };
                 project.groups.push(Group {
                     name: name.clone(),
                     original_name: name.clone(),
@@ -3501,17 +3809,18 @@ impl ProjectEngine {
                 let pid = project_id.clone();
                 if let Some(project) = self.find_project_mut(&pid) {
                     let config_dir = project.data_dir();
-                    let new_dir = config_dir.join(new_name);
                     if let Some(g) = project.groups.iter_mut().find(|g| g.name == *old_name) {
-                        // **只改内存**：盘上还是旧目录名，save 时才搬（见 apply_pending_renames）。
-                        // 以前这里立刻 `fs::rename`，于是「文件已经动了」与「schema 还没写」
-                        // 同时成立——树上那个 🟡 说不清究竟是什么没保存。
+                        // **只改内存**：盘上还是旧名字，save 时才搬（见 apply_pending_renames）。
+                        let is_xlsx = g.is_xlsx();
+                        let new_dir = if is_xlsx {
+                            config_dir.clone()
+                        } else {
+                            config_dir.join(new_name)
+                        };
                         g.name = new_name.clone();
                         g.dir = new_dir.clone();
-                        // 同步组下子节点的 path（Tbl 组每个 .tbl 在 group dir 下；
-                        // Xlsx 组统一指向工作簿，文件名在 save 时才跟着组名搬）
-                        let book = new_dir.join(format!("{}.xlsx", g.name));
-                        let is_xlsx = g.is_xlsx();
+                        // Tbl 组每个 .tbl 在 group dir 下；Xlsx 组统一指向根级工作簿。
+                        let book = g.book_path();
                         for t in &mut g.tables {
                             t.path = if is_xlsx { book.clone() } else { new_dir.join(format!("{}.tbl", t.name)) };
                         }
@@ -3543,7 +3852,11 @@ impl ProjectEngine {
                 let mut refs_rewritten = 0usize;
                 if let Some(project) = self.find_project_mut(project_id) {
                     if let Some(g) = project.groups.iter_mut().find(|g| g.name == *group) {
-                        let new_path = g.dir.join(format!("{}.tbl", new_name));
+                        let new_path = if g.is_xlsx() {
+                            g.book_path()
+                        } else {
+                            g.dir.join(format!("{}.tbl", new_name))
+                        };
                         // 同 RenameGroup：只改内存，落盘留给 save。
                         // `original_name` 保持旧值 —— 它记的是「盘上叫什么」，save 才更新。
                         if let Some(t) = g.tables.iter_mut().find(|t| t.name == *old_name) {
@@ -3794,6 +4107,7 @@ impl ProjectEngine {
                 }
             }
         }
+        issues.extend(validate_project_node_names(&project.groups));
         issues.retain(|(_, _, e)| policy.action(e.severity) != crate::model::SeverityAction::Ignore);
         issues
     }
@@ -4544,7 +4858,7 @@ package = \"com.user.kept\"
         };
         project.groups.push(Group {
             name: "xg".into(), original_name: "xg".into(),
-            dir: dir.join("xg"),
+            dir: dir.join("projects").join("p1").join("config"),
             tables: vec![b], constants: Vec::new(), enums: Vec::new(),
             is_new: false, storage: crate::model::GroupStorage::Xlsx, book_stamp: None,
         });
@@ -4620,7 +4934,7 @@ package = \"com.user.kept\"
         };
         project.groups.push(Group {
             name: "xg".into(), original_name: "xg".into(),
-            dir: dir.join("xg"),
+            dir: dir.join("projects").join("p1").join("config"),
             tables: vec![t], constants: Vec::new(), enums: Vec::new(),
             is_new: false, storage: crate::model::GroupStorage::Xlsx, book_stamp: None,
         });
@@ -4804,7 +5118,7 @@ package = \"com.user.kept\"
     }
 
     fn xlsx_book(dir: &Path) -> PathBuf {
-        config_dir(dir).join("xg").join("xg.xlsx")
+        config_dir(dir).join("xg.xlsx")
     }
 
     #[test]
@@ -4827,6 +5141,67 @@ package = \"com.user.kept\"
         assert_eq!(t.schema.fields[1].desc, "名字");
         assert!(!loaded.is_dirty(), "刚加载的项目不该是脏的");
 
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn renaming_xlsx_group_moves_root_workbook() {
+        let (dir, mut engine) = engine_with_xlsx_group("xlsx_rename");
+        assert!(engine.save_all());
+        let pid = engine.active_project_id().unwrap().to_string();
+        engine.execute_action(&ProjectAction::RenameGroup {
+            project_id: pid,
+            old_name: "xg".into(),
+            new_name: "yg".into(),
+        });
+        assert!(engine.save_all(), "改名后应能保存");
+        assert!(!config_dir(&dir).join("xg.xlsx").exists(), "旧工作簿不应还在");
+        assert!(config_dir(&dir).join("yg.xlsx").is_file(), "新工作簿应在 config 根");
+        let loaded = crate::project::load_specific_project(&dir, "p1").expect("reload");
+        let g = loaded.groups.iter().find(|g| g.name == "yg").expect("yg");
+        assert_eq!(g.storage, crate::model::GroupStorage::Xlsx);
+        assert_eq!(g.dir, config_dir(&dir), "xlsx 组的 dir 是 config 根");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn emptying_xlsx_group_never_deletes_config_root() {
+        let (dir, mut engine) = engine_with_xlsx_group("xlsx_empty_cleanup");
+        assert!(engine.save_all());
+        engine.delete_node("xg", "Hot");
+        assert!(engine.save_all(), "删空组应能保存");
+        assert!(!config_dir(&dir).join("xg.xlsx").exists(), "工作簿应被删除");
+        assert!(config_dir(&dir).is_dir(), "config 根绝不能跟着被删");
+        assert!(config_dir(&dir).join("hero").join("A.tbl").is_file(), "其它组不受影响");
+        let loaded = crate::project::load_specific_project(&dir, "p1").expect("reload");
+        assert!(!loaded.groups.iter().any(|g| g.name == "xg"), "空组应消失");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn old_xlsx_directory_layout_is_rejected() {
+        let (dir, mut engine) = engine_with_xlsx_group("xlsx_old_layout");
+        assert!(engine.save_all());
+        let config = config_dir(&dir);
+        let old_dir = config.join("xg");
+        std::fs::create_dir_all(&old_dir).unwrap();
+        std::fs::rename(config.join("xg.xlsx"), old_dir.join("xg.xlsx")).unwrap();
+        let err = crate::project::load_specific_project(&dir, "p1")
+            .expect_err("旧布局必须报错")
+            .to_string();
+        assert!(err.contains("旧布局"), "错误应指出旧布局: {err}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn duplicate_xlsx_dir_and_file_is_rejected() {
+        let (dir, mut engine) = engine_with_xlsx_group("xlsx_dup");
+        assert!(engine.save_all());
+        std::fs::create_dir_all(config_dir(&dir).join("xg")).unwrap();
+        let err = crate::project::load_specific_project(&dir, "p1")
+            .expect_err("同名目录和工作簿必须报错")
+            .to_string();
+        assert!(err.contains("同时存在"), "错误应指出同名冲突: {err}");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -5028,6 +5403,178 @@ package = \"com.user.kept\"
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// 整组粘贴时，子项也要按项目级唯一命名空间加 `_copy`，并改写组内引用。
+    #[test]
+    fn pasting_group_suffixes_colliding_children_and_rewrites_refs() {
+        use crate::model::GroupStorage;
+        let (dir, mut engine) = engine_with_saved_node("paste_child_dedupe", "hero", "A");
+        let pid = engine.active_project_id().unwrap().to_string();
+        engine.execute_action(&ProjectAction::NewTable {
+            project_id: pid.clone(), group: "hero".into(), name: "B".into(),
+            fmt_ver: crate::tbl::DEFAULT_TBL_VERSION,
+        });
+        {
+            let t = engine.find_table_mut("hero", "A").expect("A");
+            t.schema.fields.push(FieldDef {
+                name: "self_ref".into(),
+                desc: String::new(),
+                tbl_type: "@A".into(),
+                export: Export::ClientServer,
+            });
+            t.schema.fields.push(FieldDef {
+                name: "other_ref".into(),
+                desc: String::new(),
+                tbl_type: "@B".into(),
+                export: Export::ClientServer,
+            });
+            t.records[0].push("1".into());
+            t.records[0].push(String::new());
+            t.update_dirty();
+        }
+        engine.clipboard_copy_group(&pid, "hero");
+        let new_group = engine.paste_group_as(&pid, Some(GroupStorage::Xlsx)).expect("粘贴应成功");
+        let project = engine.find_project(&pid).unwrap();
+        let pasted = project.groups.iter().find(|g| g.name == new_group).expect("新组");
+        assert!(pasted.tables.iter().any(|t| t.name == "B_copy"), "第二个子项也要加 _copy");
+        let t = pasted.tables.iter().find(|t| t.name == "A_copy").expect("子项应加 _copy");
+        assert_eq!(t.schema.fields[1].tbl_type, "@A_copy", "自引用必须跟着改名");
+        assert_eq!(t.schema.fields[2].tbl_type, "@B_copy", "对同组其它节点的引用也必须跟着改名");
+        assert!(engine.validate().iter().all(|e| !e.contains("节点名")), "不应有重名错误: {:?}", engine.validate());
+        assert!(engine.save_all(), "去重后应能保存: {:?}", engine.validate());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 粘贴命名对话框的数据侧：预览给出 `_copy` 预填，确认时用用户改的名字
+    /// 一次性完成改名 + 组内引用改写；名字非法/重复则不落任何数据。
+    #[test]
+    fn preview_then_named_paste_rewrites_refs_and_rejects_duplicates() {
+        use crate::model::GroupStorage;
+        use std::collections::BTreeMap;
+
+        let (dir, mut engine) = engine_with_saved_node("paste_named_preview", "hero", "A");
+        let pid = engine.active_project_id().unwrap().to_string();
+        engine.execute_action(&ProjectAction::NewTable {
+            project_id: pid.clone(), group: "hero".into(), name: "B".into(),
+            fmt_ver: crate::tbl::DEFAULT_TBL_VERSION,
+        });
+        {
+            let t = engine.find_table_mut("hero", "A").expect("A");
+            t.schema.fields.push(FieldDef {
+                name: "self_ref".into(),
+                desc: String::new(),
+                tbl_type: "@A".into(),
+                export: Export::ClientServer,
+            });
+            t.schema.fields.push(FieldDef {
+                name: "other_ref".into(),
+                desc: String::new(),
+                tbl_type: "@B".into(),
+                export: Export::ClientServer,
+            });
+            t.records[0].push("1".into());
+            t.records[0].push(String::new());
+            t.update_dirty();
+        }
+        engine.clipboard_copy_group(&pid, "hero");
+
+        let preview = engine.preview_paste_group(&pid).expect("剪贴板里是 Group");
+        assert!(preview.has_conflict, "组名与子项名都冲突");
+        assert_eq!(preview.group_name, "hero_copy");
+        let row = |name: &str| preview.nodes.iter().find(|n| n.old_name == name).expect(name);
+        assert_eq!(row("A").new_name, "A_copy", "子项预填 _copy");
+        assert_eq!(row("B").new_name, "B_copy", "子项预填 _copy");
+
+        let mut names = BTreeMap::new();
+        names.insert("A".to_string(), "HeroA".to_string());
+        names.insert("B".to_string(), "HeroB".to_string());
+        let group = engine
+            .paste_group_as_with_names(&pid, Some(GroupStorage::Tbl), "hero_renamed", &names)
+            .expect("用户确认的名字应能粘贴");
+        assert_eq!(group, "hero_renamed");
+
+        let project = engine.find_project(&pid).unwrap();
+        let pasted = project.groups.iter().find(|g| g.name == group).expect("新组");
+        let a = pasted.tables.iter().find(|t| t.name == "HeroA").expect("改名后的 A");
+        let b = pasted.tables.iter().find(|t| t.name == "HeroB").expect("改名后的 B");
+        assert_eq!(a.schema.fields[1].tbl_type, "@HeroA", "自引用跟着改名");
+        assert_eq!(a.schema.fields[2].tbl_type, "@HeroB", "同组引用跟着改名");
+        assert_eq!(b.name, "HeroB");
+        assert!(engine.save_all(), "确认后的组应能保存: {:?}", engine.validate());
+
+        // 再次确认：同名计划必须整体失败，且不产生半截 Group。
+        let before = project_groups(&engine, &pid);
+        let mut dup = BTreeMap::new();
+        dup.insert("A".to_string(), "Same".to_string());
+        dup.insert("B".to_string(), "SAME".to_string());
+        let err = engine
+            .paste_group_as_with_names(&pid, Some(GroupStorage::Tbl), "hero_bad", &dup)
+            .expect_err("新组内两个子项同名必须拒绝");
+        assert!(err.contains("节点名已存在"), "{err}");
+        assert_eq!(project_groups(&engine, &pid), before, "失败不能留下任何组");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn project_groups(engine: &ProjectEngine, project_id: &str) -> Vec<String> {
+        engine
+            .find_project(project_id)
+            .map(|p| p.groups.iter().map(|g| g.name.clone()).collect())
+            .unwrap_or_default()
+    }
+
+    #[test]
+    fn pasting_node_uses_project_wide_name_uniqueness() {
+        use crate::model::GroupStorage;
+        let (dir, mut engine) = engine_with_saved_node("paste_node_dedupe", "hero", "A");
+        let pid = engine.active_project_id().unwrap().to_string();
+        engine.execute_action(&ProjectAction::NewGroup {
+            project_id: pid.clone(), name: "other".into(), storage: GroupStorage::Tbl,
+        });
+        engine.clipboard_copy_node(&pid, "hero", "A", NodeKind::Table);
+        let pasted = engine.paste_node_to(&pid, "other", None).expect("粘贴应成功");
+        assert_eq!(pasted, "A_copy", "目标组没有 A，但项目内已有 A，仍要加 _copy");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn duplicate_node_names_block_export() {
+        use crate::model::GroupStorage;
+        let (dir, mut engine) = engine_with_saved_node("dup_node_export", "hero", "A");
+        let pid = engine.active_project_id().unwrap().to_string();
+        engine.execute_action(&ProjectAction::NewGroup {
+            project_id: pid, name: "other".into(), storage: GroupStorage::Tbl,
+        });
+        engine.execute_action(&ProjectAction::NewTable {
+            project_id: engine.active_project_id().unwrap().to_string(),
+            group: "other".into(),
+            name: "A".into(),
+            fmt_ver: crate::tbl::DEFAULT_TBL_VERSION,
+        });
+        let err = engine.export_json().expect_err("重名必须阻断导出").to_string();
+        assert!(err.contains("节点名") && err.contains("重复"), "{err}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn duplicate_node_names_are_blocking_errors() {
+        use crate::model::GroupStorage;
+        let (dir, mut engine) = engine_with_saved_node("dup_node_name", "hero", "A");
+        let pid = engine.active_project_id().unwrap().to_string();
+        engine.execute_action(&ProjectAction::NewGroup {
+            project_id: pid, name: "other".into(), storage: GroupStorage::Tbl,
+        });
+        engine.execute_action(&ProjectAction::NewTable {
+            project_id: engine.active_project_id().unwrap().to_string(),
+            group: "other".into(),
+            name: "A".into(),
+            fmt_ver: crate::tbl::DEFAULT_TBL_VERSION,
+        });
+        engine.revalidate_all();
+        assert!(engine.validate().iter().any(|e| e.contains("节点名")), "应报节点名重复");
+        assert!(!engine.save_all(), "节点名重复必须阻断保存");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// 整组粘贴到另一种后端：节点内容不变，只换保存写入器（@02.26.8）。
     #[test]
     fn pasting_a_group_into_the_other_backend_converts_it() {
@@ -5041,7 +5588,7 @@ package = \"com.user.kept\"
         assert!(engine.save_all());
 
         // 新组：xlsx，工作簿里有 sheet A
-        let book = config_dir(&dir).join(&new_name).join(format!("{}.xlsx", new_name));
+        let book = config_dir(&dir).join(format!("{}.xlsx", new_name));
         assert!(book.is_file(), "应生成 {}", book.display());
         assert!(config_dir(&dir).join("hero").join("A.tbl").is_file(), "源组保持 tbl");
 
@@ -5049,7 +5596,7 @@ package = \"com.user.kept\"
         let pasted = loaded.groups.iter().find(|g| g.name == new_name).expect("新组");
         assert_eq!(pasted.storage, GroupStorage::Xlsx);
         assert_eq!(pasted.tables.len(), 1);
-        assert_eq!(pasted.tables[0].name, "A");
+        assert_eq!(pasted.tables[0].name, "A_copy", "子项必须带 _copy 后缀");
         assert_eq!(pasted.tables[0].records, vec![vec!["1".to_string()]]);
         let src = loaded.groups.iter().find(|g| g.name == "hero").expect("源组");
         assert_eq!(src.storage, GroupStorage::Tbl);
@@ -5065,7 +5612,7 @@ package = \"com.user.kept\"
     fn a_blocked_xlsx_save_writes_nothing_including_the_schema() {
         let (dir, mut engine) = engine_with_xlsx_group("xlsx_atomic");
         assert!(engine.save_all());
-        let book_dir = config_dir(&dir).join("xg");
+        let book_dir = config_dir(&dir);
         std::fs::write(book_dir.join("~$xg.xlsx"), b"lock").unwrap();
 
         let pid = engine.active_project_id().unwrap().to_string();
@@ -5092,7 +5639,7 @@ package = \"com.user.kept\"
     fn excel_lock_blocks_the_save() {
         let (dir, mut engine) = engine_with_xlsx_group("xlsx_lock");
         assert!(engine.save_all());
-        let lock = config_dir(&dir).join("xg").join("~$xg.xlsx");
+        let lock = config_dir(&dir).join("~$xg.xlsx");
         std::fs::write(&lock, b"lock").unwrap();
 
         {

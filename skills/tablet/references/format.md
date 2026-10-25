@@ -253,7 +253,7 @@ max_level|int|100|cs|等级上限
 
 ## 三、Xlsx 组（工作簿形态）
 
-一个组可以不用 `.tbl` 目录，而是**一个 `<group>.xlsx`**：sheet 名 = 节点名，数据在 sheet 里，
+一个组可以不用 `.tbl` 目录，而是 **`config/<group>.xlsx` 一个文件**：sheet 名 = 节点名，数据在 sheet 里，
 **结构（字段 / 类型 / export / 顺序）仍在 `project.tblschema` 的 section**。表头是派生显示。
 
 ```text
@@ -287,7 +287,7 @@ Enum sheet（1 行表头）
     ├── project.tblschema            结构投影（由 .tbl 生成）
     ├── project.toml                 可选的 [export] 覆盖
     ├── config/<group>/<Name>.tbl    Tbl 组：数据与结构真相源
-    ├── config/<group>/<group>.xlsx  Xlsx 组：数据真相源（结构在 project.tblschema）
+    ├── config/<group>.xlsx          Xlsx 组：数据真相源（结构在 project.tblschema）
     ├── gen/                         导出默认落点
     └── .tbl-cache/                  Excel 桥接临时文件
 ```

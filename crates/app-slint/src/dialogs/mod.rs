@@ -5,6 +5,7 @@
 pub mod alert;
 pub mod context_menu;
 pub mod pending;
+pub mod paste_group;
 pub mod type_selector;
 pub mod ref_picker;
 pub mod rules_panel;

@@ -339,6 +339,7 @@ pub fn export_enum_gd(enum_def: &EnumDef) -> String {
 }
 
 pub fn export_all_gdscript(project: &Project) -> Result<super::ExportResult> {
+    super::check_project_node_name_collisions(project)?;
     let export_cfg = &project.config.export;
     let client = export_cfg.client.as_ref();
     let gd = client.and_then(|c| c.gdscript.as_ref());

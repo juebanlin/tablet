@@ -61,7 +61,7 @@ tablet-cli schema delete-group --name <G>
 tablet-cli schema delete-node  --group <G> --name <N>
 ```
 
-`--storage xlsx` 建的是「工作簿组」：一组一个 `<group>.xlsx`，节点 = sheet，数据落在 Excel 里
+`--storage xlsx` 建的是「工作簿组」：一组一个 `config/<group>.xlsx`，节点 = sheet，数据落在 Excel 里
 （结构仍由 `project.tblschema` 的 section 决定）。默认 `tbl`。
 
 工作簿组对 `validate` / `export` / `schema show` 完全透明；`util` 系列是文件工具，不识别这种组。

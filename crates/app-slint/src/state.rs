@@ -527,6 +527,36 @@ impl PendingAction {
     }
 }
 
+/// 粘贴组命名对话框的一行子项。
+#[derive(Clone, Debug)]
+pub struct PasteGroupRowState {
+    pub kind: String,
+    pub old_name: String,
+    pub new_name: String,
+}
+
+/// 「粘贴 Group」冲突时的命名确认状态。
+#[derive(Default)]
+pub struct PasteGroupState {
+    pub open: bool,
+    pub target_project: String,
+    pub storage: tablet_core::model::GroupStorage,
+    pub group_name: String,
+    pub error: String,
+    pub rows: Vec<PasteGroupRowState>,
+}
+
+impl PasteGroupState {
+    pub fn close(&mut self) {
+        self.open = false;
+        self.target_project.clear();
+        self.storage = tablet_core::model::GroupStorage::Tbl;
+        self.group_name.clear();
+        self.error.clear();
+        self.rows.clear();
+    }
+}
+
 #[derive(Default)]
 pub struct PendingActionState {
     pub action: Option<PendingAction>,
@@ -957,6 +987,8 @@ pub struct AppState {
     pub ctx_menu: ContextMenuState,
     /// 待执行的 New/Rename/Delete 操作（Input/Confirm 对话框收集输入）
     pub pending: PendingActionState,
+    /// 粘贴 Group 冲突时的命名确认
+    pub paste_group: PasteGroupState,
     /// 数据导出对话框
     pub data_export: DataExportState,
     /// Schema 导出对话框
@@ -1071,6 +1103,7 @@ impl AppState {
             rules_panel: crate::dialogs::rules_panel::RulesPanelState::new(),
             ctx_menu: ContextMenuState::default(),
             pending: PendingActionState::default(),
+            paste_group: PasteGroupState::default(),
             data_export: DataExportState::default(),
             schema_export: SchemaExportState::default(),
             schema_import: SchemaImportState::default(),
