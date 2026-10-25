@@ -16,7 +16,7 @@ Thumbs.db
 
 # Tool cache
 .tbl-cache/
-.tablet.lock
+.data/
 tablet.log
 # legacy
 .tbl-tool.lock

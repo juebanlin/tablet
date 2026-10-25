@@ -246,6 +246,31 @@ ScrollView {
 
 实现：`crates/app-slint/ui/components/grid_area.slint` + `crates/app-slint/ui/dialogs/ref_picker.slint`。
 
+### 11.1 列宽（自适应 / 手动 / 本地持久化）
+
+- `GridArea` 新增 `in property <[length]> column-widths` 与 `in property <length> total-col-w`；
+  所有取宽走 `width-at(i)`（越界回退 `Theme.col-w`——Slint 越界读数组是 0px，会静默塌列）。
+  `content-w = total-col-w > 0 ? total-col-w : Theme.col-w * col-count` 兼容 GridAreaPreview。
+- 列字母行 / 每行表头 / 每个数据 cell 的 width 全部用 `width-at`；数据 ScrollView 的
+  viewport 宽度由这些 cell 自然撑出，表头 clip 内层用 `content-w`，三者必须同源。
+- `ExportDropdown` 是独立组件，宽度作为 `dd-w` 传入（`max(width-at(target), 96px)`）。
+- 拖拽 handle 是列字母 cell 右缘的 6px `TouchArea`，声明在列字母 TouchArea **之后**
+  （后声明优先命中）；`absolute-x = self.absolute-position.x + self.mouse-x` 交给 Rust，
+  Rust 用 `(start_abs_x, start_width)` 算 delta（handle 自己随宽度移动，不能用相对坐标）。
+  handle 必须转发右键给 `col-context-menu`，否则会吞掉列头菜单。
+- 实时拖动只 set `grid-column-widths` / `grid-total-col-w` / `grid-auto-width` 三个属性，
+  **不重建 header/data model**（避免破坏双击 / 编辑器 repeaters，见 §4）。
+- 命中测试：`mx` 是锚点 cell 左缘的相对坐标；目标列 =
+  `col_at_x(widths, sum(widths[..anchor_col]) + mx)`，边界归右侧列；`scroll-x` 抵消。
+  行仍按固定 22px。
+- 宽度估算/合并是纯函数（`convert/widths.rs`）：表头 11px、数据 12px、CJK/ASCII 估宽、
+  抽样 200 行、min 60 / max 480；手动宽度按列名合并（新列回退自动）。
+- **自动宽度和手动宽度是两套独立数据**：拖动/双击只写 `grid_width_manual`，从不修改
+  `grid_auto_widths`；双击边界的手动快捷操作会在自动模式下切手动并播种当前宽度，
+  但自动数据保持原值。
+- 状态与接线在 `ui/grid_layout.rs`；持久化 `UserData` 写 `<workdir>/.data/user-data.json`
+  的独立通道，**不参与** `save_all` / dirty / 校验。
+
 ## 12. 跨平台启动约定
 
 GUI（slint）与 CLI 都遵循同一套启动壳，平台差异通过 `cfg_attr` / `cfg!` 包起来，**不直接绑死任何平台**。
@@ -262,7 +287,7 @@ GUI（slint）与 CLI 都遵循同一套启动壳，平台差异通过 `cfg_attr
 
 ### 12.2 进程存活检测（lock 文件防双开）
 
-启动时写 `tablet.lock` 记录 PID；下一次启动若发现 lock 文件，验证 PID 是否还活着：
+启动时写 `.data/tablet.lock` 记录 PID；下一次启动若发现 lock 文件，验证 PID 是否还活着：
 
 | 平台 | 实现 |
 |------|------|

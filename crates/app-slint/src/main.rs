@@ -297,6 +297,7 @@ fn run_gui(workdir_arg: Option<PathBuf>) -> anyhow::Result<()> {
     // 注册全部 callback（顺序无关，只要在 ui.run() 之前）
     ui::tree::wire(&app_window, &app_state);
     ui::grid::wire(&app_window, &app_state);
+    ui::grid_layout::wire(&app_window, &app_state);
     ui::toolbar::wire(&app_window, &app_state);
     ui::focus::wire(&app_window, &app_state);
     ui::log_panel::wire(&app_window, &app_state);
@@ -323,6 +324,11 @@ fn run_gui(workdir_arg: Option<PathBuf>) -> anyhow::Result<()> {
     let _watch_timer = ui::watch::start(&app_window, &app_state);
 
     let result = app_window.run().map_err(|e| anyhow::anyhow!("{}", e));
+    // 用户习惯数据兜底保存（正常在拖拽结束/勾选/重置时已写）。
+    {
+        let mut st = app_state.borrow_mut();
+        ui::grid_layout::save_current(&mut st);
+    }
     // 退出清理（@plans §5.7）：清掉所有 Project 的 .tbl-cache/*.xlsx
     excel_bridge::cleanup_all_caches_on_exit(&app_state);
     result

@@ -41,8 +41,9 @@ export struct DataRow {
 // 由父级条件渲染控制可见性，dismiss TouchArea 见 GridArea 顶层。
 component ExportDropdown inherits Rectangle {
     in property <int> current-index: 0;
+    in property <length> dd-w: Theme.col-w;
     callback selected(int);
-    width: Theme.col-w;
+    width: root.dd-w;
     height: Theme.row-h * 4;
     background: Theme.bg-panel;
     border-color: Theme.border;
@@ -77,6 +78,10 @@ export component GridArea inherits Rectangle {
     // （ExportEnumCol → 弹 popup；其它 → 仅选中）。
     in property <[CellKind]> column-kinds;
     in property <int> col-count: 0;
+    // 每列宽度（px）。Rust 侧保证长度 >= col-count；越界时 width-at 回退 Theme.col-w。
+    in property <[length]> column-widths;
+    // 表头内容总宽；Rust 侧传入。0 时回退 100*col-count，保证 GridAreaPreview 可见。
+    in property <length> total-col-w: 0px;
     in property <int> selected-col: -1;           // 整列选中（-1 = 无）
     in property <int> selected-row: -1;           // 整行选中
     in property <int> selected-cell-row: -1;
@@ -111,6 +116,11 @@ export component GridArea inherits Rectangle {
     /// 鼠标拖选：按下后拖动时持续触发。pi/cj = 起手 cell；mx/my = 相对该 cell 的鼠标偏移。
     /// Rust 端按 col-w / row-h 推算终点 cell。
     callback cell-drag(int /* anchor_row */, int /* anchor_col */, length /* mouse_x */, length /* mouse_y */);
+    // 列宽拖拽：absolute-x 是相对窗口的指针 x，避免 handle 随列宽移动导致相对坐标漂移。
+    callback col-resize-start(int /* col */, length /* absolute_x */);
+    callback col-resize-move(int /* col */, length /* absolute_x */);
+    callback col-resize-end(int /* col */);
+    callback col-autofit(int /* col */);
     callback row-num-clicked(int);
     callback col-letter-clicked(int);
     callback col-context-menu(int, length, length);
@@ -139,8 +149,13 @@ export component GridArea inherits Rectangle {
     // 数据区与行号列共享的垂直滚动量。data ScrollView 的 viewport-y 双向绑这里，
     // 行号列用 y: scroll-y 跟随；表头不参与垂直滚动。
     in-out property <length> scroll-y: 0px;
-    property <length> total-col-w: Theme.col-w * root.col-count;
+    property <length> content-w:
+        root.total-col-w > 0px ? root.total-col-w : Theme.col-w * root.col-count;
     property <length> total-rows-h: Theme.row-h * root.data-rows.length;
+
+    pure function width-at(i: int) -> length {
+        i >= 0 && i < root.column-widths.length ? root.column-widths[i] : Theme.col-w
+    }
 
     // 字母列函数：A..Z（>26 暂不支持，显示 "?"）。
     // Slint 1.x 不支持 string 下标，因此用一长串三元展开。
@@ -191,7 +206,7 @@ export component GridArea inherits Rectangle {
                     Rectangle {
                         x: root.scroll-x;
                         y: 0;
-                        width: root.total-col-w;
+                        width: root.content-w;
                         height: parent.height;
                         VerticalLayout {
                             spacing: 0;
@@ -200,7 +215,7 @@ export component GridArea inherits Rectangle {
                             HorizontalLayout {
                                 spacing: 0;
                                 for c in root.col-count: Rectangle {
-                                    width: Theme.col-w;
+                                    width: root.width-at(c);
                                     height: Theme.row-h;
                                     background: c == root.selected-col ? Theme.bg-cell-selected : Theme.bg-header;
                                     border-color: Theme.border;
@@ -222,6 +237,40 @@ export component GridArea inherits Rectangle {
                                             }
                                         }
                                     }
+                                    // 列宽拖拽把手：放在列字母 TouchArea 之后（优先命中）。
+                                    // 必须转发右键，否则 6px 条会吞掉列头右键菜单。
+                                    Rectangle {
+                                        x: parent.width - 6px;
+                                        width: 6px;
+                                        height: parent.height;
+                                        background: handle.has-hover || handle.pressed
+                                            ? Theme.text-secondary : transparent;
+                                        handle := TouchArea {
+                                            mouse-cursor: ew-resize;
+                                            double-clicked => { root.col-autofit(c); }
+                                            moved => {
+                                                if (handle.pressed) {
+                                                    root.col-resize-move(c,
+                                                        self.absolute-position.x + self.mouse-x);
+                                                }
+                                            }
+                                            pointer-event(e) => {
+                                                if e.kind == PointerEventKind.down
+                                                  && e.button == PointerEventButton.left {
+                                                    root.col-resize-start(c,
+                                                        self.absolute-position.x + self.mouse-x);
+                                                } else if e.kind == PointerEventKind.up
+                                                  && e.button == PointerEventButton.left {
+                                                    root.col-resize-end(c);
+                                                } else if e.kind == PointerEventKind.up
+                                                  && e.button == PointerEventButton.right {
+                                                    root.col-context-menu(c,
+                                                        self.absolute-position.x + self.mouse-x,
+                                                        self.absolute-position.y + self.mouse-y);
+                                                }
+                                            }
+                                        }
+                                    }
                                 }
                             }
 
@@ -231,7 +280,7 @@ export component GridArea inherits Rectangle {
                                 for cell[ci] in hrow: Rectangle {
                                     property <bool> is-editing: hi == root.editing-header-row && ci == root.editing-header-col;
                                     property <bool> is-export: cell.kind == CellKind.export-enum || cell.kind == CellKind.export-enum-col;
-                                    width: Theme.col-w;
+                                    width: root.width-at(ci);
                                     height: Theme.row-h;
                                     // 编辑框里可能是含换行的存储真值（txt 列合法），clip 兜住不让它画到邻格
                                     clip: true;
@@ -377,7 +426,7 @@ export component GridArea inherits Rectangle {
                                 property <bool> in-range: root.range-row-min >= 0
                                     && ri >= root.range-row-min && ri <= root.range-row-max
                                     && ci >= root.range-col-min && ci <= root.range-col-max;
-                                width: Theme.col-w;
+                                width: root.width-at(ci);
                                 height: Theme.row-h;
                                 // 编辑框里可能是含换行的存储真值（txt 列合法），clip 兜住不让它画到邻格
                                 clip: true;
@@ -515,6 +564,7 @@ export component GridArea inherits Rectangle {
         ExportDropdown {
             x: root.export-popup-x;
             y: root.export-popup-y;
+            dd-w: max(root.width-at(root.export-target-col), 96px);
             current-index: root.editing-export-index;
             selected(idx) => {
                 if (root.export-target-is-header) {

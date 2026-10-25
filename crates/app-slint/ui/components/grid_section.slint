@@ -53,6 +53,12 @@ export component GridSection inherits Rectangle {
     in property <[DataRow]> data-rows;
     in property <[CellKind]> column-kinds;
     in property <int> col-count;
+    in property <[length]> column-widths;
+    in property <length> total-col-w: 0px;
+    // 列宽模式（当前节点）：auto = 自适应；false = 使用记住的手动宽度。
+    in-out property <bool> auto-column-width: true;
+    in property <bool> auto-column-width-enabled: false;
+    callback auto-column-width-toggled(bool);
     // 滚动位置透传：GridArea 内部 ScrollView 的偏移量双向绑定到这里（切表时 Rust 置 0 重置）
     in-out property <length> scroll-x: 0px;
     in-out property <length> scroll-y: 0px;
@@ -78,6 +84,10 @@ export component GridSection inherits Rectangle {
     callback cell-pressed(int, int);
     callback cell-double-clicked(int, int);
     callback cell-drag(int, int, length, length);
+    callback col-resize-start(int, length);
+    callback col-resize-move(int, length);
+    callback col-resize-end(int);
+    callback col-autofit(int);
     callback row-num-clicked(int);
     callback col-letter-clicked(int);
     callback col-context-menu(int, length, length);
@@ -102,6 +112,9 @@ export component GridSection inherits Rectangle {
         GridHeaderBar {
             title: root.title;
             subtitle: root.subtitle;
+            auto-column-width <=> root.auto-column-width;
+            auto-column-width-enabled: root.auto-column-width-enabled;
+            auto-column-width-toggled(v) => { root.auto-column-width-toggled(v); }
         }
         GridRibbon {
             show-ref-name <=> root.show-ref-name;
@@ -135,6 +148,8 @@ export component GridSection inherits Rectangle {
             data-rows: root.data-rows;
             column-kinds: root.column-kinds;
             col-count: root.col-count;
+            column-widths: root.column-widths;
+            total-col-w: root.total-col-w;
             selected-col: root.selected-col;
             selected-row: root.selected-row;
             selected-cell-row: root.selected-cell-row;
@@ -160,6 +175,10 @@ export component GridSection inherits Rectangle {
             cell-pressed(r, c) => { root.cell-pressed(r, c); }
             cell-double-clicked(r, c) => { root.cell-double-clicked(r, c); }
             cell-drag(r, c, mx, my) => { root.cell-drag(r, c, mx, my); }
+            col-resize-start(c, x) => { root.col-resize-start(c, x); }
+            col-resize-move(c, x) => { root.col-resize-move(c, x); }
+            col-resize-end(c) => { root.col-resize-end(c); }
+            col-autofit(c) => { root.col-autofit(c); }
             row-num-clicked(r) => { root.row-num-clicked(r); }
             col-letter-clicked(c) => { root.col-letter-clicked(c); }
             col-context-menu(c, x, y) => { root.col-context-menu(c, x, y); }

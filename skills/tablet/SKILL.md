@@ -345,8 +345,9 @@ tablet-cli -w <config仓库根> --project game export code --csharp-unity
 **应忽略**（工具产生的临时物 / 派生产物）：
 
 ```gitignore
-# tablet 进程锁 / 运行日志（GUI / CLI 互斥；日志写在 workdir 根）
-.tablet.lock
+# 本机用户数据（列宽等）+ 进程锁；不进版本库
+.data/
+# 运行日志（写在 workdir 根）
 tablet.log
 tablet-crash.log
 # Excel 桥接 / 编辑产生的临时工作簿（GUI 启动、退出时自动清理）
@@ -365,6 +366,9 @@ Thumbs.db
 ```
 
 `projects/*/gen/` 是 `export` 的产物，**不要手改**；要不要提交取决于你们是否让 CI 重新生成。
+
+`.data/` 是每个 checkout 的本机用户数据（`user-data.json`：列宽等视图偏好）和进程锁
+（`tablet.lock`），**不要提交**；换机器/重新 clone 不会带过去。
 
 - **SVN 仓库**：用同一份清单 `svn propset svn:ignore -F .svnignore .`；`tablet-cli.exe` 可以直接提交，
   Git 仓库建议走 LFS。

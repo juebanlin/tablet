@@ -5,6 +5,7 @@ pub mod model_sync;
 pub mod tree;
 pub mod grid;
 pub mod grid_actions;
+pub mod grid_layout;
 pub mod toolbar;
 pub mod log_panel;
 pub mod focus;

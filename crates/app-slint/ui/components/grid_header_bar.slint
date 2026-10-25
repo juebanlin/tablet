@@ -2,10 +2,15 @@
 // 归属于 GridSection 内部子区域。对应 docs/02-UI设计.md §5.0。
 
 import { Theme } from "../theme.slint";
+import { CheckBox } from "std-widgets.slint";
 
 export component GridHeaderBar inherits Rectangle {
     in property <string> title: "未选中";
     in property <string> subtitle: "";
+    // 列宽：当前节点是否自适应 / 是否允许切换。
+    in-out property <bool> auto-column-width: true;
+    in property <bool> auto-column-width-enabled: false;
+    callback auto-column-width-toggled(bool);
 
     height: 24px;
     background: Theme.bg-toolbar;
@@ -22,12 +27,21 @@ export component GridHeaderBar inherits Rectangle {
             font-size: Theme.fs-small;
             color: Theme.text-primary;
             vertical-alignment: center;
+            overflow: elide;
         }
         Text {
             text: root.subtitle;
             font-size: Theme.fs-tiny;
             color: Theme.text-secondary;
             vertical-alignment: center;
+            overflow: elide;
+        }
+        Rectangle { horizontal-stretch: 1; }
+        CheckBox {
+            text: "自动列宽";
+            checked <=> root.auto-column-width;
+            enabled: root.auto-column-width-enabled;
+            toggled => { root.auto-column-width-toggled(self.checked); }
         }
     }
 }

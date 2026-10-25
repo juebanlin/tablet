@@ -133,9 +133,15 @@ pub fn push(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
             ui_h.set_grid_scroll_x(0.0);
             ui_h.set_grid_scroll_y(0.0);
             st.grid_shown_key = key;
+            // 切节点：清列宽缓存，从 .data 读取该节点的 auto/manual。
+            super::grid_layout::on_node_changed(&mut st);
         }
     }
     let snap = convert::build_grid(&state.borrow());
+    {
+        let mut st = state.borrow_mut();
+        super::grid_layout::sync_from_snapshot(&mut st, &snap);
+    }
     let (editing_r, editing_c, editing_buffer, editing_in_formula, editing_header_row, editing_header_col) = {
         let st = state.borrow();
         match st.editing {
@@ -192,6 +198,10 @@ pub fn push(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
         ));
     }
     ui_h.set_grid_col_count(snap.col_count);
+    {
+        let st = state.borrow();
+        super::grid_layout::push_width_props(ui_h, &st);
+    }
     ui_h.set_grid_header_rows(slint::ModelRc::new(slint::VecModel::from(
         snap.header_rows.into_iter()
             .map(|r| slint::ModelRc::new(slint::VecModel::from(r)))
@@ -255,7 +265,12 @@ pub fn wire(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
         let s = state.clone();
         let weak = ui_h.as_weak();
         ui_h.on_show_ref_name_toggled(move |c| {
-            s.borrow_mut().view_show_ref_name = c;
+            {
+                let mut st = s.borrow_mut();
+                st.view_show_ref_name = c;
+                // 显示值变了（id ↔ name），自动宽度需要重算。
+                st.grid_autofit_pending = true;
+            }
             if let Some(ui_h) = weak.upgrade() { push(&ui_h, &s); }
         });
     }
@@ -265,6 +280,8 @@ pub fn wire(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
         let weak = ui_h.as_weak();
         ui_h.on_display_field_selected(move |value| {
             set_selected_display_field(&s, value.as_str());
+            // 展示列变了 → 引用列的显示值变了 → 自动宽度需要重算。
+            s.borrow_mut().grid_autofit_pending = true;
             if let Some(ui_h) = weak.upgrade() { push(&ui_h, &s); }
         });
     }
@@ -485,15 +502,18 @@ pub fn wire(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
         let weak = ui_h.as_weak();
         let ui_for_buf = ui_h.as_weak();
         ui_h.on_grid_cell_drag(move |anchor_r, anchor_c, mx, my| {
-            // Theme.col-w=100px, Theme.row-h=22px（与 ui/theme.slint 一致）
-            const COL_W: f32 = 100.0;
+            // 行高仍固定 22；列宽改为累计宽度（见 convert::col_at_x）。
             const ROW_H: f32 = 22.0;
-            let dc = (mx / COL_W).floor() as i32;
-            let dr = (my / ROW_H).floor() as i32;
-            let raw_r = anchor_r + dr;
-            let raw_c = anchor_c + dc;
             let (rows, cols) = grid_actions::dims(&s);
             if rows == 0 || cols == 0 { return; }
+            let widths = {
+                let st = s.borrow();
+                super::grid_layout::effective_widths(&st, cols)
+            };
+            let anchor_c_usize = anchor_c.max(0) as usize;
+            let anchor_x: f32 = widths.iter().take(anchor_c_usize).sum();
+            let raw_c = crate::convert::col_at_x(&widths, anchor_x + mx) as i32;
+            let raw_r = anchor_r + (my / ROW_H).floor() as i32;
             let r2 = raw_r.max(0).min(rows as i32 - 1) as usize;
             let c2 = raw_c.max(0).min(cols as i32 - 1) as usize;
             let r1 = anchor_r.max(0) as usize;

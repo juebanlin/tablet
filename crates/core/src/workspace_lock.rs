@@ -1,6 +1,6 @@
 //! 工作区进程锁：**GUI 与 CLI 互斥**（@03.7.5）。
 //!
-//! 为什么需要第二把锁：`.tablet.lock` 原来只是 GUI 的单实例开关，CLI 不参与，
+//! 为什么需要第二把锁：锁文件原来只是 GUI 的单实例开关，CLI 不参与，
 //! 于是「GUI 开着 + 跑 CLI」「两个 CLI 写同一个组」都没有任何互斥。组不在进程目录里，
 //! 所有进程共享同一个 `workdir/projects/<id>/config/<group>/`，同时写就是丢更新，
 //! 甚至（临时文件名相同时）写坏文件。
@@ -79,7 +79,10 @@ fn read_lock(path: &Path) -> Option<(u32, ProcKind)> {
 
 /// 尝试拿到工作区锁。被别的活进程占着就返回错误（GUI / CLI 互斥）。
 pub fn acquire(workdir: &Path, kind: ProcKind) -> Result<WorkspaceLock> {
-    let path = workdir.join(crate::LOCK_FILE);
+    crate::local_state::ensure_data_dir(workdir).with_context(|| {
+        format!("无法创建用户数据目录 {}", crate::local_state::data_dir(workdir).display())
+    })?;
+    let path = crate::local_state::lock_path(workdir);
     // 残留锁：最多抢两轮（第一次遇到残留 → 删掉 → 再 create_new）。
     for _ in 0..2 {
         match std::fs::OpenOptions::new()
@@ -165,7 +168,8 @@ mod tests {
     #[test]
     fn a_stale_lock_is_taken_over() {
         let dir = tmp_dir("stale");
-        let path = dir.join(crate::LOCK_FILE);
+        let path = crate::local_state::lock_path(&dir);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         // 一个几乎不可能存在的 PID（Windows 上 PID 是 4 的倍数且 << 4M）
         std::fs::write(&path, "4294967290 gui\n").unwrap();
         let lock = acquire(&dir, ProcKind::Cli).expect("残留锁应被接管");
@@ -177,7 +181,8 @@ mod tests {
     #[test]
     fn old_lock_file_without_kind_still_parses() {
         let dir = tmp_dir("legacy");
-        let path = dir.join(crate::LOCK_FILE);
+        let path = crate::local_state::lock_path(&dir);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(&path, format!("{}\n", std::process::id())).unwrap();
         let err = acquire(&dir, ProcKind::Cli).expect_err("活进程的旧格式锁也要拦住");
         assert!(format!("{:#}", err).contains("进程"), "{}", err);
@@ -188,7 +193,8 @@ mod tests {
     fn drop_does_not_delete_a_lock_that_changed_hands() {
         let dir = tmp_dir("handover");
         let lock = acquire(&dir, ProcKind::Cli).unwrap();
-        let path = dir.join(crate::LOCK_FILE);
+        let path = crate::local_state::lock_path(&dir);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         // 模拟锁被别的进程接管（PID 变了）
         std::fs::write(&path, "1 gui\n").unwrap();
         drop(lock);

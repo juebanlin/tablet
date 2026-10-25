@@ -19,6 +19,9 @@ pub struct GridSnapshot {
     pub title: String,
     pub subtitle: String,
     pub col_count: i32,
+    /// 按列顺序的稳定列名（Table = 字段名；Constant/Enum = 固定系统列）。
+    /// 用户列宽按列名存，插入/删除/重排后仍能对上。
+    pub column_names: Vec<String>,
     pub header_rows: Vec<Vec<HeaderCell>>,
     pub data_rows: Vec<DataRow>,
     /// 当前节点每列的可编辑性，由 main.rs 同步写回 AppState
@@ -52,6 +55,7 @@ impl GridSnapshot {
             title: "未选中".into(),
             subtitle: String::new(),
             col_count: 0,
+            column_names: Vec::new(),
             header_rows: Vec::new(),
             data_rows: Vec::new(),
             column_kinds: Vec::new(),
@@ -321,6 +325,7 @@ fn build_table_grid(state: &AppState, group: &str, name: &str) -> GridSnapshot {
         title: format!("{} {} / {}", ICON_TABLE, group, name),
         subtitle: format!("Table · {} 行 · {} 列", valid_count, fields.len()),
         col_count: fields.len() as i32,
+        column_names: fields.iter().map(|f| f.name.clone()).collect(),
         header_rows: vec![desc_row, export_row, type_row, field_row],
         data_rows,
         column_kinds,
@@ -392,6 +397,7 @@ fn build_constant_grid(state: &AppState, group: &str, name: &str) -> GridSnapsho
         title: format!("{} {} / {}", ICON_CONST, group, name),
         subtitle: format!("Constant · {} 项", valid_count),
         col_count: 5,
+        column_names: vec!["name".into(), "type".into(), "value".into(), "export".into(), "desc".into()],
         header_rows: vec![header_row],
         data_rows,
         column_kinds: vec![
@@ -446,6 +452,7 @@ fn build_enum_grid(state: &AppState, group: &str, name: &str) -> GridSnapshot {
         title: format!("{} {} / {}", ICON_ENUM, group, name),
         subtitle: format!("Enum · {} 项", valid_count),
         col_count: 3,
+        column_names: vec!["id".into(), "name".into(), "desc".into()],
         header_rows: vec![header_row],
         data_rows,
         column_kinds: vec![ColumnKind::Text, ColumnKind::Text, ColumnKind::Text],

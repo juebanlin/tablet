@@ -22,11 +22,11 @@ pub mod test_util;
 pub mod config_fix;
 pub mod workspace_lock;
 pub mod vcs;
+pub mod local_state;
 
 pub use search::name_matches;
 
 pub const CONFIG_FILE: &str = "tablet.toml";
-pub const LOCK_FILE: &str = ".tablet.lock";
 pub const LOG_FILE: &str = "tablet.log";
 /// 崩溃日志：与 LOG_FILE 分开，因为它必须是 append 且不被下次启动截断。
 pub const CRASH_LOG_FILE: &str = "tablet-crash.log";

@@ -95,7 +95,7 @@ tablet-cli -w <config仓库根> --project game export code --csharp-unity
 - 不需要 `workspace save`；`export` 只读磁盘上的 `.tbl` / `.xlsx`，不会写 `projects/`。
   手改过 `.tbl` 的**结构**、要同步进 `project.tblschema` 时才需要 `workspace save`。
 - xlsx 组：先保存 Excel 再点刷新；未保存的编辑 CLI 看不到。
-- tablet GUI 开着同一工作区时，CLI 会被 `.tablet.lock` 拒绝（`workspace info` 除外）。
+- tablet GUI 开着同一工作区时，CLI 会被 `.data/tablet.lock` 拒绝（`workspace info` 除外）。
 - 退出码：`0` 成功；`1` 验证 / 导出失败；`2` 用法错误。错误在 stderr。
 
 ---
@@ -339,7 +339,7 @@ public class TabletConfigWindow : EditorWindow
 Git 见 `SKILL.md` §九。SVN 用同样的清单：
 
 ```text
-.tablet.lock
+.data/
 tablet.log
 tablet-crash.log
 projects/*/.excel
@@ -353,5 +353,7 @@ projects/*/gen            （如果生成物由 CI 产出）
 ```bash
 svn propset svn:ignore -F .svnignore .
 ```
+
+`.data/` 是每个 checkout 的本机用户数据（列宽等）+ 进程锁，**不要提交**。
 
 **不要**把 `target/`、`.excel/`、`.tbl-cache/` 或绝对路径配置提交进 config 仓库。

@@ -35,12 +35,12 @@ assert_contains '"revision": "0123456"'
 winpid() { ps -W | awk -v p="$$" '$1 == p { print $4; exit }'; }
 WP=$(winpid)
 if [ -n "$WP" ]; then
-    printf '%s gui\n' "$WP" > "$WORK_DIR/.tablet.lock"
+    printf '%s gui\n' "$WP" > "$WORK_DIR/.data/tablet.lock"
     run_cli workspace info
     assert_exit 0
     run_cli project list
     assert_exit 1
-    rm -f "$WORK_DIR/.tablet.lock"
+    rm -f "$WORK_DIR/.data/tablet.lock"
 else
     _pass "跳过锁测试：拿不到当前进程的 Windows PID"
 fi

@@ -60,7 +60,7 @@
   - **Excel 同步面板**：底部面板「Excel 文件」tab →「同步」→ 对比 `.excel/*.xlsx` 与内存 group，逐表给同步动作（数据→ / ←数据 / 补列→ / 强制→ / 创建→ / ←导入）
 - **保存与并发**：
   - 延迟写盘——编辑全部在内存，按「保存全部」才落 .tbl 文件
-  - 进程锁 `.tablet.lock` + PID 存活检查：**GUI 与 CLI 互斥**，同一工作区同时只有一个 tablet 进程在操作
+  - 进程锁 `.data/tablet.lock` + PID 存活检查：**GUI 与 CLI 互斥**，同一工作区同时只有一个 tablet 进程在操作
   - 工作簿组另有基线核对：外部 Excel 改过就拒绝保存；干净的组由后台轮询自动重载
   - 树过滤器（全部 / 改动 / 新增 / 修改 / 删除）方便提交前 review
 - **导出**：通过 Project 右键「导出」一次跑全部已配置的目标——12 平台（Java / Go / C++ / C# .NET / Unity / Godot / GDScript / TypeScript / Lua / JSON / XML / xlsx）；导出前自动跑验证，错则中断

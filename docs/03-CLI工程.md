@@ -94,6 +94,7 @@ game-config/
 │   └── rpg-base.tblschema
 ├── gen/                        ← 生成产物，详见 @02.23
 ├── tablet.toml               ← 工具配置，详见 §4
+├── .data/                    ← 本机用户数据（列宽等）+ 进程锁，不进 git
 └── .gitignore                  ← 详见 §6
 ```
 
@@ -343,11 +344,28 @@ projects/*/.tbl-cache/
 # 生成产物
 gen/
 
-# 进程锁
-.tablet.lock
+# 本机用户数据（列宽 / 视图偏好）+ 进程锁，不进 git
+.data/
 ```
 
 注意：`project.toml` / `project.tblschema` / `config/**/*.tbl` 都需要进版本控制——它们是 Project 的本体。
+
+#### `.data/`：本机用户数据
+
+每个 checkout 自带一个 `.data/` 隐藏目录（**不进 Git / SVN**）：
+
+```text
+.data/
+  .gitignore        # 内容 *，应用首次写数据时创建
+  user-data.json    # 根结构 UserData：ui.grid（列宽）…；预留 history / session
+  tablet.lock       # GUI / CLI 互斥锁（原 .tablet.lock）
+  tmp/              # 原子写临时文件
+```
+
+- **不参与项目保存**：不走 `save_all` / dirty / 校验；用户改变视图时由独立通道写。
+- 同一工作区多个项目共用一个文件，条目带 `project/group/kind/node`。
+- 换机器 / 重新 clone 不会带过去；这是本机习惯数据，不是业务配置。
+- 后续「取消保存 / 操作回退 / 启动 UI 锁」复用这个目录，不再新增位置。
 
 ### 6.3 仓库结构（多 Project）
 
@@ -361,6 +379,7 @@ gen/
 │   │   ├── config/
 │   │   └── .tbl-cache/           # ← .gitignore
 │   └── slg-prod/...
+├── .data/                        # 本机用户数据 + 进程锁（.gitignore）
 ├── tblschema/                    # 本地模板库（可选进 git，按团队约定）
 └── gen/                          # 生成产物（.gitignore）
 ```
@@ -443,7 +462,7 @@ CLI 主要由 AI / 脚本驱动：**没有反馈等于没有发生**（@02.26.7�
 
 做法是 git `index.lock` 那一套：
 
-- 工作区根下 `.tablet.lock`，内容 `<pid> <kind>`（kind = `gui` / `cli`）；
+- 工作区 `.data/tablet.lock`，内容 `<pid> <kind>`（kind = `gui` / `cli`）；
 - `create_new` 独占创建，谁先谁得；
 - 拿不到锁时读 PID：**活着 → 拒绝**并说明是谁占着；已经死了 → 当残留锁清掉重试；
 - 持有者退出（含 panic 之外的正常路径）时 drop 释放，且只删 PID 对得上的那一把。

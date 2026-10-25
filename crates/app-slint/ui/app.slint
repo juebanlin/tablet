@@ -168,6 +168,16 @@ export component AppWindow inherits Window {
     in property <[DataRow]> grid-data-rows;
     in property <[CellKind]> grid-column-kinds;
     in property <int> grid-col-count;
+    // 列宽（@docs/04 §3）：Rust 计算/合并后 push；Slint 只负责按宽度渲染。
+    in property <[length]> grid-column-widths;
+    in property <length> grid-total-col-w: 0px;
+    in-out property <bool> grid-auto-width: true;
+    in property <bool> grid-auto-width-enabled: false;
+    callback grid-col-resize-start(int, length);
+    callback grid-col-resize-move(int, length);
+    callback grid-col-resize-end(int);
+    callback grid-col-autofit(int);
+    callback grid-auto-width-toggled(bool);
     // 表格区滚动偏移透传：Rust 在切表时置 0 以重置滚动条
     in-out property <length> grid-scroll-x: 0px;
     in-out property <length> grid-scroll-y: 0px;
@@ -910,6 +920,15 @@ export component AppWindow inherits Window {
                 subtitle: root.grid-subtitle;
                 show-ref-name <=> root.show-ref-name;
                 show-ref-name-enabled: root.show-ref-name-enabled;
+                column-widths: root.grid-column-widths;
+                total-col-w: root.grid-total-col-w;
+                auto-column-width <=> root.grid-auto-width;
+                auto-column-width-enabled: root.grid-auto-width-enabled;
+                auto-column-width-toggled(v) => { root.grid-auto-width-toggled(v); }
+                col-resize-start(c, x) => { root.grid-col-resize-start(c, x); }
+                col-resize-move(c, x) => { root.grid-col-resize-move(c, x); }
+                col-resize-end(c) => { root.grid-col-resize-end(c); }
+                col-autofit(c) => { root.grid-col-autofit(c); }
                 display-field-options: root.display-field-options;
                 display-field-index <=> root.display-field-index;
                 display-field-enabled: root.display-field-enabled;

@@ -1,7 +1,8 @@
 ﻿// AppState：Rust 侧的真值，所有 UI 数据从这里派生。
 // slint 是 retained UI，需要 Rust 显式 push 数据；AppState 持有 engine + UI 临时态。
 
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
+use tablet_core::local_state::UserData;
 use tablet_core::ops::{NodeKind, ProjectEngine};
 use tablet_core::project::load_workspace;
 use tablet_core::types::{BaseType, Paradigm, TblType, TypeParam};
@@ -867,8 +868,32 @@ impl GlobalSettingsDialogState {
     }
 }
 
+/// 列宽拖拽的瞬时状态（不持久化）。
+#[derive(Clone, Debug)]
+pub struct GridResizeState {
+    pub col: usize,
+    pub start_abs_x: f32,
+    pub start_w: f32,
+    pub changed: bool,
+}
+
 pub struct AppState {
     pub engine: ProjectEngine,
+    /// 用户习惯数据的唯一持久化根（`.data/user-data.json`）；不参与项目保存/dirty。
+    pub user_data: UserData,
+    pub user_data_path: std::path::PathBuf,
+    /// 当前节点的列宽模式与手动宽度（从 user_data 派生/回写）。
+    pub grid_width_auto: bool,
+    pub grid_width_manual: BTreeMap<String, f32>,
+    /// 当前节点上次估算的自动宽度（index 对齐 column_names）。
+    pub grid_auto_widths: Vec<f32>,
+    /// 当前有效宽度（自动/手动合并后），Slint 与命中测试共用。
+    pub grid_widths: Vec<f32>,
+    pub grid_widths_total: f32,
+    pub grid_col_names: Vec<String>,
+    /// 节点切换 / 列集合变化 / 显示值切换时置 true；下一次 sync 重算 auto。
+    pub grid_autofit_pending: bool,
+    pub grid_resize: Option<GridResizeState>,
     /// 工作区所在版本库的分支 / 修订；加载时探测一次，供标题栏显示。
     pub vcs_info: tablet_core::vcs::VcsInfo,
     pub selected: Option<SelectedNode>,
@@ -998,9 +1023,21 @@ impl AppState {
             ));
         }
         let vcs_info = tablet_core::vcs::probe(workdir);
+        let user_data_path = tablet_core::local_state::user_data_path(workdir);
+        let user_data = UserData::load(&user_data_path);
         Ok((Self {
             engine,
             vcs_info,
+            user_data,
+            user_data_path,
+            grid_width_auto: true,
+            grid_width_manual: BTreeMap::new(),
+            grid_auto_widths: Vec::new(),
+            grid_widths: Vec::new(),
+            grid_widths_total: 0.0,
+            grid_col_names: Vec::new(),
+            grid_autofit_pending: true,
+            grid_resize: None,
             selected: None,
             tree_filter: TreeFilter::All,
             tree_full_group: false,
