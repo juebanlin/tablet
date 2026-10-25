@@ -357,7 +357,7 @@ gen/
 ```text
 .data/
   .gitignore        # 内容 *，应用首次写数据时创建
-  user-data.json    # 根结构 UserData：ui.grid（列宽）…；预留 history / session
+  user-data.json    # 根结构 UserData：ui.grid（列宽）…；预留 session / 崩溃草稿（撤销不在这里）
   tablet.lock       # GUI / CLI 互斥锁（原 .tablet.lock）
   tmp/              # 原子写临时文件
 ```
@@ -365,7 +365,7 @@ gen/
 - **不参与项目保存**：不走 `save_all` / dirty / 校验；用户改变视图时由独立通道写。
 - 同一工作区多个项目共用一个文件，条目带 `project/group/kind/node`。
 - 换机器 / 重新 clone 不会带过去；这是本机习惯数据，不是业务配置。
-- 后续「取消保存 / 操作回退 / 启动 UI 锁」复用这个目录，不再新增位置。
+- 启动 UI 锁已经放到 `.data/tablet.lock`；**连续撤销不写这里**（它是每个 Project 的内存历史，保存即清空，docs/12）。以后若做崩溃恢复草稿 / 会话状态，再复用这个目录。
 
 ### 6.3 仓库结构（多 Project）
 

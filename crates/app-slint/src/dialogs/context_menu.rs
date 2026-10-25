@@ -446,8 +446,9 @@ pub fn wire(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
                         _ => None,
                     };
                     let mut st = s.borrow_mut();
-                    if st.engine.paste_node_to(&project_id, &name, fmt_ver).is_some() {
-                        st.tree_expanded.insert((project_id, name));
+                    if let Some(new_name) = st.engine.paste_node_to(&project_id, &name, fmt_ver) {
+                        st.tree_expanded.insert((project_id.clone(), name.clone()));
+                        st.select_pasted_node(&project_id, &name, &new_name);
                     }
                 }
                 (Some(CtxMenuKind::TreeGroup { project_id, .. }),
@@ -461,7 +462,8 @@ pub fn wire(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
                     if let Some(new_group) = new_group {
                         let mut st = s.borrow_mut();
                         st.project_expanded.insert(project_id.clone());
-                        st.tree_expanded.insert((project_id, new_group));
+                        st.tree_expanded.insert((project_id.clone(), new_group.clone()));
+                        st.select_pasted_group(&project_id, &new_group);
                     }
                 }
                 (Some(CtxMenuKind::TreeNode { group, name, .. }), "tree.rules") => {
@@ -478,8 +480,9 @@ pub fn wire(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
                         _ => None,
                     };
                     let mut st = s.borrow_mut();
-                    if st.engine.paste_node_to(&project_id, &group, fmt_ver).is_some() {
-                        st.tree_expanded.insert((project_id, group));
+                    if let Some(new_name) = st.engine.paste_node_to(&project_id, &group, fmt_ver) {
+                        st.tree_expanded.insert((project_id.clone(), group.clone()));
+                        st.select_pasted_node(&project_id, &group, &new_name);
                     }
                 }
                 (Some(CtxMenuKind::TreeNode { project_id, group, name, .. }), "tree.rename-node") => {

@@ -93,6 +93,8 @@ pub struct RulesPanelState {
     pub name: String,
     /// 打开时的规则快照，「取消」用它还原。
     pub original: Vec<Rule>,
+    /// 打开面板时的 undo 长度；取消时截断到这里，避免取消本身变成一条历史。
+    pub history_undo_len: usize,
     /// 当前选中的列。
     pub column: Option<String>,
     /// 正在表单里编辑的规则（`node.rules` 的全局下标）；None = 新增模式。
@@ -108,6 +110,7 @@ impl RulesPanelState {
             group: String::new(),
             name: String::new(),
             original: Vec::new(),
+            history_undo_len: 0,
             column: None,
             editing: None,
             draft: Rule { column: String::new(), kind: RuleKind::Unique, level: Severity::Error , source: RuleSource::User },
@@ -330,6 +333,12 @@ pub fn open_for_node(state: &Rc<RefCell<AppState>>, group: &str, name: &str) {
     st.rules_panel.group = group.to_string();
     st.rules_panel.name = name.to_string();
     st.rules_panel.original = rules;
+    let undo_len = st
+        .engine
+        .active_project_id()
+        .map(|pid| st.engine.history_len(pid).0)
+        .unwrap_or(0);
+    st.rules_panel.history_undo_len = undo_len;
     st.rules_panel.column = column.clone();
     st.rules_panel.editing = None;
     st.rules_panel.draft = match &column {
@@ -892,7 +901,10 @@ pub fn wire(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
                 st.engine.revalidate(&group, &name);
                 st.rules_panel.open = false;
             }
-            if let Some(ui) = weak.upgrade() { push(&ui, &s); }
+            if let Some(ui) = weak.upgrade() {
+                push(&ui, &s);
+                crate::refresh::after_grid_edit(&ui, &s);
+            }
         });
     }
 
@@ -901,17 +913,29 @@ pub fn wire(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
         let s = state.clone();
         let weak = ui_h.as_weak();
         ui_h.on_ru_cancel(move || {
-            let (group, name, original) = {
+            let (group, name, original, undo_len) = {
                 let st = s.borrow();
-                (st.rules_panel.group.clone(), st.rules_panel.name.clone(), st.rules_panel.original.clone())
+                (
+                    st.rules_panel.group.clone(),
+                    st.rules_panel.name.clone(),
+                    st.rules_panel.original.clone(),
+                    st.rules_panel.history_undo_len,
+                )
             };
             {
                 let mut st = s.borrow_mut();
                 st.engine.set_node_rules(&group, &name, original);
+                // 取消 = 回到打开面板之前：把面板内的临时规则事务和“还原”本身一起收掉。
+                if let Some(pid) = st.engine.active_project_id().map(str::to_string) {
+                    st.engine.truncate_history(&pid, undo_len);
+                }
                 st.engine.revalidate(&group, &name);
                 st.rules_panel.open = false;
             }
-            if let Some(ui) = weak.upgrade() { push(&ui, &s); }
+            if let Some(ui) = weak.upgrade() {
+                push(&ui, &s);
+                crate::refresh::after_grid_edit(&ui, &s);
+            }
         });
     }
 }

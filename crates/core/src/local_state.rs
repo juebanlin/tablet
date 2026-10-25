@@ -2,8 +2,9 @@
 //!
 //! 设计约束（和业务配置严格分开）：
 //! - 位置：`<workdir>/.data/`，每个 checkout 一份；**不进 Git / SVN**；
-//! - 根结构统一为 [`UserData`]，后续取消保存 / 操作回退 / 会话锁都挂在同一层级下，
+//! - 根结构统一为 [`UserData`]，列宽等本机习惯、后续崩溃草稿 / 会话状态都挂在这一层；
 //!   UI 做「清理用户数据」只面对一个入口；
+//! - **连续撤销不在这里**：它是每个 Project 的内存 `EditHistory`，保存即清空（docs/12）；
 //! - 读写不走 `save_all` / `persist_global_config` / dirty / 校验，由调用方在
 //!   用户改变视图时独立调用 [`UserData::save`]；
 //! - 读失败 / 坏文件 / 版本不匹配 → 空状态（视图偏好不是业务数据，不能卡启动）。
@@ -82,7 +83,7 @@ pub struct UiPreferences {
     pub grid: GridPreferences,
 }
 
-/// 预留：取消保存 / 操作回退（后续方案）。
+/// 预留：崩溃恢复草稿 / 会话历史（连续撤销是内存态，不写这里；见 docs/12）。
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct HistoryState {}
 

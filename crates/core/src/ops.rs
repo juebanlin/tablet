@@ -1,5 +1,6 @@
-﻿use std::collections::HashSet;
+﻿use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use crate::history::{CellSnapshot, EditHistory, EditOp, Transaction};
 use crate::model::*;
 use crate::validate::*;
 
@@ -65,6 +66,75 @@ fn dedupe_name<'a, I: IntoIterator<Item = &'a str>>(base: &str, existing: I) -> 
 fn sync_schema_from_groups(project: &mut Project) {
     // sync 永远不带 preset：project.tblschema 是「结构骨架」，行数据归项目里的 .tbl
     project.resync_schema();
+}
+
+/// 取一个节点的完整快照，给撤销栈用。找不到返回 None。
+fn capture_node_body(project: &Project, group: &str, name: &str, kind: NodeKind) -> Option<NodeBody> {
+    let g = project.groups.iter().find(|g| g.name == group)?;
+    match kind {
+        NodeKind::Table => g.tables.iter().find(|t| t.name == name).cloned().map(NodeBody::Table),
+        NodeKind::Constant => g.constants.iter().find(|c| c.name == name).cloned().map(NodeBody::Constant),
+        NodeKind::Enum => g.enums.iter().find(|e| e.name == name).cloned().map(NodeBody::Enum),
+    }
+}
+
+/// 取 Table 单元格的 `(值, 行数, 该行长度)`。行/列形状要一起存：
+/// 往空白行输入会自动补行，撤销时必须把补出来的空行也收回去。
+fn capture_table_cell(
+    project: &Project,
+    group: &str,
+    name: &str,
+    row: usize,
+    col: usize,
+) -> Option<(String, usize, usize)> {
+    let g = project.groups.iter().find(|g| g.name == group)?;
+    let t = g.tables.iter().find(|t| t.name == name)?;
+    let value = t
+        .records
+        .get(row)
+        .and_then(|r| r.get(col))
+        .cloned()
+        .unwrap_or_default();
+    Some((value, t.records.len(), t.records.get(row).map_or(0, Vec::len)))
+}
+
+/// 把节点快照写回项目。节点级事务不改名，所以按事务里的名字定位。
+fn restore_node_body(project: &mut Project, group: &str, kind: NodeKind, name: &str, body: &NodeBody) {
+    let Some(g) = project.groups.iter_mut().find(|g| g.name == group) else { return };
+    match (kind, body) {
+        (NodeKind::Table, NodeBody::Table(snapshot)) => {
+            if let Some(slot) = g.tables.iter_mut().find(|t| t.name == name) {
+                *slot = snapshot.clone();
+            } else {
+                g.tables.push(snapshot.clone());
+            }
+            if let Some(t) = g.tables.iter_mut().find(|t| t.name == name) {
+                t.update_dirty();
+            }
+        }
+        (NodeKind::Constant, NodeBody::Constant(snapshot)) => {
+            if let Some(slot) = g.constants.iter_mut().find(|c| c.name == name) {
+                *slot = snapshot.clone();
+            } else {
+                g.constants.push(snapshot.clone());
+            }
+            if let Some(c) = g.constants.iter_mut().find(|c| c.name == name) {
+                c.update_dirty();
+            }
+        }
+        (NodeKind::Enum, NodeBody::Enum(snapshot)) => {
+            if let Some(slot) = g.enums.iter_mut().find(|e| e.name == name) {
+                *slot = snapshot.clone();
+            } else {
+                g.enums.push(snapshot.clone());
+            }
+            if let Some(e) = g.enums.iter_mut().find(|e| e.name == name) {
+                e.update_dirty();
+            }
+        }
+        _ => return,
+    }
+    sync_schema_from_groups(project);
 }
 
 /// 把类型串里的 `@Old` 改写成 `@New`；没有命中返回 `None`。
@@ -294,6 +364,7 @@ fn save_project_files(project: &mut Project) -> (usize, usize, Vec<String>, bool
     let mut count = 0;
     let mut deleted = 0;
     let mut failed = false;
+    let mut write_failures: Vec<String> = Vec::new();
     // 第一次落盘：盘上还什么都没有，schema 必须无条件写一份
     let first_save = project.state.is_pending();
     // 第一步：克隆出来但未落盘的项目，先建 root 目录 + 让 schema 一并落地
@@ -359,17 +430,19 @@ fn save_project_files(project: &mut Project) -> (usize, usize, Vec<String>, bool
                     project.original_validate = project.config.validate.clone();
                     count += 1;
                 }
-                Err(e) => eprintln!(
-                    "warn: write project.toml failed: {} ({})",
-                    path.display(),
-                    e
-                ),
+                Err(e) => {
+                    failed = true;
+                    let msg = format!("[保存失败] 写 project.toml 失败: {} ({})", path.display(), e);
+                    eprintln!("warn: {}", msg);
+                    write_failures.push(msg);
+                }
             },
-            Err(e) => eprintln!(
-                "warn: 生成 project.toml 内容失败: {} ({})",
-                path.display(),
-                e
-            ),
+            Err(e) => {
+                failed = true;
+                let msg = format!("[保存失败] 生成 project.toml 内容失败: {} ({})", path.display(), e);
+                eprintln!("warn: {}", msg);
+                write_failures.push(msg);
+            }
         }
     }
     // schema 文件只在**真的会不一样**时才写：改一个格子的值不该动它。
@@ -429,16 +502,25 @@ fn save_project_files(project: &mut Project) -> (usize, usize, Vec<String>, bool
                 deleted += 1;
             } else if table.dirty {
                 let content = crate::tbl::serialize_table(table);
-                if std::fs::write(&table.path, &content).is_ok() {
-                    table.original_records = table.records.clone();
-                    table.original_fields = table.schema.fields.clone();
-                    table.original_display_field = table.display_field.clone();
-                    table.original_rules = table.rules.clone();
-                    // 落盘后「盘上叫什么」才追上新名字
-                    table.original_name = table.name.clone();
-                    table.dirty = false;
-                    table.saved = true;
-                    count += 1;
+                match std::fs::write(&table.path, &content) {
+                    Ok(()) => {
+                        table.original_records = table.records.clone();
+                        table.original_fields = table.schema.fields.clone();
+                        table.original_display_field = table.display_field.clone();
+                        table.original_rules = table.rules.clone();
+                        // 落盘后「盘上叫什么」才追上新名字
+                        table.original_name = table.name.clone();
+                        table.dirty = false;
+                        table.saved = true;
+                        count += 1;
+                    }
+                    Err(e) => {
+                        failed = true;
+                        write_failures.push(format!(
+                            "[保存失败] 写 {} 失败: {}",
+                            table.path.display(), e
+                        ));
+                    }
                 }
             }
         }
@@ -450,12 +532,21 @@ fn save_project_files(project: &mut Project) -> (usize, usize, Vec<String>, bool
                 deleted += 1;
             } else if constant.dirty {
                 let content = crate::tbl::serialize_constant(constant);
-                if std::fs::write(&constant.path, &content).is_ok() {
-                    constant.original_entries = constant.entries.clone();
-                    constant.original_name = constant.name.clone();
-                    constant.dirty = false;
-                    constant.saved = true;
-                    count += 1;
+                match std::fs::write(&constant.path, &content) {
+                    Ok(()) => {
+                        constant.original_entries = constant.entries.clone();
+                        constant.original_name = constant.name.clone();
+                        constant.dirty = false;
+                        constant.saved = true;
+                        count += 1;
+                    }
+                    Err(e) => {
+                        failed = true;
+                        write_failures.push(format!(
+                            "[保存失败] 写 {} 失败: {}",
+                            constant.path.display(), e
+                        ));
+                    }
                 }
             }
         }
@@ -467,14 +558,23 @@ fn save_project_files(project: &mut Project) -> (usize, usize, Vec<String>, bool
                 deleted += 1;
             } else if enum_def.dirty {
                 let content = crate::tbl::serialize_enum(enum_def);
-                if std::fs::write(&enum_def.path, &content).is_ok() {
-                    enum_def.original_entries = enum_def.entries.clone();
-                    enum_def.original_name = enum_def.name.clone();
-                    enum_def.original_display_field = enum_def.display_field.clone();
-                    enum_def.original_rules = enum_def.rules.clone();
-                    enum_def.dirty = false;
-                    enum_def.saved = true;
-                    count += 1;
+                match std::fs::write(&enum_def.path, &content) {
+                    Ok(()) => {
+                        enum_def.original_entries = enum_def.entries.clone();
+                        enum_def.original_name = enum_def.name.clone();
+                        enum_def.original_display_field = enum_def.display_field.clone();
+                        enum_def.original_rules = enum_def.rules.clone();
+                        enum_def.dirty = false;
+                        enum_def.saved = true;
+                        count += 1;
+                    }
+                    Err(e) => {
+                        failed = true;
+                        write_failures.push(format!(
+                            "[保存失败] 写 {} 失败: {}",
+                            enum_def.path.display(), e
+                        ));
+                    }
                 }
             }
         }
@@ -495,17 +595,27 @@ fn save_project_files(project: &mut Project) -> (usize, usize, Vec<String>, bool
 
     // 组都写成功了才写 schema 投影（见上面的注释）。
     if !failed && schema_needs_write {
-        if std::fs::write(&path, txt).is_ok() {
-            // 落盘后「盘上是什么」才追上内存
-            project.original_meta = project.schema.meta.clone();
-            project.original_separators = project.schema.separators.clone();
-            count += 1;
+        match std::fs::write(&path, txt) {
+            Ok(()) => {
+                // 落盘后「盘上是什么」才追上内存
+                project.original_meta = project.schema.meta.clone();
+                project.original_separators = project.schema.separators.clone();
+                count += 1;
+            }
+            Err(e) => {
+                failed = true;
+                write_failures.push(format!(
+                    "[保存失败] 写 {} 失败: {}",
+                    path.display(), e
+                ));
+            }
         }
     }
     if failed && first_save {
         // 首次保存没走完：盘上还没有完整的项目，别让内存把它当成已落盘。
         project.state = crate::model::ProjectState::Pending;
     }
+    warnings.extend(write_failures);
     (count, deleted, warnings, failed)
 }
 
@@ -945,6 +1055,11 @@ pub struct ProjectEngine {
     /// 最近一次保存失败的原因（xlsx 组被占用 / 外部改过 …）。
     /// 引擎日志是给 GUI 看的；CLI 需要一句能直接打给 stderr 的原因。
     pub last_save_failure: Option<String>,
+    /// 每个打开的 Project 一份会话内撤销/重做历史（docs/12）。
+    /// 按 project id 存，不按 active_idx：切换 active 不清栈，粘贴/改名必须在目标项目记账。
+    histories: HashMap<String, EditHistory>,
+    /// 正在执行 undo/redo 时为 true，避免恢复动作又被记成新事务。
+    history_applying: bool,
 }
 
 /// 表是否依赖 `names` 里任一节点（类型 `@Xxx` 或规则的 `ref_exists`）。
@@ -1022,7 +1137,7 @@ pub enum NodeKind {
 }
 
 /// 跨 project 复制粘贴的节点载荷（深拷贝）。
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum NodeBody {
     Table(Table),
     Constant(Constant),
@@ -1112,6 +1227,8 @@ impl ProjectEngine {
             default_separators: crate::types::SeparatorsSection::default(),
             logs: Vec::new(),
             last_save_failure: None,
+            histories: HashMap::new(),
+            history_applying: false,
         }
     }
 
@@ -1142,6 +1259,8 @@ impl ProjectEngine {
             default_separators: crate::types::SeparatorsSection::default(),
             logs: Vec::new(),
             last_save_failure: None,
+            histories: HashMap::new(),
+            history_applying: false,
         }
     }
 
@@ -1174,6 +1293,8 @@ impl ProjectEngine {
             default_separators: crate::types::SeparatorsSection::default(),
             logs: Vec::new(),
             last_save_failure: None,
+            histories: HashMap::new(),
+            history_applying: false,
         }
     }
 
@@ -1263,6 +1384,7 @@ impl ProjectEngine {
         }
         let project = crate::project::load_specific_project(&self.workdir, project_id)?;
         self.projects.push(project);
+        self.histories.remove(project_id);
         // 加载后立刻补上验证错误（让红框 / `!` 显示）：临时切到新打开 idx 跑 revalidate_all
         let prev = self.active_idx;
         self.active_idx = Some(self.projects.len() - 1);
@@ -1280,6 +1402,7 @@ impl ProjectEngine {
             return false;
         };
         self.projects.remove(idx);
+        self.histories.remove(project_id);
         self.validation_errors.retain(|(p, _, _, _, _)| p != project_id);
         self.validation_warnings.retain(|(p, _, _, _)| p != project_id);
         // active_idx 维护
@@ -1361,6 +1484,7 @@ impl ProjectEngine {
         self.available_projects.push(avail);
         self.available_projects.sort_by(|a, b| a.id.cmp(&b.id));
         self.projects.push(new_project);
+        self.histories.remove(&project_id);
         Ok(project_id)
     }
 
@@ -1466,6 +1590,7 @@ impl ProjectEngine {
         self.available_projects.push(avail);
         self.available_projects.sort_by(|a, b| a.id.cmp(&b.id));
         self.projects.push(new_project);
+        self.histories.remove(new_id);
         self.ui_log(format!(
             "已克隆 {} → {}（内存中，需保存才落地）",
             source_project_id, new_id
@@ -1481,6 +1606,279 @@ impl ProjectEngine {
     /// 按 id 查 project（可变）。
     pub fn find_project_mut(&mut self, id: &str) -> Option<&mut Project> {
         self.projects.iter_mut().find(|p| p.schema.meta.id == id)
+    }
+
+    // ── 会话内撤销/重做（docs/12）────────────────────────────────────────
+
+    /// active Project 是否还能撤销 / 重做。
+    pub fn can_undo(&self) -> bool {
+        self.active_project_id()
+            .and_then(|pid| self.histories.get(pid))
+            .is_some_and(EditHistory::can_undo)
+    }
+
+    pub fn can_redo(&self) -> bool {
+        self.active_project_id()
+            .and_then(|pid| self.histories.get(pid))
+            .is_some_and(EditHistory::can_redo)
+    }
+
+    pub fn undo_label(&self) -> Option<&str> {
+        self.active_project_id()
+            .and_then(|pid| self.histories.get(pid))
+            .and_then(EditHistory::undo_label)
+    }
+
+    pub fn redo_label(&self) -> Option<&str> {
+        self.active_project_id()
+            .and_then(|pid| self.histories.get(pid))
+            .and_then(EditHistory::redo_label)
+    }
+
+    pub fn history_len(&self, project_id: &str) -> (usize, usize) {
+        self.histories
+            .get(project_id)
+            .map(|h| (h.undo_len(), h.redo_len()))
+            .unwrap_or((0, 0))
+    }
+
+    /// 把指定 Project 的历史截断到 `undo_len` 步，并清空 redo。
+    /// 模态编辑面板打开时记下长度，取消时调用，避免把面板内的临时编辑留在历史里。
+    pub fn truncate_history(&mut self, project_id: &str, undo_len: usize) {
+        if let Some(h) = self.histories.get_mut(project_id) {
+            h.truncate_undo(undo_len);
+        }
+    }
+
+    /// 清空指定 Project 的撤销/重做栈（保存成功、关闭、重载时调用）。
+    pub fn clear_history(&mut self, project_id: &str) {
+        if let Some(h) = self.histories.get_mut(project_id) {
+            h.clear();
+        }
+    }
+
+    pub fn clear_all_histories(&mut self) {
+        self.histories.clear();
+    }
+
+    /// 撤销 active Project 的上一步。返回是否真的撤销了。
+    pub fn undo(&mut self) -> bool {
+        let Some(pid) = self.active_project_id().map(str::to_string) else {
+            return false;
+        };
+        let Some(tx) = self.histories.get_mut(&pid).and_then(EditHistory::pop_undo) else {
+            return false;
+        };
+        self.history_applying = true;
+        for op in tx.ops.iter().rev() {
+            self.apply_edit_op(op, true);
+        }
+        self.history_applying = false;
+        if let Some(h) = self.histories.get_mut(&pid) {
+            h.push_redo(tx.clone());
+        }
+        self.revalidate_all_projects();
+        self.ui_log(format!("[撤销] {}（{}）", tx.label, pid));
+        true
+    }
+
+    /// 重做 active Project 的下一步。返回是否真的重做了。
+    pub fn redo(&mut self) -> bool {
+        let Some(pid) = self.active_project_id().map(str::to_string) else {
+            return false;
+        };
+        let Some(tx) = self.histories.get_mut(&pid).and_then(EditHistory::pop_redo) else {
+            return false;
+        };
+        self.history_applying = true;
+        for op in tx.ops.iter() {
+            self.apply_edit_op(op, false);
+        }
+        self.history_applying = false;
+        if let Some(h) = self.histories.get_mut(&pid) {
+            h.push_undo_after_redo(tx.clone());
+        }
+        self.revalidate_all_projects();
+        self.ui_log(format!("[重做] {}（{}）", tx.label, pid));
+        true
+    }
+
+    fn push_transaction(&mut self, project_id: &str, label: &str, ops: Vec<EditOp>) {
+        if self.history_applying || ops.is_empty() {
+            return;
+        }
+        self.histories
+            .entry(project_id.to_string())
+            .or_default()
+            .push(Transaction::new(label, ops));
+    }
+
+    /// 包住一次「会改 Project 内容」的操作：比较前后整个 Project，变了才记一条事务。
+    /// 用于节点/组改名、粘贴、组增删等结构操作；高频单元格编辑不要走这里。
+    fn with_project_tx<R>(
+        &mut self,
+        project_id: &str,
+        label: &str,
+        f: impl FnOnce(&mut Self) -> R,
+    ) -> R {
+        if self.history_applying {
+            return f(self);
+        }
+        let before = self.find_project(project_id).cloned();
+        let out = f(self);
+        let after = self.find_project(project_id).cloned();
+        if let (Some(before), Some(after)) = (before, after) {
+            if before != after {
+                self.push_transaction(
+                    project_id,
+                    label,
+                    vec![EditOp::Project {
+                        project_id: project_id.to_string(),
+                        before,
+                        after,
+                    }],
+                );
+            }
+        }
+        out
+    }
+
+    /// 包住一次「只改单个节点」的操作：只存该节点的前后快照。
+    fn with_node_tx<R>(
+        &mut self,
+        group: &str,
+        name: &str,
+        kind: NodeKind,
+        label: &str,
+        f: impl FnOnce(&mut Self) -> R,
+    ) -> R {
+        if self.history_applying {
+            return f(self);
+        }
+        let pid = self.active_project_id().map(str::to_string);
+        let before = pid
+            .as_deref()
+            .and_then(|pid| self.find_project(pid))
+            .and_then(|p| capture_node_body(p, group, name, kind));
+        let out = f(self);
+        if let (Some(pid), Some(before)) = (pid, before) {
+            if let Some(after) = self
+                .find_project(&pid)
+                .and_then(|p| capture_node_body(p, group, name, kind))
+            {
+                if before != after {
+                    self.push_transaction(
+                        &pid,
+                        label,
+                        vec![EditOp::Node {
+                            project: pid.clone(),
+                            group: group.to_string(),
+                            kind,
+                            name: name.to_string(),
+                            before,
+                            after,
+                        }],
+                    );
+                }
+            }
+        }
+        out
+    }
+
+    /// 包住一次 Table 单元格写入：存前后值 + 行/列形状。
+    fn with_table_cell_tx<R>(
+        &mut self,
+        group: &str,
+        name: &str,
+        row: usize,
+        col: usize,
+        label: &str,
+        f: impl FnOnce(&mut Self) -> R,
+    ) -> R {
+        if self.history_applying {
+            return f(self);
+        }
+        let pid = self.active_project_id().map(str::to_string);
+        let before = pid
+            .as_deref()
+            .and_then(|pid| self.find_project(pid))
+            .and_then(|p| capture_table_cell(p, group, name, row, col));
+        let out = f(self);
+        if let (Some(pid), Some(before)) = (pid, before) {
+            if let Some(after) = self
+                .find_project(&pid)
+                .and_then(|p| capture_table_cell(p, group, name, row, col))
+            {
+                if before != after {
+                    self.push_transaction(
+                        &pid,
+                        label,
+                        vec![EditOp::Cell(CellSnapshot {
+                            project: pid.clone(),
+                            group: group.to_string(),
+                            node: name.to_string(),
+                            row,
+                            col,
+                            before: before.0,
+                            after: after.0,
+                            before_rows: before.1,
+                            after_rows: after.1,
+                            before_row_len: before.2,
+                            after_row_len: after.2,
+                        })],
+                    );
+                }
+            }
+        }
+        out
+    }
+
+    fn apply_edit_op(&mut self, op: &EditOp, undo: bool) {
+        match op {
+            EditOp::Cell(cell) => self.apply_cell_snapshot(cell, undo),
+            EditOp::Node { project, group, kind, name, before, after } => {
+                let body = if undo { before } else { after };
+                if let Some(p) = self.find_project_mut(project) {
+                    restore_node_body(p, group, *kind, name, body);
+                }
+            }
+            EditOp::Project { project_id, before, after } => {
+                let snapshot = if undo { before } else { after };
+                if let Some(idx) = self.projects.iter().position(|p| p.schema.meta.id == *project_id) {
+                    self.projects[idx] = snapshot.clone();
+                }
+            }
+        }
+    }
+
+    fn apply_cell_snapshot(&mut self, cell: &CellSnapshot, undo: bool) {
+        let Some(p) = self.find_project_mut(&cell.project) else { return };
+        let Some(g) = p.groups.iter_mut().find(|g| g.name == cell.group) else { return };
+        let Some(t) = g.tables.iter_mut().find(|t| t.name == cell.node) else { return };
+        let (value, target_rows, target_row_len) = if undo {
+            (&cell.before, cell.before_rows, cell.before_row_len)
+        } else {
+            (&cell.after, cell.after_rows, cell.after_row_len)
+        };
+        if t.records.len() > target_rows {
+            t.records.truncate(target_rows);
+        }
+        while t.records.len() < target_rows {
+            t.records.push(vec![String::new(); t.schema.fields.len()]);
+        }
+        if cell.row < target_rows {
+            let record = &mut t.records[cell.row];
+            if record.len() > target_row_len {
+                record.truncate(target_row_len);
+            }
+            while record.len() < target_row_len {
+                record.push(String::new());
+            }
+            if cell.col < target_row_len {
+                record[cell.col] = value.clone();
+            }
+        }
+        t.update_dirty();
     }
 
     /// 当前 active Project 在指定 (group, name) 上是否有验证错误。
@@ -1616,21 +2014,101 @@ impl ProjectEngine {
 
     /// 写回节点规则（顺序即优先级）。返回是否找到节点。
     pub fn set_node_rules(&mut self, group: &str, name: &str, rules: Vec<Rule>) -> bool {
-        let g = match self.project_mut().groups.iter_mut().find(|g| g.name == group) {
-            Some(g) => g,
-            None => return false,
+        let Some(pid) = self.active_project_id().map(str::to_string) else {
+            return false;
         };
-        if let Some(t) = g.tables.iter_mut().find(|t| t.name == name) {
-            t.rules = rules;
-            t.update_dirty();
-            return true;
+        let mut did = false;
+        self.with_project_tx(&pid, "修改校验规则", |engine| {
+            let g = match engine.project_mut().groups.iter_mut().find(|g| g.name == group) {
+                Some(g) => g,
+                None => return,
+            };
+            if let Some(t) = g.tables.iter_mut().find(|t| t.name == name) {
+                t.rules = rules;
+                t.update_dirty();
+                did = true;
+                return;
+            }
+            if let Some(e) = g.enums.iter_mut().find(|e| e.name == name) {
+                e.rules = rules;
+                e.update_dirty();
+                did = true;
+            }
+        });
+        did
+    }
+
+    /// 设置 Table / Enum 的「被引用展示列」（@10）。`None` = 回到默认。
+    /// 走节点级事务：这是 project.tblschema 里的属性，应该能撤销。
+    pub fn set_display_field(
+        &mut self,
+        group: &str,
+        name: &str,
+        kind: NodeKind,
+        value: Option<String>,
+    ) -> bool {
+        if !matches!(kind, NodeKind::Table | NodeKind::Enum) {
+            return false;
         }
-        if let Some(e) = g.enums.iter_mut().find(|e| e.name == name) {
-            e.rules = rules;
-            e.update_dirty();
-            return true;
+        let mut did = false;
+        self.with_node_tx(group, name, kind, "设置被引用展示列", |engine| {
+            let Some(g) = engine.project_mut().groups.iter_mut().find(|g| g.name == group) else {
+                return;
+            };
+            match kind {
+                NodeKind::Table => {
+                    if let Some(t) = g.tables.iter_mut().find(|t| t.name == name) {
+                        if t.display_field != value {
+                            t.display_field = value;
+                            t.update_dirty();
+                            did = true;
+                        }
+                    }
+                }
+                NodeKind::Enum => {
+                    if let Some(e) = g.enums.iter_mut().find(|e| e.name == name) {
+                        if e.display_field != value {
+                            e.display_field = value;
+                            e.update_dirty();
+                            did = true;
+                        }
+                    }
+                }
+                NodeKind::Constant => {}
+            }
+        });
+        if did {
+            self.project_mut().resync_schema();
         }
-        false
+        did
+    }
+
+    /// 在 active Project 上执行一次「任意改组内数据」的用户动作，并记一条 Project 快照。
+    /// 给 schema 导入这类一次改多个节点的入口用；调用方不要在闭包里再调本引擎的
+    /// 其他可撤销方法，否则会嵌套成两条事务。
+    pub fn edit_active_project<R>(
+        &mut self,
+        label: &str,
+        f: impl FnOnce(&mut Project) -> R,
+    ) -> Option<R> {
+        let pid = self.active_project_id().map(str::to_string)?;
+        Some(self.with_project_tx(&pid, label, |engine| f(engine.project_mut())))
+    }
+
+    /// 同 [`edit_active_project`](Self::edit_active_project)，但显式指定项目。
+    /// 给 Excel 回写这类「目标项目不一定是 active」的入口用。
+    pub fn edit_project<R>(
+        &mut self,
+        project_id: &str,
+        label: &str,
+        f: impl FnOnce(&mut Project) -> R,
+    ) -> Option<R> {
+        if !self.is_opened(project_id) {
+            return None;
+        }
+        Some(self.with_project_tx(project_id, label, |engine| {
+            f(engine.find_project_mut(project_id).expect("opened checked"))
+        }))
     }
 
     /// 节点可挂规则的列名（顺序与字段声明一致）。
@@ -1697,123 +2175,137 @@ impl ProjectEngine {
     }
 
     pub fn set_enum_cell(&mut self, group: &str, name: &str, row: usize, col: usize, val: &str) {
-        if let Some(g) = self.project_mut().groups.iter_mut().find(|g| g.name == group) {
-            if let Some(en) = g.enums.iter_mut().find(|e| e.name == name) {
-                if !val.is_empty() {
-                    while en.entries.len() <= row {
-                        en.entries.push(EnumEntry::default());
+        self.with_node_tx(group, name, NodeKind::Enum, "输入单元格", |engine| {
+            if let Some(g) = engine.project_mut().groups.iter_mut().find(|g| g.name == group) {
+                if let Some(en) = g.enums.iter_mut().find(|e| e.name == name) {
+                    if !val.is_empty() {
+                        while en.entries.len() <= row {
+                            en.entries.push(EnumEntry::default());
+                        }
                     }
-                }
-                if let Some(entry) = en.entries.get_mut(row) {
-                    match col {
-                        0 => entry.id = val.trim().to_string(),
-                        1 => entry.name = val.trim().replace(' ', ""),
-                        2 => entry.desc = val.to_string(),
-                        _ => {}
-                    }
-                }
-                en.update_dirty();
-            }
-        }
-    }
-
-    pub fn commit_enum_cell(&mut self, group: &str, name: &str, row: usize, col: usize, val: String) {
-        if let Some(g) = self.project_mut().groups.iter_mut().find(|g| g.name == group) {
-            if let Some(en) = g.enums.iter_mut().find(|e| e.name == name) {
-                if !val.is_empty() {
-                    while en.entries.len() <= row {
-                        en.entries.push(EnumEntry::default());
-                    }
-                }
-                if let Some(entry) = en.entries.get_mut(row) {
-                    match col {
-                        0 => entry.id = val,
-                        1 => entry.name = val,
-                        2 => entry.desc = val,
-                        _ => {}
-                    }
-                }
-                en.update_dirty();
-            }
-        }
-    }
-
-    pub fn clear_enum_cells(&mut self, group: &str, name: &str, cells: &[(usize, usize)]) {
-        if let Some(g) = self.project_mut().groups.iter_mut().find(|g| g.name == group) {
-            if let Some(en) = g.enums.iter_mut().find(|e| e.name == name) {
-                for &(row, col) in cells {
                     if let Some(entry) = en.entries.get_mut(row) {
                         match col {
-                            0 => entry.id.clear(),
-                            1 => entry.name.clear(),
-                            2 => entry.desc.clear(),
+                            0 => entry.id = val.trim().to_string(),
+                            1 => entry.name = val.trim().replace(' ', ""),
+                            2 => entry.desc = val.to_string(),
                             _ => {}
                         }
                     }
+                    en.update_dirty();
                 }
-                en.update_dirty();
             }
-        }
+        });
+    }
+
+    pub fn commit_enum_cell(&mut self, group: &str, name: &str, row: usize, col: usize, val: String) {
+        self.with_node_tx(group, name, NodeKind::Enum, "输入单元格", |engine| {
+            if let Some(g) = engine.project_mut().groups.iter_mut().find(|g| g.name == group) {
+                if let Some(en) = g.enums.iter_mut().find(|e| e.name == name) {
+                    if !val.is_empty() {
+                        while en.entries.len() <= row {
+                            en.entries.push(EnumEntry::default());
+                        }
+                    }
+                    if let Some(entry) = en.entries.get_mut(row) {
+                        match col {
+                            0 => entry.id = val,
+                            1 => entry.name = val,
+                            2 => entry.desc = val,
+                            _ => {}
+                        }
+                    }
+                    en.update_dirty();
+                }
+            }
+        });
+    }
+
+    pub fn clear_enum_cells(&mut self, group: &str, name: &str, cells: &[(usize, usize)]) {
+        self.with_node_tx(group, name, NodeKind::Enum, "清空单元格", |engine| {
+            if let Some(g) = engine.project_mut().groups.iter_mut().find(|g| g.name == group) {
+                if let Some(en) = g.enums.iter_mut().find(|e| e.name == name) {
+                    for &(row, col) in cells {
+                        if let Some(entry) = en.entries.get_mut(row) {
+                            match col {
+                                0 => entry.id.clear(),
+                                1 => entry.name.clear(),
+                                2 => entry.desc.clear(),
+                                _ => {}
+                            }
+                        }
+                    }
+                    en.update_dirty();
+                }
+            }
+        });
     }
 
     pub fn paste_enum_data(&mut self, group: &str, name: &str, start_row: usize, start_col: usize, grid: &[Vec<String>]) {
         if grid.is_empty() { return; }
-        if let Some(g) = self.project_mut().groups.iter_mut().find(|g| g.name == group) {
-            if let Some(en) = g.enums.iter_mut().find(|e| e.name == name) {
-                for (i, row_cells) in grid.iter().enumerate() {
-                    let row = start_row + i;
-                    while en.entries.len() <= row {
-                        en.entries.push(EnumEntry::default());
-                    }
-                    for (j, cell) in row_cells.iter().enumerate() {
-                        let col = start_col + j;
-                        let entry = &mut en.entries[row];
-                        match col {
-                            0 => entry.id = cell.clone(),
-                            1 => entry.name = cell.clone(),
-                            2 => entry.desc = cell.clone(),
-                            _ => {}
+        self.with_node_tx(group, name, NodeKind::Enum, "粘贴数据", |engine| {
+            if let Some(g) = engine.project_mut().groups.iter_mut().find(|g| g.name == group) {
+                if let Some(en) = g.enums.iter_mut().find(|e| e.name == name) {
+                    for (i, row_cells) in grid.iter().enumerate() {
+                        let row = start_row + i;
+                        while en.entries.len() <= row {
+                            en.entries.push(EnumEntry::default());
+                        }
+                        for (j, cell) in row_cells.iter().enumerate() {
+                            let col = start_col + j;
+                            let entry = &mut en.entries[row];
+                            match col {
+                                0 => entry.id = cell.clone(),
+                                1 => entry.name = cell.clone(),
+                                2 => entry.desc = cell.clone(),
+                                _ => {}
+                            }
                         }
                     }
+                    en.update_dirty();
                 }
-                en.update_dirty();
             }
-        }
-        self.ui_log(format!("粘贴 {}行 数据", grid.len()));
+            engine.ui_log(format!("粘贴 {}行 数据", grid.len()));
+        });
     }
 
     pub fn insert_enum_row(&mut self, group: &str, name: &str, at: usize) {
-        if let Some(g) = self.project_mut().groups.iter_mut().find(|g| g.name == group) {
-            if let Some(en) = g.enums.iter_mut().find(|e| e.name == name) {
-                let at = at.min(en.entries.len());
-                en.entries.insert(at, EnumEntry::default());
-                en.update_dirty();
+        self.with_node_tx(group, name, NodeKind::Enum, "插入行", |engine| {
+            if let Some(g) = engine.project_mut().groups.iter_mut().find(|g| g.name == group) {
+                if let Some(en) = g.enums.iter_mut().find(|e| e.name == name) {
+                    let at = at.min(en.entries.len());
+                    en.entries.insert(at, EnumEntry::default());
+                    en.update_dirty();
+                }
             }
-        }
+        });
     }
 
     pub fn delete_enum_row(&mut self, group: &str, name: &str, at: usize) {
-        if let Some(g) = self.project_mut().groups.iter_mut().find(|g| g.name == group) {
-            if let Some(en) = g.enums.iter_mut().find(|e| e.name == name) {
-                if at < en.entries.len() {
-                    en.entries.remove(at);
-                    en.update_dirty();
+        self.with_node_tx(group, name, NodeKind::Enum, "删除行", |engine| {
+            if let Some(g) = engine.project_mut().groups.iter_mut().find(|g| g.name == group) {
+                if let Some(en) = g.enums.iter_mut().find(|e| e.name == name) {
+                    if at < en.entries.len() {
+                        en.entries.remove(at);
+                        en.update_dirty();
+                    }
                 }
             }
-        }
+        });
     }
 
     pub fn delete_enum_rows(&mut self, group: &str, name: &str, start: usize, end: usize) {
-        if let Some(g) = self.project_mut().groups.iter_mut().find(|g| g.name == group) {
-            if let Some(en) = g.enums.iter_mut().find(|e| e.name == name) {
-                let end = end.min(en.entries.len());
-                if start < end {
-                    en.entries.drain(start..end);
-                    en.update_dirty();
-                    self.ui_log(format!("已删除 {} 行", end - start));
+        self.with_node_tx(group, name, NodeKind::Enum, "删除行", |engine| {
+            if let Some(g) = engine.project_mut().groups.iter_mut().find(|g| g.name == group) {
+                if let Some(en) = g.enums.iter_mut().find(|e| e.name == name) {
+                    let end = end.min(en.entries.len());
+                    if start < end {
+                        en.entries.drain(start..end);
+                        en.update_dirty();
+                        engine.ui_log(format!("已删除 {} 行", end - start));
+                    }
                 }
             }
-        }
+        });
     }
 
     pub fn mark_table_dirty(&mut self, group: &str, name: &str) {
@@ -1829,85 +2321,113 @@ impl ProjectEngine {
     }
 
     pub fn set_table_cell(&mut self, group: &str, name: &str, row: usize, col: usize, val: &str) {
-        if let Some(g) = self.project_mut().groups.iter_mut().find(|g| g.name == group) {
-            if let Some(t) = g.tables.iter_mut().find(|t| t.name == name) {
-                if !val.is_empty() {
-                    let cols = t.schema.fields.len();
-                    while t.records.len() <= row { t.records.push(vec![String::new(); cols]); }
+        self.write_table_cell(group, name, row, col, val);
+    }
+
+    /// 表格单元格写入的唯一实现：`set_*` / `commit_*` 都走这里，
+    /// 这样撤销栈只需要在一个地方记录 `CellSnapshot`。
+    fn write_table_cell(&mut self, group: &str, name: &str, row: usize, col: usize, val: &str) {
+        self.with_table_cell_tx(group, name, row, col, "输入单元格", |engine| {
+            if let Some(g) = engine.project_mut().groups.iter_mut().find(|g| g.name == group) {
+                if let Some(t) = g.tables.iter_mut().find(|t| t.name == name) {
+                    if !val.is_empty() {
+                        let cols = t.schema.fields.len();
+                        while t.records.len() <= row { t.records.push(vec![String::new(); cols]); }
+                    }
+                    if let Some(record) = t.records.get_mut(row) {
+                        while record.len() <= col { record.push(String::new()); }
+                        record[col] = val.to_string();
+                    }
+                    t.update_dirty();
                 }
-                if let Some(record) = t.records.get_mut(row) {
-                    while record.len() <= col { record.push(String::new()); }
-                    record[col] = val.to_string();
-                }
-                t.update_dirty();
             }
-        }
+        });
+    }
+
+    pub fn insert_constant_row(&mut self, group: &str, name: &str, at: usize) {
+        self.with_node_tx(group, name, NodeKind::Constant, "插入行", |engine| {
+            if let Some(g) = engine.project_mut().groups.iter_mut().find(|g| g.name == group) {
+                if let Some(c) = g.constants.iter_mut().find(|c| c.name == name) {
+                    let at = at.min(c.entries.len());
+                    c.entries.insert(at, ConstEntry {
+                        name: String::new(), tbl_type: "str".to_string(),
+                        value: String::new(), export: Export::ClientServer, desc: String::new(),
+                    });
+                    c.update_dirty();
+                }
+            }
+        });
+    }
+
+    pub fn delete_constant_row(&mut self, group: &str, name: &str, at: usize) {
+        self.with_node_tx(group, name, NodeKind::Constant, "删除行", |engine| {
+            if let Some(g) = engine.project_mut().groups.iter_mut().find(|g| g.name == group) {
+                if let Some(c) = g.constants.iter_mut().find(|c| c.name == name) {
+                    if at < c.entries.len() {
+                        c.entries.remove(at);
+                        c.update_dirty();
+                    }
+                }
+            }
+        });
     }
 
     pub fn set_constant_cell(&mut self, group: &str, name: &str, row: usize, col: usize, val: &str) {
-        if let Some(g) = self.project_mut().groups.iter_mut().find(|g| g.name == group) {
-            if let Some(c) = g.constants.iter_mut().find(|c| c.name == name) {
-                if !val.is_empty() {
-                    while c.entries.len() <= row {
-                        c.entries.push(ConstEntry {
-                            name: String::new(), tbl_type: "str".to_string(),
-                            value: String::new(), export: Export::ClientServer, desc: String::new(),
-                        });
+        self.with_node_tx(group, name, NodeKind::Constant, "输入单元格", |engine| {
+            if let Some(g) = engine.project_mut().groups.iter_mut().find(|g| g.name == group) {
+                if let Some(c) = g.constants.iter_mut().find(|c| c.name == name) {
+                    if !val.is_empty() {
+                        while c.entries.len() <= row {
+                            c.entries.push(ConstEntry {
+                                name: String::new(), tbl_type: "str".to_string(),
+                                value: String::new(), export: Export::ClientServer, desc: String::new(),
+                            });
+                        }
                     }
-                }
-                if let Some(entry) = c.entries.get_mut(row) {
-                    match col {
-                        0 => entry.name = val.trim().replace(' ', ""),
-                        2 => entry.value = val.to_string(),
-                        4 => entry.desc = val.to_string(),
-                        _ => {}
+                    if let Some(entry) = c.entries.get_mut(row) {
+                        match col {
+                            0 => entry.name = val.trim().replace(' ', ""),
+                            2 => entry.value = val.to_string(),
+                            4 => entry.desc = val.to_string(),
+                            _ => {}
+                        }
                     }
+                    c.update_dirty();
                 }
-                c.update_dirty();
             }
-        }
+        });
     }
 
     pub fn commit_table_cell(&mut self, group: &str, name: &str, row: usize, col: usize, val: String) {
-        if let Some(g) = self.project_mut().groups.iter_mut().find(|g| g.name == group) {
-            if let Some(t) = g.tables.iter_mut().find(|t| t.name == name) {
-                if !val.is_empty() {
-                    let cols = t.schema.fields.len();
-                    while t.records.len() <= row { t.records.push(vec![String::new(); cols]); }
-                }
-                if let Some(record) = t.records.get_mut(row) {
-                    while record.len() <= col { record.push(String::new()); }
-                    record[col] = val;
-                }
-                t.update_dirty();
-            }
-        }
+        self.write_table_cell(group, name, row, col, &val);
     }
 
     pub fn commit_constant_cell(&mut self, group: &str, name: &str, row: usize, col: usize, val: String) {
-        if let Some(g) = self.project_mut().groups.iter_mut().find(|g| g.name == group) {
-            if let Some(c) = g.constants.iter_mut().find(|c| c.name == name) {
-                if !val.is_empty() {
-                    while c.entries.len() <= row {
-                        c.entries.push(ConstEntry {
-                            name: String::new(), tbl_type: "str".to_string(),
-                            value: String::new(), export: Export::ClientServer, desc: String::new(),
-                        });
+        self.with_node_tx(group, name, NodeKind::Constant, "输入单元格", |engine| {
+            if let Some(g) = engine.project_mut().groups.iter_mut().find(|g| g.name == group) {
+                if let Some(c) = g.constants.iter_mut().find(|c| c.name == name) {
+                    if !val.is_empty() {
+                        while c.entries.len() <= row {
+                            c.entries.push(ConstEntry {
+                                name: String::new(), tbl_type: "str".to_string(),
+                                value: String::new(), export: Export::ClientServer, desc: String::new(),
+                            });
+                        }
                     }
-                }
-                if let Some(entry) = c.entries.get_mut(row) {
-                    match col {
-                        0 => entry.name = val,
-                        1 => entry.tbl_type = val,
-                        2 => entry.value = val,
-                        3 => entry.export = Export::from_input(&val),
-                        4 => entry.desc = val,
-                        _ => {}
+                    if let Some(entry) = c.entries.get_mut(row) {
+                        match col {
+                            0 => entry.name = val,
+                            1 => entry.tbl_type = val,
+                            2 => entry.value = val,
+                            3 => entry.export = Export::from_input(&val),
+                            4 => entry.desc = val,
+                            _ => {}
+                        }
                     }
+                    c.update_dirty();
                 }
-                c.update_dirty();
             }
-        }
+        });
     }
 
     /// 提交表头编辑。
@@ -1915,77 +2435,85 @@ impl ProjectEngine {
     ///   0=desc, 1=export, 2=type, 3=field —— 顺序与 UI 表头从上到下一致，也与 .tbl 序列化顺序一致。
     pub fn commit_header_edit(&mut self, group: &str, name: &str, header_row: usize, col: usize, val: String) {
         let mut keyword_err = None;
-        if let Some(g) = self.project_mut().groups.iter_mut().find(|g| g.name == group) {
-            if let Some(t) = g.tables.iter_mut().find(|t| t.name == name) {
-                let mut renamed_from: Option<String> = None;
-                if let Some(field) = t.schema.fields.get_mut(col) {
-                    match header_row {
-                        0 => field.desc = val,
-                        1 => field.export = Export::from_input(&val),
-                        2 => field.tbl_type = val,
-                        3 => {
-                            let v = val.trim().to_string();
-                            if !is_reserved_keyword(&v) {
-                                renamed_from = Some(std::mem::replace(&mut field.name, v));
-                            } else {
-                                keyword_err = Some(val);
+        self.with_node_tx(group, name, NodeKind::Table, "修改表头", |engine| {
+            if let Some(g) = engine.project_mut().groups.iter_mut().find(|g| g.name == group) {
+                if let Some(t) = g.tables.iter_mut().find(|t| t.name == name) {
+                    let mut renamed_from: Option<String> = None;
+                    if let Some(field) = t.schema.fields.get_mut(col) {
+                        match header_row {
+                            0 => field.desc = val.clone(),
+                            1 => field.export = Export::from_input(&val),
+                            2 => field.tbl_type = val.clone(),
+                            3 => {
+                                let v = val.trim().to_string();
+                                if !is_reserved_keyword(&v) {
+                                    renamed_from = Some(std::mem::replace(&mut field.name, v));
+                                } else {
+                                    keyword_err = Some(val.clone());
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                    // 字段改名 → 本表规则里的列名跟着改，否则规则会指向一个不存在的列。
+                    if let Some(old) = renamed_from {
+                        let now = t.schema.fields[col].name.clone();
+                        if old != now {
+                            for r in t.rules.iter_mut() {
+                                if r.column == old { r.column = now.clone(); }
                             }
                         }
-                        _ => {}
                     }
+                    t.update_dirty();
                 }
-                // 字段改名 → 本表规则里的列名跟着改，否则规则会指向一个不存在的列。
-                if let Some(old) = renamed_from {
-                    let now = t.schema.fields[col].name.clone();
-                    if old != now {
-                        for r in t.rules.iter_mut() {
-                            if r.column == old { r.column = now.clone(); }
-                        }
-                    }
-                }
-                t.update_dirty();
             }
-        }
-        self.project_mut().resync_schema();
-        if let Some(kw) = keyword_err {
-            self.ui_log(format!("字段名 '{}' 是保留关键字，不允许使用", kw));
-        }
+            engine.project_mut().resync_schema();
+            if let Some(kw) = keyword_err.take() {
+                engine.ui_log(format!("字段名 '{}' 是保留关键字，不允许使用", kw));
+            }
+        });
     }
 
     pub fn insert_row(&mut self, group: &str, name: &str, at: usize) {
-        if let Some(g) = self.project_mut().groups.iter_mut().find(|g| g.name == group) {
-            if let Some(t) = g.tables.iter_mut().find(|t| t.name == name) {
-                let cols = t.schema.fields.len();
-                let row = vec![String::new(); cols];
-                let at = at.min(t.records.len());
-                t.records.insert(at, row);
-                t.update_dirty();
+        self.with_node_tx(group, name, NodeKind::Table, "插入行", |engine| {
+            if let Some(g) = engine.project_mut().groups.iter_mut().find(|g| g.name == group) {
+                if let Some(t) = g.tables.iter_mut().find(|t| t.name == name) {
+                    let cols = t.schema.fields.len();
+                    let row = vec![String::new(); cols];
+                    let at = at.min(t.records.len());
+                    t.records.insert(at, row);
+                    t.update_dirty();
+                }
             }
-        }
+        });
     }
 
     pub fn delete_row(&mut self, group: &str, name: &str, at: usize) {
-        if let Some(g) = self.project_mut().groups.iter_mut().find(|g| g.name == group) {
-            if let Some(t) = g.tables.iter_mut().find(|t| t.name == name) {
-                if at < t.records.len() {
-                    t.records.remove(at);
-                    t.update_dirty();
+        self.with_node_tx(group, name, NodeKind::Table, "删除行", |engine| {
+            if let Some(g) = engine.project_mut().groups.iter_mut().find(|g| g.name == group) {
+                if let Some(t) = g.tables.iter_mut().find(|t| t.name == name) {
+                    if at < t.records.len() {
+                        t.records.remove(at);
+                        t.update_dirty();
+                    }
                 }
             }
-        }
+        });
     }
 
     pub fn delete_rows(&mut self, group: &str, name: &str, start: usize, end: usize) {
-        if let Some(g) = self.project_mut().groups.iter_mut().find(|g| g.name == group) {
-            if let Some(t) = g.tables.iter_mut().find(|t| t.name == name) {
-                let end = end.min(t.records.len());
-                if start < end {
-                    t.records.drain(start..end);
-                    t.update_dirty();
-                    self.ui_log(format!("已删除 {} 行", end - start));
+        self.with_node_tx(group, name, NodeKind::Table, "删除行", |engine| {
+            if let Some(g) = engine.project_mut().groups.iter_mut().find(|g| g.name == group) {
+                if let Some(t) = g.tables.iter_mut().find(|t| t.name == name) {
+                    let end = end.min(t.records.len());
+                    if start < end {
+                        t.records.drain(start..end);
+                        t.update_dirty();
+                        engine.ui_log(format!("已删除 {} 行", end - start));
+                    }
                 }
             }
-        }
+        });
     }
 
     pub fn insert_column(&mut self, group: &str, name: &str, at: usize) {
@@ -1994,22 +2522,24 @@ impl ProjectEngine {
             self.warn_log("id 列左侧不能插入列".to_string());
             return;
         }
-        if let Some(g) = self.project_mut().groups.iter_mut().find(|g| g.name == group) {
-            if let Some(t) = g.tables.iter_mut().find(|t| t.name == name) {
-                let at = at.min(t.schema.fields.len());
-                t.schema.fields.insert(at, FieldDef {
-                    name: format!("field{}", t.schema.fields.len()),
-                    desc: "新字段".to_string(),
-                    tbl_type: "str".to_string(),
-                    export: Export::ClientServer,
-                });
-                for record in &mut t.records {
-                    record.insert(at.min(record.len()), String::new());
+        self.with_node_tx(group, name, NodeKind::Table, "插入列", |engine| {
+            if let Some(g) = engine.project_mut().groups.iter_mut().find(|g| g.name == group) {
+                if let Some(t) = g.tables.iter_mut().find(|t| t.name == name) {
+                    let at = at.min(t.schema.fields.len());
+                    t.schema.fields.insert(at, FieldDef {
+                        name: format!("field{}", t.schema.fields.len()),
+                        desc: "新字段".to_string(),
+                        tbl_type: "str".to_string(),
+                        export: Export::ClientServer,
+                    });
+                    for record in &mut t.records {
+                        record.insert(at.min(record.len()), String::new());
+                    }
+                    t.update_dirty();
                 }
-                t.update_dirty();
             }
-        }
-        self.project_mut().resync_schema();
+            engine.project_mut().resync_schema();
+        });
     }
 
     pub fn delete_column(&mut self, group: &str, name: &str, at: usize) {
@@ -2018,105 +2548,115 @@ impl ProjectEngine {
             self.warn_log("id 列不能删除".to_string());
             return;
         }
-        if let Some(g) = self.project_mut().groups.iter_mut().find(|g| g.name == group) {
-            if let Some(t) = g.tables.iter_mut().find(|t| t.name == name) {
-                if at < t.schema.fields.len() {
-                    t.schema.fields.remove(at);
-                    for record in &mut t.records {
-                        if at < record.len() { record.remove(at); }
+        self.with_node_tx(group, name, NodeKind::Table, "删除列", |engine| {
+            if let Some(g) = engine.project_mut().groups.iter_mut().find(|g| g.name == group) {
+                if let Some(t) = g.tables.iter_mut().find(|t| t.name == name) {
+                    if at < t.schema.fields.len() {
+                        t.schema.fields.remove(at);
+                        for record in &mut t.records {
+                            if at < record.len() { record.remove(at); }
+                        }
+                        t.update_dirty();
                     }
-                    t.update_dirty();
                 }
             }
-        }
-        self.project_mut().resync_schema();
+            engine.project_mut().resync_schema();
+        });
     }
 
     pub fn paste_table_data(&mut self, group: &str, name: &str, start_row: usize, start_col: usize, grid: &[Vec<String>]) {
         if grid.is_empty() { return; }
-        if let Some(g) = self.project_mut().groups.iter_mut().find(|g| g.name == group) {
-            if let Some(t) = g.tables.iter_mut().find(|t| t.name == name) {
-                let cols = t.schema.fields.len();
-                for (i, row_cells) in grid.iter().enumerate() {
-                    let row = start_row + i;
-                    while t.records.len() <= row { t.records.push(vec![String::new(); cols]); }
-                    for (j, cell) in row_cells.iter().enumerate() {
-                        let col = start_col + j;
-                        if col < cols {
-                            let record = &mut t.records[row];
-                            while record.len() <= col { record.push(String::new()); }
-                            record[col] = cell.clone();
+        self.with_node_tx(group, name, NodeKind::Table, "粘贴数据", |engine| {
+            if let Some(g) = engine.project_mut().groups.iter_mut().find(|g| g.name == group) {
+                if let Some(t) = g.tables.iter_mut().find(|t| t.name == name) {
+                    let cols = t.schema.fields.len();
+                    for (i, row_cells) in grid.iter().enumerate() {
+                        let row = start_row + i;
+                        while t.records.len() <= row { t.records.push(vec![String::new(); cols]); }
+                        for (j, cell) in row_cells.iter().enumerate() {
+                            let col = start_col + j;
+                            if col < cols {
+                                let record = &mut t.records[row];
+                                while record.len() <= col { record.push(String::new()); }
+                                record[col] = cell.clone();
+                            }
                         }
                     }
+                    t.update_dirty();
                 }
-                t.update_dirty();
             }
-        }
-        self.ui_log(format!("粘贴 {}行 数据", grid.len()));
+            engine.ui_log(format!("粘贴 {}行 数据", grid.len()));
+        });
     }
 
     pub fn paste_constant_data(&mut self, group: &str, name: &str, start_row: usize, start_col: usize, grid: &[Vec<String>]) {
         if grid.is_empty() { return; }
-        if let Some(g) = self.project_mut().groups.iter_mut().find(|g| g.name == group) {
-            if let Some(c) = g.constants.iter_mut().find(|c| c.name == name) {
-                for (i, row_cells) in grid.iter().enumerate() {
-                    let row = start_row + i;
-                    while c.entries.len() <= row {
-                        c.entries.push(ConstEntry {
-                            name: String::new(), tbl_type: "str".to_string(),
-                            value: String::new(), export: Export::ClientServer, desc: String::new(),
-                        });
-                    }
-                    for (j, cell) in row_cells.iter().enumerate() {
-                        let col = start_col + j;
-                        let entry = &mut c.entries[row];
-                        match col {
-                            0 => entry.name = cell.clone(),
-                            1 => entry.tbl_type = cell.clone(),
-                            2 => entry.value = cell.clone(),
-                            3 => entry.export = Export::from_input(cell),
-                            4 => entry.desc = cell.clone(),
-                            _ => {}
+        self.with_node_tx(group, name, NodeKind::Constant, "粘贴数据", |engine| {
+            if let Some(g) = engine.project_mut().groups.iter_mut().find(|g| g.name == group) {
+                if let Some(c) = g.constants.iter_mut().find(|c| c.name == name) {
+                    for (i, row_cells) in grid.iter().enumerate() {
+                        let row = start_row + i;
+                        while c.entries.len() <= row {
+                            c.entries.push(ConstEntry {
+                                name: String::new(), tbl_type: "str".to_string(),
+                                value: String::new(), export: Export::ClientServer, desc: String::new(),
+                            });
+                        }
+                        for (j, cell) in row_cells.iter().enumerate() {
+                            let col = start_col + j;
+                            let entry = &mut c.entries[row];
+                            match col {
+                                0 => entry.name = cell.clone(),
+                                1 => entry.tbl_type = cell.clone(),
+                                2 => entry.value = cell.clone(),
+                                3 => entry.export = Export::from_input(cell),
+                                4 => entry.desc = cell.clone(),
+                                _ => {}
+                            }
                         }
                     }
+                    c.update_dirty();
                 }
-                c.update_dirty();
             }
-        }
-        self.ui_log(format!("粘贴 {}行 数据", grid.len()));
+            engine.ui_log(format!("粘贴 {}行 数据", grid.len()));
+        });
     }
 
     pub fn clear_table_cells(&mut self, group: &str, name: &str, cells: &[(usize, usize)]) {
-        if let Some(g) = self.project_mut().groups.iter_mut().find(|g| g.name == group) {
-            if let Some(t) = g.tables.iter_mut().find(|t| t.name == name) {
-                for &(row, col) in cells {
-                    if let Some(record) = t.records.get_mut(row) {
-                        if let Some(cell) = record.get_mut(col) { cell.clear(); }
+        self.with_node_tx(group, name, NodeKind::Table, "清空单元格", |engine| {
+            if let Some(g) = engine.project_mut().groups.iter_mut().find(|g| g.name == group) {
+                if let Some(t) = g.tables.iter_mut().find(|t| t.name == name) {
+                    for &(row, col) in cells {
+                        if let Some(record) = t.records.get_mut(row) {
+                            if let Some(cell) = record.get_mut(col) { cell.clear(); }
+                        }
                     }
+                    t.update_dirty();
                 }
-                t.update_dirty();
             }
-        }
+        });
     }
 
     pub fn clear_constant_cells(&mut self, group: &str, name: &str, cells: &[(usize, usize)]) {
-        if let Some(g) = self.project_mut().groups.iter_mut().find(|g| g.name == group) {
-            if let Some(c) = g.constants.iter_mut().find(|c| c.name == name) {
-                for &(row, col) in cells {
-                    if let Some(entry) = c.entries.get_mut(row) {
-                        match col {
-                            0 => entry.name.clear(),
-                            1 => entry.tbl_type.clear(),
-                            2 => entry.value.clear(),
-                            3 => entry.export = Export::ClientServer,
-                            4 => entry.desc.clear(),
-                            _ => {}
+        self.with_node_tx(group, name, NodeKind::Constant, "清空单元格", |engine| {
+            if let Some(g) = engine.project_mut().groups.iter_mut().find(|g| g.name == group) {
+                if let Some(c) = g.constants.iter_mut().find(|c| c.name == name) {
+                    for &(row, col) in cells {
+                        if let Some(entry) = c.entries.get_mut(row) {
+                            match col {
+                                0 => entry.name.clear(),
+                                1 => entry.tbl_type.clear(),
+                                2 => entry.value.clear(),
+                                3 => entry.export = Export::ClientServer,
+                                4 => entry.desc.clear(),
+                                _ => {}
+                            }
                         }
                     }
+                    c.update_dirty();
                 }
-                c.update_dirty();
             }
-        }
+        });
     }
 
     // --- PLACEHOLDER_SAVE ---
@@ -2372,6 +2912,11 @@ impl ProjectEngine {
         } else {
             self.ui_log("无修改需要保存".to_string());
         }
+        let had_history = self.history_len(&pid) != (0, 0);
+        self.clear_history(&pid);
+        if had_history {
+            self.ui_log(format!("[{}] 已清空撤销/重做历史", pid));
+        }
         true
     }
 
@@ -2391,15 +2936,27 @@ impl ProjectEngine {
         let mut total_deleted = 0;
         let mut warnings = Vec::new();
         let mut failed = false;
+        let mut saved_pids = Vec::new();
         self.last_save_failure = None;
         for project in &mut self.projects {
+            let pid = project.schema.meta.id.clone();
             let (c, d, w, f) = save_project_files(project);
             total_count += c;
             total_deleted += d;
             warnings.extend(w);
             failed |= f;
+            if !f {
+                saved_pids.push(pid);
+            }
         }
         for w in &warnings { self.warn_log(w.clone()); }
+        for pid in &saved_pids {
+            let had_history = self.history_len(pid) != (0, 0);
+            self.clear_history(pid);
+            if had_history {
+                self.ui_log(format!("[{}] 已清空撤销/重做历史", pid));
+            }
+        }
         if failed {
             self.last_save_failure = warnings.iter().find(|w| w.contains("保存失败")).cloned();
             self.logs.push("[保存失败] 有组没能写进磁盘（见上方原因）".to_string());
@@ -2445,6 +3002,7 @@ impl ProjectEngine {
                 self.available_projects = new_engine.available_projects;
                 self.projects = new_engine.projects;
                 self.active_idx = new_engine.active_idx;
+                self.clear_all_histories();
                 // reload 后采纳新解析的全局配置与默认分隔符，避免整写/后续读用 stale 副本
                 self.global_config = new_engine.global_config;
                 self.default_separators = new_engine.default_separators;
@@ -2472,43 +3030,47 @@ impl ProjectEngine {
     }
 
     pub fn delete_group(&mut self, group_name: &str) {
-        if let Some(g) = self.project().groups.iter().find(|g| g.name == group_name) {
-            if g.is_new {
-                self.project_mut().groups.retain(|g| g.name != group_name);
-                self.ui_log(format!("已移除新建 Group: {}", group_name));
-            } else {
-                if let Some(g) = self.project_mut().groups.iter_mut().find(|g| g.name == group_name) {
-                    for t in &mut g.tables { t.deleted = true; }
-                    for c in &mut g.constants { c.deleted = true; }
-                    for e in &mut g.enums { e.deleted = true; }
-                }
-                self.ui_log(format!("已标记删除 Group: {}", group_name));
-            }
-        }
-        sync_schema_from_groups(self.project_mut());
-        // 删除/标删后，该 group 下所有节点的 validation_errors 不应再被 UI 聚合
         let Some(pid) = self.active_project_id().map(str::to_string) else { return; };
-        self.validation_errors.retain(|(p, g, _, _, _)| !(p == &pid && g == group_name));
-        self.validation_warnings.retain(|(p, g, _, _)| !(p == &pid && g == group_name));
+        self.with_project_tx(&pid, "删除 Group", |engine| {
+            if let Some(g) = engine.project().groups.iter().find(|g| g.name == group_name) {
+                if g.is_new {
+                    engine.project_mut().groups.retain(|g| g.name != group_name);
+                    engine.ui_log(format!("已移除新建 Group: {}", group_name));
+                } else {
+                    if let Some(g) = engine.project_mut().groups.iter_mut().find(|g| g.name == group_name) {
+                        for t in &mut g.tables { t.deleted = true; }
+                        for c in &mut g.constants { c.deleted = true; }
+                        for e in &mut g.enums { e.deleted = true; }
+                    }
+                    engine.ui_log(format!("已标记删除 Group: {}", group_name));
+                }
+            }
+            sync_schema_from_groups(engine.project_mut());
+            // 删除/标删后，该 group 下所有节点的 validation_errors 不应再被 UI 聚合
+            engine.validation_errors.retain(|(p, g, _, _, _)| !(p == &pid && g == group_name));
+            engine.validation_warnings.retain(|(p, g, _, _)| !(p == &pid && g == group_name));
+        });
     }
 
     pub fn delete_node(&mut self, group_name: &str, node_name: &str) {
-        if let Some(g) = self.project_mut().groups.iter_mut().find(|g| g.name == group_name) {
-            if let Some(t) = g.tables.iter_mut().find(|t| t.name == node_name) {
-                t.deleted = true;
-            }
-            if let Some(c) = g.constants.iter_mut().find(|c| c.name == node_name) {
-                c.deleted = true;
-            }
-            if let Some(e) = g.enums.iter_mut().find(|e| e.name == node_name) {
-                e.deleted = true;
-            }
-        }
-        sync_schema_from_groups(self.project_mut());
         let Some(pid) = self.active_project_id().map(str::to_string) else { return; };
-        self.validation_errors.retain(|(p, g, n, _, _)| !(p == &pid && g == group_name && n == node_name));
-        self.validation_warnings.retain(|(p, g, n, _)| !(p == &pid && g == group_name && n == node_name));
-        self.ui_log(format!("已标记删除: {}/{}", group_name, node_name));
+        self.with_project_tx(&pid, "删除节点", |engine| {
+            if let Some(g) = engine.project_mut().groups.iter_mut().find(|g| g.name == group_name) {
+                if let Some(t) = g.tables.iter_mut().find(|t| t.name == node_name) {
+                    t.deleted = true;
+                }
+                if let Some(c) = g.constants.iter_mut().find(|c| c.name == node_name) {
+                    c.deleted = true;
+                }
+                if let Some(e) = g.enums.iter_mut().find(|e| e.name == node_name) {
+                    e.deleted = true;
+                }
+            }
+            sync_schema_from_groups(engine.project_mut());
+            engine.validation_errors.retain(|(p, g, n, _, _)| !(p == &pid && g == group_name && n == node_name));
+            engine.validation_warnings.retain(|(p, g, n, _)| !(p == &pid && g == group_name && n == node_name));
+            engine.ui_log(format!("已标记删除: {}/{}", group_name, node_name));
+        });
     }
 
     /// 把某个节点还原成盘上的样子（「还原到已保存」，@02.26）。
@@ -2517,40 +3079,44 @@ impl ProjectEngine {
     /// 盘上的样子可还原，软删的节点还原内容后仍然是删着的。所以「没有可还原的东西」
     /// 不是错误，只是没动作——返回 false，由调用方决定要不要说话。
     ///
-    /// 这是「把 `original_*` 写回状态」这条普通路径的入口。将来做连续撤销时，
-    /// 它就该变成一次普通的历史记录，不需要另开旁路（@02.26）。
+    /// 这是「把 `original_*` 写回状态」这条普通路径的入口。连续撤销已落地，
+    /// 本方法被 `with_project_tx` 包成一条普通历史记录：「还原」本身也能被撤销/重做，
+    /// 不需要另开旁路（@02.26）。
     pub fn revert_node(&mut self, group_name: &str, node_name: &str) -> bool {
-        let mut did = false;
-        if let Some(g) = self.project_mut().groups.iter_mut().find(|g| g.name == group_name) {
-            if let Some(t) = g.tables.iter_mut().find(|t| t.name == node_name) {
-                if t.revertable() {
-                    t.revert_to_saved();
-                    did = true;
-                }
-            }
-            if let Some(c) = g.constants.iter_mut().find(|c| c.name == node_name) {
-                if c.revertable() {
-                    c.revert_to_saved();
-                    did = true;
-                }
-            }
-            if let Some(e) = g.enums.iter_mut().find(|e| e.name == node_name) {
-                if e.revertable() {
-                    e.revert_to_saved();
-                    did = true;
-                }
-            }
-        }
-        if !did {
+        let Some(pid) = self.active_project_id().map(str::to_string) else {
             return false;
-        }
-        // 表头 / 表名 / # @display 都可能变，schema 投影要重建
-        sync_schema_from_groups(self.project_mut());
-        // 内容换了，这个节点的校验结果得按新内容重算（revalidate_all 是 active 作用域的，
-        // 而 grid 显示的就是 active project 的节点）
-        self.revalidate_all();
-        self.ui_log(format!("已还原到上次保存: {}/{}", group_name, node_name));
-        true
+        };
+        let mut did = false;
+        self.with_project_tx(&pid, "还原到已保存", |engine| {
+            if let Some(g) = engine.project_mut().groups.iter_mut().find(|g| g.name == group_name) {
+                if let Some(t) = g.tables.iter_mut().find(|t| t.name == node_name) {
+                    if t.revertable() {
+                        t.revert_to_saved();
+                        did = true;
+                    }
+                }
+                if let Some(c) = g.constants.iter_mut().find(|c| c.name == node_name) {
+                    if c.revertable() {
+                        c.revert_to_saved();
+                        did = true;
+                    }
+                }
+                if let Some(e) = g.enums.iter_mut().find(|e| e.name == node_name) {
+                    if e.revertable() {
+                        e.revert_to_saved();
+                        did = true;
+                    }
+                }
+            }
+            if did {
+                // 表头 / 表名 / # @display 都可能变，schema 投影要重建
+                sync_schema_from_groups(engine.project_mut());
+                // 内容换了，这个节点的校验结果得按新内容重算；撤销/重做后也会统一再算。
+                engine.revalidate_all();
+                engine.ui_log(format!("已还原到上次保存: {}/{}", group_name, node_name));
+            }
+        });
+        did
     }
 
     /// 把指定节点深拷贝到剪贴板（不改源数据，不动 dirty 标）。
@@ -2630,74 +3196,76 @@ impl ProjectEngine {
         target_group: &str,
         fmt_ver: Option<crate::tbl::TblVersion>,
     ) -> Option<String> {
-        let Some(NodeClipboard::Node { body, .. }) = self.node_clipboard.clone() else {
-            self.warn_log("剪贴板为空或类型不匹配（需要节点剪贴板）".to_string());
-            return None;
-        };
-        let project = self.find_project_mut(target_project)?;
-        let g = project.groups.iter_mut().find(|g| g.name == target_group)?;
-        let mut existing: Vec<String> = Vec::new();
-        existing.extend(g.tables.iter().map(|t| t.name.clone()));
-        existing.extend(g.constants.iter().map(|c| c.name.clone()));
-        existing.extend(g.enums.iter().map(|e| e.name.clone()));
-        let base = match &body {
-            NodeBody::Table(t) => t.name.clone(),
-            NodeBody::Constant(c) => c.name.clone(),
-            NodeBody::Enum(e) => e.name.clone(),
-        };
-        let final_name = if existing.iter().any(|n| n == &base) {
-            dedupe_name(&base, existing.iter().map(String::as_str))
-        } else {
-            base.clone()
-        };
-        let new_path = if g.is_xlsx() { g.book_path() } else { g.dir.join(format!("{}.tbl", final_name)) };
-        let kind_label = match body {
-            NodeBody::Table(mut t) => {
-                t.name = final_name.clone();
-                t.path = new_path;
-                if let Some(v) = fmt_ver { t.fmt_ver = v; }
-                t.dirty = true;
-                t.original_records.clear(); t.original_fields.clear(); t.saved = false;
-                t.original_rules.clear();
-                // 新节点盘上还不存在 → 原名就是新名（不是源节点在盘上的名字）
-                t.original_name = final_name.clone();
-                g.tables.push(t);
-                "Table"
+        self.with_project_tx(target_project, "粘贴节点", |engine| {
+            let Some(NodeClipboard::Node { body, .. }) = engine.node_clipboard.clone() else {
+                engine.warn_log("剪贴板为空或类型不匹配（需要节点剪贴板）".to_string());
+                return None;
+            };
+            let project = engine.find_project_mut(target_project)?;
+            let g = project.groups.iter_mut().find(|g| g.name == target_group)?;
+            let mut existing: Vec<String> = Vec::new();
+            existing.extend(g.tables.iter().map(|t| t.name.clone()));
+            existing.extend(g.constants.iter().map(|c| c.name.clone()));
+            existing.extend(g.enums.iter().map(|e| e.name.clone()));
+            let base = match &body {
+                NodeBody::Table(t) => t.name.clone(),
+                NodeBody::Constant(c) => c.name.clone(),
+                NodeBody::Enum(e) => e.name.clone(),
+            };
+            let final_name = if existing.iter().any(|n| n == &base) {
+                dedupe_name(&base, existing.iter().map(String::as_str))
+            } else {
+                base.clone()
+            };
+            let new_path = if g.is_xlsx() { g.book_path() } else { g.dir.join(format!("{}.tbl", final_name)) };
+            let kind_label = match body {
+                NodeBody::Table(mut t) => {
+                    t.name = final_name.clone();
+                    t.path = new_path;
+                    if let Some(v) = fmt_ver { t.fmt_ver = v; }
+                    t.dirty = true;
+                    t.original_records.clear(); t.original_fields.clear(); t.saved = false;
+                    t.original_rules.clear();
+                    // 新节点盘上还不存在 → 原名就是新名（不是源节点在盘上的名字）
+                    t.original_name = final_name.clone();
+                    g.tables.push(t);
+                    "Table"
+                }
+                NodeBody::Constant(mut c) => {
+                    c.name = final_name.clone();
+                    c.path = new_path;
+                    c.dirty = true;
+                    c.original_entries.clear(); c.saved = false;
+                    c.original_name = final_name.clone();
+                    g.constants.push(c);
+                    "Constant"
+                }
+                NodeBody::Enum(mut e) => {
+                    e.name = final_name.clone();
+                    e.path = new_path;
+                    e.dirty = true;
+                    e.original_entries.clear(); e.saved = false;
+                    e.original_rules.clear();
+                    e.original_name = final_name.clone();
+                    g.enums.push(e);
+                    "Enum"
+                }
+            };
+            engine.ui_log(format!(
+                "已粘贴 {} 到 {}/{}/{}",
+                kind_label, target_project, target_group, final_name
+            ));
+            if let Some(p) = engine.find_project_mut(target_project) {
+                sync_schema_from_groups(p);
             }
-            NodeBody::Constant(mut c) => {
-                c.name = final_name.clone();
-                c.path = new_path;
-                c.dirty = true;
-                c.original_entries.clear(); c.saved = false;
-                c.original_name = final_name.clone();
-                g.constants.push(c);
-                "Constant"
+            let prev = engine.active_idx;
+            if let Some(idx) = engine.projects.iter().position(|p| p.schema.meta.id == target_project) {
+                engine.active_idx = Some(idx);
+                engine.revalidate(target_group, &final_name);
+                engine.active_idx = prev;
             }
-            NodeBody::Enum(mut e) => {
-                e.name = final_name.clone();
-                e.path = new_path;
-                e.dirty = true;
-                e.original_entries.clear(); e.saved = false;
-                e.original_rules.clear();
-                e.original_name = final_name.clone();
-                g.enums.push(e);
-                "Enum"
-            }
-        };
-        self.ui_log(format!(
-            "已粘贴 {} 到 {}/{}/{}",
-            kind_label, target_project, target_group, final_name
-        ));
-        if let Some(p) = self.find_project_mut(target_project) {
-            sync_schema_from_groups(p);
-        }
-        let prev = self.active_idx;
-        if let Some(idx) = self.projects.iter().position(|p| p.schema.meta.id == target_project) {
-            self.active_idx = Some(idx);
-            self.revalidate(target_group, &final_name);
-            self.active_idx = prev;
-        }
-        Some(final_name)
+            Some(final_name)
+        })
     }
 
     /// 粘贴整组到目标 project，作为兄弟 Group。
@@ -2719,66 +3287,68 @@ impl ProjectEngine {
         target_project: &str,
         storage: Option<crate::model::GroupStorage>,
     ) -> Option<String> {
-        let Some(NodeClipboard::Group { snapshot, .. }) = self.node_clipboard.clone() else {
-            self.warn_log("剪贴板为空或类型不匹配（需要 Group 剪贴板）".to_string());
-            return None;
-        };
-        let project = self.find_project_mut(target_project)?;
-        let existing: Vec<String> = project.groups.iter().map(|g| g.name.clone()).collect();
-        let final_name = if existing.iter().any(|n| n == &snapshot.name) {
-            dedupe_name(&snapshot.name, existing.iter().map(String::as_str))
-        } else {
-            snapshot.name.clone()
-        };
-        let new_dir = project.data_dir().join(&final_name);
-        let mut new_group = snapshot;
-        if let Some(st) = storage {
-            new_group.storage = st;
-        }
-        new_group.name = final_name.clone();
-        new_group.original_name = final_name.clone();
-        new_group.dir = new_dir.clone();
-        new_group.is_new = true;
-        // 新组盘上还没有文件；Xlsx 组的节点 path 统一指向（尚不存在的）工作簿。
-        new_group.book_stamp = None;
-        let is_xlsx = new_group.is_xlsx();
-        let book = new_dir.join(format!("{}.xlsx", new_group.name));
-        for t in &mut new_group.tables {
-            t.path = if is_xlsx { book.clone() } else { new_dir.join(format!("{}.tbl", t.name)) };
-            t.dirty = true;
-            t.original_records.clear(); t.original_fields.clear(); t.saved = false;
-            t.original_rules.clear();
-            t.original_name = t.name.clone();
-        }
-        for c in &mut new_group.constants {
-            c.path = if is_xlsx { book.clone() } else { new_dir.join(format!("{}.tbl", c.name)) };
-            c.dirty = true;
-            c.original_entries.clear(); c.saved = false;
-            c.original_name = c.name.clone();
-        }
-        for e in &mut new_group.enums {
-            e.path = if is_xlsx { book.clone() } else { new_dir.join(format!("{}.tbl", e.name)) };
-            e.dirty = true;
-            e.original_entries.clear(); e.saved = false;
-            e.original_rules.clear();
-            e.original_name = e.name.clone();
-        }
-        let summary = format!(
-            "T{}+C{}+E{}",
-            new_group.tables.len(),
-            new_group.constants.len(),
-            new_group.enums.len(),
-        );
-        project.groups.push(new_group);
-        sync_schema_from_groups(project);
-        self.ui_log(format!("已粘贴 Group 到 {}/{}（{}）", target_project, final_name, summary));
-        let prev = self.active_idx;
-        if let Some(idx) = self.projects.iter().position(|p| p.schema.meta.id == target_project) {
-            self.active_idx = Some(idx);
-            self.revalidate_all();
-            self.active_idx = prev;
-        }
-        Some(final_name)
+        self.with_project_tx(target_project, "粘贴 Group", |engine| {
+            let Some(NodeClipboard::Group { snapshot, .. }) = engine.node_clipboard.clone() else {
+                engine.warn_log("剪贴板为空或类型不匹配（需要 Group 剪贴板）".to_string());
+                return None;
+            };
+            let project = engine.find_project_mut(target_project)?;
+            let existing: Vec<String> = project.groups.iter().map(|g| g.name.clone()).collect();
+            let final_name = if existing.iter().any(|n| n == &snapshot.name) {
+                dedupe_name(&snapshot.name, existing.iter().map(String::as_str))
+            } else {
+                snapshot.name.clone()
+            };
+            let new_dir = project.data_dir().join(&final_name);
+            let mut new_group = snapshot;
+            if let Some(st) = storage {
+                new_group.storage = st;
+            }
+            new_group.name = final_name.clone();
+            new_group.original_name = final_name.clone();
+            new_group.dir = new_dir.clone();
+            new_group.is_new = true;
+            // 新组盘上还没有文件；Xlsx 组的节点 path 统一指向（尚不存在的）工作簿。
+            new_group.book_stamp = None;
+            let is_xlsx = new_group.is_xlsx();
+            let book = new_dir.join(format!("{}.xlsx", new_group.name));
+            for t in &mut new_group.tables {
+                t.path = if is_xlsx { book.clone() } else { new_dir.join(format!("{}.tbl", t.name)) };
+                t.dirty = true;
+                t.original_records.clear(); t.original_fields.clear(); t.saved = false;
+                t.original_rules.clear();
+                t.original_name = t.name.clone();
+            }
+            for c in &mut new_group.constants {
+                c.path = if is_xlsx { book.clone() } else { new_dir.join(format!("{}.tbl", c.name)) };
+                c.dirty = true;
+                c.original_entries.clear(); c.saved = false;
+                c.original_name = c.name.clone();
+            }
+            for e in &mut new_group.enums {
+                e.path = if is_xlsx { book.clone() } else { new_dir.join(format!("{}.tbl", e.name)) };
+                e.dirty = true;
+                e.original_entries.clear(); e.saved = false;
+                e.original_rules.clear();
+                e.original_name = e.name.clone();
+            }
+            let summary = format!(
+                "T{}+C{}+E{}",
+                new_group.tables.len(),
+                new_group.constants.len(),
+                new_group.enums.len(),
+            );
+            project.groups.push(new_group);
+            sync_schema_from_groups(project);
+            engine.ui_log(format!("已粘贴 Group 到 {}/{}（{}）", target_project, final_name, summary));
+            let prev = engine.active_idx;
+            if let Some(idx) = engine.projects.iter().position(|p| p.schema.meta.id == target_project) {
+                engine.active_idx = Some(idx);
+                engine.revalidate_all();
+                engine.active_idx = prev;
+            }
+            Some(final_name)
+        })
     }
 
     /// 清空剪贴板（关闭/退出由 drop 自动处理；本接口供未来"清空剪贴板"按钮用）。
@@ -2788,7 +3358,30 @@ impl ProjectEngine {
 
     // --- PLACEHOLDER_ACTIONS ---
 
+    /// 树面板的结构动作入口。除「删除 Project」外都记一条 Project 快照事务；
+    /// DeleteProject 是项目管理动作，不进撤销栈。
     pub fn execute_action(&mut self, action: &ProjectAction) {
+        if let ProjectAction::DeleteProject { project_id } = action {
+            self.execute_action_inner(action);
+            self.histories.remove(project_id);
+            return;
+        }
+        let (project_id, label) = match action {
+            ProjectAction::NewGroup { project_id, .. } => (project_id, "新建 Group"),
+            ProjectAction::NewTable { project_id, .. } => (project_id, "新建 Table"),
+            ProjectAction::NewConstant { project_id, .. } => (project_id, "新建 Constant"),
+            ProjectAction::NewEnum { project_id, .. } => (project_id, "新建 Enum"),
+            ProjectAction::RenameGroup { project_id, .. } => (project_id, "重命名 Group"),
+            ProjectAction::RenameNode { project_id, .. } => (project_id, "重命名节点"),
+            ProjectAction::DeleteProject { project_id } => (project_id, "删除 Project"),
+        };
+        let pid = project_id.clone();
+        self.with_project_tx(&pid, label, |engine| {
+            engine.execute_action_inner(action);
+        });
+    }
+
+    fn execute_action_inner(&mut self, action: &ProjectAction) {
         match action {
             ProjectAction::NewGroup { project_id, name, storage } => {
                 let Some(project) = self.find_project_mut(project_id) else {
@@ -3038,6 +3631,7 @@ impl ProjectEngine {
         // 从 opened 移除（如果在）
         if let Some(idx) = self.projects.iter().position(|p| p.schema.meta.id == project_id) {
             self.projects.remove(idx);
+            self.histories.remove(project_id);
             // active_idx Option 维护
             match self.active_idx {
                 Some(active) if active == idx => self.active_idx = None,
@@ -3119,12 +3713,14 @@ impl ProjectEngine {
         if active {
             self.revalidate_all();
         }
+        // 外部工作簿重载 = 新基线，不是编辑器动作；旧历史不再成立。
+        self.clear_history(project_id);
         Ok(())
     }
 
     /// 保存指定 Project 的所有改动；其它 Project 不动。
     /// 不通过验证则放弃保存。
-    pub fn save_project(&mut self, project_id: &str) {
+    pub fn save_project(&mut self, project_id: &str) -> bool {
         // 先全量重算（active scope 不够，因为我们改的 project 不一定是 active）
         self.revalidate_all_projects();
         let pid_errs = self.validation_errors.iter()
@@ -3133,7 +3729,7 @@ impl ProjectEngine {
             let errors = self.validate_project(project_id);
             for e in &errors { self.logs.push(e.clone()); }
             self.logs.push(format!("[{}] [保存失败] 共 {} 个验证错误", project_id, pid_errs));
-            return;
+            return false;
         }
         let pid_for_log = project_id.to_string();
         self.log_pending_warnings(&pid_for_log);
@@ -3141,7 +3737,7 @@ impl ProjectEngine {
         let saved = {
             let Some(project) = self.find_project_mut(project_id) else {
                 self.ui_log(format!("Project 不存在: {}", project_id));
-                return;
+                return false;
             };
             save_project_files(project)
         };
@@ -3150,13 +3746,19 @@ impl ProjectEngine {
         if failed {
             self.last_save_failure = warnings.iter().find(|w| w.contains("保存失败")).cloned();
             self.logs.push(format!("[{}] [保存失败] 有组没能写进磁盘（见上方原因）", project_id));
-            return;
+            return false;
         }
         if count > 0 || deleted > 0 {
             self.ui_log(format!("[{}] 已保存 {} 个文件, 删除 {} 个", project_id, count, deleted));
         } else {
             self.ui_log(format!("[{}] 无修改需要保存", project_id));
         }
+        let had_history = self.history_len(project_id) != (0, 0);
+        self.clear_history(project_id);
+        if had_history {
+            self.ui_log(format!("[{}] 已清空撤销/重做历史", project_id));
+        }
+        true
     }
 
     /// 收集指定 Project 全部验证错误的格式化日志（仅打日志，不入索引）。
@@ -3667,6 +4269,160 @@ package = \"com.user.kept\"
 
     fn config_dir(dir: &Path) -> PathBuf {
         dir.join("projects").join("p1").join("config")
+    }
+
+    #[test]
+    fn cell_edit_undo_redo_restores_value_and_row_shape() {
+        let (dir, mut engine) = engine_with_saved_node("undo_cell", "g", "T");
+        engine.set_table_cell("g", "T", 1, 0, "2");
+        assert_eq!(engine.find_table("g", "T").unwrap().records.len(), 2, "输入空行应自动补行");
+        assert!(engine.find_table("g", "T").unwrap().dirty);
+        assert!(engine.can_undo());
+
+        assert!(engine.undo());
+        let t = engine.find_table("g", "T").unwrap();
+        assert_eq!(t.records.len(), 1, "撤销必须收回输入时补出来的空行");
+        assert_eq!(t.records[0], vec!["1".to_string()]);
+        assert!(!t.dirty, "撤销回盘上状态后应不再脏");
+        assert!(!engine.can_undo());
+        assert!(engine.can_redo());
+
+        assert!(engine.redo());
+        let t = engine.find_table("g", "T").unwrap();
+        assert_eq!(t.records.len(), 2);
+        assert_eq!(t.records[1], vec!["2".to_string()]);
+        assert!(t.dirty);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn saving_active_project_clears_its_history() {
+        let (dir, mut engine) = engine_with_saved_node("undo_save", "g", "T");
+        let pid = engine.active_project_id().unwrap().to_string();
+        engine.set_table_cell("g", "T", 0, 0, "9");
+        assert!(engine.can_undo());
+        assert!(engine.save_project(&pid), "合法数据应能保存");
+        assert!(!engine.can_undo(), "保存成功后应清空撤销栈");
+        assert!(!engine.can_redo(), "保存成功后应清空重做栈");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn histories_are_per_project_and_save_only_clears_the_target() {
+        let (dir, mut engine) = engine_with_saved_node("undo_projects", "g", "T");
+        let p1 = engine.active_project_id().unwrap().to_string();
+        engine.set_table_cell("g", "T", 0, 0, "9");
+        assert!(engine.can_undo(), "p1 应有一条历史");
+
+        let p2 = engine.clone_project_in_memory(&p1, "p2", "P2").expect("clone");
+        engine.set_active_by_id(&p2);
+        assert!(!engine.can_undo(), "新克隆项目的历史应为空");
+        engine.set_table_cell("g", "T", 0, 0, "8");
+        assert!(engine.can_undo(), "p2 应有一条历史");
+
+        // 保存 p1：只清 p1 的栈，p2 不动。
+        assert!(engine.save_project(&p1));
+        engine.set_active_by_id(&p1);
+        assert!(!engine.can_undo(), "保存 p1 后其历史应清空");
+        engine.set_active_by_id(&p2);
+        assert!(engine.can_undo(), "p2 的历史不能被 p1 的保存清掉");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn failed_save_keeps_history() {
+        let (dir, mut engine) = engine_with_saved_node("undo_save_fail", "g", "T");
+        let pid = engine.active_project_id().unwrap().to_string();
+        // id=0 会触发内置 positive_int 校验错误，保存必须失败。
+        engine.set_table_cell("g", "T", 0, 0, "0");
+        assert!(engine.can_undo());
+        assert!(!engine.save_project(&pid), "非法 id 不应保存成功");
+        assert!(engine.can_undo(), "保存失败必须保留撤销栈");
+        assert!(engine.undo(), "错误内容仍可撤销");
+        assert_eq!(engine.find_table("g", "T").unwrap().records[0][0], "1");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn header_and_row_edits_are_undoable() {
+        let (dir, mut engine) = engine_with_saved_node("undo_node", "g", "T");
+        engine.commit_header_edit("g", "T", 0, 0, "ID2".to_string());
+        assert_eq!(engine.find_table("g", "T").unwrap().schema.fields[0].desc, "ID2");
+        engine.insert_row("g", "T", 1);
+        assert_eq!(engine.find_table("g", "T").unwrap().records.len(), 2);
+
+        assert!(engine.undo(), "撤销插入行");
+        assert_eq!(engine.find_table("g", "T").unwrap().records.len(), 1);
+        assert!(engine.undo(), "撤销表头编辑");
+        assert_eq!(engine.find_table("g", "T").unwrap().schema.fields[0].desc, "ID");
+        assert!(engine.redo());
+        assert_eq!(engine.find_table("g", "T").unwrap().schema.fields[0].desc, "ID2");
+        assert!(engine.redo());
+        assert_eq!(engine.find_table("g", "T").unwrap().records.len(), 2);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn revert_to_saved_is_itself_undoable() {
+        let (dir, mut engine) = engine_with_saved_node("undo_revert", "g", "T");
+        engine.set_table_cell("g", "T", 0, 0, "9");
+        assert!(engine.revert_node("g", "T"), "应还原到已保存");
+        assert_eq!(engine.find_table("g", "T").unwrap().records[0][0], "1");
+        assert!(!engine.find_table("g", "T").unwrap().dirty);
+
+        assert!(engine.undo(), "还原到已保存也应是一步历史");
+        assert_eq!(engine.find_table("g", "T").unwrap().records[0][0], "9");
+        assert!(engine.redo());
+        assert_eq!(engine.find_table("g", "T").unwrap().records[0][0], "1");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn rename_node_is_one_undoable_transaction() {
+        let (dir, mut engine) = engine_with_saved_node("undo_rename", "g", "T");
+        let pid = engine.active_project_id().unwrap().to_string();
+        engine.execute_action(&ProjectAction::RenameNode {
+            project_id: pid,
+            group: "g".into(),
+            old_name: "T".into(),
+            new_name: "T2".into(),
+        });
+        assert!(engine.find_table("g", "T2").is_some());
+        assert!(engine.find_table("g", "T").is_none());
+        assert!(engine.can_undo());
+
+        assert!(engine.undo());
+        assert!(engine.find_table("g", "T").is_some(), "撤销改名应恢复旧名");
+        assert!(engine.find_table("g", "T2").is_none());
+
+        assert!(engine.redo());
+        assert!(engine.find_table("g", "T2").is_some(), "重做改名应恢复新名");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn paste_node_is_one_undoable_transaction() {
+        let (dir, mut engine) = engine_with_saved_node("undo_paste", "g", "T");
+        let pid = engine.active_project_id().unwrap().to_string();
+        engine.clipboard_copy_node(&pid, "g", "T", NodeKind::Table);
+        let pasted = engine.paste_node_to(&pid, "g", None).expect("粘贴成功");
+        assert!(engine.find_table("g", &pasted).is_some());
+        assert!(engine.can_undo());
+
+        assert!(engine.undo());
+        assert!(engine.find_table("g", &pasted).is_none(), "撤销粘贴应移除新节点");
+
+        assert!(engine.redo());
+        assert!(engine.find_table("g", &pasted).is_some(), "重做粘贴应恢复节点");
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

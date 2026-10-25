@@ -25,7 +25,7 @@ impl ProjectState {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Project {
     /// CLI 的 `-w` workdir：`tablet.toml` 与 `gen/` 所在目录。仓库级，全局共享。
     pub workdir: PathBuf,
@@ -136,8 +136,9 @@ impl Project {
     /// 把 `meta` / `separators` / `[export]` 三块整体还原成盘上的样子。
     ///
     /// 与节点上的 [`Table::revert_to_saved`] 是同一条路径的两种粒度：都是「把
-    /// `original_*` 写回状态」。将来做连续撤销时，这里就是一次普通的历史记录，
-    /// 不需要另开一条绕过状态的旁路。
+    /// `original_*` 写回状态」。连续撤销已经落地后，调用方（项目设置）会把这次
+    /// 写回包进一条普通历史记录，因此撤销/重做也能回到还原前后的状态；
+    /// 这里仍然只负责写回内容，不碰历史栈。
     pub fn revert_settings(&mut self) {
         self.schema.meta = self.original_meta.clone();
         self.schema.separators = self.original_separators.clone();
@@ -673,7 +674,7 @@ impl ValidateConfig {
 /// 注意：
 /// - UI 配置仅在全局级别（GlobalConfig），项目级不支持覆盖。
 /// - 分隔符配置存储在 TblSchema 中，不在此处。
-#[derive(Debug, Clone, serde::Deserialize, serde::Serialize, Default)]
+#[derive(Debug, Clone, PartialEq, serde::Deserialize, serde::Serialize, Default)]
 pub struct ProjectConfig {
     #[serde(default)]
     pub export: ExportConfig,
@@ -709,7 +710,7 @@ impl GroupStorage {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Group {
     pub name: String,
     /// 上次落盘时的组名。改名不在改名那一刻动盘，只记在这里，save 时才搬目录。
@@ -1004,7 +1005,7 @@ pub fn effective_rules(mode: NodeMode, user: &[Rule]) -> Vec<Rule> {
     out
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Table {
     pub name: String,
     /// 上次落盘时的表名，`.tbl` 在盘上叫什么。
@@ -1099,7 +1100,7 @@ pub struct FieldDef {
     pub export: Export,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Constant {
     pub name: String,
     /// 上次落盘时的常量表名。语义同 `Table::original_name`。
@@ -1155,7 +1156,7 @@ pub const ENUM_DEFAULT_DISPLAY_FIELD: &str = "name";
 /// 枚举定义：mode=enum 的 .tbl 文件
 ///
 /// 表头固定 id|name|desc 三列，无 #desc/#type/#export/#field 头。
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct EnumDef {
     pub name: String,
     /// 上次落盘时的枚举名。语义同 `Table::original_name`。

@@ -223,11 +223,18 @@ fn execute_action(
     std::fs::create_dir_all(&excel_dir).map_err(|e| format!("创建 .excel 目录失败: {}", e))?;
 
     let mut st = state.borrow_mut();
-    let project = st.engine.find_project_mut(&pid).ok_or("找不到项目")?;
-    let group = project.groups.iter_mut()
-        .find(|g| g.name == group_name).ok_or("找不到组")?;
+    let result = {
+        let project = st.engine.find_project_mut(&pid).ok_or("找不到项目")?;
+        let group = project.groups.iter_mut()
+            .find(|g| g.name == group_name).ok_or("找不到组")?;
 
-    // 校验（计划是否过期）与落盘都在 core 里——dirty 的处理漏在 UI 层正是上次
-    // 「回读的数据写不进 .tbl」那个 bug 的成因，别再漏出去。
-    excel_sync::execute(&xlsx_path, group, node, &op).map_err(|e| e.to_string())
+        // 校验（计划是否过期）与落盘都在 core 里——dirty 的处理漏在 UI 层正是上次
+        // 「回读的数据写不进 .tbl」那个 bug 的成因，别再漏出去。
+        excel_sync::execute(&xlsx_path, group, node, &op).map_err(|e| e.to_string())
+    };
+    if result.is_ok() {
+        // 同步已同时改内存和工作簿，属于外部基线变化；旧撤销栈不再成立。
+        st.engine.clear_history(&pid);
+    }
+    result
 }

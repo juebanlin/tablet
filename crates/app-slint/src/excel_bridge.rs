@@ -501,16 +501,22 @@ pub fn on_excel_closed(state: &Rc<RefCell<AppState>>) {
             let count = patch.patches.len();
             {
                 let mut st = state.borrow_mut();
-                if let Some(project) = st.engine.find_project_mut(&session.project_id) {
-                    if let Some(group) = project.groups.iter_mut().find(|g| g.name == session.group) {
-                        apply_patch_to_group(group, &patch);
-                    }
+                // Excel 回写是一次可撤销的用户动作：目标项目不一定是 active，走显式 project id。
+                let applied = st.engine.edit_project(&session.project_id, "Excel 回写", |project| {
+                    let Some(group) = project.groups.iter_mut().find(|g| g.name == session.group) else {
+                        return false;
+                    };
+                    apply_patch_to_group(group, &patch);
+                    project.resync_schema();
+                    true
+                });
+                if applied == Some(true) {
+                    st.engine.revalidate_all_projects();
+                    st.engine.ui_log(format!(
+                        "[Excel] {} 回写完成（影响 {} 个节点）",
+                        session.group, count,
+                    ));
                 }
-                st.engine.revalidate_all_projects();
-                st.engine.ui_log(format!(
-                    "[Excel] {} 回写完成（影响 {} 个节点）",
-                    session.group, count,
-                ));
             }
         }
         Err(e) => {

@@ -1,14 +1,23 @@
 // 顶部工具栏：单行主按钮区。
 // 表级开关（如「枚举显示名字」）和表级动作（如「Excel 编辑」）已下移至 GridRibbon。
 // Project 级导出（导出 / 导出 Schema）和合并 Schema 已迁到 TreeProject 右键菜单；
-// 工具栏只保留 workspace 级动作（保存 / 重新加载）。
-// 对应 docs/02-UI设计.md §5.1。
+// 工具栏保留会话内撤销/重做 + 当前 Project 保存/重新加载。
+// 对应 docs/12-保存与连续撤销.md §4 与 docs/04-UI设计.md §5.1。
 
 import { Theme } from "../theme.slint";
 import { Button } from "std-widgets.slint";
 
 export component Toolbar inherits Rectangle {
-    callback btn-clicked(string);          // 按钮 id：generate-test/clear/save/reload
+    callback btn-clicked(string);          // 按钮 id：undo/redo/save/reload
+
+    // 撤销/重做只作用于 active Project；无 active 或栈空时禁用。
+    in property <bool> undo-enabled: false;
+    in property <bool> redo-enabled: false;
+    in property <bool> save-enabled: false;
+    /// 「当前项目：<name>」或「当前项目：—」。
+    in property <string> active-project-label: "当前项目：—";
+    /// 当前项目是否有未保存改动（显示标签后的圆点）。
+    in property <bool> active-project-dirty: false;
 
     height: Theme.toolbar-h;
     background: Theme.bg-toolbar;
@@ -26,11 +35,49 @@ export component Toolbar inherits Rectangle {
         // S15-X 待重新评估 —— 暂时注释掉「生成测试数据」/「清空配置」
         // Button { text: "生成测试数据"; clicked => { root.btn-clicked("generate-test"); } }
         // Button { text: "清空配置"; clicked => { root.btn-clicked("clear"); } }
-        // Rectangle { width: 1px; background: Theme.border-light; }
-        Button { text: "保存全部"; clicked => { root.btn-clicked("save"); } }
-        Button { text: "重新加载"; clicked => { root.btn-clicked("reload"); } }
-        // 「导入 Schema」已迁到项目右键 → 「合并 Schema...」（与「导出 Schema...」对偶）。
-        // 「模板库」按钮已挪到 TreeSection 顶部功能区，并整合进统一「新建项目」对话框。
+
+        Button {
+            text: "撤销";
+            enabled: root.undo-enabled;
+            clicked => { root.btn-clicked("undo"); }
+        }
+        Button {
+            text: "重做";
+            enabled: root.redo-enabled;
+            clicked => { root.btn-clicked("redo"); }
+        }
+        // 撤销/重做与保存/重新加载之间留一条细分隔线。
+        Rectangle {
+            width: 1px;
+            height: 16px;
+            background: Theme.border-light;
+        }
+        Button {
+            text: "保存";
+            enabled: root.save-enabled;
+            clicked => { root.btn-clicked("save"); }
+        }
+        Button {
+            text: "重新加载";
+            clicked => { root.btn-clicked("reload"); }
+        }
+
+        // 当前项目紧跟在按钮组后面：它是撤销/重做/保存三者的共同目标。
+        Rectangle { width: Theme.sp-3; }
+        Text {
+            text: root.active-project-label;
+            font-size: Theme.fs-small;
+            color: Theme.text-secondary;
+            vertical-alignment: center;
+            overflow: elide;
+        }
+        Rectangle {
+            width: 7px;
+            height: 7px;
+            border-radius: 3.5px;
+            background: Theme.mark-modified;
+            visible: root.active-project-dirty;
+        }
     }
 }
 
@@ -39,5 +86,11 @@ export component ToolbarPreview inherits Window {
     width: 900px;
     height: 60px;
 
-    Toolbar { }
+    Toolbar {
+        undo-enabled: true;
+        redo-enabled: true;
+        save-enabled: true;
+        active-project-label: "当前项目：SLG 测试";
+        active-project-dirty: true;
+    }
 }

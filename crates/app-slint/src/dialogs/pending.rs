@@ -133,6 +133,14 @@ pub(crate) fn execute(state: &Rc<RefCell<AppState>>) {
             ui::tree::close_project_with_persist(state, &pid);
             return;
         }
+        PendingAction::ReloadWorkspace => {
+            // 用户已确认丢弃所有未保存改动；engine.reload() 会清空全部撤销历史。
+            st.pending.close();
+            drop(st);
+            state.borrow_mut().engine.reload();
+            ui::toolbar::reset_view_after_reload(state);
+            return;
+        }
     };
     if let PendingAction::NewGroup { project_id, .. } = &action {
         st.tree_expanded.insert((project_id.clone(), buf.clone()));
@@ -272,7 +280,8 @@ pub(crate) fn handle_project_root_action(state: &Rc<RefCell<AppState>>, project_
             if let Some(new_group) = new_group {
                 let mut st = state.borrow_mut();
                 st.project_expanded.insert(project_id.to_string());
-                st.tree_expanded.insert((project_id.to_string(), new_group));
+                st.tree_expanded.insert((project_id.to_string(), new_group.clone()));
+                st.select_pasted_group(project_id, &new_group);
             }
         }
         _ => {}

@@ -474,14 +474,20 @@ export component GridArea inherits Rectangle {
                                     // 避免单击释放前的微小抖动把单格强制扩成 CellRange。
                                     property <bool> dragged: false;
                                     clicked => {
-                                        if (self.last-shift) { root.cell-shift-clicked(ri, ci); }
-                                        else { root.cell-clicked(ri, ci); }
+                                        // 拖选结束后 Slint 仍可能补发 clicked；此时不能把
+                                        // CellRange 收缩回 anchor 单格（否则公式栏/状态栏只剩 A1）。
+                                        if (!self.dragged) {
+                                            if (self.last-shift) { root.cell-shift-clicked(ri, ci); }
+                                            else { root.cell-clicked(ri, ci); }
+                                        }
                                     }
                                     double-clicked => { root.cell-double-clicked(ri, ci); }
                                     // 按下后拖动：持续把鼠标位置发给 Rust，Rust 推算终点 cell 并扩 GridSelection
                                     moved => {
-                                        self.dragged = true;
-                                        root.cell-drag(ri, ci, self.mouse-x, self.mouse-y);
+                                        if (self.pressed) {
+                                            self.dragged = true;
+                                            root.cell-drag(ri, ci, self.mouse-x, self.mouse-y);
+                                        }
                                     }
                                     pointer-event(e) => {
                                         if e.kind == PointerEventKind.down {

@@ -79,6 +79,12 @@ export component AppWindow inherits Window {
 
     // ── Toolbar ─────────────────────────────────────────────
     callback toolbar-btn-clicked(string);
+    /// 会话内撤销/重做状态与命令目标（active Project），由 Rust 在每次刷新时推送。
+    in property <bool> undo-enabled: false;
+    in property <bool> redo-enabled: false;
+    in property <bool> save-enabled: false;
+    in property <string> active-project-label: "当前项目：—";
+    in property <bool> active-project-dirty: false;
     // BottomPanel
     callback bottom-tab-changed(int);
     callback clear-log-clicked();
@@ -158,6 +164,8 @@ export component AppWindow inherits Window {
     in property <string> formula-display: "";
     in property <string> formula-raw: "";
     in property <bool> formula-editable: false;
+    /// 单格选区才允许展开公式栏；区域选区强制折叠。
+    in property <bool> formula-single: false;
     in-out property <string> editing-buffer: "";
     in property <bool> formula-editing: false;
     callback formula-request-edit();
@@ -830,6 +838,25 @@ export component AppWindow inherits Window {
         key-pressed(e) => {
             // 调试：把每个键事件汇报给 Rust
             root.debug-key(e.text, e.modifiers.control);
+            // 撤销/重做/保存：只在没有 LineEdit / TextEdit 抢焦点时到这里；
+            // 文本框里的 Ctrl+Z 仍由文本框自己处理（@12 §4.5）。
+            if (e.modifiers.control && e.modifiers.shift
+                && (e.text == "z" || e.text == "Z" || e.text == "\u{1a}")) {
+                root.toolbar-btn-clicked("redo");
+                return accept;
+            }
+            if (e.modifiers.control && (e.text == "z" || e.text == "Z" || e.text == "\u{1a}")) {
+                root.toolbar-btn-clicked("undo");
+                return accept;
+            }
+            if (e.modifiers.control && (e.text == "y" || e.text == "Y" || e.text == "\u{19}")) {
+                root.toolbar-btn-clicked("redo");
+                return accept;
+            }
+            if (e.modifiers.control && (e.text == "s" || e.text == "S" || e.text == "\u{13}")) {
+                root.toolbar-btn-clicked("save");
+                return accept;
+            }
             // Windows winit：Ctrl+letter 时 e.text 可能是控制字符（\u{3}=Ctrl+C, \u{16}=Ctrl+V），
             // 也可能仍是 "c"/"v"（取决于键盘布局/IME），两种都接住。
             if (e.modifiers.control && (e.text == "c" || e.text == "C" || e.text == "\u{3}")) {
@@ -863,6 +890,11 @@ export component AppWindow inherits Window {
         spacing: 0;
 
         Toolbar {
+            undo-enabled: root.undo-enabled;
+            redo-enabled: root.redo-enabled;
+            save-enabled: root.save-enabled;
+            active-project-label: root.active-project-label;
+            active-project-dirty: root.active-project-dirty;
             btn-clicked(id) => {
                 root.drop-focus();
                 // 各对话框 open 由 Rust 端在 toolbar wire 内设置，slint 这里仅转发。
@@ -944,6 +976,7 @@ export component AppWindow inherits Window {
                 formula-display: root.formula-display;
                 formula-raw: root.formula-raw;
                 formula-editable: root.formula-editable;
+                formula-single: root.formula-single;
                 formula-editing: root.formula-editing;
                 editing-buffer <=> root.editing-buffer;
                 formula-request-edit => { root.drop-focus(); root.formula-request-edit(); }
@@ -1676,6 +1709,7 @@ export component AppWindowPreview inherits AppWindow {
     coord: "B3";
     formula-display: "战士";
     formula-editable: true;
+    formula-single: true;
     show-ref-name: true;
     display-field-options: ["ID", "name", "desc"];
     display-field-index: 1;

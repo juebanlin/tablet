@@ -208,6 +208,7 @@ pub fn wire(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
             }
             drop(st);
             if let Some(ui_h) = weak.upgrade() {
+                ui::toolbar::push(&ui_h, &s);
                 push(&ui_h, &s);
                 if grid_dirty { ui::grid::push(&ui_h, &s); }
                 crate::ui::bottom_panel::push_excel_files(&ui_h, &s);

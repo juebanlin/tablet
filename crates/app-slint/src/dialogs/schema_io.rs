@@ -366,6 +366,7 @@ pub fn wire(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
             run_import(&s);
             s.borrow_mut().schema_import.open = false;
             if let Some(ui_h) = weak.upgrade() {
+                ui::toolbar::push(&ui_h, &s);
                 ui::tree::push(&ui_h, &s);
                 ui::grid::push(&ui_h, &s);
                 push_import(&ui_h, &s);
@@ -563,11 +564,17 @@ fn run_import(state: &Rc<RefCell<AppState>>) {
         .cloned().collect();
     let config_dir = st.engine.project().data_dir();
     let with_preset = st.schema_import.with_preset;
-    let (added, overwritten) = apply_schema_to_project(
-        &mut st.engine.project_mut().groups,
-        &sections,
-        &config_dir,
-        with_preset,
-    );
-    st.engine.ui_log(format!("[导入Schema] 完成: {} 新增, {} 覆盖", added, overwritten));
+    let result = st.engine.edit_active_project("导入 Schema", |project| {
+        let result = apply_schema_to_project(
+            &mut project.groups,
+            &sections,
+            &config_dir,
+            with_preset,
+        );
+        project.resync_schema();
+        result
+    });
+    if let Some((added, overwritten)) = result {
+        st.engine.ui_log(format!("[导入Schema] 完成: {} 新增, {} 覆盖", added, overwritten));
+    }
 }

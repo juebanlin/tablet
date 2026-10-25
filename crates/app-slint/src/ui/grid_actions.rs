@@ -21,24 +21,35 @@ pub(crate) fn commit_editing(ui_weak: &slint::Weak<AppWindow>, state: &Rc<RefCel
         Some(ui_h) => ui_h.get_editing_buffer().to_string(),
         None => return,
     };
-    let mut st = state.borrow_mut();
-    if st.editing_header_row >= 0 && st.editing_header_col >= 0 {
-        let hi = st.editing_header_row as usize;
-        let ci = st.editing_header_col as usize;
-        st.set_header_cell(hi, ci, buf);
-        st.editing_header_row = -1;
-        st.editing_header_col = -1;
-        st.editing_buffer.clear();
-        st.editing_in_formula = false;
-        return;
-    }
-    if let Some((r, c)) = st.editing {
-        st.set_cell(r, c, &buf);
-        st.editing = None;
-        st.editing_buffer.clear();
-        st.editing_in_formula = false;
-        st.editing_header_row = -1;
-        st.editing_header_col = -1;
+    let committed = {
+        let mut st = state.borrow_mut();
+        if st.editing_header_row >= 0 && st.editing_header_col >= 0 {
+            let hi = st.editing_header_row as usize;
+            let ci = st.editing_header_col as usize;
+            st.set_header_cell(hi, ci, buf);
+            st.editing_header_row = -1;
+            st.editing_header_col = -1;
+            st.editing_buffer.clear();
+            st.editing_in_formula = false;
+            true
+        } else if let Some((r, c)) = st.editing {
+            st.set_cell(r, c, &buf);
+            st.editing = None;
+            st.editing_buffer.clear();
+            st.editing_in_formula = false;
+            st.editing_header_row = -1;
+            st.editing_header_col = -1;
+            true
+        } else {
+            false
+        }
+    };
+    // 提交会改 dirty / 历史；必须把树上的 🟡 和 Toolbar 的撤销按钮一起刷掉，
+    // 不能等用户再点一下别处（这是「编辑后树标脏/撤销按钮不反应」的修复）。
+    if committed {
+        if let Some(ui_h) = ui_weak.upgrade() {
+            crate::refresh::after_grid_edit(&ui_h, state);
+        }
     }
 }
 
@@ -229,43 +240,18 @@ pub(crate) fn perform_row_action(state: &Rc<RefCell<AppState>>, row: usize, acti
             _ => {}
         }
     } else if is_constant {
-        if let Some(g) = st.engine.project_mut().groups.iter_mut().find(|g| g.name == group) {
-            if let Some(c) = g.constants.iter_mut().find(|c| c.name == name) {
-                use tablet_core::model::ConstEntry;
-                match action {
-                    "grid.row-insert-above" | "grid.row-insert-below" => {
-                        let at = if action == "grid.row-insert-above" { row } else { row + 1 };
-                        let at = at.min(c.entries.len());
-                        c.entries.insert(at, ConstEntry {
-                            name: String::new(), tbl_type: "str".to_string(),
-                            value: String::new(), export: Export::ClientServer, desc: String::new(),
-                        });
-                        c.update_dirty();
-                    }
-                    "grid.row-delete" => {
-                        if row < c.entries.len() { c.entries.remove(row); c.update_dirty(); }
-                    }
-                    _ => {}
-                }
-            }
+        match action {
+            "grid.row-insert-above" => st.engine.insert_constant_row(&group, &name, row),
+            "grid.row-insert-below" => st.engine.insert_constant_row(&group, &name, row + 1),
+            "grid.row-delete" => st.engine.delete_constant_row(&group, &name, row),
+            _ => {}
         }
     } else if is_enum {
-        if let Some(g) = st.engine.project_mut().groups.iter_mut().find(|g| g.name == group) {
-            if let Some(e) = g.enums.iter_mut().find(|e| e.name == name) {
-                use tablet_core::model::EnumEntry;
-                match action {
-                    "grid.row-insert-above" | "grid.row-insert-below" => {
-                        let at = if action == "grid.row-insert-above" { row } else { row + 1 };
-                        let at = at.min(e.entries.len());
-                        e.entries.insert(at, EnumEntry { id: String::new(), name: String::new(), desc: String::new() });
-                        e.update_dirty();
-                    }
-                    "grid.row-delete" => {
-                        if row < e.entries.len() { e.entries.remove(row); e.update_dirty(); }
-                    }
-                    _ => {}
-                }
-            }
+        match action {
+            "grid.row-insert-above" => st.engine.insert_enum_row(&group, &name, row),
+            "grid.row-insert-below" => st.engine.insert_enum_row(&group, &name, row + 1),
+            "grid.row-delete" => st.engine.delete_enum_row(&group, &name, row),
+            _ => {}
         }
     }
     if st.realtime_validate { st.engine.revalidate(&group, &name); }

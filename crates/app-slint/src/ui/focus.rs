@@ -14,7 +14,6 @@ use crate::{refresh, ui, AppWindow};
 pub fn wire(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
     {
         let s = state.clone();
-        let weak = ui_h.as_weak();
         let ui_for_buf = ui_h.as_weak();
         ui_h.on_commit_pending_edit(move || {
             let need = {
@@ -22,8 +21,8 @@ pub fn wire(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
                 st.editing.is_some() || st.editing_header_row >= 0
             };
             if !need { return; }
+            // commit_editing 内部已经 after_grid_edit（grid/tree/toolbar/log）。
             ui::grid_actions::commit_editing(&ui_for_buf, &s);
-            if let Some(ui_h) = weak.upgrade() { ui::grid::push(&ui_h, &s); }
         });
     }
 
@@ -35,7 +34,6 @@ pub fn wire(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
             if ui::grid_actions::selection_anchor(&s).is_none() { return; }
             ui::grid_actions::perform_action(&s, "grid.cell-copy", "Ctrl+C");
             if let Some(ui_h) = weak.upgrade() {
-                ui::grid::push(&ui_h, &s);
                 refresh::after_log(&ui_h, &s);
             }
         });
@@ -47,8 +45,7 @@ pub fn wire(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
             if ui::grid_actions::selection_anchor(&s).is_none() { return; }
             ui::grid_actions::perform_action(&s, "grid.cell-cut", "Ctrl+X");
             if let Some(ui_h) = weak.upgrade() {
-                ui::grid::push(&ui_h, &s);
-                refresh::after_log(&ui_h, &s);
+                refresh::after_grid_edit(&ui_h, &s);
             }
         });
     }
@@ -59,8 +56,7 @@ pub fn wire(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
             if ui::grid_actions::selection_anchor(&s).is_none() { return; }
             ui::grid_actions::perform_action(&s, "grid.cell-paste", "Ctrl+V");
             if let Some(ui_h) = weak.upgrade() {
-                ui::grid::push(&ui_h, &s);
-                refresh::after_log(&ui_h, &s);
+                refresh::after_grid_edit(&ui_h, &s);
             }
         });
     }
@@ -71,8 +67,7 @@ pub fn wire(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
             if ui::grid_actions::selection_anchor(&s).is_none() { return; }
             ui::grid_actions::perform_action(&s, "grid.cell-clear", "Delete");
             if let Some(ui_h) = weak.upgrade() {
-                ui::grid::push(&ui_h, &s);
-                refresh::after_log(&ui_h, &s);
+                refresh::after_grid_edit(&ui_h, &s);
             }
         });
     }

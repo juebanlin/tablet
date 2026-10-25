@@ -30,6 +30,7 @@ pub fn push_window_title(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
 /// 树结构变了（New/Rename/Delete Group/Node、克隆、reload）。
 pub fn after_tree_change(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
     push_window_title(ui_h, state);
+    ui::toolbar::push(ui_h, state);
     ui::tree::push(ui_h, state);
     ui::grid::push(ui_h, state);
     ui::bottom_panel::push_log(ui_h, state);
@@ -39,6 +40,7 @@ pub fn after_tree_change(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
 
 /// grid 单元格写入或表头改了。dirty 标记会冒到树面板，所以也刷树。
 pub fn after_grid_edit(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
+    ui::toolbar::push(ui_h, state);
     ui::grid::push(ui_h, state);
     ui::tree::push(ui_h, state);
     ui::bottom_panel::push_log(ui_h, state);
@@ -46,6 +48,8 @@ pub fn after_grid_edit(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
 
 /// PendingAction（input / confirm 对话框）走完。
 pub fn after_pending_action(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
+    push_window_title(ui_h, state);
+    ui::toolbar::push(ui_h, state);
     dialogs::pending::push_input(ui_h, state);
     dialogs::pending::push_confirm(ui_h, state);
     ui::tree::push(ui_h, state);
@@ -55,6 +59,7 @@ pub fn after_pending_action(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
 
 /// 右键菜单 action 走完后的标准 fan-out（含可能被打开的 input/confirm/new-project / 数据导出 / schema 导出 / schema 导入合并）。
 pub fn after_ctx_menu(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
+    ui::toolbar::push(ui_h, state);
     dialogs::context_menu::push(ui_h, state);
     dialogs::pending::push_input(ui_h, state);
     dialogs::pending::push_confirm(ui_h, state);
@@ -76,6 +81,7 @@ pub fn after_log(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
 
 /// 全局设置对话框关闭后。
 pub fn after_global_settings(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
+    ui::toolbar::push(ui_h, state);
     dialogs::global_settings::push(ui_h, state);
     ui::tree::push(ui_h, state);
     ui::grid::push(ui_h, state);
@@ -85,6 +91,7 @@ pub fn after_global_settings(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
 /// 启动时的初次 push（不调用 reset_view_after_reload，避免覆盖 AppState::load 已计算好的展开集）。
 pub fn initial(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
     push_window_title(ui_h, state);
+    ui::toolbar::push(ui_h, state);
     ui::tree::push(ui_h, state);
     ui::grid::push(ui_h, state);
     ui::bottom_panel::push_log(ui_h, state);

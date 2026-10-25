@@ -30,12 +30,16 @@ export component StatusBar inherits Rectangle {
             text: root.selection-info;
             font-size: Theme.fs-tiny;
             color: Theme.text-secondary;
+            height: parent.height;
+            horizontal-stretch: 1;
             vertical-alignment: center;
+            overflow: elide;
         }
         Text {
             text: root.hover-info;
             font-size: Theme.fs-tiny;
             color: Theme.text-secondary;
+            height: parent.height;
             vertical-alignment: center;
         }
     }

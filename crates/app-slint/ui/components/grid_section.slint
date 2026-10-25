@@ -42,6 +42,7 @@ export component GridSection inherits Rectangle {
     in property <string> formula-display: "";
     in property <string> formula-raw: "";
     in property <bool> formula-editable: false;
+    in property <bool> formula-single: false;
     in-out property <string> editing-buffer: "";
     in property <bool> formula-editing: false;
     callback formula-request-edit();
@@ -136,6 +137,7 @@ export component GridSection inherits Rectangle {
             display-text: root.formula-display;
             raw-text: root.formula-raw;
             editable: root.formula-editable;
+            single-cell: root.formula-single;
             editing: root.formula-editing;
             editing-buffer <=> root.editing-buffer;
             request-edit => { root.formula-request-edit(); }
@@ -213,6 +215,7 @@ export component GridSectionPreview inherits Window {
         coord: "B3";
         formula-display: "战士";
         formula-editable: true;
+        formula-single: true;
         selection-info: "B2:D5 (4行×3列，共12格)";
         hover-info: "光标: C4";
         col-count: 5;

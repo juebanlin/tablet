@@ -447,6 +447,8 @@ pub enum PendingAction {
     DeleteProject { project_id: String },
     /// 关闭 dirty Project：单步 ConfirmDialog（确认放弃未保存改动）
     CloseDirtyProject { project_id: String },
+    /// 重新加载整个工作区：单步 ConfirmDialog（有未保存改动时先确认）
+    ReloadWorkspace,
 }
 
 impl PendingAction {
@@ -463,7 +465,8 @@ impl PendingAction {
             | PendingAction::DeleteNode { .. }
             | PendingAction::ReloadXlsxGroup { .. }
             | PendingAction::DeleteProject { .. }
-            | PendingAction::CloseDirtyProject { .. })
+            | PendingAction::CloseDirtyProject { .. }
+            | PendingAction::ReloadWorkspace)
     }
     pub fn input_title(&self) -> &'static str {
         match self {
@@ -501,6 +504,7 @@ impl PendingAction {
             PendingAction::ReloadXlsxGroup { .. } => "重新加载组",
             PendingAction::DeleteProject { .. } => "确认删除 Project",
             PendingAction::CloseDirtyProject { .. } => "未保存的修改",
+            PendingAction::ReloadWorkspace => "重新加载",
             _ => "",
         }
     }
@@ -516,6 +520,8 @@ impl PendingAction {
                 format!("此操作不可逆，将永久删除 projects/{}/ 目录及其全部数据。是否继续？", project_id),
             PendingAction::CloseDirtyProject { project_id } =>
                 format!("Project \"{}\" 有未保存的修改，关闭后将丢失这些改动。继续关闭？", project_id),
+            PendingAction::ReloadWorkspace =>
+                "当前有未保存的改动。重新加载会丢弃所有 Project 的内存改动，并清空撤销/重做历史。继续？".to_string(),
             _ => String::new(),
         }
     }
@@ -1078,6 +1084,66 @@ impl AppState {
             excel_sync_open: false,
             alert: None,
         }, config_fixed, open_failures))
+    }
+
+    /// 跨项目粘贴后把 active 切到目标项目并选中新 Group。
+    /// 撤销/重做按钮与 Ctrl+Z 只作用于 active project，粘贴完必须让目标项目成为 active，
+    /// 否则用户会以为粘贴没有历史（docs/12 §6）。
+    pub fn select_pasted_group(&mut self, project_id: &str, group: &str) {
+        self.engine.set_active_by_id(project_id);
+        self.selected = Some(SelectedNode::Group {
+            project_id: project_id.to_string(),
+            group: group.to_string(),
+        });
+        self.grid_selection = GridSelection::None;
+        self.editing = None;
+        self.editing_header_row = -1;
+        self.editing_header_col = -1;
+    }
+
+    /// 跨项目粘贴后切 active 并选中新节点；按目标项目里实际存在的节点类型决定 selected。
+    pub fn select_pasted_node(&mut self, project_id: &str, group: &str, name: &str) {
+        self.engine.set_active_by_id(project_id);
+        let kind = self
+            .engine
+            .find_project(project_id)
+            .and_then(|p| p.groups.iter().find(|g| g.name == group))
+            .and_then(|g| {
+                if g.tables.iter().any(|t| t.name == name) {
+                    Some("table")
+                } else if g.constants.iter().any(|c| c.name == name) {
+                    Some("constant")
+                } else if g.enums.iter().any(|e| e.name == name) {
+                    Some("enum")
+                } else {
+                    None
+                }
+            });
+        self.selected = match kind {
+            Some("table") => Some(SelectedNode::Table {
+                project_id: project_id.to_string(),
+                group: group.to_string(),
+                name: name.to_string(),
+            }),
+            Some("constant") => Some(SelectedNode::Constant {
+                project_id: project_id.to_string(),
+                group: group.to_string(),
+                name: name.to_string(),
+            }),
+            Some("enum") => Some(SelectedNode::Enum {
+                project_id: project_id.to_string(),
+                group: group.to_string(),
+                name: name.to_string(),
+            }),
+            _ => Some(SelectedNode::Group {
+                project_id: project_id.to_string(),
+                group: group.to_string(),
+            }),
+        };
+        self.grid_selection = GridSelection::None;
+        self.editing = None;
+        self.editing_header_row = -1;
+        self.editing_header_col = -1;
     }
 
     /// 写一个单元格的真实存储值；按当前 selected 节点类型分发到 engine。

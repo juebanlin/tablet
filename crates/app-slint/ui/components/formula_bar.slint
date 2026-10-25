@@ -31,12 +31,18 @@ export component FormulaBar inherits Rectangle {
     in-out property <string> editing-buffer: "";
     in property <bool> editing: false;
     in property <bool> editable: false;
+    /// 单格选区才允许展开；A1:C1 / 整行 / 整列强制折叠。
+    in property <bool> single-cell: false;
 
     /// 展开态：仅 UI 局部状态（session 内记忆，不落盘）。
     in-out property <bool> expanded: false;
     /// 实际生效的展开态。没有选中单元格（coord 空）时强制折叠——
     /// 否则会出现「箭头已隐藏、栏却还撑着高度、没法收回去」的死角。
-    property <bool> is-expanded: root.expanded && root.coord != "";
+    property <bool> is-expanded: root.expanded && root.single-cell && root.coord != "";
+    // 选区从单格变成区域/整行/整列时，顺手清掉展开态；否则再回到单格会突然弹开。
+    changed single-cell => {
+        if (!root.single-cell) { root.expanded = false; }
+    }
 
     callback request-edit();
     callback commit();
@@ -61,11 +67,14 @@ export component FormulaBar inherits Rectangle {
         Rectangle {
             width: 48px + Theme.sp-3;
             Text {
-                x: Theme.sp-3;
+                x: 0;
                 y: root.is-expanded ? Theme.sp-2 : 0;
+                width: parent.width;
+                height: root.is-expanded ? parent.height - Theme.sp-2 : parent.height;
                 text: root.coord;
                 font-size: Theme.fs-tiny;
                 color: Theme.text-secondary;
+                horizontal-alignment: center;
                 vertical-alignment: root.is-expanded ? top : center;
             }
         }
@@ -229,17 +238,20 @@ export component FormulaBarPreview inherits Window {
             coord: "B3";
             display-text: "战士";
             editable: true;
+            single-cell: true;
         }
         FormulaBar {
             coord: "C3";
             display-text: "这是一段很长很长的描述文本，用来演示展开后自动换行 + 滚动条的效果，单元格里根本显示不下。";
             editable: true;
+            single-cell: true;
             expanded: true;
         }
         FormulaBar {
             coord: "D3";
             display-text: "1001";
             editable: false;
+            single-cell: true;
         }
     }
 }

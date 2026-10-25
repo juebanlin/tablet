@@ -11,7 +11,7 @@ use slint::ComponentHandle;
 
 use crate::convert;
 use crate::state::{self, AppState, CtxMenuKind, GridSelection, SelectedNode};
-use crate::{dialogs, AppWindow, CellKind};
+use crate::{dialogs, ui, AppWindow, CellKind};
 
 /// 当前选中的节点能不能「还原到已保存」（@02.26）。
 ///
@@ -96,31 +96,24 @@ fn display_field_dropdown(state: &AppState) -> (Vec<slint::SharedString>, i32, b
 fn set_selected_display_field(state: &Rc<RefCell<AppState>>, value: &str) {
     let mut st = state.borrow_mut();
     let sel = st.selected.clone();
-    match sel {
+    let did = match sel {
         Some(SelectedNode::Table { project_id, group, name }) => {
             if st.engine.active_project_id() != Some(project_id.as_str()) { return; }
             // 表的「ID」= 不转换（清空）；其它列名显式存储（@10）
             let new = if value == DISPLAY_FIELD_ID { None } else { Some(value.to_string()) };
-            let Some(t) = st.engine.find_table_mut(&group, &name) else { return; };
-            if t.display_field == new { return; }
-            t.display_field = new;
+            st.engine.set_display_field(&group, &name, tablet_core::ops::NodeKind::Table, new)
         }
         Some(SelectedNode::Enum { project_id, group, name }) => {
             if st.engine.active_project_id() != Some(project_id.as_str()) { return; }
             // 枚举默认即 name：选 name = 清空（回默认）；其余显式存储（@10）
             let new = if value == tablet_core::model::ENUM_DEFAULT_DISPLAY_FIELD { None } else { Some(value.to_string()) };
-            let Some(e) = st.engine.find_enum_mut(&group, &name) else { return; };
-            if e.display_field == new { return; }
-            e.display_field = new;
+            st.engine.set_display_field(&group, &name, tablet_core::ops::NodeKind::Enum, new)
         }
         _ => return,
+    };
+    if did {
+        st.engine.ui_log(format!("[被引用展示列] 设为 {}", value));
     }
-    if let Some(p) = st.engine.active_mut() {
-        // `# @display` 住在 project.tblschema 里 → 走重算，不是置 true：
-        // 选过去又选回来（或选回默认的 name）应当自动回到干净。
-        p.resync_schema();
-    }
-    st.engine.ui_log(format!("[被引用展示列] 设为 {}", value));
 }
 
 pub fn push(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
@@ -230,6 +223,7 @@ pub fn push(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
     ui_h.set_formula_display(snap.formula_display.into());
     ui_h.set_formula_raw(snap.formula_raw.into());
     ui_h.set_formula_editable(snap.formula_editable);
+    ui_h.set_formula_single(snap.formula_single);
     ui_h.set_selection_info(snap.selection_info.into());
     ui_h.set_hover_info(snap.hover_info.into());
 }
@@ -253,6 +247,7 @@ fn push_selection_only(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
     ui_h.set_formula_display(snap.formula_display.into());
     ui_h.set_formula_raw(snap.formula_raw.into());
     ui_h.set_formula_editable(snap.formula_editable);
+    ui_h.set_formula_single(snap.formula_single);
     ui_h.set_selection_info(snap.selection_info.into());
     ui_h.set_hover_info(snap.hover_info.into());
 }
@@ -282,7 +277,11 @@ pub fn wire(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
             set_selected_display_field(&s, value.as_str());
             // 展示列变了 → 引用列的显示值变了 → 自动宽度需要重算。
             s.borrow_mut().grid_autofit_pending = true;
-            if let Some(ui_h) = weak.upgrade() { push(&ui_h, &s); }
+            if let Some(ui_h) = weak.upgrade() {
+                ui::toolbar::push(&ui_h, &s);
+                ui::tree::push(&ui_h, &s);
+                push(&ui_h, &s);
+            }
         });
     }
     // 「Excel 编辑」按钮：选中叶节点（Table/Constant/Enum）时调起单 sheet xlsx
@@ -432,7 +431,7 @@ pub fn wire(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
                 }
             }
             if let Some(ui_h) = weak.upgrade() {
-                if was_editing { push(&ui_h, &s); } else { push_selection_only(&ui_h, &s); }
+                push_selection_only(&ui_h, &s);
             }
         });
     }
@@ -466,7 +465,7 @@ pub fn wire(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
                 };
             }
             if let Some(ui_h) = weak.upgrade() {
-                if was_editing { push(&ui_h, &s); } else { push_selection_only(&ui_h, &s); }
+                push_selection_only(&ui_h, &s);
             }
         });
     }
@@ -490,9 +489,8 @@ pub fn wire(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
                 if changed { st.grid_selection = new_sel; }
                 changed
             };
-            if let Some(ui_h) = weak.upgrade() {
-                if was_editing { push(&ui_h, &s); }
-                else if changed { push_selection_only(&ui_h, &s); }
+            if changed {
+                if let Some(ui_h) = weak.upgrade() { push_selection_only(&ui_h, &s); }
             }
         });
     }
@@ -516,8 +514,19 @@ pub fn wire(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
             let raw_r = anchor_r + (my / ROW_H).floor() as i32;
             let r2 = raw_r.max(0).min(rows as i32 - 1) as usize;
             let c2 = raw_c.max(0).min(cols as i32 - 1) as usize;
-            let r1 = anchor_r.max(0) as usize;
-            let c1 = anchor_c.max(0) as usize;
+            // 选区起点优先用当前选区 anchor：shift+拖动时鼠标按下的 cell（callback 的
+            // anchor_*）是终点侧，不是旧选区起点。普通拖动时 `cell-pressed` 已经把选区
+            // 设成按下格，两者相同。
+            let (r1, c1) = {
+                let st = s.borrow();
+                match st.grid_selection {
+                    GridSelection::Cell(ar, ac) => (ar, ac),
+                    GridSelection::CellRange { r1, c1, .. } => (r1, c1),
+                    GridSelection::Row(r) => (r, 0),
+                    GridSelection::Col(c) => (0, c),
+                    GridSelection::None => (anchor_r.max(0) as usize, anchor_c.max(0) as usize),
+                }
+            };
             let new_sel = if r1 == r2 && c1 == c2 {
                 GridSelection::Cell(r1, c1)
             } else {
@@ -535,7 +544,7 @@ pub fn wire(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
             if was_editing { grid_actions::commit_editing(&ui_for_buf, &s); }
             s.borrow_mut().grid_selection = new_sel;
             if let Some(ui_h) = weak.upgrade() {
-                if was_editing { push(&ui_h, &s); } else { push_selection_only(&ui_h, &s); }
+                push_selection_only(&ui_h, &s);
             }
         });
     }
@@ -551,7 +560,6 @@ pub fn wire(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
             };
             if was_editing {
                 grid_actions::commit_editing(&ui_for_buf, &s);
-                if let Some(ui_h) = weak.upgrade() { push(&ui_h, &s); }
             }
             let (kind, header_single) = {
                 let st = s.borrow();
@@ -697,20 +705,18 @@ pub fn wire(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
     // inline / 公式栏 编辑提交（Enter / 失焦）
     {
         let s = state.clone();
-        let weak = ui_h.as_weak();
         let ui_for_buf = ui_h.as_weak();
         ui_h.on_grid_cell_edit_committed(move || {
+            // commit_editing 内部已经 after_grid_edit（grid/tree/toolbar/log）；
+            // 这里不要再整表 push，避免一次提交重建两次 model。
             grid_actions::commit_editing(&ui_for_buf, &s);
-            if let Some(ui_h) = weak.upgrade() { push(&ui_h, &s); }
         });
     }
     {
         let s = state.clone();
-        let weak = ui_h.as_weak();
         let ui_for_buf = ui_h.as_weak();
         ui_h.on_formula_commit(move || {
             grid_actions::commit_editing(&ui_for_buf, &s);
-            if let Some(ui_h) = weak.upgrade() { push(&ui_h, &s); }
         });
     }
     // inline 编辑取消（Esc — slint 暂未发出，此处保留 hook）
@@ -786,7 +792,7 @@ pub fn wire(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
             if was_editing { grid_actions::commit_editing(&ui_for_buf, &s); }
             s.borrow_mut().grid_selection = GridSelection::Row(r as usize);
             if let Some(ui_h) = weak.upgrade() {
-                if was_editing { push(&ui_h, &s); } else { push_selection_only(&ui_h, &s); }
+                push_selection_only(&ui_h, &s);
             }
         });
     }
@@ -803,14 +809,13 @@ pub fn wire(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
             if was_editing { grid_actions::commit_editing(&ui_for_buf, &s); }
             s.borrow_mut().grid_selection = GridSelection::Col(c as usize);
             if let Some(ui_h) = weak.upgrade() {
-                if was_editing { push(&ui_h, &s); } else { push_selection_only(&ui_h, &s); }
+                push_selection_only(&ui_h, &s);
             }
         });
     }
     // 表格空白区点击 → 仅 commit 当前编辑（不改 selection）
     {
         let s = state.clone();
-        let weak = ui_h.as_weak();
         let ui_for_buf = ui_h.as_weak();
         ui_h.on_grid_blank_clicked(move || {
             let need = {
@@ -819,7 +824,6 @@ pub fn wire(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
             };
             if !need { return; }
             grid_actions::commit_editing(&ui_for_buf, &s);
-            if let Some(ui_h) = weak.upgrade() { push(&ui_h, &s); }
         });
     }
     // Export Popup 选项被选中（Constant 数据格 / Table 表头 export 行）
@@ -828,7 +832,7 @@ pub fn wire(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
         let weak = ui_h.as_weak();
         ui_h.on_grid_cell_export_selected(move |r, c, idx| {
             grid_actions::on_cell_export_selected(&s, r, c, idx);
-            if let Some(ui_h) = weak.upgrade() { push(&ui_h, &s); }
+            if let Some(ui_h) = weak.upgrade() { crate::refresh::after_grid_edit(&ui_h, &s); }
         });
     }
     {
@@ -836,7 +840,7 @@ pub fn wire(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
         let weak = ui_h.as_weak();
         ui_h.on_grid_header_export_selected(move |c, idx| {
             grid_actions::on_header_export_selected(&s, c, idx);
-            if let Some(ui_h) = weak.upgrade() { push(&ui_h, &s); }
+            if let Some(ui_h) = weak.upgrade() { crate::refresh::after_grid_edit(&ui_h, &s); }
         });
     }
     // grid 列字母右键

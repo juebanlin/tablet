@@ -46,9 +46,8 @@ pub fn open_for(state: &Rc<RefCell<AppState>>, project_id: &str) {
 fn edit_project(state: &Rc<RefCell<AppState>>, f: impl FnOnce(&mut Project)) {
     let mut st = state.borrow_mut();
     let id = st.project_settings.project_id.clone();
-    if let Some(p) = st.engine.find_project_mut(&id) {
-        f(p);
-    }
+    // 项目设置直接编辑内存；用项目级事务包住，字段级修改也能撤销。
+    let _ = st.engine.edit_project(&id, "项目设置", f);
 }
 
 /// 把盘上的快照取一份出来。**先 clone 再拿 mutable**，避开同时借 `engine` 两次。
@@ -61,8 +60,7 @@ fn original_of<T>(state: &Rc<RefCell<AppState>>, f: impl FnOnce(&Project) -> T) 
 fn write_sep(state: &Rc<RefCell<AppState>>, f: impl FnOnce(&mut tablet_core::types::SeparatorsSection)) {
     let mut st = state.borrow_mut();
     let id = st.project_settings.project_id.clone();
-    if let Some(p) = st.engine.find_project_mut(&id) {
-        f(&mut p.schema.separators);
+    if st.engine.edit_project(&id, "项目设置", |p| f(&mut p.schema.separators)).is_some() {
         st.project_settings.sep_touched = true;
     }
 }
@@ -415,18 +413,14 @@ pub fn wire(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
                 _ => SeverityAction::Block,
             };
             {
-                let mut st = s.borrow_mut();
-                let id = st.project_settings.project_id.clone();
-                if let Some(p) = st.engine.find_project_mut(&id) {
-                    match level.as_str() {
-                        "error" => p.config.validate.error = action,
-                        "warning" => p.config.validate.warning = action,
-                        "info" => p.config.validate.info = action,
-                        _ => {}
-                    }
-                }
+                edit_project(&s, |p| match level.as_str() {
+                    "error" => p.config.validate.error = action,
+                    "warning" => p.config.validate.warning = action,
+                    "info" => p.config.validate.info = action,
+                    _ => {}
+                });
                 // 策略变了 → block / report 的分流要重算（对话框是模态的，重算一次即可）
-                st.engine.revalidate_all();
+                s.borrow_mut().engine.revalidate_all();
             }
             if let Some(ui_h) = weak.upgrade() { push(&ui_h, &s); }
         });
@@ -441,14 +435,8 @@ pub fn wire(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
             match ExportKey::from_str(&key) {
                 None => err = Some(format!("不认识的导出字段: {}", key)),
                 Some(k) => {
-                    let ok = {
-                        let mut st = s.borrow_mut();
-                        let id = st.project_settings.project_id.clone();
-                        match st.engine.find_project_mut(&id) {
-                            Some(p) => k.set(&mut p.config.export, &value),
-                            None => true,
-                        }
-                    };
+                    let mut ok = true;
+                    edit_project(&s, |p| { ok = k.set(&mut p.config.export, &value); });
                     if !ok {
                         err = Some(format!("导出配置不接受 {} = {:?}（值非法，保持原样）", key, value));
                     }
@@ -510,16 +498,14 @@ pub fn wire(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
         let weak = ui_h.as_weak();
         ui_h.on_ps_revert_all(move || {
             {
-                let mut st = s.borrow_mut();
-                let id = st.project_settings.project_id.clone();
                 let mut sep_changed = false;
-                if let Some(p) = st.engine.find_project_mut(&id) {
+                edit_project(&s, |p| {
                     let before = p.schema.separators.clone();
                     p.revert_settings();
                     sep_changed = p.schema.separators != before;
-                }
+                });
                 if sep_changed {
-                    st.project_settings.sep_touched = true;
+                    s.borrow_mut().project_settings.sep_touched = true;
                 }
             }
             if let Some(ui_h) = weak.upgrade() { push(&ui_h, &s); }

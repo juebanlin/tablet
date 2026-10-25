@@ -36,6 +36,9 @@ pub struct GridSnapshot {
     pub formula_raw: String,
     /// 当前选中 cell 是否允许编辑（Text 列且非占位行外限制）
     pub formula_editable: bool,
+    /// 当前选中是否是**单格**。区域/整行/整列选区时公式栏强制折叠，
+    /// 否则会保留上一次展开高度并显示过期的 raw 内容。
+    pub formula_single: bool,
     pub selected_cell_row: i32,
     pub selected_cell_col: i32,
     pub selected_row: i32,
@@ -65,6 +68,7 @@ impl GridSnapshot {
             formula_display: String::new(),
             formula_raw: String::new(),
             formula_editable: false,
+            formula_single: false,
             selected_cell_row: -1,
             selected_cell_col: -1,
             selected_row: -1,
@@ -92,11 +96,19 @@ pub fn build_grid(state: &AppState) -> GridSnapshot {
 
 /// 把 AppState.grid_selection 投影到 snap 的 coord/formula/selection_info 等字段。
 fn enrich_selection(snap: &mut GridSnapshot, state: &AppState) {
+    // 先清掉上一个选区的公式栏内容；区域/整行/整列没有单格内容，
+    // 不能让上一次的 raw 文本和展开高度留着。
+    snap.formula_display.clear();
+    snap.formula_raw.clear();
+    snap.formula_editable = false;
+    snap.formula_single = false;
+
     match state.grid_selection {
         GridSelection::Cell(r, c) if (c as i32) < snap.col_count => {
             snap.selected_cell_row = r as i32;
             snap.selected_cell_col = c as i32;
             snap.coord = format!("{}{}", col_letter(c), r + 1);
+            snap.formula_single = true;
             let kind = snap.column_kinds.get(c);
             // 公式栏只允许 Text 列编辑；picker / ReadOnly 列只读 + 显示原始存储值（@04.5.3）
             snap.formula_editable = matches!(kind, Some(ColumnKind::Text));
@@ -141,11 +153,29 @@ fn enrich_selection(snap: &mut GridSnapshot, state: &AppState) {
         }
         GridSelection::Row(r) => {
             snap.selected_row = r as i32;
-            snap.selection_info = format!("第{}行", r + 1);
+            // 公式栏/Name Box 用 Excel 地址风格：整行 = `1:1`；
+            // 状态栏用完整单元格范围 + 维度：`A1:C1 (3列)`。
+            let last = col_letter(snap.col_count.max(1) as usize - 1);
+            let full = format!("A{0}:{1}{0}", r + 1, last);
+            snap.coord = format!("{0}:{0}", r + 1);
+            snap.selection_info = format!(
+                "{} ({}列)",
+                full,
+                snap.col_count.max(0),
+            );
         }
         GridSelection::Col(c) if (c as i32) < snap.col_count => {
             snap.selected_col = c as i32;
-            snap.selection_info = format!("第{}列", col_letter(c));
+            // 公式栏/Name Box：整列 = `A:A`；状态栏：`A1:A3 (3行)`。
+            let letter = col_letter(c);
+            let rows = snap.data_count.max(1);
+            let full = format!("{0}1:{0}{1}", letter, rows);
+            snap.coord = format!("{0}:{0}", letter);
+            snap.selection_info = format!(
+                "{} ({}行)",
+                full,
+                snap.data_count.max(0),
+            );
         }
         _ => {}
     }
@@ -646,12 +676,59 @@ desc | txt | cs | 描述
     }
 
     #[test]
+    fn single_cell_selection_shows_column_and_row() {
+        let (dir, mut state) = workspace_with_multiline_cell();
+        state.grid_selection = GridSelection::Cell(0, 0);
+        let snap = build_grid(&state);
+        assert_eq!(snap.coord, "A1");
+        assert_eq!(snap.selection_info, "A1");
+        assert!(snap.formula_single);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn whole_row_and_column_use_excel_name_box_style() {
+        let (dir, mut state) = workspace_with_multiline_cell();
+        state.grid_selection = GridSelection::Row(0);
+        let snap = build_grid(&state);
+        assert_eq!(snap.coord, "1:1", "公式栏/Name Box 的整行地址");
+        assert_eq!(snap.selection_info, "A1:C1 (3列)", "状态栏应显示完整单元格范围");
+        assert!(!snap.formula_single);
+
+        state.grid_selection = GridSelection::Col(1);
+        let snap = build_grid(&state);
+        assert_eq!(snap.coord, "B:B", "公式栏/Name Box 的整列地址");
+        assert_eq!(snap.selection_info, "B1:B1 (1行)", "状态栏应显示完整单元格范围");
+        assert!(!snap.formula_single);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn range_selection_reports_the_full_range() {
+        let (dir, mut state) = workspace_with_multiline_cell();
+        state.grid_selection = GridSelection::CellRange { r1: 0, c1: 0, r2: 0, c2: 2 };
+        let snap = build_grid(&state);
+        assert_eq!(snap.coord, "A1:C1", "公式栏左边应显示完整范围");
+        assert_eq!(
+            snap.selection_info,
+            "A1:C1 (1行×3列, 共3格)",
+            "状态栏应显示完整范围，而不是 anchor A1"
+        );
+        assert!(snap.formula_display.is_empty(), "区域选区没有单格内容");
+        assert!(snap.formula_raw.is_empty(), "区域选区不能留下上一格的 raw");
+        assert!(!snap.formula_editable, "区域选区不可编辑");
+        assert!(!snap.formula_single, "区域选区必须强制折叠公式栏");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn multiline_cell_is_flattened_for_display_but_kept_raw() {
         let (dir, mut state) = workspace_with_multiline_cell();
 
         // 选中 desc 列那一格（id/name/desc → 第 2 列）
         state.grid_selection = GridSelection::Cell(0, 2);
         let snap = build_grid(&state);
+        assert!(snap.formula_single, "单格选区允许展开公式栏");
 
         let cell = slint::Model::row_data(&snap.data_rows[0].cells, 2).unwrap().text.to_string();
         assert!(!cell.contains('\n') && !cell.contains('\r'), "数据格展示串残留换行: {cell:?}");

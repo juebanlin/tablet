@@ -70,3 +70,12 @@ jobs:
 - **macOS 最低 10.13**（High Sierra, 2017）由 `MACOSX_DEPLOYMENT_TARGET=10.13` 限定；不设的话默认跟 runner 一致（13.x），10.13 用户启动会被 dyld 拒
 - **macOS 签名/公证**脚本不做。GitHub Actions 上签名要 `apple-actions/import-codesign-certs` + 团队证书
 - **artifact 体积**：Linux/Win release 二进制各约 25-40MB（含 slint），上传到 GitHub Releases 没问题；`linux-cli-musl/tablet-cli` 静态链后大约 8-12MB
+
+## gui/
+
+Windows 桌面 GUI 冒烟测试脚手架（半自动，不进 CI）：
+
+- `scripts/gui/GuiHarness.ps1`：启动/移动/截图/坐标点击/发键/关窗
+- `scripts/gui/smoke_gui.ps1`：示例场景（建临时工作区 → 截图 → 可选点树节点）
+
+用法与边界见 `scripts/gui/README.md`；业务状态断言仍放 Rust 单测（docs/08 §6.2）。

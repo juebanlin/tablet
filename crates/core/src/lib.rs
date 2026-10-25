@@ -23,6 +23,7 @@ pub mod config_fix;
 pub mod workspace_lock;
 pub mod vcs;
 pub mod local_state;
+pub mod history;
 
 pub use search::name_matches;
 
