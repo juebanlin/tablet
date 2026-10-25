@@ -28,5 +28,17 @@ run_cli --project demo export data --json -o "$WORK_DIR/out"
 assert_exit 0
 assert_file_exists "$WORK_DIR/out/json/Hero.json"
 
+# Unity 场景：数据进 Assets/Resources，只有 Unity runtime 进 Assets/Scripts。
+# 这两条就是 references/unity.md 推荐的命令（宿主侧配置好路径后不需要 -o）。
+mkdir -p "$WORK_DIR/client/Assets/Resources/Config" "$WORK_DIR/client/Assets/Scripts/Config"
+run_cli --project demo export data --json -o "$WORK_DIR/client/Assets/Resources/Config"
+assert_exit 0
+assert_file_exists "$WORK_DIR/client/Assets/Resources/Config/json/Hero.json"
+
+run_cli --project demo export code --csharp-unity -o "$WORK_DIR/client/Assets/Scripts/Config"
+assert_exit 0
+assert_file_exists "$WORK_DIR/client/Assets/Scripts/Config/Loader.cs"
+assert_file_contains "$WORK_DIR/client/Assets/Scripts/Config/Loader.cs" "Newtonsoft"
+
 cleanup
 end_tests

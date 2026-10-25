@@ -191,15 +191,30 @@ pub enum ExportAction {
         /// GDScript
         #[arg(long)]
         gdscript: bool,
-        /// TypeScript
+        /// TypeScript（client + server 两端）
         #[arg(long)]
         typescript: bool,
+        /// TypeScript（仅前端 / client）
+        #[arg(long)]
+        typescript_client: bool,
+        /// TypeScript（仅 Node.js / server）
+        #[arg(long)]
+        typescript_server: bool,
         /// C++
         #[arg(long)]
         cpp: bool,
         /// C#（dotnet/unity/godot 三套）
         #[arg(long)]
         csharp: bool,
+        /// C#（仅 .NET / server）
+        #[arg(long)]
+        csharp_dotnet: bool,
+        /// C#（仅 Unity / client）
+        #[arg(long)]
+        csharp_unity: bool,
+        /// C#（仅 Godot / client）
+        #[arg(long)]
+        csharp_godot: bool,
         /// 全部语言
         #[arg(long)]
         all: bool,
@@ -236,6 +251,36 @@ pub enum SchemaAction {
         /// 同时列出每个节点的有效校验规则（系统内置 + 用户规则）
         #[arg(long)]
         rules: bool,
+    },
+    /// 导出项目结构为 .tblschema（或保存为本地模板）
+    Export {
+        /// 输出文件；与 --as-template 二选一
+        #[arg(long, required_unless_present = "as_template", conflicts_with = "as_template")]
+        out: Option<PathBuf>,
+        /// 保存到本地模板目录（需要 --meta-id）
+        #[arg(long, requires = "meta_id")]
+        as_template: bool,
+        /// 只导出这些分组（可重复）；与 --node 取并集；都不给 = 全部
+        #[arg(long = "group")]
+        groups: Vec<String>,
+        /// 只导出指定节点 `Group/Name`（可重复）
+        #[arg(long = "node", value_name = "GROUP/NAME")]
+        nodes: Vec<String>,
+        /// 带上 # @preset 数据（默认只导结构）
+        #[arg(long)]
+        with_preset: bool,
+        /// 覆盖 `# @meta id`
+        #[arg(long)]
+        meta_id: Option<String>,
+        /// 覆盖 `# @meta name`
+        #[arg(long)]
+        meta_name: Option<String>,
+        /// 覆盖 `# @meta category`
+        #[arg(long)]
+        meta_category: Option<String>,
+        /// 覆盖 `# @meta version`
+        #[arg(long)]
+        meta_version: Option<String>,
     },
     /// 添加分组
     AddGroup {
@@ -346,6 +391,8 @@ pub struct WorkspaceArgs {
 
 #[derive(Subcommand, Debug)]
 pub enum WorkspaceAction {
+    /// 显示工作区 / 版本库信息（不加载项目，不占工作区锁）
+    Info,
     /// 保存所有 dirty 节点到磁盘
     Save,
     /// 从磁盘重新加载

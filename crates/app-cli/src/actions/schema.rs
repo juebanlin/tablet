@@ -30,6 +30,115 @@ pub struct SchemaNodeInfo {
     pub rules: Vec<String>,
 }
 
+/// `schema export` 的入参。`out` / `as_template` 二选一（clap 已保证）。
+pub struct SchemaExportOptions {
+    pub out: Option<std::path::PathBuf>,
+    pub as_template: bool,
+    pub groups: Vec<String>,
+    pub nodes: Vec<String>,
+    pub with_preset: bool,
+    pub meta_id: Option<String>,
+    pub meta_name: Option<String>,
+    pub meta_category: Option<String>,
+    pub meta_version: Option<String>,
+}
+
+#[derive(serde::Serialize)]
+pub struct SchemaExportOutcome {
+    pub path: String,
+    pub template: bool,
+    pub sections: usize,
+}
+
+/// 把当前项目（可选中分组 / 节点）导出为 `.tblschema`，或写进本地模板目录。
+///
+/// 对齐 GUI 的「导出 Schema / 另存为模板」：默认只导结构，`--with-preset` 才带数据。
+pub fn run_schema_export(
+    engine: &ProjectEngine,
+    opts: &SchemaExportOptions,
+) -> Result<SchemaExportOutcome> {
+    use tablet_core::tblschema::{
+        is_valid_metadata_id, schema_from_project, serialize_tblschema, TblSchema,
+    };
+
+    let project = engine.active()
+        .ok_or_else(|| anyhow::anyhow!("没有活跃的 Project"))?;
+    let full = schema_from_project(&project.groups, opts.with_preset);
+
+    // 先校验选择目标存在，避免"导出成功但空了"。
+    for g in &opts.groups {
+        if !full.sections.iter().any(|s| &s.group == g) {
+            bail!("分组不存在或没有可导出的节点: {}", g);
+        }
+    }
+    let mut wanted_nodes: Vec<(String, String)> = Vec::new();
+    for spec in &opts.nodes {
+        let Some((g, name)) = spec.split_once('/') else {
+            bail!("--node 需要 `Group/Name`，收到 {:?}", spec);
+        };
+        if !full.sections.iter().any(|s| s.group == g && s.name == name) {
+            bail!("节点不存在: {}", spec);
+        }
+        wanted_nodes.push((g.to_string(), name.to_string()));
+    }
+
+    let all = opts.groups.is_empty() && wanted_nodes.is_empty();
+    let sections: Vec<_> = full.sections.into_iter().filter(|s| {
+        all
+            || opts.groups.iter().any(|g| g == &s.group)
+            || wanted_nodes.iter().any(|(g, n)| g == &s.group && n == &s.name)
+    }).collect();
+    if sections.is_empty() {
+        bail!("没有匹配的节点可导出");
+    }
+
+    let mut meta = project.schema.meta.clone();
+    if let Some(v) = &opts.meta_id { meta.id = v.trim().to_string(); }
+    if let Some(v) = &opts.meta_name { meta.name = v.trim().to_string(); }
+    if let Some(v) = &opts.meta_category { meta.category = v.trim().to_string(); }
+    if let Some(v) = &opts.meta_version { meta.version = v.trim().to_string(); }
+    if !meta.id.is_empty() && !is_valid_metadata_id(&meta.id) {
+        bail!("非法 meta id: {}（仅小写字母/数字/下划线/连字符，1-32 位）", meta.id);
+    }
+    if meta.name.is_empty() && !meta.id.is_empty() {
+        meta.name = meta.id.clone();
+    }
+
+    let schema = TblSchema {
+        meta,
+        separators: Default::default(),
+        sections,
+    };
+    let content = serialize_tblschema(&schema);
+
+    let (path, template) = if opts.as_template {
+        let id = schema.meta.id.clone();
+        if id.is_empty() {
+            bail!("--as-template 需要 --meta-id");
+        }
+        let dir = tablet_core::template::default_local_dir();
+        std::fs::create_dir_all(&dir)?;
+        (dir.join(format!("{}.tblschema", id)), true)
+    } else {
+        let out = opts.out.clone()
+            .ok_or_else(|| anyhow::anyhow!("需要 --out 或 --as-template"))?;
+        (out, false)
+    };
+
+    if let Some(parent) = path.parent() {
+        if !parent.as_os_str().is_empty() {
+            std::fs::create_dir_all(parent)?;
+        }
+    }
+    std::fs::write(&path, content)?;
+
+    Ok(SchemaExportOutcome {
+        path: path.to_string_lossy().replace('\\', "/"),
+        template,
+        sections: schema.sections.len(),
+    })
+}
+
 pub fn run_schema_show(engine: &ProjectEngine, with_rules: bool) -> Result<Vec<SchemaShowEntry>> {
     let project = engine.active()
         .ok_or_else(|| anyhow::anyhow!("没有活跃的 Project"))?;

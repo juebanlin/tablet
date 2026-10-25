@@ -625,7 +625,7 @@ hero/
   └── HeroBase      (table, 5 fields, 120 rows)
       · id = unique() [系统]
       · id = non_empty() [系统]
-      · id = integer() [系统]
+      · id = positive_int() [系统]
       · name = matches(^[A-Z][A-Z0-9_]*$) [警告]
 ```
 
@@ -682,6 +682,39 @@ tablet-cli schema add-enum --group hero --name HeroRarity \
 >
 > 一个组里最后一个节点被删掉时，组目录一并清理；**新建的空组**则保留，
 > 好让 `add-group` → `add-table` 能跨进程走通。
+
+#### `schema export`
+
+把项目结构导出成 `.tblschema`（对应 GUI 的「导出 Schema...」/「另存为模板...」）。
+
+```bash
+# 全部节点（只导结构；加 --with-preset 才带数据）
+tablet-cli --project slg-test schema export --out slg.tblschema
+
+# 只导一个分组 / 一个节点（可重复，取并集）
+tablet-cli --project slg-test schema export --out hero.tblschema --group hero
+tablet-cli --project slg-test schema export --out one.tblschema --node hero/HeroBase
+
+# 覆盖元数据
+tablet-cli --project slg-test schema export --out tpl.tblschema   --meta-id slg_core --meta-name "SLG 核心结构" --meta-category slg --meta-version 1.2.0
+
+# 保存到本地模板目录（等价于 GUI 的「另存为模板...」）
+tablet-cli --project slg-test schema export --as-template --meta-id slg_core
+```
+
+| 参数 | 说明 |
+|------|------|
+| `--out <file>` | 输出文件；与 `--as-template` 二选一 |
+| `--as-template` | 写到本地模板目录 `<local>/<meta-id>.tblschema`，需要 `--meta-id` |
+| `--group <G>` | 只导出该分组（可重复） |
+| `--node <G/N>` | 只导出该节点（可重复） |
+| `--with-preset` | 带上 `# @preset` 数据 |
+| `--meta-id` / `--meta-name` / `--meta-category` / `--meta-version` | 覆盖 `# @meta` |
+
+- 不传 `--group` / `--node` = 全部节点；两者同时给时取并集。
+- 元数据缺省继承当前项目；`--meta-name` 为空时用 id 兜底。
+- `--fmt json` 输出 `{"path": "...", "template": false, "sections": N}`。
+- 项目级「合并 Schema」是**导入**，CLI 目前只有文件级的 `util merge-schema`。
 
 #### `schema rename-group`
 
@@ -762,13 +795,37 @@ tablet-cli --project slg-test export data
 
 | 参数 | 说明 |
 |------|------|
-| `--java` / `--go` / `--lua` / `--gdscript` / `--typescript` / `--cpp` / `--csharp` | 选择语言 |
+| `--java` / `--go` / `--lua` / `--gdscript` / `--cpp` | 选择语言 |
+| `--typescript` | TypeScript 两端（= `--typescript-client --typescript-server`） |
+| `--typescript-client` / `--typescript-server` | 只导前端 / 只导 Node.js 端 |
+| `--csharp` | C# 三套（dotnet + unity + godot） |
+| `--csharp-dotnet` / `--csharp-unity` / `--csharp-godot` | 只导一个 C# runtime |
 | `--all` | 全部语言 |
 | `--package <pkg>` | 覆盖 Java/Go 的 package 名 |
 | `--namespace <ns>` | 覆盖 C++/C# 的 namespace |
-| `-o, --output <path>` | 覆盖代码输出目录 |
+| `-o, --output <path>` | 覆盖代码输出目录（语义见下） |
 
-至少选一种语言或 `--all`。`--csharp` 同时生成 dotnet/unity/godot 三套。
+至少选一种语言或 `--all`。`--csharp` / `--typescript` 是简写；要单套（例如 Unity 客户端）
+用 `--csharp-unity`，不会顺带生成 dotnet / godot。
+
+**`-o` 的语义**：
+
+- 只选一种格式：`DIR` 就是该格式的输出目录（与旧行为一致）。
+- 选多种格式：`DIR` 是**输出根**，按 `export all -o` 的标准布局展开：
+  `DIR/server/java`、`DIR/server/go`、`DIR/server/cpp`、`DIR/server/csharp`、
+  `DIR/server/typescript`、`DIR/client/lua`、`DIR/client/gdscript`、
+  `DIR/client/typescript`、`DIR/client/csharp_unity`、`DIR/client/csharp_godot`。
+  这样多个 runtime 的 `Loader.cs` / 同名文件不会互相覆盖。
+- 相对路径按 `projects/<id>/` 解析（不是当前目录）；拿不准就写绝对路径。
+
+**UI 导出对话框的 4 个预设 = CLI 组合**：
+
+| UI 预设 | CLI |
+|---|---|
+| 全部 | `export all` |
+| 数据 | `export data` |
+| 后端 | `export data` + `export code --java --go --cpp --csharp-dotnet --typescript-server` |
+| 前端 | `export code --lua --gdscript --typescript-client --csharp-unity --csharp-godot` |
 
 ```bash
 # 仅 Java
@@ -786,8 +843,11 @@ tablet-cli --project slg-test export code --csharp --namespace Test.Config
 # 多语言同时导出
 tablet-cli --project slg-test export code --java --go
 
-# 多语言 + 统一输出目录
+# 多语言 + 统一输出根（实际写到 tmp/server/java、tmp/server/go）
 tablet-cli --project slg-test export code --java --go -o ./tmp/
+
+# 只导 Unity 客户端（不会生成 dotnet / godot）
+tablet-cli --project slg-test export code --csharp-unity
 
 # 全部语言
 tablet-cli --project slg-test export code --all
@@ -938,6 +998,41 @@ tablet-cli excel import --group item --file D:/shared/item_update.xlsx
 ---
 
 ### 8.6 workspace — 工作区操作
+
+#### `workspace info`
+
+显示工作区路径、版本库分支 / 修订、项目列表。**不加载 `.tbl`、不占工作区锁**：
+GUI 开着、甚至某张表坏了，也能读到分支（Unity 插件 / CI 用它显示"当前在哪个分支"）。
+
+```bash
+tablet-cli workspace info
+tablet-cli --fmt json workspace info
+```
+
+```
+Workspace: D:/game/config
+  VCS:    git
+  Branch: main @ 8c47a4f
+  Projects: game (SLG), tools (工具配置)
+  Last:   game
+```
+
+```json
+{
+  "workdir": "D:/game/config",
+  "vcs": "git",
+  "branch": "main",
+  "revision": "8c47a4f",
+  "detached": false,
+  "vcs_error": null,
+  "last_project": "game",
+  "projects": [{"id": "game", "name": "SLG"}]
+}
+```
+
+- Git：直接读 `.git`（含 submodule / worktree），不要求 PATH 里有 git。
+- SVN：`.svn` + `svn info --show-item`（SVN 1.9+）；没装命令行工具时 `branch/revision` 为空、`vcs_error` 说明原因。
+- 无版本库：`vcs = null`。
 
 #### `workspace save`
 

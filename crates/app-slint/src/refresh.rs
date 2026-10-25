@@ -13,8 +13,23 @@ use crate::state::AppState;
 use crate::AppWindow;
 use crate::{dialogs, ui};
 
+/// 窗口标题：`tablet vX — <分支>`。分支来自加载时缓存的 `VcsInfo`。
+pub fn push_window_title(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
+    let st = state.borrow();
+    let mut title = format!("tablet v{}", env!("CARGO_PKG_VERSION"));
+    if let Some(display) = st.vcs_info.display() {
+        title.push_str(" — ");
+        title.push_str(&display);
+    } else if let Some(kind) = st.vcs_info.kind {
+        title.push_str(" — ");
+        title.push_str(kind.as_str());
+    }
+    ui_h.set_window_title(title.into());
+}
+
 /// 树结构变了（New/Rename/Delete Group/Node、克隆、reload）。
 pub fn after_tree_change(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
+    push_window_title(ui_h, state);
     ui::tree::push(ui_h, state);
     ui::grid::push(ui_h, state);
     ui::bottom_panel::push_log(ui_h, state);
@@ -69,6 +84,7 @@ pub fn after_global_settings(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
 
 /// 启动时的初次 push（不调用 reset_view_after_reload，避免覆盖 AppState::load 已计算好的展开集）。
 pub fn initial(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
+    push_window_title(ui_h, state);
     ui::tree::push(ui_h, state);
     ui::grid::push(ui_h, state);
     ui::bottom_panel::push_log(ui_h, state);

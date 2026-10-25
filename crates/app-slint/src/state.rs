@@ -869,6 +869,8 @@ impl GlobalSettingsDialogState {
 
 pub struct AppState {
     pub engine: ProjectEngine,
+    /// 工作区所在版本库的分支 / 修订；加载时探测一次，供标题栏显示。
+    pub vcs_info: tablet_core::vcs::VcsInfo,
     pub selected: Option<SelectedNode>,
     pub tree_filter: TreeFilter,
     pub tree_full_group: bool,
@@ -995,8 +997,10 @@ impl AppState {
                 engine.validation_errors.len(), engine.validation_warnings.len()
             ));
         }
+        let vcs_info = tablet_core::vcs::probe(workdir);
         Ok((Self {
             engine,
+            vcs_info,
             selected: None,
             tree_filter: TreeFilter::All,
             tree_full_group: false,

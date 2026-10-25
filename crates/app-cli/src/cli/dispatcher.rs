@@ -42,6 +42,8 @@ fn run(cli: Cli) -> Result<i32> {
     // `util` 是纯文件工具（不碰工作区状态），`list-templates` 只读应用目录，不参与。
     let _workspace_lock = match &cli.command {
         Command::Util(_) | Command::ListTemplates => None,
+        // 只读、且不加载项目：GUI 开着时也要能读到分支（Unity 插件 / CI 会调）。
+        Command::Workspace(wa) if matches!(wa.action, WorkspaceAction::Info) => None,
         _ => Some(tablet_core::workspace_lock::acquire(
             &cli.workdir,
             tablet_core::workspace_lock::ProcKind::Cli,
@@ -55,6 +57,10 @@ fn run(cli: Cli) -> Result<i32> {
             return Ok(0);
         }
         Command::Project(pa) => return dispatch_project(&cli, pa),
+        // workspace info 只读 tablet.toml + 扫项目目录，不加载 .tbl，也不需要工作区锁。
+        Command::Workspace(wa) if matches!(wa.action, WorkspaceAction::Info) => {
+            return print_workspace_info(&cli, &cli.workdir);
+        }
         // sep show 只要给了显式来源（--defaults / --config / --schema）就与项目无关，
         // 不该被「先加载 Project」那步挡住——@03.8.8 明确写了「可带项目上下文也可独立使用」。
         // 只有光秃秃的 `sep show`（读当前项目生效值）才需要项目。
@@ -234,7 +240,9 @@ fn run(cli: Cli) -> Result<i32> {
                     Ok(if summary.has_error() { 1 } else { 0 })
                 }
                 ExportAction::Code {
-                    java, go, lua, gdscript, typescript, cpp, csharp, all,
+                    java, go, lua, gdscript,
+                    typescript, typescript_client, typescript_server,
+                    cpp, csharp, csharp_dotnet, csharp_unity, csharp_godot, all,
                     package, namespace, output,
                 } => {
                     if let Some(pkg) = package {
@@ -243,22 +251,26 @@ fn run(cli: Cli) -> Result<i32> {
                     if let Some(ns) = namespace {
                         apply_namespace_override(&mut engine, ns);
                     }
-                    if let Some(o) = output {
-                        apply_code_output(&mut engine, o);
-                    }
                     let mut formats = ExportFormats::default();
                     if *all {
                         formats = ExportFormats::all();
                         formats.json = false;
                         formats.xml = false;
                     } else {
-                        if *java { formats.java = true; }
-                        if *go { formats.go = true; }
-                        if *lua { formats.lua = true; }
-                        if *gdscript { formats.gdscript = true; }
-                        if *typescript { formats.typescript = true; }
-                        if *cpp { formats.cpp = true; }
-                        if *csharp { formats.csharp = true; }
+                        formats.java = *java;
+                        formats.go = *go;
+                        formats.lua = *lua;
+                        formats.gdscript = *gdscript;
+                        formats.cpp = *cpp;
+                        // --typescript / --csharp 是简写：展开成两端 / 三套。
+                        formats.typescript_client = *typescript_client || *typescript;
+                        formats.typescript_server = *typescript_server || *typescript;
+                        formats.csharp_dotnet = *csharp_dotnet || *csharp;
+                        formats.csharp_unity = *csharp_unity || *csharp;
+                        formats.csharp_godot = *csharp_godot || *csharp;
+                    }
+                    if let Some(o) = output {
+                        apply_code_output(&mut engine, o, &formats);
                     }
                     if !formats.any() {
                         eprintln!("错误: 请指定至少一种语言或使用 --all");
@@ -314,6 +326,31 @@ fn run(cli: Cli) -> Result<i32> {
                     }
                     Ok(0)
                 }
+                SchemaAction::Export {
+                    out, as_template, groups, nodes, with_preset,
+                    meta_id, meta_name, meta_category, meta_version,
+                } => {
+                    let opts = crate::actions::schema::SchemaExportOptions {
+                        out: out.clone(),
+                        as_template: *as_template,
+                        groups: groups.clone(),
+                        nodes: nodes.clone(),
+                        with_preset: *with_preset,
+                        meta_id: meta_id.clone(),
+                        meta_name: meta_name.clone(),
+                        meta_category: meta_category.clone(),
+                        meta_version: meta_version.clone(),
+                    };
+                    let outcome = crate::actions::schema::run_schema_export(&engine, &opts)?;
+                    if cli.is_json() {
+                        println!("{}", serde_json::to_string_pretty(&outcome).unwrap_or_default());
+                    } else if outcome.template {
+                        println!("已保存为本地模板: {}（{} 个节点）", outcome.path, outcome.sections);
+                    } else {
+                        println!("已导出 Schema: {}（{} 个节点）", outcome.path, outcome.sections);
+                    }
+                    Ok(0)
+                }
                 SchemaAction::AddGroup { name, storage } => {
                     crate::actions::schema::run_schema_add_group(&mut engine, name, storage)?;
                     println!("已添加 Group: {}（{}）", name, storage);
@@ -358,8 +395,10 @@ fn run(cli: Cli) -> Result<i32> {
                 }
             }
         }
-        Command::Workspace(wa) => {
+        Command::Workspace(ref wa) => {
             match &wa.action {
+                // 正常走不到这里（上面已早返回）；保留分支保证 match 穷尽。
+                WorkspaceAction::Info => print_workspace_info(&cli, &engine.workdir),
                 WorkspaceAction::Save => {
                     crate::actions::workspace::run_workspace_save(&mut engine)?;
                     println!("已保存");
@@ -426,6 +465,17 @@ fn load_workspace_checked(workdir: &std::path::Path) -> Result<(ProjectEngine, b
         anyhow::bail!("有 {} 个 Project 打不开，已中止", failed.len());
     }
     Ok((engine, config_fixed))
+}
+
+/// `workspace info` 的公共输出（早返回与兜底分支共用）。
+fn print_workspace_info(cli: &Cli, workdir: &std::path::Path) -> Result<i32> {
+    let summary = crate::actions::workspace::run_workspace_info(workdir)?;
+    if cli.is_json() {
+        println!("{}", serde_json::to_string_pretty(&summary).unwrap_or_default());
+    } else {
+        output::print_workspace_info_cli(&summary);
+    }
+    Ok(0)
 }
 
 fn dispatch_project(cli: &Cli, pa: &ProjectArgs) -> Result<i32> {
@@ -529,20 +579,35 @@ fn apply_data_output(engine: &mut ProjectEngine, path: &std::path::Path) {
     crate::actions::overrides::apply_overrides(engine, &overrides);
 }
 
-fn apply_code_output(engine: &mut ProjectEngine, path: &std::path::Path) {
-    let p = path.to_string_lossy().to_string();
-    let overrides = vec![
-        format!("export.server.java.code_output={}", p),
-        format!("export.server.go.code_output={}", p),
-        format!("export.server.cpp.code_output={}", p),
-        format!("export.server.csharp_dotnet.code_output={}", p),
-        format!("export.server.typescript.output={}", p),
-        format!("export.client.lua.output={}", p),
-        format!("export.client.gdscript.output={}", p),
-        format!("export.client.typescript.output={}", p),
-        format!("export.client.csharp_unity.code_output={}", p),
-        format!("export.client.csharp_godot.code_output={}", p),
-    ];
+/// `export code -o DIR` 的语义：
+/// - 只选了一种格式 → DIR 就是该格式的输出目录（沿用旧行为）；
+/// - 选了多种 → DIR 是输出根，按 `export all -o` 的标准布局展开，
+///   避免多个 runtime 的 `Loader.cs` / 同名文件互相覆盖。
+fn apply_code_output(
+    engine: &mut ProjectEngine,
+    path: &std::path::Path,
+    formats: &ExportFormats,
+) {
+    let mut selected: Vec<(&str, &str)> = Vec::new();
+    if formats.java { selected.push(("export.server.java.code_output", "server/java")); }
+    if formats.go { selected.push(("export.server.go.code_output", "server/go")); }
+    if formats.cpp { selected.push(("export.server.cpp.code_output", "server/cpp")); }
+    if formats.csharp_dotnet { selected.push(("export.server.csharp_dotnet.code_output", "server/csharp")); }
+    if formats.typescript_server { selected.push(("export.server.typescript.output", "server/typescript")); }
+    if formats.lua { selected.push(("export.client.lua.output", "client/lua")); }
+    if formats.gdscript { selected.push(("export.client.gdscript.output", "client/gdscript")); }
+    if formats.typescript_client { selected.push(("export.client.typescript.output", "client/typescript")); }
+    if formats.csharp_unity { selected.push(("export.client.csharp_unity.code_output", "client/csharp_unity")); }
+    if formats.csharp_godot { selected.push(("export.client.csharp_godot.code_output", "client/csharp_godot")); }
+
+    let multiple = selected.len() > 1;
+    let overrides: Vec<String> = selected
+        .into_iter()
+        .map(|(key, sub)| {
+            let dir = if multiple { path.join(sub) } else { path.to_path_buf() };
+            format!("{}={}", key, dir.to_string_lossy())
+        })
+        .collect();
     crate::actions::overrides::apply_overrides(engine, &overrides);
 }
 

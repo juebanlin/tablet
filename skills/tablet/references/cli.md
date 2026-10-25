@@ -19,6 +19,9 @@ tablet-cli [全局选项] <命令>
 
 `util` 子命令不需要也不接受 `-w` / `--project` / `-s`。
 
+**参数顺序**：`-w` / `--project` / `-s` 是顶层参数，必须写在子命令**前面**；
+`--fmt` 是全局参数，位置随意。
+
 ---
 
 ## project
@@ -48,6 +51,10 @@ tablet-cli schema add-table    --group <G> --name <N> [--tbl-fmt v2|v3]
 tablet-cli schema add-constant --group <G> --name <N>
 tablet-cli schema add-enum     --group <G> --name <N> --entry 1:NAME:说明 [--entry 2:OTHER]
 
+tablet-cli schema export --out <file.tblschema> [--group G]... [--node G/N]... [--with-preset] \
+                        [--meta-id ID] [--meta-name NAME] [--meta-category CAT] [--meta-version V]
+tablet-cli schema export --as-template --meta-id ID
+
 tablet-cli schema rename-group --old <A> --new <B>
 tablet-cli schema rename-node  --group <G> --old <A> --new <B>
 tablet-cli schema delete-group --name <G>
@@ -64,6 +71,13 @@ GUI 开着时 CLI 会被工作区锁拒绝（`util` / `list-templates` 除外）
 
 `schema show --rules` 在结构树每项下面列出该节点的**有效规则**（系统内置 + 用户 `# @rule`，
 系统项带 `[系统]` 标记、按 `@01.8.11` 只读）。排查「为什么这行报错」先看它。
+
+`schema export` 对应 GUI 的「导出 Schema... / 另存为模板...」：
+
+- 默认导出全部节点、只导结构；`--with-preset` 才带 `# @preset` 数据。
+- `--group` / `--node` 可重复，取并集。
+- `--as-template` 写到本地模板目录，需要合法 `--meta-id`；与 `--out` 二选一。
+- 元数据缺省继承当前项目；`--meta-name` 空时用 id 兜底。
 
 所有写命令都是 **校验 → 执行 → 落盘 → 看结果**：
 
@@ -110,8 +124,10 @@ tablet-cli validate --fmt json        # errors / warnings 两个数组
 
 ```bash
 tablet-cli export data [--json] [--xml] [--group G] [--node N] [-o DIR]
-tablet-cli export code --java|--go|--lua|--gdscript|--typescript|--cpp|--csharp|--all \
-                       [--package <pkg>] [--namespace <ns>] [-o DIR]
+tablet-cli export code --java|--go|--cpp|--lua|--gdscript \
+                       [--typescript|--typescript-client|--typescript-server] \
+                       [--csharp|--csharp-dotnet|--csharp-unity|--csharp-godot] \
+                       [--all] [--package <pkg>] [--namespace <ns>] [-o DIR]
 tablet-cli export all [-o DIR]
 ```
 
@@ -121,6 +137,26 @@ tablet-cli export all [-o DIR]
 - 单个格式失败**不打断**其它格式，但**只要有一个失败，退出码就是 1**。
 - `--package` 同时覆盖 Java 与 Go；`--namespace` 同时覆盖 C++ 与 C#。
 - `--fmt json` 输出逐格式的 `added/modified/deleted/unchanged/warnings` 统计。
+- `export code` 的格式粒度与 UI 的 12 个勾选框一一对应：
+
+  | 参数 | 只导 |
+  |---|---|
+  | `--typescript` | TS 两端（= `--typescript-client --typescript-server`） |
+  | `--typescript-client` / `--typescript-server` | 只前端 / 只 Node.js |
+  | `--csharp` | C# 三套（= dotnet + unity + godot） |
+  | `--csharp-dotnet` / `--csharp-unity` / `--csharp-godot` | 只一个 runtime |
+
+- `-o` 语义：**单格式 = 精确目录；多格式 = 输出根**，按
+  `server/java`、`server/go`、`server/cpp`、`server/csharp`、`server/typescript`、
+  `client/lua`、`client/gdscript`、`client/typescript`、`client/csharp_unity`、`client/csharp_godot`
+  展开，避免多个 `Loader.cs` 互相覆盖。
+
+UI 的 4 个预设 = CLI 组合：全部 `export all`；数据 `export data`；
+后端 `export data` + `export code --java --go --cpp --csharp-dotnet --typescript-server`；
+前端 `export code --lua --gdscript --typescript-client --csharp-unity --csharp-godot`。
+
+> Unity 插件 / bat 的完整调用方式（路径配置、分支显示、bat、EditorWindow）见 `unity.md`。
+> 关键：给 Unity 用 `export code --csharp-unity`（只出一套）；`--csharp` 会顺带生成 dotnet / godot。
 
 ## excel
 
@@ -134,10 +170,16 @@ tablet-cli excel import --group hero --file hero.xlsx
 ## workspace
 
 ```bash
+tablet-cli workspace info      # 工作区路径 / VCS 分支 / 项目列表（不加载 .tbl、不占锁）
 tablet-cli workspace save      # 落盘 + 刷新 project.tblschema 投影
 tablet-cli workspace reload    # 丢弃内存改动，从盘重读
 tablet-cli workspace clear --confirm   # 清空所有 .tbl（危险）
 ```
+
+`workspace info` 是只读快照，**不占工作区锁**：GUI 开着也能读，给 Unity 插件 / CI 显示当前分支。
+Git 直接读 `.git`（含 submodule / worktree）；SVN 用 `svn info --show-item`（1.9+）。
+`--fmt json` 字段：`workdir` / `vcs` / `branch` / `revision` / `detached` / `vcs_error` /
+`last_project` / `projects`。
 
 `save` 遇到验证错误会**一个字节都不写**并 exit 1。
 

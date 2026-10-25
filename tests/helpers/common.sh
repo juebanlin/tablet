@@ -345,6 +345,44 @@ assert_dir_exists() {
     fi
 }
 
+assert_file_not_exists() {
+    local path="$1"
+    if [ -e "$path" ]; then
+        _fail "path should not exist: $path"
+    else
+        _pass "path absent: $path"
+    fi
+}
+
+assert_dir_not_exists() {
+    local path="$1"
+    if [ -d "$path" ]; then
+        _fail "dir should not exist: $path"
+    else
+        _pass "dir absent: $path"
+    fi
+}
+
+assert_file_contains() {
+    local path="$1"
+    local pattern="$2"
+    if [ -f "$path" ] && grep -q "$pattern" "$path"; then
+        _pass "file contains '$pattern': $path"
+    else
+        _fail "file does not contain '$pattern': $path"
+    fi
+}
+
+assert_file_not_contains() {
+    local path="$1"
+    local pattern="$2"
+    if [ -f "$path" ] && grep -q "$pattern" "$path"; then
+        _fail "file should not contain '$pattern': $path"
+    else
+        _pass "file does not contain '$pattern': $path"
+    fi
+}
+
 # ─── 内部 ─────────────────────────────────────────────────────────────────
 
 _pass() {

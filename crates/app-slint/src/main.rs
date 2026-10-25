@@ -239,7 +239,6 @@ fn run_gui(workdir_arg: Option<PathBuf>) -> anyhow::Result<()> {
     );
 
     let app_window = AppWindow::new()?;
-    app_window.set_app_version(env!("CARGO_PKG_VERSION").into());
     {
         let st = app_state.borrow();
         app_window.set_picker_trigger_header_single(st.picker_trigger_header_single);

@@ -32,6 +32,7 @@ pub fn wire(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
         }
         if let Some(ui_h) = weak.upgrade() {
             if full_refresh {
+                refresh::push_window_title(&ui_h, &s);
                 ui::tree::push(&ui_h, &s);
                 ui::grid::push(&ui_h, &s);
                 dialogs::type_selector::push(&ui_h, &s);
@@ -50,6 +51,8 @@ pub fn wire(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
 /// 同时重新展开 active project 下所有 group + active project 根；并跑一次全 Project 验证。
 pub(crate) fn reset_view_after_reload(state: &Rc<RefCell<AppState>>) {
     let mut st = state.borrow_mut();
+    // 外部可能刚切过分支；重载时顺手重新探测一次（Git 是文件读，SVN 起一次 svn info）。
+    st.vcs_info = tablet_core::vcs::probe(&st.engine.workdir);
     st.selected = None;
     st.grid_selection = GridSelection::None;
     st.editing = None;

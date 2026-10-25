@@ -14,27 +14,32 @@ pub struct ExportFormats {
     pub xml: bool,
     pub java: bool,
     pub go: bool,
+    pub cpp: bool,
+    pub csharp_dotnet: bool,
+    pub csharp_unity: bool,
+    pub csharp_godot: bool,
     pub lua: bool,
     pub gdscript: bool,
-    pub typescript: bool,
-    pub cpp: bool,
-    pub csharp: bool,
+    pub typescript_client: bool,
+    pub typescript_server: bool,
 }
 
 impl ExportFormats {
     pub fn all() -> Self {
         Self {
-            json: true, xml: true, java: true, go: true,
-            lua: true, gdscript: true, typescript: true, cpp: true,
-            csharp: true,
+            json: true, xml: true, java: true, go: true, cpp: true,
+            csharp_dotnet: true, csharp_unity: true, csharp_godot: true,
+            lua: true, gdscript: true,
+            typescript_client: true, typescript_server: true,
         }
     }
 
     /// 任一 flag 为真 = 用户显式指定子集；全 false = 走 all() 兜底。
     pub fn any(&self) -> bool {
-        self.json || self.xml || self.java || self.go
-            || self.lua || self.gdscript || self.typescript || self.cpp
-            || self.csharp
+        self.json || self.xml || self.java || self.go || self.cpp
+            || self.csharp_dotnet || self.csharp_unity || self.csharp_godot
+            || self.lua || self.gdscript
+            || self.typescript_client || self.typescript_server
     }
 }
 
@@ -96,22 +101,28 @@ pub fn run_export(engine: &mut ProjectEngine, formats: ExportFormats) -> ExportS
     if formats.go {
         summary.per_format.push(("Go", outcome(engine.export_go())));
     }
+    if formats.cpp {
+        summary.per_format.push(("C++", outcome(engine.export_cpp())));
+    }
+    if formats.csharp_dotnet {
+        summary.per_format.push(("C# (.NET)", outcome(engine.export_csharp_dotnet())));
+    }
+    if formats.typescript_server {
+        summary.per_format.push(("TypeScript (Node.js)", outcome(engine.export_typescript_server())));
+    }
     if formats.lua {
         summary.per_format.push(("Lua", outcome(engine.export_lua())));
     }
     if formats.gdscript {
         summary.per_format.push(("GDScript", outcome(engine.export_gdscript())));
     }
-    if formats.typescript {
+    if formats.typescript_client {
         summary.per_format.push(("TypeScript (前端)", outcome(engine.export_typescript_client())));
-        summary.per_format.push(("TypeScript (Node.js)", outcome(engine.export_typescript_server())));
     }
-    if formats.cpp {
-        summary.per_format.push(("C++", outcome(engine.export_cpp())));
-    }
-    if formats.csharp {
-        summary.per_format.push(("C# (.NET)", outcome(engine.export_csharp_dotnet())));
+    if formats.csharp_unity {
         summary.per_format.push(("C# (Unity)", outcome(engine.export_csharp_unity())));
+    }
+    if formats.csharp_godot {
         summary.per_format.push(("C# (Godot)", outcome(engine.export_csharp_godot())));
     }
     summary

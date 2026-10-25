@@ -4,7 +4,7 @@
 //! 未知 / 废弃 key 通过 [`OverrideWarning`] 收集起来交给调用方决定怎么报告。
 
 use tablet_core::model::{
-    ClientConfig, CppExport, DotNetExport, GodotCSharpExport, GoExport, JavaExport,
+    ClientConfig, CppExport, DotNetExport, GdScriptExport, GodotCSharpExport, GoExport, JavaExport,
     JsonExport, LuaExport, ProjectConfig, ServerExport, UnityCSharpExport, XmlExport,
 };
 use tablet_core::ops::ProjectEngine;
@@ -163,6 +163,10 @@ pub fn apply_overrides(engine: &mut ProjectEngine, overrides: &[String]) -> Over
                 ensure_export_client_lua(&mut project.config);
                 project.config.export.client.as_mut().unwrap().lua.as_mut().unwrap().output = Some(value.to_string());
             }
+            "export.client.gdscript.output" => {
+                ensure_export_client_gdscript(&mut project.config);
+                project.config.export.client.as_mut().unwrap().gdscript.as_mut().unwrap().output = Some(value.to_string());
+            }
             "export.client.typescript.output" => {
                 ensure_export_client_typescript(&mut project.config);
                 project.config.export.client.as_mut().unwrap().typescript.as_mut().unwrap().output = Some(value.to_string());
@@ -274,6 +278,13 @@ fn ensure_export_client_lua(config: &mut ProjectConfig) {
         config.export.client.as_mut().unwrap().lua = Some(LuaExport {
             output: None,
         });
+    }
+}
+
+fn ensure_export_client_gdscript(config: &mut ProjectConfig) {
+    ensure_export_client(config);
+    if config.export.client.as_ref().unwrap().gdscript.is_none() {
+        config.export.client.as_mut().unwrap().gdscript = Some(GdScriptExport::default());
     }
 }
 

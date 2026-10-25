@@ -134,6 +134,41 @@ pub fn print_project_info_cli(s: &ProjectInfoSummary) {
     println!("  Dirty:     {}", if s.dirty { "是" } else { "否" });
 }
 
+pub fn print_workspace_info_cli(s: &crate::actions::workspace::WorkspaceInfoSummary) {
+    println!("Workspace: {}", s.workdir);
+    match s.vcs {
+        Some(vcs) => {
+            println!("  VCS:    {}", vcs);
+            let branch = match (&s.branch, &s.revision) {
+                (Some(b), Some(r)) if s.detached => format!("HEAD@{}", r),
+                (Some(b), Some(r)) if vcs == "svn" => format!("{}@{}", b, r),
+                (Some(b), Some(r)) => format!("{} @ {}", b, r),
+                (Some(b), None) => b.clone(),
+                (None, Some(r)) => format!("@{}", r),
+                (None, None) => "(未知)".to_string(),
+            };
+            println!("  Branch: {}", branch);
+            if let Some(e) = &s.vcs_error {
+                println!("  Note:   {}", e);
+            }
+        }
+        None => println!("  VCS:    (未检测到 Git / SVN)"),
+    }
+    if s.projects.is_empty() {
+        println!("  Projects: (无)");
+    } else {
+        let list: Vec<String> = s
+            .projects
+            .iter()
+            .map(|p| format!("{} ({})", p.id, p.name))
+            .collect();
+        println!("  Projects: {}", list.join(", "));
+    }
+    if let Some(lp) = &s.last_project {
+        println!("  Last:   {}", lp);
+    }
+}
+
 pub fn print_sep_show_cli(s: &crate::actions::sep::SepShowSummary) {
     // 多项目工作区里必须说清看的是哪个项目，否则「生效值」无从谈起
     match &s.project {
