@@ -39,10 +39,10 @@ allowed-tools:
 | 打包给程序读 | `tablet-cli export all -o <dir>` |
 
 > **真相源**：两种组后端（@02.26.8）——
-> - `.tbl` 组：结构与数据都在各 `.tbl` 里；`project.tblschema` 是投影，保存时重写。
-> - `.xlsx` 组：结构在 `project.tblschema` 的 section，数据在工作簿的 sheet 里。
+> - `.tbl` 组：结构与数据都在各 `.tbl` 里；`project.tblmanifest` 只是节点索引 / 规则 / storage，不含字段。
+> - `.xlsx` 组：结构与数据都在工作簿里（4 行表头 + sheet）；manifest 只记录节点索引与 storage。
 >
-> 项目建好之后改 `.tblschema` 不会改动已有的 `.tbl`；`.xlsx` 组反过来，结构以 schema 为准。
+> 项目建好之后改 `.tblschema` 不会改动已有的项目；模板只在导入时使用。
 
 ## 二、三步流水线（最常用）
 
@@ -200,7 +200,7 @@ max_level|int|100|cs|等级上限
 **加字段** = 在 `@field` 区加一个块，再在需要的那几条记录里补 `字段名:值`（老记录不补 = 空值）。
 **加记录** = 追加一个 `[<新id>]` 块，id 不能与已有记录重复。
 
-改完 `.tbl` 跑一次 `workspace save`，把结构同步进 `project.tblschema`。
+改完 `.tbl` 跑一次 `workspace save`；结构留在 `.tbl` 里，manifest 只刷新节点索引。
 **一个 `.tbl` 写坏了，整个项目会拒绝加载**（不会再静默少一张表）。
 
 ## 五之二、Xlsx 组（工作簿组）
@@ -208,7 +208,7 @@ max_level|int|100|cs|等级上限
 有的项目把数据放在 `config/<group>.xlsx` 里：**一个组一个工作簿，节点 = sheet**。工具把它当普通组用——
 `validate` / `export` / `schema show` 完全一样，导出结果和 `.tbl` 组没有区别。
 
-- **结构仍然在 `project.tblschema`**：字段名 / 类型 / export / 顺序以 section 为准；sheet 只是数据。
+- **结构与数据都在 workbook 里**：4 行表头定义字段，sheet 是数据；manifest 不含字段。
 - Table sheet：第 1–4 行是 desc / export / type / 字段名（**派生显示**，改了不生效），第 5 行起是数据。
 - Constant sheet：1 行表头 `name | type | value | export | desc`；Enum：`id | name | desc`。
 - **不要用文本工具手写 `.xlsx`**（二进制）。要改数据：GUI 里编辑、或「用 Excel 打开（原文件）」、
@@ -219,7 +219,7 @@ max_level|int|100|cs|等级上限
 
 ## 五之三、校验规则（`# @rule`）
 
-规则**只写在 `project.tblschema` 的段内**（不写 `.tbl`、不进 Excel），对 Table / Enum 生效；
+规则**只写在 `project.tblmanifest` 的段内**（不写 `.tbl`、不进 Excel），对 Table / Enum 生效；
 Constant 不支持（`value` 逐行类型不同，写了会在解析期带行号报错）。
 
 ```text
@@ -274,13 +274,15 @@ tablet-cli [-w <workdir>] [--project <id>] [--fmt json] <命令>
 |---|---|
 | 看模板 | `list-templates` |
 | 项目 | `project list` / `info` / `new` / `rename` / `delete --confirm` / `clone` |
+| 原生导入 | `project import-tbl --id P [--group G] <PATH>...`；`project import-xlsx --id P <FILE.xlsx>` |
+| 外部 Excel 映射 | `util xlsx-to-tbl <f.xlsx> --schema <tpl.tblschema> -o <dir>` |
 | 结构 | `schema show [--rules]`；`add-group --name G [--storage tbl\|xlsx]`；`add-table --group G --name N [--tbl-fmt v2\|v3]`；`add-constant --group G --name N`；`add-enum --group G --name N --entry 1:X:说明` |
 | 导出结构 | `schema export --out <file> [--group G] [--node G/N] [--with-preset]`；`schema export --as-template --meta-id ID` |
 | 改名 / 删除 | `schema rename-group --old A --new B`；`schema rename-node --group G --old A --new B`；`schema delete-group --name G`；`schema delete-node --group G --name N` |
 | 验证 | `validate [--group G] [--node N] [--strict]` |
 | 导出 | `export data [--json\|--xml] [--group G] [--node N] [-o DIR]`；`export code --java\|--go\|--cpp\|--lua\|--gdscript\|--typescript[-client\|-server]\|--csharp[-dotnet\|-unity\|-godot]\|--all [-o DIR]`；`export all [-o DIR]` |
 | Excel | `excel export --group G [-o f.xlsx]`；`excel import --group G --file f.xlsx` |
-| 工作区 | `workspace info`（分支 / 修订 / 项目列表）；`workspace save`（同时刷新 `project.tblschema`） |
+| 工作区 | `workspace info`（分支 / 修订 / 项目列表）；`workspace save`（同时刷新 `project.tblmanifest` 索引） |
 
 - `--fmt json` 只对查询类命令有效：`project list/info`、`schema show`、`schema export`、`validate`、`export`、`workspace info`、`sep show`。
 - `--project` 覆盖 `last_project`；不写则跟随 `[project] last_project`。
@@ -325,7 +327,7 @@ tablet-cli -w <config仓库根> --project game export code --csharp-unity
 
 ## 八、不要做的事
 
-- ❌ 除了 `.tblschema` / `.tbl`，不要手写其它配置文件（`project.toml` / `tablet.toml`）；临时改配置用 `-s key=value`。
+- ❌ 除了 `.tblschema` / `.tbl`，不要手写其它配置文件（`project.tblmanifest` / `project.toml` / `tablet.toml`）；临时改配置用 `-s key=value`。
 - ❌ 不要在 `.tblschema` 里给 constant / enum 段写数据行——只能进 `# @preset`。
 - ❌ 不要用中文导出码、不要给枚举或 table 的 id 用 0 / 负数、不要用关键字当字段名。
 - ❌ 不要给系统已保证的列再挂 `unique()` / `non_empty()`（只会得到冗余警告）。
@@ -339,7 +341,7 @@ tablet-cli -w <config仓库根> --project game export code --csharp-unity
 
 ## 九、仓库约定（.gitignore）
 
-**必须提交**：`tablet.toml`、`projects/<id>/project.tblschema`、`projects/<id>/project.toml`（若存在）、
+**必须提交**：`tablet.toml`、`projects/<id>/project.tblmanifest`、`projects/<id>/project.toml`（若存在）、
 `projects/<id>/config/**`（`.tbl` 文件，以及 xlsx 组的 `config/<group>.xlsx`）。
 
 **应忽略**（工具产生的临时物 / 派生产物）：

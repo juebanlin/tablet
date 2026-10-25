@@ -571,10 +571,15 @@ fn run_import(state: &Rc<RefCell<AppState>>) {
             &config_dir,
             with_preset,
         );
-        project.resync_schema();
+        if result.is_ok() {
+            project.resync_schema();
+        }
         result
     });
-    if let Some((added, overwritten)) = result {
-        st.engine.ui_log(format!("[导入Schema] 完成: {} 新增, {} 覆盖", added, overwritten));
+    match result {
+        Some(Ok((added, overwritten))) =>
+            st.engine.ui_log(format!("[导入Schema] 完成: {} 新增, {} 覆盖", added, overwritten)),
+        Some(Err(e)) => st.engine.warn_log(format!("[导入Schema] 失败: {}", e)),
+        None => {}
     }
 }

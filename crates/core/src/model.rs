@@ -29,14 +29,14 @@ impl ProjectState {
 pub struct Project {
     /// CLI 的 `-w` workdir：`tablet.toml` 与 `gen/` 所在目录。仓库级，全局共享。
     pub workdir: PathBuf,
-    /// 当前 Project 的根目录：`project.tblschema` / `config/` 在它下面。
+    /// 当前 Project 的根目录：`project.tblmanifest` / `config/` 在它下面。
     /// - 多 Project 模式：`<workdir>/projects/<id>/`
     pub project_root: PathBuf,
     /// 项目配置（来自 project.toml），业务逻辑使用。
     pub config: ProjectConfig,
-    /// `project.tblschema` 解析结果，承担"项目身份 + 结构骨架"双职：
+    /// 运行时投影：meta / separators / 节点索引来自 manifest，字段由数据文件补全。
     /// - `schema.meta.id / name / created_at / source_template* / category / version` = 项目身份
-    /// - `schema.sections` = 结构骨架，由 ops 在 group/node 变动时增量同步
+    /// - `schema.sections` = 节点索引 / storage / 规则 / display，由 ops 在 group/node 变动时增量同步
     pub schema: TblSchema,
     /// 上次落盘时的 `schema.meta` / `schema.separators` 快照。
     ///
@@ -46,7 +46,7 @@ pub struct Project {
     /// 见 [`Project::schema_changed`]。
     pub original_meta: SchemaMetadata,
     pub original_separators: crate::types::SeparatorsSection,
-    /// 上次落盘时的 `[export]`（住在 `project.toml`，与 `project.tblschema` 是两个文件）。
+    /// 上次落盘时的 `[export]`（住在 `project.toml`，与 `project.tblmanifest` 是两个文件）。
     /// 语义同上：只在 load / save 两个点写。
     pub original_export: ExportConfig,
     /// 上次落盘时的 `[validate]`。语义同 `original_export`。
@@ -84,7 +84,7 @@ impl Project {
         self.schema = s;
     }
 
-    /// `project.tblschema` 现在写盘会和盘上不一样吗。
+    /// `project.tblmanifest` 现在写盘会和盘上不一样吗。
     ///
     /// 项目「自己的属性」只有 `meta` 与 `separators`；`schema.sections` 是 groups 的
     /// 投影，所以结构变化由**子节点自己**回答（`Group::schema_changed`），不在这里
@@ -113,7 +113,7 @@ impl Project {
     /// `project.toml` 现在写盘会和盘上不一样吗。
     ///
     /// 这个文件里只有 `[export]`，与 `schema_changed()` 管的是**两个不同的文件**，
-    /// 所以要分开问：改 export 不该顺手重写 `project.tblschema`，反之亦然。
+    /// 所以要分开问：改 export 不该顺手重写 `project.tblmanifest`，反之亦然。
     ///
     /// `project.toml` 是**可选的覆盖段**——没改过就不该有文件，让 export 继续从
     /// 工作区 `tablet.toml` 继承（@02.26.3）。
@@ -122,7 +122,7 @@ impl Project {
             || self.config.validate != self.original_validate
     }
 
-    /// 项目的「自己的属性」有没有偏离盘上——`meta` / `separators`（进 `project.tblschema`）
+    /// 项目的「自己的属性」有没有偏离盘上——`meta` / `separators`（进 `project.tblmanifest`）
     /// 加 `[export]`（进 `project.toml`）。
     ///
     /// **刻意不含 `groups`**：那些是数据与结构，这个谓词喂给项目设置的「全部还原」按钮，
@@ -688,7 +688,7 @@ pub struct ProjectConfig {
 /// | 后端 | 结构真相源 | 数据真相源 |
 /// |---|---|---|
 /// | `Tbl`  | 各 `.tbl` 自己（自描述） | 各 `.tbl` |
-/// | `Xlsx` | `project.tblschema` 的 section | `config/<group>.xlsx` 的 sheet |
+/// | `Xlsx` | workbook 的 4 行表头 | `config/<group>.xlsx` 的 sheet |
 ///
 /// 节点（`Table` / `Constant` / `EnumDef`）在内存里两种后端完全同型，
 /// 所以差别只在「加载时从哪读、保存时往哪写」，不在模型里。
@@ -739,7 +739,7 @@ impl Group {
         self.storage == GroupStorage::Xlsx
     }
 
-    /// 影响 `project.tblschema` 的改动：自己的名字 / 新增，或**任何子节点**。
+    /// 影响 `project.tblmanifest` 的改动：自己的名字 / 新增，或**任何子节点**。
     /// 「A.B.C 里只有 C 改了」在这里体现为 C 说 true，A 和 B 只是把它聚合上来。
     pub fn schema_changed(&self) -> bool {
         self.is_new
@@ -822,7 +822,7 @@ pub struct Rule {
 /// 规则来源。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RuleSource {
-    /// 用户写在 `project.tblschema` 里的。
+    /// 用户写在 `project.tblmanifest` 里的。
     User,
     /// 系统内置（`builtin_rules`），只读。
     Builtin,
@@ -1031,19 +1031,19 @@ pub struct Table {
     pub fmt_ver: crate::tbl::TblVersion,
     /// 被引用展示列（@10）：被 `@本表` 引用时展示哪一列。`None` = 显示原始 id；
     /// `Some(列名)` = 展示该列（须为 str/int/txt 叶子类型）。
-    /// 持久化在 project.tblschema 段内的 `# @display` 行；本字段是运行时真相源。
+    /// 持久化在 project.tblmanifest 段内的 `# @display` 行；本字段是运行时真相源。
     pub display_field: Option<String>,
-    /// 上次落盘时的 `display_field`。`# @display` 写在 project.tblschema 里，
+    /// 上次落盘时的 `display_field`。`# @display` 写在 project.tblmanifest 里，
     /// 所以要进 `schema_changed()`（@02.26.2）。
     pub original_display_field: Option<String>,
-    /// 节点级校验规则（@01.10.7）。顺序即优先级；只存 project.tblschema，不写 `.tbl`。
+    /// 节点级校验规则（@01.10.7）。顺序即优先级；只存 project.tblmanifest，不写 `.tbl`。
     pub rules: Vec<Rule>,
     /// 上次落盘时的 `rules` 快照。语义同 `original_display_field`。
     pub original_rules: Vec<Rule>,
 }
 
 impl Table {
-    /// 影响 `project.tblschema` 的改动。
+    /// 影响 `project.tblmanifest` 的改动。
     ///
     /// **不含 `records`**——改一个格子的值会让本表要写盘，但 schema 文件一个字都不用动。
     /// 父层的聚合必须用这个而不是 `dirty`，否则每次单元格编辑都会把 schema 标脏。
@@ -1116,7 +1116,7 @@ pub struct Constant {
 }
 
 impl Constant {
-    /// 影响 `project.tblschema` 的改动：只有名字（常量段在 schema 里只剩段头）。
+    /// 影响 `project.tblmanifest` 的改动：只有名字（常量段在 schema 里只剩段头）。
     ///
     /// 常量**不支持** `# @rule`：`value` 列每行的类型可以不同，列级规则无法定义
     /// 统一的比较口径；`name` 唯一这类约束也已经由内置校验覆盖（@01.8.8）。
@@ -1170,18 +1170,18 @@ pub struct EnumDef {
     pub original_entries: Vec<EnumEntry>,
     pub saved: bool,
     /// 被引用展示列（@10）：被 `@本枚举` 引用时展示 `name` 还是 `desc`。`None` = 显示原始 id。
-    /// 持久化在 project.tblschema 段内的 `# @display` 行；本字段是运行时真相源。
+    /// 持久化在 project.tblmanifest 段内的 `# @display` 行；本字段是运行时真相源。
     pub display_field: Option<String>,
     /// 上次落盘时的 `display_field`。语义同 `Table::original_display_field`。
     pub original_display_field: Option<String>,
-    /// 节点级校验规则（@01.10.7）。顺序即优先级；只存 project.tblschema。
+    /// 节点级校验规则（@01.10.7）。顺序即优先级；只存 project.tblmanifest。
     pub rules: Vec<Rule>,
     /// 上次落盘时的 `rules` 快照。语义同 `Table::original_rules`。
     pub original_rules: Vec<Rule>,
 }
 
 impl EnumDef {
-    /// 影响 `project.tblschema` 的改动：名字 + `# @display` + 规则（**不含 entries**）。
+    /// 影响 `project.tblmanifest` 的改动：名字 + `# @display` + 规则（**不含 entries**）。
     pub fn schema_changed(&self) -> bool {
         self.original_name != self.name
             || self.original_display_field != self.display_field

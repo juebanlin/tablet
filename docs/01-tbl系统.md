@@ -2,7 +2,7 @@
 
 本文档定义 .tbl / .tblschema 文件的全部规则：文件结构、表头、类型范式、命名约束、值验证。所有面向 tbl 系统的硬性规则都在这一篇——其它文档不再重复，只做引用。
 
-> 组还有另一种后端：**工作簿组**（一组一个 `.xlsx`，节点 = sheet，结构仍来自 `project.tblschema`）。
+> 组还有另一种后端：**工作簿组**（一组一个 `.xlsx`，节点 = sheet，结构仍来自 `project.tblmanifest`）。
 > 它的数据形态、加载/保存规则见 @02.26.8，本文档只管 `.tbl` / `.tblschema`。
 
 ## 1. 设计原则
@@ -16,14 +16,15 @@
 | 引用平级 | `@Xxx` 与 `int / List<P> / Tuple2<P,P>` 在 schema 层同级；可作独立列，也可作为「特殊 int」进入复合类型参数位（@S24） |
 | 跨平台一致 | 同一份 .tbl 同时供 Java / Go / Lua 使用，零运行时分歧 |
 
-## 2. 文件分两类
+## 2. 文件分三类
 
 | 扩展名 | 内容 | 一文件存几张表 | 用途 |
 |--------|------|-----------|------|
 | `.tbl` | 结构 + 数据 | 一张 | 运行时数据源；策划日常编辑的对象 |
-| `.tblschema` | 仅结构 | 多张 | 结构备份/迁移、生成测试数据、批量初始化项目 |
+| `.tblschema` | 结构 + 可选预设数据 | 多张 | 模板：新建项目、迁移、合并、生成测试数据 |
+| `project.tblmanifest` | 项目身份 + 节点索引 + storage + 规则 / display | 整个项目 | 运行时清单；不承载字段与数据 |
 
-`.tbl` 由 `#mode` 决定具体子类（table / constant / enum，@4 详述）。`.tblschema` 是 schema-only 的 DDL，相当于 SQL 的「create table」。
+`.tbl` 由 `#mode` 决定具体子类（table / constant / enum，@4 详述）。`.tblschema` 是**模板**，可以带 `# @preset` 数据；项目运行时只保留 `project.tblmanifest` 和各自的数据文件，不保留完整模板（@11）。
 
 ## 3. Full .tblschema demo
 
@@ -669,7 +670,7 @@ camelCase 撞名等价于 PascalCase 撞名（源名必以小写字母开头，�
 | enum | `name` | `unique()`、`non_empty()`、`upper_snake()` |
 | constant | — | 不支持节点级规则（@8.8） |
 
-- 这些规则**不写进** `project.tblschema`，**不可编辑、不可删除**；规则面板以「系统」标出，CLI 用 `schema show --rules` 查看。
+- 这些规则**不写进** `project.tblmanifest`，**不可编辑、不可删除**；规则面板以「系统」标出，CLI 用 `schema show --rules` 查看。
 - `positive_int()` / `upper_snake()` 只由系统生成，写在 schema 里会被拒绝。
 - 与内置规则重复的用户规则**不执行**，只报一条非阻断的 `RuleRedundant`：enum 的 `name` 上再挂 `unique()` / `non_empty()`；enum 的 `id` 上挂 `range(1, )`（只加下限且 ≤1）。
 - **内置规则由规则引擎执行**（不再有硬编码的 id/name 检查）：改约束只需要改 `builtin_rules`，
@@ -702,7 +703,9 @@ camelCase 撞名等价于 PascalCase 撞名（源名必以小写字母开头，�
 - UI 工具只读展示，不提供标色入口
 - Excel 回读时：行背景非白色/无填充 → 写入 `#@c:`；白色/无填充 → 移除标记
 
-## 10. .tblschema 详解
+## 10. .tblschema 模板详解
+
+`.tblschema` 是**导入 / 新建用**的完整模板，不是项目的运行时结构文件。运行时文件见 @11。
 
 ### 10.1 文件头
 
@@ -751,6 +754,9 @@ UI 上是否展示 id 还是 name 由全局开关 `[ui] show_meta_id` 决定（@
 - `group` — 组名
 - `Name` — 配置项名（PascalCase）
 - `mode` — `table` / `constant` / `enum`
+- `xlsx`（可选） — 该组的数据后端是工作簿；缺省 = `tbl`。同一组的所有 section 必须一致
+  - 示例：`[building/Building] table xlsx`
+  - 导入时按「新建 Excel Group」生成 `config/<group>.xlsx`；模板不携带 Excel 样式
 
 ### 10.3 分隔符 directive `# @sep`
 
@@ -857,7 +863,7 @@ title | str | cs | 标题
   Constant 不支持（`value` 列逐行类型不同，没有统一比较口径；见 @8.8），写了会在解析阶段带行号报错。
 - 一列可以有多条规则，一行一条；**行序即优先级**（决定报告与展示顺序）。
 - 级别缺省 `error`：命中即阻断保存；`warn` 只提示，不阻断。
-- 规则**只住在 `project.tblschema`**：不写进 `.tbl`、不进 Excel / xlsx sheet。
+- 规则**只住在 `project.tblmanifest`**：不写进 `.tbl`、不进 Excel / xlsx sheet。
 
 v1 内置验证器：
 
@@ -932,6 +938,55 @@ key | str | cs | 英文 key
 后续可扩展：文件直接放进 `crates/core/schemas/`，`build.rs` 自动重编。模板加载详见 @02 项目模板章节。
 
 测试流程详见 @10。
+
+## 11. project.tblmanifest
+
+运行时清单。一个 Project 一个文件，固定文件名 `project.tblmanifest`：
+
+```text
+#!tblmanifest v1
+
+# @meta id: demo
+# @meta name: 演示
+
+[hero/HeroBase] table
+# @display: name
+# @rule: id = unique()
+
+[building/Building] table xlsx
+```
+
+### 11.1 与 `.tblschema` 的分工
+
+| 文件 | 结构来源 | 数据来源 | 生命周期 |
+|------|---------|---------|---------|
+| `.tblschema` | 自己的字段行 | 自己的 `# @preset`（可选） | 导入时一次性使用 |
+| `project.tblmanifest` | 不写字段 | 不写数据 | 项目运行时长期存在 |
+| `.tbl` | 自己的 `@field` 表头 | 自己的数据区 | 项目运行时长期存在 |
+| `.xlsx` | workbook 的 4 行表头 | sheet 数据区 | 项目运行时长期存在 |
+
+- manifest **不允许字段行 / 数据行 / `# @preset`**，读到直接报错；
+- 字段结构来自 `.tbl` 表头或 workbook 表头；
+- 规则 / `# @display` / storage / 项目 meta 只住在 manifest；
+- 保存时 manifest 不含 preset，字段变化不会写进 manifest。
+
+### 11.2 Section 与 storage
+
+- 语法与模板相同：`[group/Name] mode [xlsx]`；
+- 缺省后端 = `tbl`；`xlsx` 表示该组是工作簿组；
+- 同组 section 的 storage 必须一致，混写报错；
+- 加载：
+  - Tbl 组：扫描 `config/<group>/`，结构从每个 `.tbl` 读；
+  - Xlsx 组：扫描 `config/<group>.xlsx`，sheet 名对应 section，结构从 4 行表头读；
+  - manifest 列了、盘上没有 → 报错；盘上有、manifest 没列 → 不静默收编。
+
+### 11.3 导入与导出
+
+- **模板导入**只接受 `.tblschema`（可带 `# @preset`）：字段与 preset 落成 `.tbl` / workbook，规则 / display / meta 落成 manifest；
+- **原生数据导入**另走 `project import-tbl` / `project import-xlsx`（@03.8）：文件本身必须已符合 `.tbl` / 4 行表头规则；
+- `table xlsx` 的模板 section 会生成真实工作簿，和「新建 Excel Group」同一套写出逻辑；
+- 导出模板从 manifest + 数据文件反推，数据是否打进 `# @preset` 由导出选项决定；
+- 模板不保留、也不导出 Excel 样式。
 
 ## 附录 A. 验证架构
 

@@ -2,8 +2,8 @@
 //! CLI 采用 util 方式：直接解析和修改文件，不依赖 ProjectEngine 的内存状态。
 
 use anyhow::{Context, Result};
-use tablet_core::project::{PROJECT_SCHEMA_FILE, PROJECTS_DIR};
-use tablet_core::tblschema::{parse_tblschema, serialize_tblschema};
+use tablet_core::manifest::{parse_tblmanifest, serialize_tblmanifest};
+use tablet_core::project::{PROJECT_MANIFEST_FILE, PROJECTS_DIR};
 
 pub fn run_project_rename(
     engine: &mut tablet_core::ops::ProjectEngine,
@@ -21,11 +21,11 @@ pub fn run_project_rename(
     let old_root = project.project_root.clone();
     let workdir = project.workdir.clone();
 
-    // 读取 project.tblschema
-    let schema_path = old_root.join(PROJECT_SCHEMA_FILE);
+    // 读取 project.tblmanifest
+    let schema_path = old_root.join(PROJECT_MANIFEST_FILE);
     let schema_txt = std::fs::read_to_string(&schema_path)
         .with_context(|| format!("读取 {} 失败", schema_path.display()))?;
-    let mut schema = parse_tblschema(&schema_txt)
+    let mut schema = parse_tblmanifest(&schema_txt)
         .with_context(|| format!("解析 {} 失败", schema_path.display()))?;
 
     // 修改 id 和/或 name
@@ -47,8 +47,8 @@ pub fn run_project_rename(
     }
     schema.meta.name = effective_new_name.clone();
 
-    // 写回 tblschema
-    let new_schema_txt = serialize_tblschema(&schema);
+    // 写回 manifest
+    let new_schema_txt = serialize_tblmanifest(&schema);
     std::fs::write(&schema_path, new_schema_txt)
         .with_context(|| format!("写入 {} 失败", schema_path.display()))?;
 

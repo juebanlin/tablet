@@ -2,11 +2,11 @@
 //!
 //! 每个 leaf 独立回退：从高优先级往低找，取第一个「写过」它的来源。
 //! 优先级（高 → 低）：`--schema`（.tblschema）→ `--config`（tablet.toml）
-//! → 当前项目 schema → 内置默认。
+//! → 当前项目 manifest → 内置默认。
 //!
 //! 注意这里**不是**「全局默认值与项目值合并」——`tablet.toml [separators]` 早已降级为
 //! 「新建空项目时拷贝一次的模板」（@01.7.4），运行期项目的分隔符只有一个来源：
-//! 该项目自己的 `project.tblschema`。`--config` 传的是**指定文件**，不是全局配置。
+//! 该项目自己的 `project.tblmanifest`。`--config` 传的是**指定文件**，不是全局配置。
 
 use std::path::Path;
 
@@ -46,7 +46,13 @@ fn load_config_separators(path: &Path) -> Result<SeparatorsSection> {
 
 fn load_schema_separators(path: &Path) -> Result<SeparatorsSection> {
     let text = std::fs::read_to_string(path)?;
-    Ok(parse_tblschema(&text)?.separators)
+    let first = text.lines().map(str::trim).find(|l| !l.is_empty());
+    // `--schema` 既能给模板，也能直接给项目运行时清单；两者共用 # @sep 语法。
+    if first == Some(tablet_core::manifest::MANIFEST_HEADER) {
+        Ok(tablet_core::manifest::parse_tblmanifest(&text)?.separators)
+    } else {
+        Ok(parse_tblschema(&text)?.separators)
+    }
 }
 
 pub fn run_sep_show(

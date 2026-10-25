@@ -3,11 +3,11 @@
 //! 文档对应：@02 Project / @03.4 / @07 S15-D。
 //!
 //! 仓库级 `tablet.toml` 是全局**默认值**（不随 Project 切换）。Project 自己的
-//! 身份元数据存在 `<workdir>/projects/<id>/project.tblschema` 的 `# @meta` 段里
+//! 身份元数据存在 `<workdir>/projects/<id>/project.tblmanifest` 的 `# @meta` 段里
 //! （id / name / created_at / source_template / source_template_version / category / version）。
 //! 可选的配置覆盖（仅 `[export]`）落在同目录下的 `project.toml`：
 //! `[ui]` / `[separators]` / `[project]` 写在项目级会被加载流程剥掉
-//! （`[ui]` 是工作区级；`[separators]` 以 .tblschema `# @sep` 为准；
+//! （`[ui]` 是工作区级；`[separators]` 以 manifest `# @sep` 为准；
 //! `[project]` 是仓库状态）。
 //!
 //! ```toml
@@ -33,7 +33,7 @@ use crate::tblschema::TblSchema;
 
 pub const PROJECTS_DIR: &str = "projects";
 pub const PROJECT_TOML_FILE: &str = "project.toml";
-pub const PROJECT_SCHEMA_FILE: &str = "project.tblschema";
+pub const PROJECT_MANIFEST_FILE: &str = "project.tblmanifest";
 
 /// tablet.toml 由内存 `GlobalConfig` 用 serde 整文件序列化而成（无 `#` 注释）。
 /// 这也是**唯一的**整写入口——结构、表头、顺序都由 serde 保证规范且幂等。
@@ -79,7 +79,7 @@ pub fn project_toml_text(export: &ExportConfig, validate: &ValidateConfig) -> Re
 /// 流程：
 /// 1. 解析 `<workdir>/tablet.toml`（不存在则写默认）—— 全局配置
 /// 2. 从 `<workdir>/projects/` 扫描，从 `last_project` 或第一个挑选
-/// 3. 解析 project.tblschema 和 project.toml，合并配置
+/// 3. 解析 project.tblmanifest 和 project.toml，合并配置
 /// 4. 扫 config/ 加载 groups
 pub fn load_project(workdir: &Path) -> Result<Project> {
     let config_path = workdir.join(crate::CONFIG_FILE);
@@ -129,7 +129,7 @@ fn load_specific_project_impl(
     global_config: &GlobalConfig,
 ) -> Result<Project> {
     let proj_text = std::fs::read_to_string(project_root.join(PROJECT_TOML_FILE)).ok();
-    let schema = read_project_schema(
+    let manifest = read_project_manifest(
         project_root,
         project_root.file_name().unwrap().to_str().unwrap(),
     )?;
@@ -137,37 +137,41 @@ fn load_specific_project_impl(
     // 解析项目级配置（仅 [export] 段）
     let config = parse_project_config(proj_text.as_deref(), global_config)?;
 
-    // 分隔符始终来自 schema，不从 toml 读取
+    // 分隔符始终来自 manifest，不从 toml 读取
     // （project.toml 中的 [separators] 段会被忽略）
 
     let data_dir = project_root.join("config");
     let mut groups = if data_dir.is_dir() {
-        load_groups_in(&data_dir, &schema)?
+        load_groups_in(&data_dir, &manifest)?
     } else {
         std::fs::create_dir_all(&data_dir)?;
         println!("已创建配置目录: {}", data_dir.display());
         Vec::new()
     };
-    // 被引用展示列（@10）：.tbl 不含该信息，从 project.tblschema 段回填到节点。
-    crate::tblschema::apply_display_to_groups(&mut groups, &schema);
-    // 节点级校验规则（@01.10.7）：同上，规则只住在 project.tblschema。
-    crate::tblschema::apply_rules_to_groups(&mut groups, &schema);
+    // 被引用展示列（@10）：.tbl 不含该信息，从 manifest 段回填到节点。
+    crate::tblschema::apply_display_to_groups(&mut groups, &manifest);
+    // 节点级校验规则（@01.10.7）：同上，规则只住在 manifest。
+    crate::tblschema::apply_rules_to_groups(&mut groups, &manifest);
 
     // 刚从盘上读进来，盘上的就是它自己
     let original_export = config.export.clone();
     let original_validate = config.validate.clone();
-    Ok(Project {
+    let mut project = Project {
         workdir: workdir.to_path_buf(),
         project_root: project_root.to_path_buf(),
         config,
-        original_meta: schema.meta.clone(),
-        original_separators: schema.separators.clone(),
+        original_meta: manifest.meta.clone(),
+        original_separators: manifest.separators.clone(),
         original_export,
         original_validate,
-        schema,
+        schema: manifest,
         groups,
         state: crate::model::ProjectState::Loaded,
-    })
+    };
+    // 运行时 schema 是 groups 的投影：manifest 只提供索引/语义，字段结构来自
+    // `.tbl` 表头与 workbook 表头。这里补全内存投影，供导出 / 校验 / UI 使用。
+    project.resync_schema();
+    Ok(project)
 }
 
 /// 解析项目级配置（仅 [export] 段）。
@@ -175,7 +179,7 @@ fn load_specific_project_impl(
 /// 项目级 project.toml 不允许覆盖工作区级段：
 /// - [project]    仓库状态（last_project / opened_projects），不属于单项目
 /// - [ui]         UI 偏好仅工作区级；多 Project 同时打开时按项目切 UI 策略会反复变
-/// - [separators] 分隔符以 project.tblschema 的 # @sep 为准
+/// - [separators] 分隔符以 project.tblmanifest 的 # @sep 为准
 ///
 /// 项目级配置加载策略：
 /// - project.toml 缺失 / 无 `[export]` 段 → 从全局配置拷贝完整初始值
@@ -431,7 +435,7 @@ pub fn list_projects(workdir: &Path) -> Vec<ProjectListEntry> {
 
 /// 扫 `<workdir>/projects/` 找出合法的 Project 目录。
 ///
-/// **合法性判定**：目录里必须有 `project.tblschema` 文件——否则跳过。这能过滤掉
+/// **合法性判定**：目录里必须有 `project.tblmanifest` 文件——否则跳过。这能过滤掉
 /// "Excel 编辑创建的孤儿 .tbl-cache 目录"（用户新建项目未保存就关程序，cache 目录留下
 /// 但 schema 没落盘 → 下次启动会被误识别为空 Project）。
 fn scan_projects_dir(projects_dir: &Path) -> Vec<ProjectListEntry> {
@@ -455,9 +459,9 @@ fn scan_projects_dir(projects_dir: &Path) -> Vec<ProjectListEntry> {
         if id.starts_with('.') {
             continue;
         }
-        // 仅当目录含 project.tblschema 时才视为合法 Project。
+        // 仅当目录含 project.tblmanifest 时才视为合法 Project。
         // 跳过仅有 .tbl-cache（Excel 编辑残留）/ 空 / 其它垃圾目录。
-        if !path.join(PROJECT_SCHEMA_FILE).is_file() {
+        if !path.join(PROJECT_MANIFEST_FILE).is_file() {
             continue;
         }
         let meta = read_project_meta_short(&path);
@@ -477,25 +481,21 @@ fn pick_project<'a>(candidates: &'a [ProjectListEntry], preferred: &str) -> Opti
     candidates.first()
 }
 
-/// 读 `<project_root>/project.tblschema` 解析出 schema。
+/// 读 `<project_root>/project.tblmanifest` 解析出运行时清单。
 ///
-/// - 文件**缺失** → 带 id/name 兜底的空 schema（还没建 schema，不算"坏"）
+/// - 文件缺失 → `Err`
 /// - 文件在但**解析失败** → `Err`，原因里带文件路径与行号
 ///
-/// **"存在但读不懂"必须失败，不能兜底。** 原来这里是 `Err(_) => fallback`，把解析错误
-/// 整个吞掉：一个写坏的 `project.tblschema` 会静默变成「空身份 + 默认分隔符」的项目，
-/// 而数据是从 `.tbl` 另外读的，所以项目**看起来一切正常** —— 直到下一次保存，把原始
-/// 内容覆盖掉。CLI 主要由 AI / 脚本驱动，没有反馈就等于没有发生（@02.26）。
-fn read_project_schema(
+fn read_project_manifest(
     project_root: &Path,
     project_id_fallback: &str,
 ) -> Result<crate::tblschema::TblSchema> {
-    let path = project_root.join(PROJECT_SCHEMA_FILE);
+    let path = project_root.join(PROJECT_MANIFEST_FILE);
     let txt = match std::fs::read_to_string(&path) {
         Ok(t) => t,
-        Err(_) => return Ok(fallback_schema(project_id_fallback)),
+        Err(_) => anyhow::bail!("缺少运行时清单: {}", path.display()),
     };
-    let mut s = crate::tblschema::parse_tblschema(&txt)
+    let mut s = crate::manifest::parse_tblmanifest(&txt)
         .map_err(|e| anyhow::anyhow!("{} 解析失败: {}", path.display(), e))?;
     if s.meta.id.is_empty() {
         s.meta.id = project_id_fallback.to_string();
@@ -510,11 +510,11 @@ fn read_project_schema(
 ///
 /// 列表要能列出坏项目（按目录名），一个坏项目不该让整张列表打不开；
 /// 真要动它的时候走 [`read_project_schema`]，那时会硬失败并给出位置。
-fn read_project_schema_lenient(
+fn read_project_manifest_lenient(
     project_root: &Path,
     project_id_fallback: &str,
 ) -> crate::tblschema::TblSchema {
-    read_project_schema(project_root, project_id_fallback)
+    read_project_manifest(project_root, project_id_fallback)
         .unwrap_or_else(|_| fallback_schema(project_id_fallback))
 }
 
@@ -528,7 +528,7 @@ fn fallback_schema(id: &str) -> crate::tblschema::TblSchema {
 /// 仅读取 schema.meta 的 (id, name)，用于 scan_projects_dir 列表展示与 created_at 取值。
 /// 失败时返回 None；调用方按目录名兜底。
 fn read_project_meta_short(project_root: &Path) -> Option<(String, String)> {
-    let s = read_project_schema_lenient(project_root, "");
+    let s = read_project_manifest_lenient(project_root, "");
     if s.meta.id.is_empty() {
         return None;
     }
@@ -537,7 +537,7 @@ fn read_project_meta_short(project_root: &Path) -> Option<(String, String)> {
 
 /// 读取 schema.meta.created_at（可空）。供 load_workspace 填 AvailableProject。
 fn read_project_created_at(project_root: &Path) -> String {
-    read_project_schema_lenient(project_root, "").meta.created_at
+    read_project_manifest_lenient(project_root, "").meta.created_at
 }
 
 
@@ -644,13 +644,14 @@ fn load_tbl_group(name: &str, dir: &Path) -> Result<Group> {
     })
 }
 
-/// 加载 Xlsx 组：**结构来自 `project.tblschema` 的 section，数据来自 workbook 的 sheet**
+/// 加载 Xlsx 组：**结构与数据都来自 workbook**；manifest 的 section 只决定节点清单
 /// （@02.27）。
 ///
 /// 三条硬规则（都是「读不懂就报错」那条契约的延续）：
 /// - schema 有 section、workbook 没有同名 sheet → 报错；
 /// - section 的类型决定 sheet 怎么读（table 4 行表头 / constant、enum 1 行表头）；
-/// - workbook 里有、schema 里没有的 sheet → 忽略（策划的私有 sheet，P3 才变成"托管节点"）。
+/// - workbook 里有、manifest 里没有的 sheet → 忽略（策划的私有 sheet，P3 才变成"托管节点"）；
+/// - Table 的字段 / 类型 / export / desc 全部从 4 行表头读，manifest 不提供。
 pub(crate) fn load_xlsx_group(
     name: &str,
     dir: &Path,
@@ -726,56 +727,79 @@ pub(crate) fn file_stamp(path: &Path) -> Option<(std::time::SystemTime, u64)> {
     Some((meta.modified().ok()?, meta.len()))
 }
 
-fn field_defs_from_section(sec: &crate::tblschema::SchemaSection) -> Vec<FieldDef> {
-    sec.fields.iter().map(|f| FieldDef {
-        name: f.name.clone(),
-        desc: f.desc.clone(),
-        tbl_type: f.tbl_type.clone(),
-        // 解析期已经严格校验过导出码
-        export: Export::from_input(&f.export),
-    }).collect()
-}
-
-/// Table sheet → `Table`。表头 4 行，列按**字段名**对齐（允许策划插私有列）。
+/// Table sheet → `Table`。结构完全来自 workbook 的 4 行表头：
+/// desc / export / type / 字段名。
+///
+/// 字段名非空的列 = 模型列；字段名留空的列视为策划私有列，不进入模型、保存时原样保留。
 fn table_from_sheet(
     sec: &crate::tblschema::SchemaSection,
     ws: &umya_spreadsheet::Worksheet,
     book_path: &Path,
 ) -> Result<Table> {
-    use crate::excel_sync::vo::{Layout, HDR_DESC, HDR_NAME};
+    use crate::excel_sync::vo::{DATA_START, HDR_DESC, HDR_EXPORT, HDR_NAME, HDR_TYPE};
+    use crate::model::{FieldDef, Table, TableSchema};
 
-    let mut fields = field_defs_from_section(sec);
-    // desc 以 sheet 为准（用户已拍板）；取不到才回落到 schema。
-    let layout = crate::excel_sync::read::detect_layout(ws, Some(&fields));
-    if layout != Layout::Modern {
+    let (max_col, max_row) = ws.highest_column_and_row();
+    if max_row < HDR_NAME {
         anyhow::bail!(
-            "{} 的 sheet {} 不是 4 行表头布局（desc/export/type/字段名），无法按 schema 读取",
+            "{} 的 sheet {} 缺少 4 行表头（desc/export/type/字段名）",
             book_path.display(), sec.name
         );
     }
+    let last_col = (1..=max_col).rev()
+        .find(|&c| !ws.value((c, HDR_NAME)).trim().is_empty())
+        .unwrap_or(0);
+    if last_col == 0 {
+        anyhow::bail!("{} 的 sheet {} 没有字段列", book_path.display(), sec.name);
+    }
 
-    // 字段名 → 物理列号（1-based）。缺失即报错：静默丢一列比报错糟得多。
-    let (max_col, _) = ws.highest_column_and_row();
-    let mut col_of: Vec<u32> = Vec::with_capacity(fields.len());
-    for f in &fields {
-        let found = (1..=max_col).find(|&c| ws.value((c, HDR_NAME)) == f.name);
-        let Some(c) = found else {
+    let mut fields: Vec<FieldDef> = Vec::new();
+    let mut col_of: Vec<u32> = Vec::new();
+    for c in 1..=last_col {
+        let name = ws.value((c, HDR_NAME)).trim().to_string();
+        if name.is_empty() { continue; }
+        if let Some((_, msg)) = crate::validate::validate_field_name(&name) {
             anyhow::bail!(
-                "{} 的 sheet {} 缺少字段列 {:?}（表头第 {} 行）",
-                book_path.display(), sec.name, f.name, HDR_NAME
+                "{} 的 sheet {} 第 {} 列字段名不合法: {}",
+                book_path.display(), sec.name, c, msg
             );
-        };
+        }
+        let ty = ws.value((c, HDR_TYPE)).trim().to_string();
+        if crate::types::TblType::parse(&ty).is_none() {
+            anyhow::bail!(
+                "{} 的 sheet {} 字段 {} 的类型 {:?} 不合法",
+                book_path.display(), sec.name, name, ty
+            );
+        }
+        let export = parse_xlsx_export(&ws.value((c, HDR_EXPORT)))
+            .ok_or_else(|| anyhow::anyhow!(
+                "{} 的 sheet {} 字段 {} 的 export 值 {:?} 不合法（只接受 cs/c/s/- 或中文展示值）",
+                book_path.display(), sec.name, name, ws.value((c, HDR_EXPORT))
+            ))?;
+        fields.push(FieldDef {
+            name,
+            desc: ws.value((c, HDR_DESC)),
+            tbl_type: ty,
+            export,
+        });
         col_of.push(c);
     }
-    // desc 行：sheet 里有就覆盖 schema 的
-    for (i, f) in fields.iter_mut().enumerate() {
-        let d = ws.value((col_of[i], HDR_DESC));
-        if !d.is_empty() { f.desc = d; }
+    if fields.first().map_or(true, |f| f.name != "id") {
+        anyhow::bail!(
+            "{} 的 sheet {} 第一个字段必须是 id（当前是 {:?}）",
+            book_path.display(), sec.name,
+            fields.first().map(|f| f.name.as_str()).unwrap_or("")
+        );
+    }
+    let mut seen = std::collections::HashSet::new();
+    for f in &fields {
+        if !seen.insert(&f.name) {
+            anyhow::bail!("{} 的 sheet {} 字段名重复: {}", book_path.display(), sec.name, f.name);
+        }
     }
 
-    let (_, max_row) = ws.highest_column_and_row();
     let mut records: Vec<Vec<String>> = Vec::new();
-    for r in crate::excel_sync::vo::DATA_START..=max_row {
+    for r in DATA_START..=max_row {
         let cells: Vec<String> = col_of.iter().map(|&c| ws.value((c, r))).collect();
         if cells.iter().all(|v| v.is_empty()) { continue; }
         records.push(cells);
@@ -798,6 +822,20 @@ fn table_from_sheet(
         rules: sec.rules.clone(),
         original_rules: sec.rules.clone(),
     })
+}
+
+/// Excel 表头的 export 单元格：短码与中文展示值都认，其它值报错。
+fn parse_xlsx_export(raw: &str) -> Option<crate::model::Export> {
+    if let Some(e) = crate::model::Export::parse_code(raw) {
+        return Some(e);
+    }
+    match raw.trim() {
+        "前后端" => Some(crate::model::Export::ClientServer),
+        "客户端" => Some(crate::model::Export::ClientOnly),
+        "服务器" => Some(crate::model::Export::ServerOnly),
+        "不导出" => Some(crate::model::Export::None),
+        _ => None,
+    }
 }
 
 /// Constant sheet → `Constant`。1 行表头 `name|type|value|export|desc`，按位置读。
@@ -865,6 +903,91 @@ fn enum_from_sheet(
     })
 }
 
+/// 原生 xlsx 导入用：不依赖 manifest section，直接把 workbook 的所有 sheet 读成节点。
+///
+/// - `_empty` 是空组占位 sheet，跳过；
+/// - Table 必须是 4 行表头；Constant / Enum 按首行固定表头识别；
+/// - 不做改名，sheet 名就是节点名；重名 / 非法名直接报错。
+pub(crate) fn load_xlsx_group_all_sheets(
+    name: &str,
+    dir: &Path,
+    book_path: &Path,
+) -> Result<Group> {
+    use crate::tblschema::{SchemaMode, SchemaSection};
+    use crate::model::GroupStorage;
+
+    let mut book = umya_spreadsheet::reader::xlsx::read(book_path)
+        .with_context(|| format!("打开 {}", book_path.display()))?;
+    let sheet_names: Vec<String> = book.sheet_collection_no_check().iter()
+        .map(|s| s.name().to_string())
+        .collect();
+
+    let mut tables = Vec::new();
+    let mut constants = Vec::new();
+    let mut enums = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+
+    for sheet_name in sheet_names {
+        if sheet_name.eq_ignore_ascii_case("_empty") { continue; }
+        if !crate::validate::is_valid_node_name(&sheet_name) {
+            anyhow::bail!(
+                "{} 的 sheet {:?} 不是合法配置项名（大写字母开头，只含英文数字下划线）",
+                book_path.display(), sheet_name
+            );
+        }
+        if !seen.insert(sheet_name.to_lowercase()) {
+            anyhow::bail!("{} 的 sheet 名大小写重复: {}", book_path.display(), sheet_name);
+        }
+
+        let ws = book.sheet_by_name_mut(&sheet_name)
+            .map_err(|e| anyhow::anyhow!("打开 sheet {} 失败: {}", sheet_name, e))?;
+        let mode = detect_sheet_mode(ws);
+        let sec = SchemaSection {
+            group: name.to_string(),
+            name: sheet_name.clone(),
+            mode: mode.clone(),
+            storage: GroupStorage::Xlsx,
+            fields: Vec::new(),
+            preset: Vec::new(),
+            display: None,
+            rules: Vec::new(),
+        };
+        match mode {
+            SchemaMode::Table => tables.push(table_from_sheet(&sec, ws, book_path)?),
+            SchemaMode::Constant => constants.push(constant_from_sheet(&sec, ws, book_path)?),
+            SchemaMode::Enum => enums.push(enum_from_sheet(&sec, ws, book_path)?),
+        }
+    }
+
+    Ok(Group {
+        name: name.to_string(),
+        original_name: name.to_string(),
+        dir: dir.to_path_buf(),
+        tables,
+        constants,
+        enums,
+        is_new: false,
+        storage: GroupStorage::Xlsx,
+        book_stamp: file_stamp(book_path),
+    })
+}
+
+/// 认一张 sheet 是 table / constant / enum。
+/// Constant / Enum 的 1 行表头是固定值；其它一律按 Table 的 4 行表头读（读不出来会报错）。
+fn detect_sheet_mode(ws: &umya_spreadsheet::Worksheet) -> crate::tblschema::SchemaMode {
+    use crate::tblschema::SchemaMode;
+    let cell = |c: u32| ws.value((c, 1)).trim().to_string();
+    if cell(1) == "name" && cell(2) == "type" && cell(3) == "value"
+        && cell(4) == "export" && cell(5) == "desc"
+    {
+        SchemaMode::Constant
+    } else if cell(1) == "id" && cell(2) == "name" && cell(3) == "desc" {
+        SchemaMode::Enum
+    } else {
+        SchemaMode::Table
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -878,8 +1001,8 @@ mod tests {
 
     fn write_schema(root: &Path, id: &str, name: &str) {
         std::fs::write(
-            root.join(PROJECT_SCHEMA_FILE),
-            format!("#!tblschema v1\n# @meta id: {}\n# @meta name: {}\n", id, name),
+            root.join(PROJECT_MANIFEST_FILE),
+            format!("#!tblmanifest v1\n# @meta id: {}\n# @meta name: {}\n", id, name),
         ).unwrap();
     }
 
@@ -1048,15 +1171,15 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// 孤儿目录（缺 project.tblschema 但有 .tbl-cache 之类残留）应被 list_projects 跳过。
+    /// 孤儿目录（缺 project.tblmanifest 但有 .tbl-cache 之类残留）应被 list_projects 跳过。
     /// 防止"新建项目未保存就关程序，cache 目录留下"导致下次启动加载空 Project 的 bug。
     #[test]
     fn list_projects_skips_dirs_without_schema() {
         let dir = unique_tmp("orphan");
-        // 合法 project：有 project.tblschema
+        // 合法 project：有 project.tblmanifest
         std::fs::create_dir_all(dir.join("projects/real/config")).unwrap();
         write_schema(&dir.join("projects/real"), "real", "真项目");
-        // 孤儿 project：仅有 .tbl-cache 残留，无 project.tblschema
+        // 孤儿 project：仅有 .tbl-cache 残留，无 project.tblmanifest
         std::fs::create_dir_all(dir.join("projects/orphan/.tbl-cache")).unwrap();
         std::fs::write(
             dir.join("projects/orphan/.tbl-cache/hero-1234567890.xlsx"),
@@ -1067,7 +1190,7 @@ mod tests {
 
         let list = list_projects(&dir);
         let ids: Vec<_> = list.iter().map(|e| e.id.as_str()).collect();
-        assert_eq!(ids, vec!["real"], "应仅识别有 project.tblschema 的目录");
+        assert_eq!(ids, vec!["real"], "应仅识别有 project.tblmanifest 的目录");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

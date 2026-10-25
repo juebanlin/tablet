@@ -93,7 +93,7 @@ tablet-cli -w <config仓库根> --project game export code --csharp-unity
   `<root>/server/csharp`、`<root>/client/csharp_unity`、`<root>/client/csharp_godot`），不会互相覆盖。
 - 服务端照常用自己的组合（`export data --xml`、`export code --java|--go|--cpp|...`）。
 - 不需要 `workspace save`；`export` 只读磁盘上的 `.tbl` / `.xlsx`，不会写 `projects/`。
-  手改过 `.tbl` 的**结构**、要同步进 `project.tblschema` 时才需要 `workspace save`。
+  手改过 `.tbl` 后需要把数据/结构落盘时才跑 `workspace save`；manifest 只刷新索引。
 - xlsx 组：先保存 Excel 再点刷新；未保存的编辑 CLI 看不到。
 - tablet GUI 开着同一工作区时，CLI 会被 `.data/tablet.lock` 拒绝（`workspace info` 除外）。
 - 退出码：`0` 成功；`1` 验证 / 导出失败；`2` 用法错误。错误在 stderr。

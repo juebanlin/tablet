@@ -47,12 +47,12 @@ assert_exit 1
 assert_stderr_contains "Bad.tbl"
 cleanup
 
-# ── 写坏的 project.tblschema：报错 + 非零退出 ──
+# ── 写坏的 project.tblmanifest：报错 + 非零退出 ──
 # 这条守的是「CLI 给 AI / 脚本调用，没有反馈等于没有发生」：解析失败原来被
 # `Err(_) => fallback` 整个吞掉，项目会静默退化成"空身份 + 默认分隔符"，
 # 而且要等到下一次保存才炸（那时原始内容已经被覆盖了）。
 setup_workspace "$TEMPLATE"
-sed -i 's/^# @meta id: test$/# @meta id: Bad-Id/' "$WORK_DIR/projects/test/project.tblschema"
+sed -i 's/^# @meta id: test$/# @meta id: Bad-Id/' "$WORK_DIR/projects/test/project.tblmanifest"
 run_cli project info --id test
 assert_exit 1
 assert_stderr_contains "解析失败"
@@ -68,7 +68,7 @@ cleanup
 # ── 但「建一个新的」不能被堵死 ──
 # 折腾坏了之后，新建一个正是出路之一。所以 project new 不因为有别的项目打不开就拒绝。
 setup_workspace "$TEMPLATE"
-sed -i 's/^# @meta id: test$/# @meta id: Bad-Id/' "$WORK_DIR/projects/test/project.tblschema"
+sed -i 's/^# @meta id: test$/# @meta id: Bad-Id/' "$WORK_DIR/projects/test/project.tblmanifest"
 run_cli project new --template "$TEMPLATE" --id fresh
 assert_exit 0
 cleanup

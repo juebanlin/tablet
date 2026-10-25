@@ -1,6 +1,6 @@
 #!/bin/bash
 # tests/02_schema/test_rules_roundtrip.sh
-# # @rule 指令写进 project.tblschema，保存后仍在（规则只住 schema，@01.10.7）。
+# # @rule 指令写进 project.tblmanifest，保存后仍在（规则只住 schema，@01.10.7）。
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "$SCRIPT_DIR/../helpers/common.sh"
 begin_test "schema/rules-roundtrip"
@@ -29,17 +29,17 @@ setup_empty_workspace
 run_cli project new --from-file "$SCHEMA" --id test
 assert_exit 0
 
-SCHEMA_FILE="$WORK_DIR/projects/test/project.tblschema"
+SCHEMA_FILE="$WORK_DIR/projects/test/project.tblmanifest"
 assert_file_exists "$SCHEMA_FILE"
 
 if ! grep -q '^# @rule: key = unique()$' "$SCHEMA_FILE"; then
-    _fail "# @rule: unique() 没写进 project.tblschema:\n$(cat "$SCHEMA_FILE")"
+    _fail "# @rule: unique() 没写进 project.tblmanifest:\n$(cat "$SCHEMA_FILE")"
 else
     _pass "unique 规则已写入"
 fi
 
 if ! grep -q '^# @rule: name = ref_exists(Lang.key) \[warn\]$' "$SCHEMA_FILE"; then
-    _fail "# @rule: ref_exists + [warn] 没写进 project.tblschema:\n$(cat "$SCHEMA_FILE")"
+    _fail "# @rule: ref_exists + [warn] 没写进 project.tblmanifest:\n$(cat "$SCHEMA_FILE")"
 else
     _pass "ref_exists 规则已写入（含级别）"
 fi

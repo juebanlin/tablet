@@ -545,6 +545,24 @@ fn dispatch_project(cli: &Cli, pa: &ProjectArgs) -> Result<i32> {
             println!("已删除 Project: {}", id);
             Ok(0)
         }
+        ProjectAction::ImportTbl { id, group, paths } => {
+            let (mut engine, _config_fixed) = load_workspace_checked(&cli.workdir)?;
+            let group = match group.clone() {
+                Some(g) => g,
+                None => derive_import_group(paths)?,
+            };
+            let out = engine.import_tbl_files(id, &group, paths)
+                .map_err(|e| anyhow::anyhow!(e))?;
+            println!("已导入 {} 个 .tbl → {}（组 {}）", out.nodes, id, out.group);
+            Ok(0)
+        }
+        ProjectAction::ImportXlsx { id, file } => {
+            let (mut engine, _config_fixed) = load_workspace_checked(&cli.workdir)?;
+            let out = engine.import_xlsx_group(id, file)
+                .map_err(|e| anyhow::anyhow!(e))?;
+            println!("已导入 Excel Group → {}（{}，{} 个节点）", id, out.group, out.nodes);
+            Ok(0)
+        }
         ProjectAction::Clone { source, id, name } => {
             let (mut engine, _config_fixed) = load_workspace_checked(&cli.workdir)?;
             run_project_clone(&mut engine, source, id, name.as_deref())?;
@@ -627,4 +645,25 @@ fn apply_namespace_override(engine: &mut ProjectEngine, ns: &str) {
         format!("export.client.csharp_godot.namespace={}", ns),
     ];
     crate::actions::overrides::apply_overrides(engine, &overrides);
+}
+
+
+/// `.tbl` 导入的默认组名：所有文件必须来自同一个目录，目录名即组名。
+fn derive_import_group(paths: &[std::path::PathBuf]) -> anyhow::Result<String> {
+    let first = paths.first()
+        .ok_or_else(|| anyhow::anyhow!("没有选择 .tbl 文件"))?;
+    let parent = first.parent()
+        .ok_or_else(|| anyhow::anyhow!("文件没有父目录: {}", first.display()))?;
+    for p in paths.iter().skip(1) {
+        if p.parent() != Some(parent) {
+            anyhow::bail!("一次导入的 .tbl 必须来自同一个目录（组名取目录名）");
+        }
+    }
+    let name = parent.file_name()
+        .map(|s| s.to_string_lossy().to_string())
+        .unwrap_or_default();
+    if !tablet_core::validate::is_valid_group_name(&name) {
+        anyhow::bail!("目录名不是合法组名: {}（用 --group 指定）", name);
+    }
+    Ok(name)
 }

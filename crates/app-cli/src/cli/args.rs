@@ -135,6 +135,27 @@ pub enum ProjectAction {
         #[arg(long)]
         confirm: bool,
     },
+    /// 原生导入 .tbl 文件到一个 Tbl 组（组名默认取文件所在目录名）
+    ImportTbl {
+        /// 目标项目 id
+        #[arg(long)]
+        id: String,
+        /// 目标组名（默认取所有文件共同的父目录名）
+        #[arg(long)]
+        group: Option<String>,
+        /// 一个或多个 .tbl 文件
+        #[arg(required = true, value_name = "PATH")]
+        paths: Vec<PathBuf>,
+    },
+    /// 原生导入一个 Excel 工作簿：文件 = 组，sheet = 节点
+    ImportXlsx {
+        /// 目标项目 id
+        #[arg(long)]
+        id: String,
+        /// 工作簿路径
+        #[arg(value_name = "FILE")]
+        file: PathBuf,
+    },
     /// 克隆 Project
     Clone {
         /// 源项目 id

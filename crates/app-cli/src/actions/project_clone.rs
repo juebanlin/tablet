@@ -30,7 +30,7 @@ pub fn run_project_clone(
     // 克隆结果是否真的写下去了，去盘上看。
     engine.save_all_projects();
     let root = engine.workdir.join(tablet_core::project::PROJECTS_DIR).join(new_id);
-    if !root.join(tablet_core::project::PROJECT_SCHEMA_FILE).is_file() {
+    if !root.join(tablet_core::project::PROJECT_MANIFEST_FILE).is_file() {
         bail!(
             "克隆未落盘：{} 不存在（可能有其它 Project 存在验证错误，保存被整体中止）",
             root.display()

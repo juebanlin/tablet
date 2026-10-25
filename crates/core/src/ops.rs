@@ -62,15 +62,15 @@ fn dedupe_name<'a, I: IntoIterator<Item = &'a str>>(base: &str, existing: I) -> 
     format!("{}_copy_{}", base, chrono::Local::now().timestamp_millis())
 }
 
-/// 同步 schema.sections 与 groups 的结构（仅结构骨架，不动 schema.meta）。
+/// 同步 schema.sections 与 groups 的索引 / storage / 规则 / display（不动 schema.meta）。
 /// 任何 NewGroup / RenameGroup / DeleteGroup / NewTable / RenameNode / DeleteNode
-/// / paste_node_to / paste_group_to 后都要调一次，保证 save 时 project.tblschema
+/// / paste_node_to / paste_group_to 后都要调一次，保证 save 时 project.tblmanifest
 /// 与磁盘 .tbl 一致。
 ///
 /// 这里不碰任何"脏"状态：脏由每层自己跟盘上快照比出来（@02.26.2），
 /// 改名改回原名后会自动回到干净。
 fn sync_schema_from_groups(project: &mut Project) {
-    // sync 永远不带 preset：project.tblschema 是「结构骨架」，行数据归项目里的 .tbl
+    // sync 永远不带 preset：manifest 只有索引/语义，行数据归项目里的 .tbl
     project.resync_schema();
 }
 
@@ -570,12 +570,12 @@ fn save_project_files(project: &mut Project) -> (usize, usize, Vec<String>, bool
     //
     // **判据是「和盘上的字不一样」，不是内存里的脏标。** `schema.sections` 是 groups 的
     // 投影，手改 `.tbl`（加一列 / 加一条）不会让任何 `original_*` 变化，于是
-    // `schema_changed()` 为假 —— 旧代码就此跳过，`project.tblschema` 永远停在上一次
+    // `schema_changed()` 为假 —— 旧代码就此跳过，`project.tblmanifest` 永远停在上一次
     // 结构变更时的样子。CLI 的工作流正是「改 .tbl → workspace save」，那条路必须把投影
     // 刷新掉，否则下一个 `project new --from-file` / `util scaffold` 拿到的还是旧结构。
     project.resync_schema();
-    let schema_txt = crate::tblschema::serialize_tblschema(&project.schema);
-    let schema_path = project.project_root.join(crate::project::PROJECT_SCHEMA_FILE);
+    let schema_txt = crate::manifest::serialize_tblmanifest(&project.schema);
+    let schema_path = project.project_root.join(crate::project::PROJECT_MANIFEST_FILE);
     let schema_on_disk = std::fs::read_to_string(&schema_path).ok();
     let schema_needs_write = first_save
         || project.schema_changed()
@@ -790,6 +790,13 @@ fn xlsx_preflight(group: &crate::model::Group) -> Option<String> {
 }
 
 /// Xlsx 组的写盘结果。
+/// 原生导入结果（.tbl 文件或 xlsx 组）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ImportOutcome {
+    pub group: String,
+    pub nodes: usize,
+}
+
 struct XlsxSaveOutcome {
     written: usize,
     deleted: usize,
@@ -1216,7 +1223,7 @@ pub struct AvailableProject {
     pub name: String,
     /// `<workdir>/projects/<id>/`
     pub root: PathBuf,
-    /// 取自 `project.tblschema` 的 `# @meta created_at`；用于 sort=created。
+    /// 取自 `project.tblmanifest` 的 `# @meta created_at`；用于 sort=created。
     pub created_at: String,
 }
 
@@ -1610,9 +1617,9 @@ impl ProjectEngine {
             &schema.sections,
             &data_dir,
             with_preset,
-        );
+        ).map_err(|e| e.to_string())?;
 
-        // 清除 schema 的 preset（数据已灌入 groups，项目 schema 只保留结构骨架）
+        // 清除 schema 的 preset（数据已灌入 groups；运行时只需索引/语义）
         for sec in &mut new_project.schema.sections {
             sec.preset.clear();
         }
@@ -2203,7 +2210,7 @@ impl ProjectEngine {
     }
 
     /// 设置 Table / Enum 的「被引用展示列」（@10）。`None` = 回到默认。
-    /// 走节点级事务：这是 project.tblschema 里的属性，应该能撤销。
+    /// 走节点级事务：这是 project.tblmanifest 里的属性，应该能撤销。
     pub fn set_display_field(
         &mut self,
         group: &str,
@@ -3661,6 +3668,259 @@ impl ProjectEngine {
         self.node_clipboard = None;
     }
 
+    // ── 原生导入：.tbl / .xlsx ────────────────────────────────────────────
+
+    /// 原生导入一批 `.tbl` 到一个 Tbl 组。
+    ///
+    /// - 文件先全部解析、校验，通过后才复制；
+    /// - 文件名 = 节点名；组名由调用方给（GUI 用目录名）；
+    /// - 名字按项目级唯一性检查，**不自动加 `_copy`**；
+    /// - 目标组必须是 Tbl；不存在则新建。
+    pub fn import_tbl_files(
+        &mut self,
+        project_id: &str,
+        group_name: &str,
+        paths: &[std::path::PathBuf],
+    ) -> Result<ImportOutcome, String> {
+        if paths.is_empty() {
+            return Err("没有选择 .tbl 文件".to_string());
+        }
+        if !crate::validate::is_valid_group_name(group_name) {
+            return Err(format!("组名不合法: {}（只能包含中英文数字下划线）", group_name));
+        }
+        if !self.is_opened(project_id) {
+            self.open_project(project_id).map_err(|e| e.to_string())?;
+        }
+
+        // 1) 全部解析 + 名字校验，任何失败都不碰盘。
+        let mut parsed: Vec<(std::path::PathBuf, crate::tbl::TblFile, String)> = Vec::new();
+        for path in paths {
+            if path.extension().map_or(true, |e| !e.eq_ignore_ascii_case("tbl")) {
+                return Err(format!("不是 .tbl 文件: {}", path.display()));
+            }
+            let tbl = crate::tbl::parse_tbl(path).map_err(|e| e.to_string())?;
+            let name = match &tbl {
+                crate::tbl::TblFile::Table(t) => t.name.clone(),
+                crate::tbl::TblFile::Constant(c) => c.name.clone(),
+                crate::tbl::TblFile::Enum(e) => e.name.clone(),
+            };
+            if !crate::validate::is_valid_node_name(&name) {
+                return Err(format!("{} 的节点名不合法: {}", path.display(), name));
+            }
+            parsed.push((path.clone(), tbl, name));
+        }
+
+        let project = self.find_project(project_id)
+            .ok_or_else(|| format!("Project 不存在: {}", project_id))?;
+        let existing = all_project_node_names(project);
+        let mut used_names = existing;
+        for (_, _, name) in &parsed {
+            if node_name_taken(&used_names, name) {
+                return Err(format!("节点名已存在（项目内唯一，忽略大小写）: {}", name));
+            }
+            used_names.push(name.clone());
+        }
+        let existing_group = project.groups.iter()
+            .find(|g| g.name.eq_ignore_ascii_case(group_name));
+        if let Some(g) = existing_group {
+            if g.is_xlsx() {
+                return Err(format!("组 {} 是 Excel Group；.tbl 导入只支持 Tbl 组", g.name));
+            }
+        }
+        let canonical_group = existing_group
+            .map(|g| g.name.clone())
+            .unwrap_or_else(|| group_name.to_string());
+        let data_dir = project.data_dir();
+        let group_dir = existing_group
+            .map(|g| g.dir.clone())
+            .unwrap_or_else(|| data_dir.join(&canonical_group));
+        for (_, _, name) in &parsed {
+            let target = group_dir.join(format!("{}.tbl", name));
+            if target.exists() {
+                return Err(format!("目标文件已存在: {}", target.display()));
+            }
+        }
+
+        // 2) 复制文件；失败则清掉已复制的，不进入内存模型。
+        let mut copied: Vec<std::path::PathBuf> = Vec::new();
+        for (src, _, name) in &parsed {
+            if let Err(e) = std::fs::create_dir_all(&group_dir) {
+                for p in &copied { let _ = std::fs::remove_file(p); }
+                return Err(format!("创建目录失败: {} ({})", group_dir.display(), e));
+            }
+            let target = group_dir.join(format!("{}.tbl", name));
+            if let Err(e) = std::fs::copy(src, &target) {
+                for p in &copied { let _ = std::fs::remove_file(p); }
+                let _ = std::fs::remove_file(&target);
+                return Err(format!("复制失败: {} -> {} ({})", src.display(), target.display(), e));
+            }
+            copied.push(target);
+        }
+
+        // 3) 进内存模型并标记为已落盘（文件已经就位，不再写一遍）。
+        let (created_group, group_was_new) = {
+            let project = self.find_project_mut(project_id).expect("opened checked");
+            let group_was_new = !project.groups.iter().any(|g| g.name.eq_ignore_ascii_case(&canonical_group));
+            let group = match project.groups.iter_mut()
+                .find(|g| g.name.eq_ignore_ascii_case(&canonical_group)) {
+                Some(g) => g,
+                None => {
+                    project.groups.push(Group {
+                        name: canonical_group.clone(),
+                        original_name: canonical_group.clone(),
+                        dir: group_dir.clone(),
+                        tables: Vec::new(),
+                        constants: Vec::new(),
+                        enums: Vec::new(),
+                        is_new: true,
+                        storage: crate::model::GroupStorage::Tbl,
+                        book_stamp: None,
+                    });
+                    project.groups.last_mut().unwrap()
+                }
+            };
+            for (_, tbl, name) in parsed {
+                let path = group.dir.join(format!("{}.tbl", name));
+                match tbl {
+                    crate::tbl::TblFile::Table(mut t) => {
+                        t.name = name.clone();
+                        t.original_name = name.clone();
+                        t.path = path;
+                        t.dirty = false;
+                        t.saved = true;
+                        t.original_records = t.records.clone();
+                        t.original_fields = t.schema.fields.clone();
+                        t.original_display_field = None;
+                        t.original_rules.clear();
+                        group.tables.push(t);
+                    }
+                    crate::tbl::TblFile::Constant(mut c) => {
+                        c.name = name.clone();
+                        c.original_name = name.clone();
+                        c.path = path;
+                        c.dirty = false;
+                        c.saved = true;
+                        c.original_entries = c.entries.clone();
+                        group.constants.push(c);
+                    }
+                    crate::tbl::TblFile::Enum(mut e) => {
+                        e.name = name.clone();
+                        e.original_name = name.clone();
+                        e.path = path;
+                        e.dirty = false;
+                        e.saved = true;
+                        e.original_entries = e.entries.clone();
+                        e.original_display_field = None;
+                        e.original_rules.clear();
+                        group.enums.push(e);
+                    }
+                }
+            }
+            sync_schema_from_groups(project);
+            (canonical_group.clone(), group_was_new)
+        };
+
+        if !self.save_project(project_id) {
+            for p in &copied { let _ = std::fs::remove_file(p); }
+            if let Some(project) = self.find_project_mut(project_id) {
+                if let Some(g) = project.groups.iter_mut().find(|g| g.name == created_group) {
+                    g.tables.retain(|t| !copied.iter().any(|p| p == &t.path));
+                    g.constants.retain(|c| !copied.iter().any(|p| p == &c.path));
+                    g.enums.retain(|e| !copied.iter().any(|p| p == &e.path));
+                }
+                project.groups.retain(|g| g.name != created_group
+                    || !group_was_new
+                    || !g.tables.is_empty() || !g.constants.is_empty() || !g.enums.is_empty());
+                sync_schema_from_groups(project);
+            }
+            return Err("导入后保存失败，已回滚磁盘文件".to_string());
+        }
+
+        let nodes = paths.len();
+        self.ui_log(format!("[导入] {} 个 .tbl → {}/{}", nodes, project_id, created_group));
+        Ok(ImportOutcome { group: created_group, nodes })
+    }
+
+    /// 原生导入一个 xlsx：文件 = 组，sheet = 节点。
+    ///
+    /// 工作簿原样复制，保留样式；结构与数据从 workbook 表头 / sheet 读取。
+    pub fn import_xlsx_group(
+        &mut self,
+        project_id: &str,
+        path: &std::path::Path,
+    ) -> Result<ImportOutcome, String> {
+        if path.extension().map_or(true, |e| !e.eq_ignore_ascii_case("xlsx")) {
+            return Err(format!("不是 .xlsx 文件: {}", path.display()));
+        }
+        let group_name = path.file_stem()
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_default();
+        if !crate::validate::is_valid_group_name(&group_name) {
+            return Err(format!("文件名不是合法组名: {}（只能包含中英文数字下划线）", group_name));
+        }
+        if !self.is_opened(project_id) {
+            self.open_project(project_id).map_err(|e| e.to_string())?;
+        }
+
+        let project = self.find_project(project_id)
+            .ok_or_else(|| format!("Project 不存在: {}", project_id))?;
+        if project.groups.iter().any(|g| g.name.eq_ignore_ascii_case(&group_name)) {
+            return Err(format!("组已存在: {}（导入不合并，请先改名或删除原组）", group_name));
+        }
+        let data_dir = project.data_dir();
+        let group = crate::project::load_xlsx_group_all_sheets(&group_name, &data_dir, path)
+            .map_err(|e| format!("{:#}", e))?;
+        let existing = all_project_node_names(project);
+        let mut used_names = existing;
+        for name in group.tables.iter().map(|t| t.name.clone())
+            .chain(group.constants.iter().map(|c| c.name.clone()))
+            .chain(group.enums.iter().map(|e| e.name.clone()))
+        {
+            if node_name_taken(&used_names, &name) {
+                return Err(format!("节点名已存在（项目内唯一，忽略大小写）: {}", name));
+            }
+            used_names.push(name);
+        }
+        let target = data_dir.join(format!("{}.xlsx", group_name));
+        if target.exists() {
+            return Err(format!("目标文件已存在: {}", target.display()));
+        }
+
+        if let Err(e) = std::fs::create_dir_all(&data_dir) {
+            return Err(format!("创建目录失败: {} ({})", data_dir.display(), e));
+        }
+        if let Err(e) = std::fs::copy(path, &target) {
+            return Err(format!("复制失败: {} -> {} ({})", path.display(), target.display(), e));
+        }
+
+        let nodes = group.tables.len() + group.constants.len() + group.enums.len();
+        let mut group = group;
+        group.dir = data_dir.clone();
+        group.book_stamp = crate::project::file_stamp(&target);
+        group.is_new = false;
+        for t in &mut group.tables { t.path = target.clone(); }
+        for c in &mut group.constants { c.path = target.clone(); }
+        for e in &mut group.enums { e.path = target.clone(); }
+
+        {
+            let project = self.find_project_mut(project_id).expect("opened checked");
+            project.groups.push(group);
+            sync_schema_from_groups(project);
+        }
+
+        if !self.save_project(project_id) {
+            let _ = std::fs::remove_file(&target);
+            if let Some(project) = self.find_project_mut(project_id) {
+                project.groups.retain(|g| g.name != group_name);
+                sync_schema_from_groups(project);
+            }
+            return Err("导入后保存失败，已删除复制进来的工作簿".to_string());
+        }
+
+        self.ui_log(format!("[导入] Excel Group {}/{}（{} 个节点）", project_id, group_name, nodes));
+        Ok(ImportOutcome { group: group_name, nodes })
+    }
+
     // --- PLACEHOLDER_ACTIONS ---
 
     /// 树面板的结构动作入口。除「删除 Project」外都记一条 Project 快照事务；
@@ -4374,7 +4634,7 @@ mod project_toml_template_tests {
 
         save_project_files(&mut project);
         assert!(!toml_path.exists(), "没改过 export 就不该生成覆盖文件");
-        assert!(project_root.join(crate::project::PROJECT_SCHEMA_FILE).exists(),
+        assert!(project_root.join(crate::project::PROJECT_MANIFEST_FILE).exists(),
             "但 tblschema 首次落盘还是要写");
 
         // 改 export（模拟「项目设置」）→ 保存才写入
@@ -4432,7 +4692,7 @@ package = \"com.user.kept\"
 
     #[test]
     fn save_persists_display_field_and_reload_restores_it() {
-        // 改节点 display_field → 保存 → project.tblschema 带 `# @display` → 重载回填（@10）。
+        // 改节点 display_field → 保存 → project.tblmanifest 带 `# @display` → 重载回填（@10）。
         let dir = unique_tmp("display");
         std::fs::create_dir_all(&dir).unwrap();
         let project_root = dir.join("projects").join("p1");
@@ -4480,7 +4740,7 @@ package = \"com.user.kept\"
         });
         save_project_files(&mut project);
 
-        let schema_txt = std::fs::read_to_string(project_root.join(crate::project::PROJECT_SCHEMA_FILE)).unwrap();
+        let schema_txt = std::fs::read_to_string(project_root.join(crate::project::PROJECT_MANIFEST_FILE)).unwrap();
         assert!(schema_txt.contains("[g/T] table\n# @display: name"), "schema = {}", schema_txt);
         assert!(schema_txt.contains("[g/E] enum\n# @display: desc"), "schema = {}", schema_txt);
 
@@ -4530,7 +4790,7 @@ package = \"com.user.kept\"
     // ── 重命名的「保存时才动盘」契约 ────────────────────────────────────
     //
     // 改名曾经是全程序唯一一个「保存前就碰文件系统」的操作：`.tbl` 立刻被
-    // `fs::rename`，而 `project.tblschema` 没跟着写。于是「文件已经动了」与
+    // `fs::rename`，而 `project.tblmanifest` 没跟着写。于是「文件已经动了」与
     // 「还有东西没保存」同时成立，树上那个 🟡 说不清是什么没保存。
     // 现在改名只写内存，搬文件推迟到 save（`apply_pending_renames`）。
 
@@ -4542,7 +4802,7 @@ package = \"com.user.kept\"
     ///
     /// 刻意手搓 `original_name` / `saved` / `original_meta` 是不行的——那等于
     /// 我自己给自己出题。走一遍真实链路顺带把一件事钉住：`resync_schema()` 从
-    /// groups 重建出来的 schema 必须**等于**从 `project.tblschema` 解析出来的，
+    /// groups 重建出来的 schema 必须**等于**从 `project.tblmanifest` 解析出来的，
     /// 否则每个项目一打开就永远亮着 🟡。
     fn engine_with_saved_node(label: &str, group: &str, node: &str) -> (PathBuf, ProjectEngine) {
         let dir = unique_tmp(label);
@@ -4753,7 +5013,7 @@ package = \"com.user.kept\"
 
         engine.reload();
         let (_, rules) = engine.node_rules("g", "T").expect("节点还在");
-        assert_eq!(rules.len(), 1, "规则必须从 project.tblschema 读回来");
+        assert_eq!(rules.len(), 1, "规则必须从 project.tblmanifest 读回来");
         assert_eq!(rules[0].kind, RuleKind::Unique);
         assert!(!engine.find_table("g", "T").unwrap().dirty, "重新加载后规则不该让节点变脏");
     }
@@ -5024,7 +5284,7 @@ package = \"com.user.kept\"
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// 手改 `.tbl`（加一列）后 `save`，`project.tblschema` 必须跟着刷新。
+    /// 手改 `.tbl`（加一列）后 `save`，`project.tblmanifest` 必须跟着刷新。
     ///
     /// `schema.sections` 是 groups 的投影，手改数据文件不会让任何 `original_*` 变化 ——
     /// 旧代码只看内存脏标，于是**永远**跳过这次写入，投影停在上一次结构变更时的样子。
@@ -5047,9 +5307,14 @@ package = \"com.user.kept\"
         assert!(engine.save_all());
 
         let schema = std::fs::read_to_string(
-            dir.join("projects/p1").join(crate::project::PROJECT_SCHEMA_FILE)).unwrap();
-        assert!(schema.contains("hp | int | cs | 血量"),
-            "save 没刷新投影:\n{}", schema);
+            dir.join("projects/p1").join(crate::project::PROJECT_MANIFEST_FILE)).unwrap();
+        // manifest 只记录索引；字段结构仍来自 .tbl（内存投影已包含 hp）
+        let t = engine.find_table("hero", "HeroBase").expect("HeroBase");
+        assert!(t.schema.fields.iter().any(|f| f.name == "hp"), "内存投影要包含手改出来的列");
+        assert!(schema.contains("[hero/HeroBase] table"), "manifest 要有 section:
+{}", schema);
+        assert!(!schema.contains("hp | int"), "manifest 不写字段行:
+{}", schema);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -5304,9 +5569,9 @@ package = \"com.user.kept\"
         assert!(engine.save_all());
 
         // 手工把 schema 里加一个没有 sheet 的 section
-        let schema_path = dir.join("projects/p1").join(crate::project::PROJECT_SCHEMA_FILE);
+        let schema_path = dir.join("projects/p1").join(crate::project::PROJECT_MANIFEST_FILE);
         let mut txt = std::fs::read_to_string(&schema_path).unwrap();
-        txt.push_str("\n[xg/Ghost] table\nid | int | cs | ID\n");
+        txt.push_str("\n[xg/Ghost] table\n");
         std::fs::write(&schema_path, txt).unwrap();
 
         let err = crate::project::load_specific_project(&dir, "p1")
@@ -5604,7 +5869,7 @@ package = \"com.user.kept\"
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// 被拦下的保存**什么都不写**——包括 `project.tblschema`。
+    /// 被拦下的保存**什么都不写**——包括 `project.tblmanifest`。
     ///
     /// schema 是 groups 的投影。先写 schema、再发现某个组写不进去，就会造出
     /// 「schema 里有这个节点、盘上却没有它的数据」——项目当场打不开。
@@ -5620,7 +5885,7 @@ package = \"com.user.kept\"
             project_id: pid, group: "xg".into(), name: "Extra".into(),
             fmt_ver: crate::tbl::DEFAULT_TBL_VERSION,
         });
-        let schema_path = dir.join("projects/p1").join(crate::project::PROJECT_SCHEMA_FILE);
+        let schema_path = dir.join("projects/p1").join(crate::project::PROJECT_MANIFEST_FILE);
         let before = std::fs::read_to_string(&schema_path).unwrap();
 
         assert!(!engine.save_all(), "被占用时必须失败");
@@ -5884,7 +6149,7 @@ package = \"com.user.kept\"
     #[test]
     fn a_data_edit_dirties_the_node_but_not_the_schema() {
         // 分层的关键一条。父层如果直接 OR 子节点的 `dirty`，那么**每次单元格编辑**
-        // 都会把 project.tblschema 标成需要重写——改一个格子的值根本不动 schema。
+        // 都会把 project.tblmanifest 标成需要重写——改一个格子的值根本不动 schema。
         let (dir, mut engine) = engine_with_saved_node("schema_layer", "hero", "HeroBase");
         let pid = engine.active_project_id().unwrap().to_string();
         assert!(!engine.find_project(&pid).unwrap().schema_changed(), "起点应当干净");
@@ -5893,7 +6158,7 @@ package = \"com.user.kept\"
 
         let p = engine.find_project(&pid).unwrap();
         assert!(p.is_dirty(), "数据改了 → 这个项目有东西要写盘");
-        assert!(!p.schema_changed(), "但 project.tblschema 一个字都不用动");
+        assert!(!p.schema_changed(), "但 project.tblmanifest 一个字都不用动");
         assert!(engine.find_table("hero", "HeroBase").unwrap().dirty, "该表自己要写盘");
 
         let _ = std::fs::remove_dir_all(&dir);
@@ -5901,7 +6166,7 @@ package = \"com.user.kept\"
 
     #[test]
     fn display_field_is_part_of_the_schema_and_reverting_it_clears_it() {
-        // `# @display` 写在 project.tblschema 里，所以它必须进 `schema_changed()`；
+        // `# @display` 写在 project.tblmanifest 里，所以它必须进 `schema_changed()`；
         // 而它没有 records 那种自然快照，靠 `original_display_field`。
         let (dir, mut engine) = engine_with_saved_node("schema_display", "hero", "HeroBase");
         let pid = engine.active_project_id().unwrap().to_string();
@@ -5934,7 +6199,7 @@ package = \"com.user.kept\"
         )).expect("创建");
         assert_eq!(id, "p1");
         let root = dir.join("projects").join("p1");
-        assert!(root.join(crate::project::PROJECT_SCHEMA_FILE).is_file(), "tblschema 应落盘");
+        assert!(root.join(crate::project::PROJECT_MANIFEST_FILE).is_file(), "tblschema 应落盘");
         assert!(root.join("config").join("hero").join("HeroBase.tbl").is_file(), ".tbl 应落盘");
         assert!(engine.find_project("p1").is_some(), "应注册进 projects");
         assert!(engine.available_projects.iter().any(|a| a.id == "p1"), "应注册进 available");
@@ -5956,7 +6221,7 @@ package = \"com.user.kept\"
 
     #[test]
     fn changing_export_makes_the_project_dirty_but_not_the_schema() {
-        // `project.toml` 与 `project.tblschema` 是两个文件，所以要分开问。
+        // `project.toml` 与 `project.tblmanifest` 是两个文件，所以要分开问。
         // 曾经 UI 树手工拼聚合、只问 `schema_changed()`，于是"只改了 export 保存"
         // 不亮 🟡——树现在直接问 `Project::is_dirty()`。
         let (dir, mut engine) = engine_with_saved_node("export_dirty", "hero", "HeroBase");
@@ -5969,7 +6234,7 @@ package = \"com.user.kept\"
         let p = engine.find_project(&pid).unwrap();
         assert!(p.toml_changed(), "export 变了 → project.toml 要写");
         assert!(p.is_dirty(), "项目该亮 🟡");
-        assert!(!p.schema_changed(), "但 project.tblschema 一个字都不用动");
+        assert!(!p.schema_changed(), "但 project.tblmanifest 一个字都不用动");
         assert!(engine.is_project_dirty(&pid), "关项目前的「有未保存改动」也应当为真");
 
         let _ = std::fs::remove_dir_all(&dir);
@@ -5977,7 +6242,7 @@ package = \"com.user.kept\"
 
     #[test]
     fn deleting_a_saved_node_is_a_schema_change() {
-        // 被删掉的段要从 project.tblschema 里消失，所以删除也是 schema 变更。
+        // 被删掉的段要从 project.tblmanifest 里消失，所以删除也是 schema 变更。
         // 而"新建了又没保存就删掉"的节点盘上从来没有过，不该算。
         let (dir, mut engine) = engine_with_saved_node("schema_delete", "hero", "HeroBase");
         let pid = engine.active_project_id().unwrap().to_string();
@@ -6113,5 +6378,80 @@ package = \"com.user.kept\"
 
         let _ = std::fs::remove_dir_all(&dir);
     }
+    #[test]
+    fn importing_tbl_files_registers_group_and_manifest() {
+        let (dir, mut engine) = engine_with_saved_node("import_tbl", "hero", "HeroBase");
+        let pid = engine.active_project_id().unwrap().to_string();
+        let src = dir.join("external/Imported.tbl");
+        std::fs::create_dir_all(src.parent().unwrap()).unwrap();
+        std::fs::write(&src, "#!tbl v3\n#mode table\n---\n\n@field id\n  desc:ID\n  export:cs\n  type:int\n\n[1]\n").unwrap();
+
+        let out = engine.import_tbl_files(&pid, "imported", &[src]).expect("import");
+        assert_eq!(out.group, "imported");
+        assert_eq!(out.nodes, 1);
+        assert!(config_dir(&dir).join("imported/Imported.tbl").is_file());
+        let p = engine.find_project(&pid).unwrap();
+        let g = p.groups.iter().find(|g| g.name == "imported").expect("group");
+        assert!(!g.is_xlsx());
+        assert!(g.tables.iter().any(|t| t.name == "Imported"));
+        let manifest = std::fs::read_to_string(
+            dir.join("projects/p1").join(crate::project::PROJECT_MANIFEST_FILE)).unwrap();
+        assert!(manifest.contains("[imported/Imported] table"), "{manifest}");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn importing_xlsx_group_copies_workbook_and_manifest() {
+        let (dir, mut engine) = engine_with_saved_node("import_xlsx", "hero", "HeroBase");
+        let pid = engine.active_project_id().unwrap().to_string();
+        let src = dir.join("external/Items.xlsx");
+        std::fs::create_dir_all(src.parent().unwrap()).unwrap();
+        let group = crate::model::Group {
+            name: "Items".into(),
+            original_name: "Items".into(),
+            dir: src.parent().unwrap().to_path_buf(),
+            tables: vec![crate::model::Table {
+                name: "Item".into(),
+                original_name: "Item".into(),
+                path: src.clone(),
+                schema: crate::model::TableSchema { fields: vec![
+                    crate::model::FieldDef { name: "id".into(), desc: "ID".into(), tbl_type: "int".into(), export: crate::model::Export::ClientServer },
+                ]},
+                records: vec![vec!["1".into()]],
+                dirty: true,
+                deleted: false,
+                original_records: Vec::new(),
+                original_fields: Vec::new(),
+                saved: false,
+                fmt_ver: crate::tbl::DEFAULT_TBL_VERSION,
+                display_field: None,
+                original_display_field: None,
+                rules: Vec::new(),
+                original_rules: Vec::new(),
+            }],
+            constants: Vec::new(),
+            enums: Vec::new(),
+            is_new: true,
+            storage: crate::model::GroupStorage::Xlsx,
+            book_stamp: None,
+        };
+        crate::excel_sync::apply::write_fresh_group(&src, &group).unwrap();
+
+        let out = engine.import_xlsx_group(&pid, &src).expect("import xlsx");
+        assert_eq!(out.group, "Items");
+        assert_eq!(out.nodes, 1);
+        assert!(config_dir(&dir).join("Items.xlsx").is_file());
+        let p = engine.find_project(&pid).unwrap();
+        let g = p.groups.iter().find(|g| g.name == "Items").expect("group");
+        assert!(g.is_xlsx());
+        assert!(g.tables.iter().any(|t| t.name == "Item"));
+        let manifest = std::fs::read_to_string(
+            dir.join("projects/p1").join(crate::project::PROJECT_MANIFEST_FILE)).unwrap();
+        assert!(manifest.contains("[Items/Item] table xlsx"), "{manifest}");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
 }
 

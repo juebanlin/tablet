@@ -163,6 +163,72 @@ pub fn push(path: &Path, group: &Group, pair: &PairPlan, scope: PushScope) -> Re
 /// 工作表保护尤其不能加：这条流用 umya 原地编辑，而 umya 不认识 `<protectedRanges>`
 /// （「放开某片区域可编辑」那个元素）、会把它静默丢掉，却保留整表保护开关——结果是把
 /// 文件变成整张只读，策划连数据都改不了。
+/// 从零写一整组工作簿（table / constant / enum 都写，默认样式）。
+///
+/// 模板导入 / `util scaffold` 用：没有原工作簿可保留样式，只要求「结构 + 数据」
+/// 与内存模型一致。运行时保存仍走 `ops::save_xlsx_group` 的定点写入。
+pub(crate) fn write_fresh_group(path: &Path, group: &Group) -> Result<()> {
+    use rust_xlsxwriter::Workbook;
+    let mut wb = Workbook::new();
+
+    let mut n = 0usize;
+    for table in &group.tables {
+        if table.deleted { continue; }
+        let ws = wb.add_worksheet();
+        ws.set_name(sanitize_sheet_name(&table.name))?;
+        for (i, f) in table.schema.fields.iter().enumerate() {
+            let c = i as u16;
+            ws.write_string(HDR_DESC - 1, c, &f.desc)?;
+            ws.write_string(HDR_EXPORT - 1, c, f.export.display())?;
+            ws.write_string(HDR_TYPE - 1, c, &f.tbl_type)?;
+            ws.write_string(HDR_NAME - 1, c, &f.name)?;
+        }
+        for (r, row) in table.records.iter().enumerate() {
+            for (c, val) in row.iter().enumerate() {
+                ws.write_string(r as u32 + DATA_START - 1, c as u16, val)?;
+            }
+        }
+        n += 1;
+    }
+    for constant in &group.constants {
+        if constant.deleted { continue; }
+        let ws = wb.add_worksheet();
+        ws.set_name(sanitize_sheet_name(&constant.name))?;
+        for (i, h) in ["name", "type", "value", "export", "desc"].iter().enumerate() {
+            ws.write_string(0, i as u16, *h)?;
+        }
+        for (r, e) in constant.entries.iter().enumerate() {
+            ws.write_string(r as u32 + 1, 0, &e.name)?;
+            ws.write_string(r as u32 + 1, 1, &e.tbl_type)?;
+            ws.write_string(r as u32 + 1, 2, &e.value)?;
+            ws.write_string(r as u32 + 1, 3, e.export.display())?;
+            ws.write_string(r as u32 + 1, 4, &e.desc)?;
+        }
+        n += 1;
+    }
+    for enum_def in &group.enums {
+        if enum_def.deleted { continue; }
+        let ws = wb.add_worksheet();
+        ws.set_name(sanitize_sheet_name(&enum_def.name))?;
+        for (i, h) in ["id", "name", "desc"].iter().enumerate() {
+            ws.write_string(0, i as u16, *h)?;
+        }
+        for (r, e) in enum_def.entries.iter().enumerate() {
+            ws.write_string(r as u32 + 1, 0, &e.id)?;
+            ws.write_string(r as u32 + 1, 1, &e.name)?;
+            ws.write_string(r as u32 + 1, 2, &e.desc)?;
+        }
+        n += 1;
+    }
+    if n == 0 {
+        // xlsx 至少要有一个 sheet；运行时保存也用同一个占位名（ops::save_xlsx_group）。
+        let ws = wb.add_worksheet();
+        ws.set_name("_empty")?;
+    }
+    std::fs::write(path, wb.save_to_buffer()?)?;
+    Ok(())
+}
+
 fn write_fresh_xlsx(path: &Path, group: &Group) -> Result<()> {
     use rust_xlsxwriter::Workbook;
     let mut wb = Workbook::new();

@@ -7,7 +7,7 @@
 //!
 //! - 内置模板源（`BuiltinTemplates`，由 `crates/core/schemas/*.tblschema` 通过 `include_str!` 嵌入）
 //! - 本地模板源（`LocalTemplates`，扫程序根目录 `<binary-dir>/tblschema/`）
-//! - `instantiate_template`：把 schema 翻译为空 .tbl 文件集合 + project.tblschema，落到 target_dir
+//! - `instantiate_template`：把 schema 翻译为空 .tbl 文件集合 + project.tblmanifest，落到 target_dir
 //!
 //! UI 端的"模板库"对话框按统一接口列出多个 source，详见 @04.6.6。
 
@@ -15,9 +15,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
 
-use crate::tblschema::{
-    serialize_tblschema, TblSchema,
-};
+use crate::tblschema::TblSchema;
 
 mod builtin;
 mod local;
@@ -72,7 +70,7 @@ pub trait TemplateSource {
     fn load_by_id(&self, id: &str) -> Option<TemplateContent>;
 }
 
-/// 把 schema 展开成空骨架落盘：`<target>/project.tblschema` + `<target>/config/<group>/<name>.tbl`。
+/// 把 schema 展开成空骨架落盘：`<target>/project.tblmanifest` + `<target>/config/<group>/<name>.tbl`。
 ///
 /// 用于「从模板 / schema 建项目」的落盘，以及 CLI 的 `util scaffold`（输出到任意目录，
 /// 不进 `projects/`）。
@@ -98,20 +96,22 @@ pub fn instantiate_template(schema: &TblSchema, target_dir: &Path) -> Result<()>
     // 与建项目同一条路：sections → 内存节点（preset 作为初始数据灌入）
     let mut groups: Vec<crate::model::Group> = Vec::new();
     let config_dir = target_dir.join("config");
-    crate::tblschema::apply_schema_to_project(&mut groups, &schema.sections, &config_dir, true);
+    crate::tblschema::apply_schema_to_project(&mut groups, &schema.sections, &config_dir, true)
+        .map_err(|e| anyhow::anyhow!("{}", e))?;
 
-    // 实例化后的 schema 不保留 preset（数据已经进了 .tbl）
-    let mut schema_without_preset = schema.clone();
-    for sec in &mut schema_without_preset.sections {
-        sec.preset.clear();
-    }
-
+    // tbl 组渲染到内存；xlsx 组直接写工作簿（与「新建 Excel Group」同一条保存器）。
     let mut planned: Vec<(PathBuf, String)> = Vec::new();
     planned.push((
-        target_dir.join(crate::project::PROJECT_SCHEMA_FILE),
-        serialize_tblschema(&schema_without_preset),
+        target_dir.join(crate::project::PROJECT_MANIFEST_FILE),
+        crate::manifest::serialize_tblmanifest(schema),
     ));
     for g in &groups {
+        if g.is_xlsx() {
+            std::fs::create_dir_all(&config_dir)
+                .with_context(|| format!("创建目录失败: {}", config_dir.display()))?;
+            crate::excel_sync::apply::write_fresh_group(&g.book_path(), g)?;
+            continue;
+        }
         for t in &g.tables { planned.push((t.path.clone(), crate::tbl::serialize_table(t))); }
         for c in &g.constants { planned.push((c.path.clone(), crate::tbl::serialize_constant(c))); }
         for e in &g.enums { planned.push((e.path.clone(), crate::tbl::serialize_enum(e))); }
@@ -174,6 +174,7 @@ mod tests {
                     display: None,
 
                     rules: Vec::new(),
+                storage: crate::model::GroupStorage::default(),
                 },
                 SchemaSection {
                     group: "hero".to_string(),
@@ -188,6 +189,7 @@ mod tests {
                     display: None,
 
                     rules: Vec::new(),
+                storage: crate::model::GroupStorage::default(),
                 },
                 SchemaSection {
                     group: "global".to_string(),
@@ -205,6 +207,7 @@ mod tests {
                     display: None,
 
                     rules: Vec::new(),
+                storage: crate::model::GroupStorage::default(),
                 },
             ],
         }
@@ -216,15 +219,16 @@ mod tests {
         let schema = make_schema_with("demo");
         instantiate_template(&schema, &target).expect("instantiate");
 
-        // project.tblschema 写入了带 meta 的内容
+        // project.tblmanifest 写入了带 meta 的索引；不写字段/preset
         let schema_text =
-            std::fs::read_to_string(target.join("project.tblschema")).expect("read schema");
+            std::fs::read_to_string(target.join("project.tblmanifest")).expect("read manifest");
+        assert!(schema_text.starts_with("#!tblmanifest v1"));
         assert!(schema_text.contains("# @meta id: demo"));
         assert!(schema_text.contains("[hero/HeroBase] table"));
-
-        // 验证：实例化后的 project.tblschema 不应包含 # @preset 块
         assert!(!schema_text.contains("# @preset"),
-            "项目实例化后 project.tblschema 不应包含 preset 数据");
+            "运行时清单不应包含 preset 数据");
+        assert!(!schema_text.contains("hp | int"),
+            "运行时清单不应包含字段行");
 
         // Table 骨架：4 行表头 + ---，没有数据行
         let hero_base = std::fs::read_to_string(target.join("config/hero/HeroBase.tbl"))
@@ -281,7 +285,7 @@ mod tests {
         // 不预先创建
         let schema = make_schema_with("demo");
         instantiate_template(&schema, &target).expect("instantiate");
-        assert!(target.join("project.tblschema").exists());
+        assert!(target.join("project.tblmanifest").exists());
         let _ = std::fs::remove_dir_all(&target);
     }
 
@@ -315,6 +319,7 @@ mod tests {
             display: None,
 
             rules: Vec::new(),
+                storage: crate::model::GroupStorage::default(),
         });
         instantiate_template(&schema, &target).expect("instantiate");
         let txt = std::fs::read_to_string(target.join("config/hero/HeroBase.tbl")).expect("read tbl");
@@ -343,6 +348,7 @@ mod tests {
             display: None,
 
             rules: Vec::new(),
+                storage: crate::model::GroupStorage::default(),
         });
         instantiate_template(&schema, &target).expect("instantiate");
         let txt = std::fs::read_to_string(target.join("config/hero/HeroType.tbl")).expect("read");
@@ -366,6 +372,7 @@ mod tests {
             display: None,
 
             rules: Vec::new(),
+                storage: crate::model::GroupStorage::default(),
         });
         instantiate_template(&schema, &target).expect("instantiate");
         let txt = std::fs::read_to_string(target.join("config/g/C.tbl")).expect("read");
@@ -382,5 +389,59 @@ mod tests {
         let m = TemplateMeta::from_schema(&schema, "local");
         assert_eq!(m.id, "stem");
         assert_eq!(m.name, "stem");
+    }
+}
+
+#[cfg(test)]
+mod xlsx_template_tests {
+    use super::*;
+    use crate::tblschema::{SchemaField, SchemaMode, SchemaSection};
+
+    fn xlsx_schema() -> TblSchema {
+        let mut schema = TblSchema {
+            meta: Default::default(),
+            separators: Default::default(),
+            sections: vec![SchemaSection {
+                group: "building".into(),
+                name: "Building".into(),
+                mode: SchemaMode::Table,
+                storage: crate::model::GroupStorage::Xlsx,
+                fields: vec![
+                    SchemaField { name: "id".into(), tbl_type: "int".into(), export: "cs".into(), desc: "建筑ID".into() },
+                    SchemaField { name: "name".into(), tbl_type: "str".into(), export: "cs".into(), desc: "名称".into() },
+                ],
+                preset: vec![vec!["1".into(), "主城".into()]],
+                display: None,
+                rules: Vec::new(),
+            }],
+        };
+        schema.meta.id = "xlsx_tpl".into();
+        schema
+    }
+
+    #[test]
+    fn instantiate_xlsx_section_creates_workbook_and_manifest() {
+        let target = std::env::temp_dir().join(format!(
+            "tbltemplate_xlsx_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
+        ));
+        instantiate_template(&xlsx_schema(), &target).expect("instantiate");
+
+        let manifest = std::fs::read_to_string(target.join("project.tblmanifest")).expect("manifest");
+        assert!(manifest.contains("[building/Building] table xlsx"), "{manifest}");
+        assert!(!manifest.contains("id | int"), "manifest 不写字段: {manifest}");
+        assert!(!manifest.contains("# @preset"), "manifest 不写数据: {manifest}");
+
+        let book = target.join("config/building.xlsx");
+        assert!(book.is_file(), "xlsx 组应生成工作簿");
+        let wb = umya_spreadsheet::reader::xlsx::read(&book).expect("read workbook");
+        let ws = wb.sheet_by_name("Building").expect("Building sheet");
+        assert_eq!(ws.value((1, 4)), "id");
+        assert_eq!(ws.value((2, 4)), "name");
+        assert_eq!(ws.value((1, 5)), "1");
+        assert_eq!(ws.value((2, 5)), "主城");
+
+        let _ = std::fs::remove_dir_all(&target);
     }
 }

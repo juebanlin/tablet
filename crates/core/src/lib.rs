@@ -10,6 +10,8 @@ pub mod enums;
 pub mod tbl;
 pub mod tbl_str;
 pub mod tblschema;
+pub mod manifest;
+pub mod importer;
 pub mod template;
 pub mod project;
 pub mod validate;

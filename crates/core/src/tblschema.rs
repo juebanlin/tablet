@@ -1,4 +1,4 @@
-use std::path::Path;
+﻿use std::path::Path;
 use anyhow::{Result, bail};
 use crate::model::*;
 use crate::tbl_str;
@@ -37,6 +37,9 @@ pub struct SchemaSection {
     pub group: String,
     pub name: String,
     pub mode: SchemaMode,
+    /// 该组的数据后端。默认 Tbl；manifest / 模板 section 末尾写 `xlsx` 时为 Xlsx。
+    /// 同一组的所有 section 必须一致（解析阶段校验）。
+    pub storage: GroupStorage,
     /// Table 段：列声明；Constant / Enum 段：永远空（entries 在项目 .tbl 里，preset 例外）。
     pub fields: Vec<SchemaField>,
     /// 可选预设数据（与 .tbl `---` 之后行同形态）：
@@ -93,7 +96,42 @@ pub fn is_valid_metadata_id(id: &str) -> bool {
     id.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_' || c == '-')
 }
 
+/// schema 文件的两种角色：模板（完整结构 + 可选数据）与运行时清单（只有索引/语义）。
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SchemaKind {
+    Template,
+    Manifest,
+}
+
+/// 解析模板 `.tblschema`（v1）。允许字段行与 `# @preset`。
 pub fn parse_tblschema(content: &str) -> Result<TblSchema> {
+    parse_schema(content, SchemaKind::Template)
+}
+
+/// 第一行 magic 校验：
+/// - manifest 必须显式声明 `#!tblmanifest v1`；
+/// - template 声明了 `#!` 就必须是 `#!tblschema v1`；完全没头部的片段（merge 用）仍然接受。
+fn check_schema_header(content: &str, kind: SchemaKind) -> Result<()> {
+    let first = content.lines().map(str::trim).find(|l| !l.is_empty());
+    match kind {
+        SchemaKind::Manifest => {
+            if first != Some("#!tblmanifest v1") {
+                bail!("line 1: 缺少 `#!tblmanifest v1` 头部（运行时文件必须是 project.tblmanifest）");
+            }
+        }
+        SchemaKind::Template => {
+            if let Some(line) = first {
+                if line.starts_with("#!") && line != "#!tblschema v1" {
+                    bail!("line 1: 不支持的模板头部 {:?}（只接受 `#!tblschema v1`）", line);
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+pub(crate) fn parse_schema(content: &str, kind: SchemaKind) -> Result<TblSchema> {
+    check_schema_header(content, kind)?;
     let mut sections = Vec::new();
     let mut current: Option<SchemaSection> = None;
     let mut meta = SchemaMetadata::default();
@@ -114,6 +152,9 @@ pub fn parse_tblschema(content: &str) -> Result<TblSchema> {
             // 仅识别独立 `# @preset`（后接空白或行尾），其它带后缀写法当注释。
             if let Some(rest) = trimmed.trim_start_matches('#').trim_start().strip_prefix("@preset") {
                 if rest.trim().is_empty() {
+                    if kind == SchemaKind::Manifest {
+                        bail!("line {}: 运行时清单不允许 `# @preset`（数据必须放在 .tbl / xlsx 里）", line_num + 1);
+                    }
                     if current.is_none() {
                         bail!("line {}: `# @preset` 必须出现在某个 [section] 之后", line_num + 1);
                     }
@@ -194,8 +235,14 @@ pub fn parse_tblschema(content: &str) -> Result<TblSchema> {
                 validate_section(&sec, line_num)?;
                 sections.push(sec);
             }
-            current = Some(parse_section_header(trimmed, line_num)?);
+            current = Some(parse_section_header(trimmed, line_num, kind)?);
         } else if let Some(ref mut sec) = current {
+            if kind == SchemaKind::Manifest && !in_preset {
+                bail!(
+                    "line {}: 运行时清单不允许字段/数据行（结构由 .tbl / xlsx 表头提供）",
+                    line_num + 1
+                );
+            }
             if in_preset {
                 // preset 行：按 `|` 切并 decode，trim 单元格。空行已在外层过滤。
                 // 走 tbl_str：让用户在 schema 里用 `\|` 表示字面竖线、`\n` 表示换行等。
@@ -258,6 +305,8 @@ pub fn parse_tblschema(content: &str) -> Result<TblSchema> {
         validate_section(&sec, content.lines().count())?;
         sections.push(sec);
     }
+
+    validate_storage_consistency(&sections)?;
 
     // name 缺省 = id；id 缺省由调用方按文件名 stem 兜底（这里不强制）
     if meta.name.is_empty() {
@@ -497,7 +546,7 @@ fn apply_sep_kv(sep: &mut SeparatorsSection, key: &str, value: &str) {
     }
 }
 
-fn parse_section_header(line: &str, line_num: usize) -> Result<SchemaSection> {
+fn parse_section_header(line: &str, line_num: usize, _kind: SchemaKind) -> Result<SchemaSection> {
     let end_bracket = line.find(']').unwrap_or(0);
     let path = &line[1..end_bracket];
     let rest = line[end_bracket + 1..].trim();
@@ -529,17 +578,54 @@ fn parse_section_header(line: &str, line_num: usize) -> Result<SchemaSection> {
         _ => bail!("line {}: mode must be 'table' / 'constant' / 'enum'", line_num + 1),
     };
 
-    // ignore index= option (backward compat, index is always "id")
+    // 后端标记：只认 `xlsx`（默认 tbl）。`index=` 是历史选项，继续忽略；
+    // 其它未知 token 直接报错，避免把拼错的 `xls` 当注释吞掉。
+    let mut storage = GroupStorage::Tbl;
+    for opt in parts.iter().skip(1) {
+        if *opt == "xlsx" {
+            storage = GroupStorage::Xlsx;
+        } else if opt.starts_with("index=") {
+            // index 永远是 id（@01.10），保留兼容旧模板
+        } else if *opt == "tbl" {
+            storage = GroupStorage::Tbl;
+        } else {
+            bail!(
+                "line {}: 未知 section 选项 {:?}（只支持 xlsx / tbl）",
+                line_num + 1, opt
+            );
+        }
+    }
     Ok(SchemaSection {
         group: group.trim().to_string(),
         name: name.trim().to_string(),
         mode,
+        storage,
         fields: Vec::new(),
         preset: Vec::new(),
         display: None,
 
         rules: Vec::new(),
     })
+}
+
+/// 同一组只能有一种后端：解析后统一检查，避免 manifest 里一段 tbl、一段 xlsx。
+fn validate_storage_consistency(sections: &[SchemaSection]) -> Result<()> {
+    let mut seen: std::collections::HashMap<&str, GroupStorage> = std::collections::HashMap::new();
+    for sec in sections {
+        match seen.get(sec.group.as_str()) {
+            Some(&s) if s != sec.storage => {
+                bail!(
+                    "[{}/{}] 与同组其它 section 的 storage 不一致（同组必须统一为 tbl 或 xlsx）",
+                    sec.group, sec.name
+                );
+            }
+            Some(_) => {}
+            None => {
+                seen.insert(sec.group.as_str(), sec.storage);
+            }
+        }
+    }
+    Ok(())
 }
 
 fn parse_field_line(line: &str, line_num: usize, mode: &SchemaMode) -> Result<SchemaField> {
@@ -590,12 +676,20 @@ fn validate_section(sec: &SchemaSection, _line_num: usize) -> Result<()> {
 pub fn merge_schemas(schemas: &[TblSchema]) -> Result<TblSchema> {
     let mut all_sections = Vec::new();
     let mut keys = std::collections::HashSet::new();
+    let mut storage: std::collections::HashMap<String, GroupStorage> = std::collections::HashMap::new();
 
     for schema in schemas {
         for sec in &schema.sections {
             let key = format!("{}/{}", sec.group, sec.name);
             if !keys.insert(key.clone()) {
                 bail!("duplicate section: [{}]", key);
+            }
+            if let Some(prev) = storage.get(&sec.group) {
+                if *prev != sec.storage {
+                    bail!("group {} 的 storage 冲突（tbl / xlsx 不能混）", sec.group);
+                }
+            } else {
+                storage.insert(sec.group.clone(), sec.storage);
             }
             all_sections.push(sec.clone());
         }
@@ -643,12 +737,7 @@ pub fn serialize_tblschema(schema: &TblSchema) -> String {
 
     for sec in &schema.sections {
         writeln!(s).unwrap();
-        let mode = match sec.mode {
-            SchemaMode::Table => "table",
-            SchemaMode::Constant => "constant",
-            SchemaMode::Enum => "enum",
-        };
-        writeln!(s, "[{}/{}] {}", sec.group, sec.name, mode).unwrap();
+        write_section_header(&mut s, sec);
 
         // 被引用展示列（@10）：非默认时输出。
         if let Some(d) = &sec.display {
@@ -687,8 +776,23 @@ pub fn serialize_tblschema(schema: &TblSchema) -> String {
     s
 }
 
+/// 写 `[group/Name] mode [xlsx]`。storage 是组属性，但 manifest / 模板都按 section
+/// 原样携带，读的人不用再查路径。
+pub(crate) fn write_section_header(s: &mut String, sec: &SchemaSection) {
+    use std::fmt::Write;
+    let mode = match sec.mode {
+        SchemaMode::Table => "table",
+        SchemaMode::Constant => "constant",
+        SchemaMode::Enum => "enum",
+    };
+    match sec.storage {
+        GroupStorage::Tbl => { writeln!(s, "[{}/{}] {}", sec.group, sec.name, mode).unwrap(); }
+        GroupStorage::Xlsx => { writeln!(s, "[{}/{}] {} xlsx", sec.group, sec.name, mode).unwrap(); }
+    }
+}
+
 /// 把 SeparatorsSection 中与默认不同的字段写成 `# @sep` 行。全部默认 = 不输出。
-fn write_sep_diff(s: &mut String, sep: &SeparatorsSection) {
+pub(crate) fn write_sep_diff(s: &mut String, sep: &SeparatorsSection) {
     use std::fmt::Write;
     use crate::types::SepKey;
     let d = SeparatorsSection::default();
@@ -726,6 +830,7 @@ pub fn schema_from_project(groups: &[Group], with_preset: bool) -> TblSchema {
                 group: group.name.clone(),
                 name: table.name.clone(),
                 mode: SchemaMode::Table,
+                storage: group.storage,
                 fields,
                 preset,
                 display: table.display_field.clone(),
@@ -753,6 +858,7 @@ pub fn schema_from_project(groups: &[Group], with_preset: bool) -> TblSchema {
                 group: group.name.clone(),
                 name: constant.name.clone(),
                 mode: SchemaMode::Constant,
+                storage: group.storage,
                 fields: Vec::new(),
                 preset,
                 display: None,
@@ -773,6 +879,7 @@ pub fn schema_from_project(groups: &[Group], with_preset: bool) -> TblSchema {
                 group: group.name.clone(),
                 name: enum_def.name.clone(),
                 mode: SchemaMode::Enum,
+                storage: group.storage,
                 fields: Vec::new(),
                 preset,
                 display: enum_def.display_field.clone(),
@@ -799,15 +906,40 @@ pub fn apply_schema_to_project(
     sections: &[SchemaSection],
     config_dir: &Path,
     with_preset: bool,
-) -> (usize, usize) {
+) -> Result<(usize, usize)> {
+    validate_storage_consistency(sections)?;
+    // 先只读校验一遍：后端不一致必须在改动任何节点之前失败，避免留下半截导入。
+    for sec in sections {
+        if let Some(g) = groups.iter().find(|g| g.name == sec.group) {
+            if g.storage != sec.storage {
+                bail!(
+                    "组 {} 已存在且后端是 {}，模板要求 {}；不自动转换后端",
+                    sec.group, g.storage.as_str(), sec.storage.as_str()
+                );
+            }
+        }
+    }
+
     let mut added = 0usize;
     let mut overwritten = 0usize;
 
     for sec in sections {
         let group = match groups.iter_mut().find(|g| g.name == sec.group) {
-            Some(g) => g,
+            Some(g) => {
+                if g.storage != sec.storage {
+                    bail!(
+                        "组 {} 已存在且后端是 {}，模板要求 {}；不自动转换后端",
+                        sec.group, g.storage.as_str(), sec.storage.as_str()
+                    );
+                }
+                g
+            }
             None => {
-                let dir = config_dir.join(&sec.group);
+                let dir = if sec.storage == GroupStorage::Xlsx {
+                    config_dir.to_path_buf()
+                } else {
+                    config_dir.join(&sec.group)
+                };
                 groups.push(Group {
                     name: sec.group.clone(),
                     original_name: sec.group.clone(),
@@ -816,12 +948,18 @@ pub fn apply_schema_to_project(
                     constants: Vec::new(),
                     enums: Vec::new(),
                     is_new: true,
-                    // 从 .tblschema 展开出来的组一律是文本后端：schema 文件里没有
-                    // 存储方式的信息（@02.27），xlsx 组只由 UI / CLI 显式新建。
-                    storage: crate::model::GroupStorage::Tbl,
+                    storage: sec.storage,
                     book_stamp: None,
                 });
                 groups.last_mut().unwrap()
+            }
+        };
+        // 节点路径按组后端推导：xlsx 组所有节点都指向同一个工作簿。
+        let node_path = |group: &Group, name: &str| -> std::path::PathBuf {
+            if group.is_xlsx() {
+                group.book_path()
+            } else {
+                group.dir.join(format!("{}.tbl", name))
             }
         };
 
@@ -864,7 +1002,7 @@ pub fn apply_schema_to_project(
                     table.dirty = true;
                     overwritten += 1;
                 } else {
-                    let path = group.dir.join(format!("{}.tbl", sec.name));
+                    let path = node_path(group, &sec.name);
                     group.tables.push(Table {
                         name: sec.name.clone(),
                         original_name: sec.name.clone(),
@@ -907,7 +1045,7 @@ pub fn apply_schema_to_project(
                     constant.dirty = true;
                     overwritten += 1;
                 } else {
-                    let path = group.dir.join(format!("{}.tbl", sec.name));
+                    let path = node_path(group, &sec.name);
                     let snap = entries.clone();
                     group.constants.push(Constant {
                         name: sec.name.clone(),
@@ -942,7 +1080,7 @@ pub fn apply_schema_to_project(
                     en.dirty = true;
                     overwritten += 1;
                 } else {
-                    let path = group.dir.join(format!("{}.tbl", sec.name));
+                    let path = node_path(group, &sec.name);
                     let snap = entries.clone();
                     group.enums.push(EnumDef {
                         name: sec.name.clone(),
@@ -963,12 +1101,12 @@ pub fn apply_schema_to_project(
         }
     }
 
-    (added, overwritten)
+    Ok((added, overwritten))
 }
 
 /// 把 schema 各段里的 `# @display` 回填到对应节点（被引用展示列，@10）。
 ///
-/// `.tbl` 里不含被引用展示列信息——它只住在 project.tblschema。加载项目时先由 .tbl 得到
+/// `.tbl` 里不含被引用展示列信息——它只住在 project.tblmanifest。加载项目时先由 .tbl 得到
 /// groups（display_field 全为 None），再调本函数用 schema 段回填。按 (group, name) 匹配。
 pub fn apply_display_to_groups(groups: &mut [Group], schema: &TblSchema) {
     for sec in &schema.sections {
@@ -996,7 +1134,7 @@ pub fn apply_display_to_groups(groups: &mut [Group], schema: &TblSchema) {
 
 /// 把 schema 各段里的 `# @rule` 回填到对应节点（节点级校验规则，@01.10.7）。
 ///
-/// 规则只住在 project.tblschema——`.tbl` 与 xlsx sheet 都不含。加载项目时先由数据文件
+/// 规则只住在 project.tblmanifest——`.tbl` 与 xlsx sheet 都不含。加载项目时先由数据文件
 /// 得到 groups（rules 全为空），再用本函数回填，**同时填 original 快照**
 /// （这是从盘上读回来的值，不能算脏）。按 (group, name) 匹配。
 pub fn apply_rules_to_groups(groups: &mut [Group], schema: &TblSchema) {
@@ -1124,6 +1262,7 @@ id | int | cs | x
             display: None,
 
             rules: Vec::new(),
+                storage: crate::model::GroupStorage::default(),
         });
         let out = serialize_tblschema(&schema);
         assert!(!out.contains("# @sep"), "默认值不应输出 sep 行: {}", out);
@@ -1148,6 +1287,7 @@ id | int | cs | x
             display: None,
 
             rules: Vec::new(),
+                storage: crate::model::GroupStorage::default(),
         });
         let out = serialize_tblschema(&schema);
         assert!(out.contains("# @sep Map.entry = ,"), "应写出 Map.entry: {}", out);
@@ -1287,6 +1427,7 @@ id | int | cs | x
             display: None,
 
             rules: Vec::new(),
+                storage: crate::model::GroupStorage::default(),
         });
         let txt = serialize_tblschema(&s);
         assert!(txt.contains("# @meta id: demo"));
@@ -1553,6 +1694,7 @@ id | int | cs | x
                     display: None,
 
                     rules: Vec::new(),
+                storage: crate::model::GroupStorage::default(),
                 },
                 SchemaSection {
                     group: "global".into(),
@@ -1565,6 +1707,7 @@ id | int | cs | x
                     display: None,
 
                     rules: Vec::new(),
+                storage: crate::model::GroupStorage::default(),
                 },
                 SchemaSection {
                     group: "hero".into(),
@@ -1577,6 +1720,7 @@ id | int | cs | x
                     display: None,
 
                     rules: Vec::new(),
+                storage: crate::model::GroupStorage::default(),
                 },
             ],
         };
@@ -1614,6 +1758,7 @@ id | int | cs | x
                     display: None,
 
                     rules: Vec::new(),
+                storage: crate::model::GroupStorage::default(),
                 },
                 SchemaSection {
                     group: "g".into(),
@@ -1626,6 +1771,7 @@ id | int | cs | x
                     display: None,
 
                     rules: Vec::new(),
+                storage: crate::model::GroupStorage::default(),
                 },
             ],
         };
@@ -1652,12 +1798,14 @@ id | int | cs | x
             preset: vec![], display: Some("name".into()),
 
             rules: Vec::new(),
+                storage: crate::model::GroupStorage::default(),
         });
         schema.sections.push(SchemaSection {
             group: "hero".into(), name: "HeroType".into(), mode: SchemaMode::Enum,
             fields: vec![], preset: vec![], display: Some("desc".into()),
 
             rules: Vec::new(),
+                storage: crate::model::GroupStorage::default(),
         });
         schema.sections.push(SchemaSection {
             group: "g".into(), name: "Plain".into(), mode: SchemaMode::Table,
@@ -1665,6 +1813,7 @@ id | int | cs | x
             preset: vec![], display: None,
 
             rules: Vec::new(),
+                storage: crate::model::GroupStorage::default(),
         });
         let txt = serialize_tblschema(&schema);
         assert!(txt.contains("[hero/HeroBase] table\n# @display: name"), "txt = {}", txt);
@@ -1692,12 +1841,14 @@ id | int | cs | x
                     fields: vec![], preset: vec![], display: Some("name".into()),
 
                     rules: Vec::new(),
+                storage: crate::model::GroupStorage::default(),
                 },
                 SchemaSection {
                     group: "hero".into(), name: "HeroType".into(), mode: SchemaMode::Enum,
                     fields: vec![], preset: vec![], display: Some("desc".into()),
 
                     rules: Vec::new(),
+                storage: crate::model::GroupStorage::default(),
                 },
             ],
         };
@@ -1910,5 +2061,41 @@ id | int | cs | d
         // 从盘上读回来的值不算脏
         groups[0].tables[0].update_dirty();
         assert!(!groups[0].tables[0].dirty);
+    }
+}
+
+
+#[cfg(test)]
+mod storage_token_tests {
+    use super::*;
+    use crate::model::GroupStorage;
+
+    #[test]
+    fn template_accepts_xlsx_section_and_round_trips() {
+        let src = "#!tblschema v1
+[building/Building] table xlsx
+id | int | cs | ID
+name | str | cs | 名称
+# @preset
+1 | 主城
+";
+        let s = parse_tblschema(src).expect("parse template");
+        assert_eq!(s.sections[0].storage, GroupStorage::Xlsx);
+        assert_eq!(s.sections[0].fields.len(), 2);
+        assert_eq!(s.sections[0].preset.len(), 1);
+        let out = serialize_tblschema(&s);
+        assert!(out.contains("[building/Building] table xlsx"), "{out}");
+        let back = parse_tblschema(&out).expect("re-parse");
+        assert_eq!(back.sections[0].storage, GroupStorage::Xlsx);
+    }
+
+    #[test]
+    fn template_still_rejects_unknown_section_options() {
+        let err = parse_tblschema("#!tblschema v1
+[g/T] table xls
+id | int | cs | ID
+")
+            .unwrap_err().to_string();
+        assert!(err.contains("未知 section 选项"), "{err}");
     }
 }

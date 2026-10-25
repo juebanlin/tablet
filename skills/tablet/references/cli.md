@@ -33,6 +33,8 @@ tablet-cli project new --template <tpl> --id <id> [--name N] [--switch-after tru
 tablet-cli project new --from-file <x.tblschema> --id <id> [--name N]
 tablet-cli project rename --id <id> [--new-id <new>] [--new-name <name>]
 tablet-cli project clone --source <id> --id <new> [--name N]
+tablet-cli project import-tbl --id <id> [--group N] <PATH>...
+tablet-cli project import-xlsx --id <id> <FILE.xlsx>
 tablet-cli project delete --id <id> --confirm
 ```
 
@@ -40,6 +42,8 @@ tablet-cli project delete --id <id> --confirm
 - `--from-file` 时，`# @preset` 会写进 `config/<group>/*.tbl`。
 - `--name` 省略时：`--from-file` 取 schema 的 `# @meta name`，否则 = id。
 - `delete` / `clone` 目标不存在 → exit 1，不会假装成功。
+- `import-tbl`：文件名 = 节点名，组名默认取共同父目录；节点名项目级冲突直接失败。
+- `import-xlsx`：文件 = 组，sheet = 节点；工作簿原样复制，保留样式。
 
 ## schema
 
@@ -62,7 +66,7 @@ tablet-cli schema delete-node  --group <G> --name <N>
 ```
 
 `--storage xlsx` 建的是「工作簿组」：一组一个 `config/<group>.xlsx`，节点 = sheet，数据落在 Excel 里
-（结构仍由 `project.tblschema` 的 section 决定）。默认 `tbl`。
+（结构与数据都在工作簿里；manifest 只记 storage）。默认 `tbl`。
 
 工作簿组对 `validate` / `export` / `schema show` 完全透明；`util` 系列是文件工具，不识别这种组。
 GUI 开着时 CLI 会被工作区锁拒绝（`util` / `list-templates` 除外）。
@@ -171,7 +175,7 @@ tablet-cli excel import --group hero --file hero.xlsx
 
 ```bash
 tablet-cli workspace info      # 工作区路径 / VCS 分支 / 项目列表（不加载 .tbl、不占锁）
-tablet-cli workspace save      # 落盘 + 刷新 project.tblschema 投影
+tablet-cli workspace save      # 落盘 + 刷新 project.tblmanifest 索引
 tablet-cli workspace reload    # 丢弃内存改动，从盘重读
 tablet-cli workspace clear --confirm   # 清空所有 .tbl（危险）
 ```
@@ -250,6 +254,6 @@ done
 | `节点不存在: g/n` | `--node` 拼错 |
 | `schema 校验未通过，未创建项目` | preset 数据 / 字段名 / 引用不过关，看逐条 `line N` |
 | `保存失败：项目存在 N 个验证错误` | 先 `validate` 定位，再改 `.tbl` |
-| `Project X 打不开: … 解析失败` | 该项目的 `project.tblschema` 或某个 `.tbl` 坏了；`project new` 仍可用 |
+| `Project X 打不开: … 解析失败` | 该项目的 `project.tblmanifest` 或某个 `.tbl` 坏了；`project new` 仍可用 |
 | `--fmt json` 没输出 JSON | 该命令不支持（只有查询类支持） |
 | `工作区正被另一个 GUI 使用（PID xxx）` | GUI 开着时 CLI 拒绝执行；先关 GUI（`util` / `list-templates` 不受限） |

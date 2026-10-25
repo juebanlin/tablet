@@ -92,7 +92,7 @@ fn display_field_dropdown(state: &AppState) -> (Vec<slint::SharedString>, i32, b
 }
 
 /// 「被引用展示列」下拉回调（@10）：把当前选中表/枚举节点的 display_field 设为 value
-/// （`ID` = 清除），等保存项目时随 project.tblschema 落盘。
+/// （`ID` = 清除），等保存项目时随 project.tblmanifest 落盘。
 fn set_selected_display_field(state: &Rc<RefCell<AppState>>, value: &str) {
     let mut st = state.borrow_mut();
     let sel = st.selected.clone();
@@ -269,7 +269,7 @@ pub fn wire(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
             if let Some(ui_h) = weak.upgrade() { push(&ui_h, &s); }
         });
     }
-    // 「被引用展示列」下拉（@10）：改当前选中表/枚举节点的 display_field → 保存时随 project.tblschema 落盘 → 重建 grid
+    // 「被引用展示列」下拉（@10）：改当前选中表/枚举节点的 display_field → 保存时随 project.tblmanifest 落盘 → 重建 grid
     {
         let s = state.clone();
         let weak = ui_h.as_weak();

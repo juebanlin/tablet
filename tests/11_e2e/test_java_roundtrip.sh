@@ -41,8 +41,11 @@ run_roundtrip() {
     assert_exit 0
 
     # 生成 TestMain.java（同一个 package；布尔字段的取值方式要跟导出侧一致）
+    run_cli --project rt schema export --out "$WORK_DIR/gen_test.tblschema"
+    assert_exit 0
+
     run_cli_raw util gen-test --lang java --format json \
-        --schema "$proj/project.tblschema" \
+        --schema "$WORK_DIR/gen_test.tblschema" \
         --package "$JAVA_PACKAGE" \
         --lombok "$lombok" \
         -o "$proj"

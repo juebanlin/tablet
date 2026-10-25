@@ -10,7 +10,7 @@ run_cli project new --template standard --id myproj --name "测试项目"
 assert_exit 0
 assert_contains "已创建 Project"
 assert_dir_exists "$WORK_DIR/projects/myproj"
-assert_file_exists "$WORK_DIR/projects/myproj/project.tblschema"
+assert_file_exists "$WORK_DIR/projects/myproj/project.tblmanifest"
 cleanup
 
 # ── 重复创建失败 ──

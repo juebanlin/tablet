@@ -4,10 +4,10 @@
 
 | 文件 | 位置 | 角色 |
 |---|---|---|
-| `.tblschema` | 独立的输入文件 / `projects/<id>/project.tblschema` | **建项目时**的结构 + 预设数据 |
+| `.tblschema` | 独立的模板文件 | **建项目 / 导入时**的结构 + 可选预设数据 |
 | `.tbl` | `projects/<id>/config/<group>/<Name>.tbl` | 项目**运行时**的结构与数据的真相源 |
 
-建项目之后，`.tbl` 说了算；`project.tblschema` 是 groups 的投影，`workspace save` 时重写。
+建项目之后，`.tbl` / workbook 说了算；`project.tblmanifest` 只记录节点索引、storage、规则与 display。
 
 ---
 
@@ -71,12 +71,13 @@ Map_List.kv  Map_List.item  Map_List.entry
 ### 段头
 
 ```text
-[<group>/<Name>] <mode>
+[<group>/<Name>] <mode> [xlsx]
 ```
 
 - `group`：`[A-Za-z0-9_一-鿿]+`，等价于 `config/` 下的目录名。
 - `Name`：`[A-Z][A-Za-z0-9_]*`，等价于 `.tbl` 文件名与生成类名；全项目唯一（忽略大小写）。
 - `mode`：`table` / `constant` / `enum`。
+- `xlsx`（可选）：该组是工作簿组；导入时生成 `config/<group>.xlsx`。同组所有 section 必须一致。
 
 组名 / 段名在**解析时**就校验，非法会带行号报错。
 
@@ -115,7 +116,7 @@ Map_List.kv  Map_List.item  Map_List.entry
 - 只对 **Table / Enum** 有意义；**constant 段不支持**（`value` 逐行类型不同）。
 - 只对**标量列**生效（`int` / `long` / `float` / `bool` / `str` / `txt` / `@Xxx`）；`List<>` / `Map<>` / `Tuple*` 等复合类型不参与。整数列按数值比较（`01` == `1`），其余按 trim 后字符串比较。
 - 级别缺省 `error`；`[warn]` / `[info]` 是否阻断由项目策略决定（`project.toml` 的 `[validate]`，默认 warn=仅提示、info=忽略）。
-- 规则只存 `project.tblschema`，不写进 `.tbl`，也不进 Excel。
+- 规则只存 `project.tblmanifest`，不写进 `.tbl`，也不进 Excel。
 - 一列可以有多条规则。系统已保证的约束（table/enum 的 `id` 唯一·必填·正整数、enum 的 `name`
   唯一·必填·UPPER_SNAKE）不要再手写，重复只会得到一条非阻断的冗余警告。
 
@@ -254,7 +255,7 @@ max_level|int|100|cs|等级上限
 ## 三、Xlsx 组（工作簿形态）
 
 一个组可以不用 `.tbl` 目录，而是 **`config/<group>.xlsx` 一个文件**：sheet 名 = 节点名，数据在 sheet 里，
-**结构（字段 / 类型 / export / 顺序）仍在 `project.tblschema` 的 section**。表头是派生显示。
+**结构（字段 / 类型 / export / 顺序）就在 workbook 的 4 行表头里**；manifest 不含字段。
 
 ```text
 Table sheet（4 行表头，数据从第 5 行起）
@@ -278,16 +279,40 @@ Enum sheet（1 行表头）
 
 ---
 
+## 三·五、运行时清单 `project.tblmanifest`
+
+项目运行时只有这一份“结构索引”，**不要手写**，由工具保存时生成：
+
+```text
+#!tblmanifest v1
+
+# @meta id: demo
+# @meta name: 演示项目
+
+[hero/HeroBase] table
+# @display: name
+# @rule: id = unique()
+
+[building/Building] table xlsx
+```
+
+- section 语法与模板相同，但没有字段行、没有 `# @preset`；读到会报错。
+- 默认 `tbl`，`xlsx` 显式写；同组必须一致。
+- 字段名 / 类型 / export / desc 来自 `.tbl` 表头或 workbook 4 行表头。
+- 规则 / `# @display` / storage / 项目 meta 只住 manifest。
+
+---
+
 ## 四、项目目录
 
 ```text
 <workdir>/
 ├── tablet.toml                      工作区配置（全局默认 + last_project）
 └── projects/<id>/
-    ├── project.tblschema            结构投影（由 .tbl 生成）
+    ├── project.tblmanifest            节点索引 / storage / 规则 / display（不含字段）
     ├── project.toml                 可选的 [export] 覆盖
     ├── config/<group>/<Name>.tbl    Tbl 组：数据与结构真相源
-    ├── config/<group>.xlsx          Xlsx 组：数据真相源（结构在 project.tblschema）
+    ├── config/<group>.xlsx          Xlsx 组：结构与数据真相源（4 行表头 + sheet）
     ├── gen/                         导出默认落点
     └── .tbl-cache/                  Excel 桥接临时文件
 ```

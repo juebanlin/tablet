@@ -331,8 +331,8 @@ mod tests {
         let proj = dir.join("projects").join("demo");
         std::fs::create_dir_all(proj.join("config").join("enums")).unwrap();
         std::fs::write(
-            proj.join("project.tblschema"),
-            "#!tblschema v1\n# @meta id: demo\n\n[enums/HeroType] enum\n",
+            proj.join("project.tblmanifest"),
+            "#!tblmanifest v1\n# @meta id: demo\n\n[enums/HeroType] enum\n",
         )
         .unwrap();
         std::fs::write(

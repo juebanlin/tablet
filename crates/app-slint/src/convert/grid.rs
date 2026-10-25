@@ -630,16 +630,12 @@ mod tests {
         std::fs::create_dir_all(proj.join("config").join("enums")).unwrap();
         std::fs::create_dir_all(proj.join("config").join("hero")).unwrap();
 
-        std::fs::write(proj.join("project.tblschema"), "\
-#!tblschema v1
+        std::fs::write(proj.join("project.tblmanifest"), "\
+#!tblmanifest v1
 # @meta id: demo
 
 [enums/HeroType] enum
-
 [hero/HeroBase] table
-id | int | cs | 英雄 ID
-name | str | cs | 名称
-desc | txt | cs | 描述
 ").unwrap();
         std::fs::write(proj.join("config").join("enums").join("HeroType.tbl"), "\
 #!tbl v2

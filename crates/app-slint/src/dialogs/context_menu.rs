@@ -31,6 +31,8 @@ pub enum MenuAction {
     ExportSchema,
     ExportTemplate,
     MergeSchema,
+    ImportTbl,
+    ImportXlsx,
     NewGroupInProject,
     NewXlsxGroupInProject,
     CloneProject,
@@ -85,6 +87,8 @@ impl MenuAction {
             ExportSchema => "tree.proj-export-schema",
             ExportTemplate => "tree.proj-export-template",
             MergeSchema => "tree.proj-merge-schema",
+            ImportTbl => "tree.proj-import-tbl",
+            ImportXlsx => "tree.proj-import-xlsx",
             NewGroupInProject => "tree.proj-new-group",
             NewXlsxGroupInProject => "tree.proj-new-xlsx-group",
             CloneProject => "tree.proj-clone",
@@ -149,7 +153,7 @@ fn sections_for(kind: &CtxMenuKind, state: &AppState) -> Vec<Vec<MenuAction>> {
             if state.engine.is_opened(project_id) {
                 vec![
                     vec![SaveProject, ExportProject, ExportSchema, ExportTemplate, MergeSchema],
-                    vec![NewGroupInProject, NewXlsxGroupInProject, CloneProject],
+                    vec![NewGroupInProject, NewXlsxGroupInProject, ImportTbl, ImportXlsx, CloneProject],
                     vec![PasteGroupTbl, PasteGroupXlsx],
                     vec![ProjectSettings, DeleteProject],
                     vec![CloseProject],
@@ -235,6 +239,8 @@ fn entry(action: MenuAction, kind: &CtxMenuKind, state: &AppState) -> Option<Ctx
         MenuAction::ExportSchema => "导出 Schema...".into(),
         MenuAction::ExportTemplate => "另存为模板...".into(),
         MenuAction::MergeSchema => "合并 Schema...".into(),
+        MenuAction::ImportTbl => "导入 .tbl 文件...".into(),
+        MenuAction::ImportXlsx => "导入 Excel Group...".into(),
         MenuAction::CloneProject => "克隆项目...".into(),
         MenuAction::ProjectSettings => "项目设置...".into(),
         MenuAction::DeleteProject => "删除".into(),
@@ -374,6 +380,48 @@ pub fn wire(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
                         tablet_core::model::GroupStorage::Tbl
                     };
                     s.borrow_mut().pending.open(PendingAction::NewGroup { project_id, storage });
+                }
+                (Some(CtxMenuKind::TreeProject { project_id }), "tree.proj-import-tbl") => {
+                    if let Some(files) = rfd::FileDialog::new()
+                        .add_filter("TBL", &["tbl"])
+                        .pick_files()
+                    {
+                        let parent = files.first().and_then(|p| p.parent());
+                        let group = parent.and_then(|p| p.file_name())
+                            .map(|s| s.to_string_lossy().to_string())
+                            .unwrap_or_default();
+                        let same_parent = files.iter().all(|p| p.parent() == parent);
+                        if !same_parent {
+                            dialogs::alert::raise(&s, "导入失败",
+                                "一次导入的 .tbl 必须来自同一个目录（目录名 = 组名）");
+                        } else {
+                            match s.borrow_mut().engine.import_tbl_files(&project_id, &group, &files) {
+                                Ok(out) => {
+                                    let mut st = s.borrow_mut();
+                                    st.project_expanded.insert(project_id.clone());
+                                    st.tree_expanded.insert((project_id.clone(), out.group.clone()));
+                                    st.select_pasted_group(&project_id, &out.group);
+                                }
+                                Err(e) => dialogs::alert::raise(&s, "导入 .tbl 失败", &e),
+                            }
+                        }
+                    }
+                }
+                (Some(CtxMenuKind::TreeProject { project_id }), "tree.proj-import-xlsx") => {
+                    if let Some(file) = rfd::FileDialog::new()
+                        .add_filter("Excel", &["xlsx"])
+                        .pick_file()
+                    {
+                        match s.borrow_mut().engine.import_xlsx_group(&project_id, &file) {
+                            Ok(out) => {
+                                let mut st = s.borrow_mut();
+                                st.project_expanded.insert(project_id.clone());
+                                st.tree_expanded.insert((project_id.clone(), out.group.clone()));
+                                st.select_pasted_group(&project_id, &out.group);
+                            }
+                            Err(e) => dialogs::alert::raise(&s, "导入 Excel Group 失败", &e),
+                        }
+                    }
                 }
                 (Some(CtxMenuKind::TreeProject { project_id }), action) => {
                     dialogs::pending::handle_project_root_action(&s, &project_id, action);

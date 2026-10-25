@@ -1014,13 +1014,13 @@ pub struct AppState {
     pub excel_sync_open: bool,
     /// 待显示的提示框（标题, 正文）。`Some` = 弹着。
     ///
-    /// 目前唯一来源：**项目打不开**（`project.tblschema` 解析失败，@02.26）。
+    /// 目前唯一来源：**项目打不开**（`project.tblmanifest` 解析失败，@02.26）。
     /// 那条路「中断打开 + 弹框说明」，而不是兜底成空项目静静放过去。
     pub alert: Option<(String, String)>,
 }
 
 impl AppState {
-    /// 返回值第三项是**打不开的项目**：`project.tblschema` 存在但解析失败的那些。
+    /// 返回值第三项是**打不开的项目**：`project.tblmanifest` 存在但解析失败的那些。
     ///
     /// 不在加载里兜底成空项目，也不自己弹框（那时还没有窗口）—— 交给 main.rs 在窗口
     /// 建好之后弹（@02.26）。数据是从 `.tbl` 另外读的，所以兜底会让项目**看起来一切正常**，

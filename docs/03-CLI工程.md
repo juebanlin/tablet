@@ -75,7 +75,7 @@ game-config/
 ├── projects/                   ← 全部 Project，按 id 分目录
 │   ├── slg-test/               ← 一个 Project
 │   │   ├── project.toml        ← Project 可选配置覆盖（仅 [export] 段，字段级 deep merge）
-│   │   ├── project.tblschema   ← 该 Project 的元数据（id/name/category/version）+ 结构骨架 + separators
+│   │   ├── project.tblmanifest   ← 项目身份 + 节点索引 + storage + 规则 / display + separators
 │   │   ├── config/             ← .tbl 文件，Group = 子目录
 │   │   │   ├── hero/
 │   │   │   │   ├── HeroBase.tbl       ← Table
@@ -112,7 +112,7 @@ Group 名仅在工具内部使用，不进生成代码路径，因此允许中�
 
 ## 4. tablet.toml 配置
 
-工具配置文件（`GlobalConfig`），定义启动展开偏好、导出目标、UI 行为、类型分隔符默认值。所有字段都有默认值，新建项目可只写少量字段。**`tablet.toml` 是仓库全局配置，所有 Project 共享；Project 自身的元数据放在 `projects/<id>/project.tblschema`，可选的导出配置覆盖放在 `projects/<id>/project.toml`（@02 Project）**。
+工具配置文件（`GlobalConfig`），定义启动展开偏好、导出目标、UI 行为、类型分隔符默认值。所有字段都有默认值，新建项目可只写少量字段。**`tablet.toml` 是仓库全局配置，所有 Project 共享；Project 自身的元数据放在 `projects/<id>/project.tblmanifest`，可选的导出配置覆盖放在 `projects/<id>/project.toml`（@02 Project）**。
 
 **配置分层与合并规则**：
 - **export**：Project 的 `[export]` 段按 **field-level deep-merge** 覆盖全局；缺失字段回退到全局（例如：项目只写 `[export.server.cpp]`，其它语言用全局配置）
@@ -348,7 +348,7 @@ gen/
 .data/
 ```
 
-注意：`project.toml` / `project.tblschema` / `config/**/*.tbl` 都需要进版本控制——它们是 Project 的本体。
+注意：`project.toml` / `project.tblmanifest` / `config/**/*.tbl` 都需要进版本控制——它们是 Project 的本体。
 
 #### `.data/`：本机用户数据
 
@@ -375,7 +375,7 @@ gen/
 ├── projects/                     # 全部 Project（进 git，除 .tbl-cache/）
 │   ├── slg-test/
 │   │   ├── project.toml
-│   │   ├── project.tblschema
+│   │   ├── project.tblmanifest
 │   │   ├── config/
 │   │   └── .tbl-cache/           # ← .gitignore
 │   └── slg-prod/...
@@ -570,7 +570,7 @@ tablet-cli project new --from-file demo.tblschema --id temp-test --switch-after 
 | `--id <id>` | 目标项目 id，必填 | — |
 | `--new-id <id>` | 新 id（会迁移目录）。必须满足 `[a-z0-9_-]{1,32}`，否则报错且**原项目不动** | 不改 |
 
-读取 `project.tblschema` 失败（含 `# @meta id` 声明了非法值）时，命令**非零退出**并逐条打印
+读取 `project.tblmanifest` 失败（含 `# @meta id` 声明了非法值）时，命令**非零退出**并逐条打印
 `错误: Project <id> 打不开: <文件>: line N: ...`；见 @02.26.7。
 例外：`project new` 不因为有别的项目打不开就拒绝（建新的正是折腾坏之后的出路之一）。
 | `--new-name <name>` | 新显示名 | 不改 |
@@ -619,6 +619,37 @@ tablet-cli project clone --source slg-test --id slg-test-backup
 
 tablet-cli project clone --source slg-prod --id slg-hotfix --name "SLG 热修复"
 ```
+
+#### `project import-tbl`
+
+原生导入一个或多个 `.tbl` 文件。文件先全部解析校验，通过后才复制。
+
+| 参数 | 说明 | 默认 |
+|------|------|------|
+| `--id <id>` | 目标项目，必填 | — |
+| `--group <name>` | 目标组名 | 所有文件共同的父目录名 |
+| `<PATH>...` | 一个或多个 `.tbl` 文件，必填 | — |
+
+```bash
+tablet-cli project import-tbl --id slg-test --group hero ./incoming/HeroBase.tbl
+tablet-cli project import-tbl --id slg-test ./incoming/hero/HeroBase.tbl ./incoming/hero/Skill.tbl
+```
+
+- 文件名 = 节点名；目录名 = 组名；
+- 节点名按项目级唯一检查，冲突直接失败，**不自动 `_copy`**；
+- 目标组必须是 Tbl 组；同名文件已存在 → 失败。
+
+#### `project import-xlsx`
+
+原生导入一个工作簿：文件 = 组，sheet = 节点。
+
+```bash
+tablet-cli project import-xlsx --id slg-test ./incoming/building.xlsx
+```
+
+- 工作簿原样复制到 `config/<group>.xlsx`，保留 Excel 样式；
+- Table sheet 必须是 4 行表头；Constant / Enum 按首行固定表头识别；
+- 同名组 / 节点名冲突 → 失败，不合并。
 
 ---
 
@@ -1055,7 +1086,7 @@ Workspace: D:/game/config
 
 #### `workspace save`
 
-保存所有 dirty 节点到磁盘，并顺手刷新 `project.tblschema` 投影
+保存所有 dirty 节点到磁盘，并顺手刷新 `project.tblmanifest` 索引
 （手改过 `.tbl` 也能把结构同步进 schema 文件）。
 
 ```bash
@@ -1122,7 +1153,7 @@ tablet-cli util gen-test --lang java --format json \
 
 | 参数 | 说明 |
 |------|------|
-| （无） | 展示**当前项目**的生效值，来源是该项目的 `project.tblschema`（@01.7.4） |
+| （无） | 展示**当前项目**的生效值，来源是该项目的 `project.tblmanifest`（@01.7.4） |
 | `--defaults` | 仅展示内置默认值（不读任何文件、不牵扯项目） |
 | `--config <path>` | 读**指定** tablet.toml 的 `[separators]`（是「指定文件」，不是全局配置） |
 | `--schema <path>` | 读**指定** .tblschema 的 `# @sep` |
@@ -1322,18 +1353,23 @@ tablet-cli util tbl-to-xlsx config/hero/HeroBase.tbl -o output/hero.xlsx
 
 #### `util xlsx-to-tbl`
 
-xlsx 转换回 .tbl（需要 schema 做 header 校验）。
+任意表头 Excel → `.tbl`（模板驱动映射）。
 
 ```bash
 tablet-cli util xlsx-to-tbl hero.xlsx --schema project.tblschema -o config/hero/
 ```
+
+- `.tblschema` 给出目标节点与字段；
+- Excel 可以是规则 4 行表头，也可以只有一行列名；
+- 列按字段名匹配（大小写不敏感），缺列直接报错；
+- Constant / Enum 使用固定列名 `name/type/value/export/desc`、`id/name/desc`。
 
 #### `util scaffold`
 
 从 .tblschema 生成项目骨架（空 .tbl 文件，含表头无数据）。
 
 ```bash
-tablet-cli util scaffold project.tblschema -o new_project/config/
+tablet-cli util scaffold project.tblmanifest -o new_project/config/
 tablet-cli util scaffold custom.tblschema -o /tmp/skeleton/
 ```
 
@@ -1582,7 +1618,7 @@ tablet-cli sep show
 tablet-cli sep show --defaults
 
 # 查看某 schema 覆盖后的值
-tablet-cli sep show --schema projects/slg-test/project.tblschema
+tablet-cli sep show --schema projects/slg-test/project.tblmanifest
 ```
 
 ### 13.6 底层工具

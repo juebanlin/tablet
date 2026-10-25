@@ -7,7 +7,7 @@
 #   1. 裸 `sep show` 反映**当前项目** schema 里的 `# @sep`
 #   2. 多项目工作区里各看各的，表头说清是哪个项目
 #
-# 分隔符的运行期来源只有一个：项目自己的 project.tblschema（@01.7.4）。
+# 分隔符的运行期来源只有一个：项目自己的 project.tblmanifest（@01.7.4）。
 # tablet.toml [separators] 早已降级为「新建空项目时拷贝一次的模板」，不参与运行期。
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -26,7 +26,7 @@ setup_empty_workspace
 "$CLI" -w "$WORK_DIR" project new --template standard --id pb >/dev/null 2>&1
 
 # 只给 pa 设一个偏离默认值的列表分隔符（默认是 ;）
-insert_directive "$WORK_DIR/projects/pa/project.tblschema" '# @sep List = ~'
+insert_directive "$WORK_DIR/projects/pa/project.tblmanifest" '# @sep List = ~'
 
 # ── pa：应反映自己的 schema，并在表头标明项目 ──
 run_cli --project pa sep show
@@ -47,7 +47,7 @@ assert_exit 0
 assert_contains "分隔符配置（项目 "
 
 # ── 显式来源仍与项目无关，且不标项目 ──
-run_cli sep show --schema "$WORK_DIR/projects/pa/project.tblschema"
+run_cli sep show --schema "$WORK_DIR/projects/pa/project.tblmanifest"
 assert_exit 0
 assert_contains 'List .*~'
 assert_not_contains "分隔符配置（项目"

@@ -198,10 +198,11 @@ pub fn run_tbl_to_xlsx(tbl_path: &Path, output: &Path) -> Result<()> {
     Ok(())
 }
 
-pub fn run_xlsx_to_tbl(_xlsx_path: &Path, _schema_path: &Path, _output_dir: &Path) -> Result<usize> {
-    // xlsx-to-tbl 需要完整的 Group 结构做 header 校验，
-    // 独立模式下需要从 schema 构建空骨架 Group，暂未实现。
-    anyhow::bail!("xlsx-to-tbl 尚未实现（需要从 schema 构建空骨架 Group）")
+/// 任意表头 Excel → `.tbl`（模板驱动映射）。
+pub fn run_xlsx_to_tbl(xlsx_path: &Path, schema_path: &Path, output_dir: &Path) -> Result<usize> {
+    let text = std::fs::read_to_string(schema_path)?;
+    let schema = parse_tblschema(&text)?;
+    tablet_core::importer::xlsx_to_tbl(&schema, xlsx_path, output_dir)
 }
 
 pub fn run_scaffold(schema_path: &Path, output_dir: &Path) -> Result<()> {

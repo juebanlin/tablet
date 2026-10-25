@@ -11,7 +11,7 @@ OUT_DIR="$WORK_DIR/scaffold_out"
 run_cli_raw util scaffold "$SCHEMA" -o "$OUT_DIR"
 assert_exit 0
 assert_dir_exists "$OUT_DIR"
-assert_file_exists "$OUT_DIR/project.tblschema"
+assert_file_exists "$OUT_DIR/project.tblmanifest"
 cleanup
 
 end_tests

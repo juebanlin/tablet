@@ -29,8 +29,11 @@ run_cli export code --go --package "$GO_PACKAGE"
 assert_exit 0
 
 # 生成 Go test main（使用同一套 package + code-output）
+run_cli --project rt schema export --out "$WORK_DIR/gen_test.tblschema"
+assert_exit 0
+
 run_cli_raw util gen-test --lang go --format json \
-    --schema "$PROJECT_ROOT/project.tblschema" \
+    --schema "$WORK_DIR/gen_test.tblschema" \
     --package "$GO_PACKAGE" \
     --code-output "$GO_CODE_OUTPUT" \
     -o "$PROJECT_ROOT"
