@@ -437,10 +437,15 @@ export component GridArea inherits Rectangle {
                                     : (row.row-color.alpha > 0 ? row.row-color : (mod(ri, 2) == 0 ? Theme.bg-panel : Theme.bg-row-alt));
                                 border-color: cell.has-error ? Theme.border-error : Theme.border-light;
                                 border-width: cell.has-error ? 1.5px : 0.5px;
-                                property <bool> has-arrow: is-export
+                                // 下拉箭头只在「有值」或「当前选中格」显示：
+                                // 空占位行不再每列都画箭头（减少视觉噪音）；
+                                // 表头的类型/导出箭头不受影响。
+                                property <bool> has-arrow: (is-export
                                   || col-kind == CellKind.type-enum-col
                                   || col-kind == CellKind.type-enum
-                                  || col-kind == CellKind.ref;
+                                  || col-kind == CellKind.ref)
+                                  && (cell.text != ""
+                                      || (ri == root.selected-cell-row && ci == root.selected-cell-col));
                                 // 非编辑态显示文字（超宽截断 + 省略号，不溢出邻格）
                                 if !is-editing: Text {
                                     text: cell.text;
