@@ -557,6 +557,26 @@ impl PasteGroupState {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum LogFilter {
+    #[default]
+    All,
+    Info,
+    Warning,
+    Error,
+}
+
+impl LogFilter {
+    pub fn from_index(i: i32) -> Self {
+        match i {
+            1 => Self::Info,
+            2 => Self::Warning,
+            3 => Self::Error,
+            _ => Self::All,
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct ExcelMapFieldState {
     pub target_name: String,
@@ -1057,6 +1077,8 @@ pub struct AppState {
     pub paste_group: PasteGroupState,
     /// 任意 Excel 映射导入
     pub excel_mapping: ExcelMappingState,
+    /// 底部日志过滤：全部 / Info / Warn / Error
+    pub log_filter: LogFilter,
     /// 数据导出对话框
     pub data_export: DataExportState,
     /// Schema 导出对话框
@@ -1173,6 +1195,7 @@ impl AppState {
             pending: PendingActionState::default(),
             paste_group: PasteGroupState::default(),
             excel_mapping: ExcelMappingState::default(),
+            log_filter: LogFilter::All,
             data_export: DataExportState::default(),
             schema_export: SchemaExportState::default(),
             schema_import: SchemaImportState::default(),

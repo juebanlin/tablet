@@ -1151,6 +1151,38 @@ pub struct XlsxExternalChange {
     pub dirty: bool,
 }
 
+/// 日志级别：UI 按级别过滤 / 着色，CLI 写文件时映射到 log crate。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LogLevel {
+    Info,
+    Warning,
+    Error,
+}
+
+impl LogLevel {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            LogLevel::Info => "INFO",
+            LogLevel::Warning => "WARN",
+            LogLevel::Error => "ERROR",
+        }
+    }
+}
+
+/// 一条带级别和时间戳的日志。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LogEntry {
+    pub time: String,
+    pub level: LogLevel,
+    pub message: String,
+}
+
+impl LogEntry {
+    pub fn display_line(&self) -> String {
+        format!("{} [{}] {}", self.time, self.level.as_str(), self.message)
+    }
+}
+
 pub struct ProjectEngine {
     /// 顶层 workdir（@04.2.0 多 Project 同时管理）。所有 project 共用。
     pub workdir: PathBuf,
@@ -1177,7 +1209,7 @@ pub struct ProjectEngine {
     /// 仅用作「新建空项目」时 schema.separators 的初值（从模板/文件复制时取 source.separators）。
     /// 已加载项目的 separators 各自走 schema，运行期不再读这里。
     pub default_separators: crate::types::SeparatorsSection,
-    pub logs: Vec<String>,
+    pub logs: Vec<LogEntry>,
     /// 最近一次保存失败的原因（xlsx 组被占用 / 外部改过 …）。
     /// 引擎日志是给 GUI 看的；CLI 需要一句能直接打给 stderr 的原因。
     pub last_save_failure: Option<String>,
@@ -2095,7 +2127,7 @@ impl ProjectEngine {
     /// 操作日志：显示在 UI 面板 + 写文件（info 级别）
     pub fn ui_log(&mut self, msg: String) {
         let now = chrono::Local::now().format("%H:%M:%S").to_string();
-        self.logs.push(format!("{} {}", now, msg));
+        self.logs.push(LogEntry { time: now, level: LogLevel::Info, message: msg.clone() });
         log::info!("{}", msg);
     }
 
@@ -2107,14 +2139,14 @@ impl ProjectEngine {
     /// 警告日志：显示在 UI 面板（带 ⚠️）+ 写文件（warn 级别）
     pub fn warn_log(&mut self, msg: String) {
         let now = chrono::Local::now().format("%H:%M:%S").to_string();
-        self.logs.push(format!("{} ⚠️ {}", now, msg));
+        self.logs.push(LogEntry { time: now, level: LogLevel::Warning, message: msg.clone() });
         log::warn!("{}", msg);
     }
 
     /// 错误日志：显示在 UI 面板（带 ❌）+ 写文件（error 级别）
     pub fn error_log(&mut self, msg: String) {
         let now = chrono::Local::now().format("%H:%M:%S").to_string();
-        self.logs.push(format!("{} ❌ {}", now, msg));
+        self.logs.push(LogEntry { time: now, level: LogLevel::Error, message: msg.clone() });
         log::error!("{}", msg);
     }
 
@@ -2124,7 +2156,7 @@ impl ProjectEngine {
         self.ui_log(msg);
     }
 
-    pub fn logs(&self) -> &[String] {
+    pub fn logs(&self) -> &[LogEntry] {
         &self.logs
     }
 
@@ -3073,8 +3105,8 @@ impl ProjectEngine {
             .count();
         if active_errs > 0 {
             let errors = self.validate();
-            for e in &errors { self.logs.push(e.clone()); }
-            self.logs.push(format!("[保存失败] 共 {} 个验证错误", active_errs));
+            for e in &errors { self.error_log(e.clone()); }
+            self.error_log(format!("[保存失败] 共 {} 个验证错误", active_errs));
             return false;
         }
         self.log_pending_warnings(&pid);
@@ -3083,7 +3115,7 @@ impl ProjectEngine {
         for w in &warnings { self.warn_log(w.clone()); }
         if failed {
             self.last_save_failure = warnings.iter().find(|w| w.contains("保存失败")).cloned();
-            self.logs.push("[保存失败] 有组没能写进磁盘（见上方原因）".to_string());
+            self.error_log("[保存失败] 有组没能写进磁盘（见上方原因）".to_string());
             return false;
         }
         if count > 0 || deleted > 0 {
@@ -3105,8 +3137,8 @@ impl ProjectEngine {
         self.revalidate_all_projects();
         if !self.validation_errors.is_empty() {
             let errors = self.validate();
-            for e in &errors { self.logs.push(e.clone()); }
-            self.logs.push(format!("[保存失败] 共 {} 个验证错误", self.validation_errors.len()));
+            for e in &errors { self.error_log(e.clone()); }
+            self.error_log(format!("[保存失败] 共 {} 个验证错误", self.validation_errors.len()));
             return;
         }
         let pids: Vec<String> = self.projects.iter().map(|p| p.schema.meta.id.clone()).collect();
@@ -3138,7 +3170,7 @@ impl ProjectEngine {
         }
         if failed {
             self.last_save_failure = warnings.iter().find(|w| w.contains("保存失败")).cloned();
-            self.logs.push("[保存失败] 有组没能写进磁盘（见上方原因）".to_string());
+            self.error_log("[保存失败] 有组没能写进磁盘（见上方原因）".to_string());
         }
         if total_count > 0 || total_deleted > 0 {
             self.ui_log(format!("已保存 {} 个文件, 删除 {} 个（{} 个 Project）",
@@ -4405,8 +4437,8 @@ impl ProjectEngine {
             .filter(|(p, _, _, _, _)| p == project_id).count();
         if pid_errs > 0 {
             let errors = self.validate_project(project_id);
-            for e in &errors { self.logs.push(e.clone()); }
-            self.logs.push(format!("[{}] [保存失败] 共 {} 个验证错误", project_id, pid_errs));
+            for e in &errors { self.error_log(e.clone()); }
+            self.error_log(format!("[{}] [保存失败] 共 {} 个验证错误", project_id, pid_errs));
             return false;
         }
         let pid_for_log = project_id.to_string();
@@ -4423,7 +4455,7 @@ impl ProjectEngine {
         for w in &warnings { self.warn_log(w.clone()); }
         if failed {
             self.last_save_failure = warnings.iter().find(|w| w.contains("保存失败")).cloned();
-            self.logs.push(format!("[{}] [保存失败] 有组没能写进磁盘（见上方原因）", project_id));
+            self.error_log(format!("[{}] [保存失败] 有组没能写进磁盘（见上方原因）", project_id));
             return false;
         }
         if count > 0 || deleted > 0 {
@@ -6127,7 +6159,7 @@ package = \"com.user.kept\"
             "改名失败后内存应退回旧名，不能假装成功");
         assert!(engine.find_table("hero", "HeroMain").is_none());
         assert!(gdir.join("HeroBase.tbl").is_file(), "旧文件应原地未动");
-        assert!(engine.logs().iter().any(|l| l.contains("保留原名")),
+        assert!(engine.logs().iter().any(|l| l.message.contains("保留原名")),
             "失败必须报到日志，不能吞: {:?}", engine.logs());
 
         let _ = std::fs::remove_dir_all(&dir);
@@ -6597,6 +6629,18 @@ package = \"com.user.kept\"
         assert_eq!(t.schema.fields[0].name, "id");
         assert_eq!(t.records[0], vec!["1".to_string(), "亚瑟".to_string()]);
 
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn log_entries_keep_their_levels() {
+        let (dir, mut engine) = engine_with_saved_node("log_levels", "hero", "HeroBase");
+        engine.ui_log("info".into());
+        engine.warn_log("warn".into());
+        engine.error_log("error".into());
+        let levels: Vec<_> = engine.logs().iter().map(|e| e.level).collect();
+        assert_eq!(levels, vec![crate::ops::LogLevel::Info, crate::ops::LogLevel::Warning, crate::ops::LogLevel::Error]);
+        assert!(engine.logs().iter().any(|e| e.message == "warn"));
         let _ = std::fs::remove_dir_all(&dir);
     }
 

@@ -5,9 +5,37 @@ import { ScrollView } from "std-widgets.slint";
 import { TabBar } from "tab_bar.slint";
 import { ExcelBrowser } from "excel_browser.slint";
 
+export struct LogRow {
+    time: string,
+    // 0 = info, 1 = warn, 2 = error
+    level: int,
+    message: string,
+}
+
+component LogChip inherits Rectangle {
+    in property <string> label: "";
+    in property <int> index: 0;
+    in property <int> current: 0;
+    callback picked(int);
+    width: 54px;
+    height: 18px;
+    border-radius: 2px;
+    background: index == current ? Theme.bg-row-hover : transparent;
+    Text {
+        text: root.label;
+        font-size: Theme.fs-tiny;
+        color: index == current ? Theme.text-primary : Theme.text-secondary;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+    TouchArea { clicked => { root.picked(root.index); } }
+}
+
 export component BottomPanel inherits Rectangle {
     // 日志 tab
-    in property <string> log-text: "";
+    in property <[LogRow]> log-rows;
+    in property <int> log-filter: 0;
+    in property <string> log-summary: "";
     // Excel 文件 tab
     in property <[string]> excel-files;
     // 已选中的文件
@@ -44,6 +72,8 @@ export component BottomPanel inherits Rectangle {
                     border-width: 1px;
                     HorizontalLayout {
                         padding-left: Theme.sp-2;
+                        padding-right: Theme.sp-2;
+                        spacing: 2px;
                         alignment: start;
                         Rectangle {
                             width: 48px; height: 18px;
@@ -58,20 +88,55 @@ export component BottomPanel inherits Rectangle {
                             }
                             TouchArea { clicked => { root.clear-log-clicked(); } }
                         }
+                        Rectangle { width: 6px; }
+                        LogChip { label: "全部"; index: 0; current: root.log-filter; picked(i) => { root.log-filter-changed(i); } }
+                        LogChip { label: "Info"; index: 1; current: root.log-filter; picked(i) => { root.log-filter-changed(i); } }
+                        LogChip { label: "Warn"; index: 2; current: root.log-filter; picked(i) => { root.log-filter-changed(i); } }
+                        LogChip { label: "Error"; index: 3; current: root.log-filter; picked(i) => { root.log-filter-changed(i); } }
+                        Text {
+                            text: root.log-summary;
+                            font-size: Theme.fs-tiny;
+                            color: Theme.text-secondary;
+                            vertical-alignment: center;
+                            horizontal-stretch: 1;
+                            horizontal-alignment: right;
+                            overflow: elide;
+                        }
                     }
                 }
                 // 日志内容
                 ScrollView {
                     VerticalLayout {
-                        padding: Theme.sp-2;
+                        padding-left: Theme.sp-2;
+                        padding-right: Theme.sp-2;
+                        padding-top: 2px;
                         spacing: 0;
-                        TextInput {
-                            text: root.log-text;
-                            read-only: true;
-                            single-line: false;
-                            wrap: word-wrap;
-                            font-size: Theme.fs-tiny;
-                            color: Theme.text-secondary;
+                        for row in root.log-rows: HorizontalLayout {
+                            height: 18px;
+                            spacing: Theme.sp-2;
+                            padding-left: 2px;
+                            Text {
+                                text: row.time;
+                                font-size: Theme.fs-tiny;
+                                color: Theme.text-secondary;
+                                width: 54px;
+                                vertical-alignment: center;
+                            }
+                            Text {
+                                text: row.level == 2 ? "ERROR" : row.level == 1 ? "WARN" : "INFO";
+                                font-size: Theme.fs-tiny;
+                                color: row.level == 2 ? Theme.text-error : row.level == 1 ? Theme.text-warning : Theme.text-secondary;
+                                width: 38px;
+                                vertical-alignment: center;
+                            }
+                            Text {
+                                text: row.message;
+                                font-size: Theme.fs-tiny;
+                                color: row.level == 2 ? Theme.text-error : row.level == 1 ? Theme.text-warning : Theme.text-primary;
+                                horizontal-stretch: 1;
+                                vertical-alignment: center;
+                                overflow: elide;
+                            }
                         }
                     }
                 }
@@ -102,6 +167,7 @@ export component BottomPanel inherits Rectangle {
     in-out property <int> bottom-tab: 0;
     callback bottom-tab-changed(int);
     callback clear-log-clicked();
+    callback log-filter-changed(int);
     callback excel-sync-clicked();
     callback excel-delete-clicked();
     callback excel-refresh-clicked();

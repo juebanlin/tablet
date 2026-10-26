@@ -23,7 +23,7 @@ import { Toolbar } from "components/toolbar.slint";
 import { TreeSection, TreeNode } from "components/tree_section.slint";
 import { GridSection } from "components/grid_section.slint";
 import { GridArea, HeaderCell, DataCell, DataRow, CellKind } from "components/grid_area.slint";
-import { BottomPanel } from "components/bottom_panel.slint";
+import { BottomPanel, LogRow } from "components/bottom_panel.slint";
 import { TypeSelector, RefItem, TsParamSlot } from "dialogs/type_selector.slint";
 import { RefPicker, RefRow, RefHeader } from "dialogs/ref_picker.slint";
 import { RulesPanel, RuleColumnRow, RuleCard, RuleIssueRow } from "dialogs/rules_panel.slint";
@@ -90,6 +90,7 @@ export component AppWindow inherits Window {
     // BottomPanel
     callback bottom-tab-changed(int);
     callback clear-log-clicked();
+    callback log-filter-changed(int);
     callback excel-sync-clicked();
     callback excel-delete-clicked();
     callback excel-refresh-clicked();
@@ -229,7 +230,9 @@ export component AppWindow inherits Window {
     in property <string> hover-info;
 
     // ── BottomPanel (Log + Excel) ─────────────────────────
-    in property <string> logs-text;
+    in property <[LogRow]> log-rows;
+    in property <int> log-filter: 0;
+    in property <string> log-summary: "";
     in property <[string]> excel-files;
     in-out property <[bool]> excel-selected: [];
     in property <bool> excel-has-selection: false;
@@ -1105,13 +1108,16 @@ export component AppWindow inherits Window {
 
         BottomPanel {
             panel-height: root.log-h;
-            log-text: root.logs-text;
+            log-rows: root.log-rows;
+            log-filter: root.log-filter;
+            log-summary: root.log-summary;
             excel-files: root.excel-files;
             excel-selected: root.excel-selected;
             excel-has-selection: root.excel-has-selection;
             bottom-tab <=> root.bottom-tab;
             bottom-tab-changed(i) => { root.bottom-tab-changed(i); }
             clear-log-clicked => { root.clear-log-clicked(); }
+            log-filter-changed(i) => { root.log-filter-changed(i); }
             excel-sync-clicked => { root.excel-sync-clicked(); }
             excel-delete-clicked => { root.excel-delete-clicked(); }
             excel-refresh-clicked => { root.excel-refresh-clicked(); }
@@ -1912,7 +1918,12 @@ export component AppWindowPreview inherits AppWindow {
         ], row-color: #ffe0e0, selected: false },
     ];
 
-    logs-text: "14:32:01 已加载 hero/HeroBase.tbl (3条)\n14:33:15 新建 Table: hero/HeroSkill\n14:34:02 [验证] hero/HeroBase D2: \"4,5\" 列表元素类型不匹配, 示例: 1;2;3";
+    log-rows: [
+        { time: "14:32:01", level: 0, message: "已加载 hero/HeroBase.tbl (3条)" },
+        { time: "14:33:15", level: 1, message: "hero/HeroBase 有警告" },
+        { time: "14:34:02", level: 2, message: "hero/HeroBase D2: 列表元素类型不匹配" },
+    ];
+    log-summary: "全部 3 · Info 1 · Warn 1 · Error 1";
 
     sx-items: [
         { indent: 0, icon: "📁", name: "hero", group-name: "hero", checked: true, tristate: false, is-conflict: false },

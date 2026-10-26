@@ -3,15 +3,46 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use slint::{ComponentHandle, Model};
+use slint::{ComponentHandle, Model, ModelRc, VecModel};
 
-use crate::state::AppState;
-use crate::AppWindow;
+use crate::state::{AppState, LogFilter};
+use crate::{AppWindow, LogRow};
 
 pub fn push_log(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
     let st = state.borrow();
-    let flat = st.engine.logs.join("\n");
-    ui.set_logs_text(flat.into());
+    let mut info = 0usize;
+    let mut warn = 0usize;
+    let mut error = 0usize;
+    for e in &st.engine.logs {
+        match e.level {
+            tablet_core::ops::LogLevel::Info => info += 1,
+            tablet_core::ops::LogLevel::Warning => warn += 1,
+            tablet_core::ops::LogLevel::Error => error += 1,
+        }
+    }
+    let rows: Vec<LogRow> = st.engine.logs.iter().rev()
+        .filter(|e| match st.log_filter {
+            LogFilter::All => true,
+            LogFilter::Info => e.level == tablet_core::ops::LogLevel::Info,
+            LogFilter::Warning => e.level == tablet_core::ops::LogLevel::Warning,
+            LogFilter::Error => e.level == tablet_core::ops::LogLevel::Error,
+        })
+        .map(|e| LogRow {
+            time: e.time.clone().into(),
+            level: match e.level {
+                tablet_core::ops::LogLevel::Info => 0,
+                tablet_core::ops::LogLevel::Warning => 1,
+                tablet_core::ops::LogLevel::Error => 2,
+            },
+            message: e.message.clone().into(),
+        })
+        .collect();
+    ui.set_log_rows(ModelRc::new(VecModel::from(rows)));
+    ui.set_log_filter(st.log_filter as i32);
+    ui.set_log_summary(format!(
+        "全部 {} · Info {} · Warn {} · Error {}",
+        st.engine.logs.len(), info, warn, error
+    ).into());
 }
 
 pub fn push_excel_files(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
@@ -78,6 +109,15 @@ pub fn wire(ui: &AppWindow, state: &Rc<RefCell<AppState>>) {
     ui.on_bottom_tab_changed(move |_i| {
         let _ = s.borrow();
         // tab switch — no state change
+    });
+
+    let s = state.clone();
+    let ui_h2 = ui.as_weak();
+    ui.on_log_filter_changed(move |i| {
+        s.borrow_mut().log_filter = LogFilter::from_index(i);
+        if let Some(u) = ui_h2.upgrade() {
+            push_log(&u, &s);
+        }
     });
 
     let s = state.clone();
