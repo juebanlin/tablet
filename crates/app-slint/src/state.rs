@@ -557,6 +557,72 @@ impl PasteGroupState {
     }
 }
 
+#[derive(Clone, Debug)]
+pub struct ExcelMapFieldState {
+    pub target_name: String,
+    /// 0-based 列索引；保存时 +1 转成 1-based。
+    pub source_index: i32,
+    pub tbl_type: String,
+    pub export: tablet_core::model::Export,
+    pub desc: String,
+}
+
+#[derive(Clone, Debug)]
+pub struct ExcelMapSheetState {
+    pub sheet: String,
+    pub header_row: i32,
+    pub data_start: i32,
+    pub desc_row: i32,
+    pub type_row: i32,
+    pub export_row: i32,
+    pub node_name: String,
+    pub columns: Vec<String>,
+    pub preview_rows: Vec<Vec<String>>,
+    pub fields: Vec<ExcelMapFieldState>,
+    pub error: String,
+    pub can_import: bool,
+}
+
+impl ExcelMapSheetState {
+    pub fn new(sheet: String) -> Self {
+        let node_name = tablet_core::excel_mapping::normalize_node_name(&sheet);
+        Self {
+            sheet,
+            header_row: 1,
+            data_start: 2,
+            desc_row: 0,
+            type_row: 0,
+            export_row: 0,
+            node_name,
+            columns: Vec::new(),
+            preview_rows: Vec::new(),
+            fields: Vec::new(),
+            error: String::new(),
+            can_import: false,
+        }
+    }
+}
+
+#[derive(Default)]
+pub struct ExcelMappingState {
+    pub open: bool,
+    pub project_id: String,
+    pub file: String,
+    pub group_name: String,
+    pub sheets: Vec<ExcelMapSheetState>,
+    pub active_index: i32,
+}
+
+impl ExcelMappingState {
+    pub fn active(&self) -> Option<&ExcelMapSheetState> {
+        self.sheets.get(self.active_index.max(0) as usize)
+    }
+    pub fn active_mut(&mut self) -> Option<&mut ExcelMapSheetState> {
+        let i = self.active_index.max(0) as usize;
+        self.sheets.get_mut(i)
+    }
+}
+
 #[derive(Default)]
 pub struct PendingActionState {
     pub action: Option<PendingAction>,
@@ -989,6 +1055,8 @@ pub struct AppState {
     pub pending: PendingActionState,
     /// 粘贴 Group 冲突时的命名确认
     pub paste_group: PasteGroupState,
+    /// 任意 Excel 映射导入
+    pub excel_mapping: ExcelMappingState,
     /// 数据导出对话框
     pub data_export: DataExportState,
     /// Schema 导出对话框
@@ -1104,6 +1172,7 @@ impl AppState {
             ctx_menu: ContextMenuState::default(),
             pending: PendingActionState::default(),
             paste_group: PasteGroupState::default(),
+            excel_mapping: ExcelMappingState::default(),
             data_export: DataExportState::default(),
             schema_export: SchemaExportState::default(),
             schema_import: SchemaImportState::default(),

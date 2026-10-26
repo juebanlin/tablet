@@ -3841,6 +3841,111 @@ impl ProjectEngine {
         Ok(ImportOutcome { group: created_group, nodes })
     }
 
+    /// 任意 Excel 映射导入：按 `MappingPlan` 生成一个 `.tbl`，登记 manifest。
+    ///
+    /// 源 Excel 不修改；默认进 Tbl 组。冲突直接失败，不自动改名。
+    pub fn import_mapped_excel(
+        &mut self,
+        project_id: &str,
+        plan: &crate::excel_mapping::MappingPlan,
+    ) -> Result<ImportOutcome, String> {
+        if !self.is_opened(project_id) {
+            self.open_project(project_id).map_err(|e| e.to_string())?;
+        }
+        let project = self.find_project(project_id)
+            .ok_or_else(|| format!("Project 不存在: {}", project_id))?;
+        let existing_group = project.groups.iter()
+            .find(|g| g.name.eq_ignore_ascii_case(&plan.group_name));
+        if let Some(g) = existing_group {
+            if g.is_xlsx() {
+                return Err(format!("组 {} 是 Excel Group；映射导入只生成 Tbl 组", g.name));
+            }
+        }
+        if node_name_taken(&all_project_node_names(project), &plan.node_name) {
+            return Err(format!("节点名已存在（项目内唯一，忽略大小写）: {}", plan.node_name));
+        }
+        let canonical_group = existing_group
+            .map(|g| g.name.clone())
+            .unwrap_or_else(|| plan.group_name.clone());
+        let data_dir = project.data_dir();
+        let group_dir = existing_group
+            .map(|g| g.dir.clone())
+            .unwrap_or_else(|| data_dir.join(&canonical_group));
+        let target = group_dir.join(format!("{}.tbl", plan.node_name));
+        if target.exists() {
+            return Err(format!("目标文件已存在: {}", target.display()));
+        }
+
+        let (fields, records) = crate::excel_mapping::build_table_parts(plan)?;
+        let table = Table {
+            name: plan.node_name.clone(),
+            original_name: plan.node_name.clone(),
+            path: target.clone(),
+            schema: crate::model::TableSchema { fields: fields.clone() },
+            original_records: records.clone(),
+            original_fields: fields.clone(),
+            records,
+            dirty: false,
+            deleted: false,
+            saved: true,
+            fmt_ver: crate::tbl::DEFAULT_TBL_VERSION,
+            display_field: None,
+            original_display_field: None,
+            rules: Vec::new(),
+            original_rules: Vec::new(),
+        };
+        let content = crate::tbl::serialize_table(&table);
+        if let Err(e) = std::fs::create_dir_all(&group_dir) {
+            return Err(format!("创建目录失败: {} ({})", group_dir.display(), e));
+        }
+        if let Err(e) = std::fs::write(&target, content) {
+            return Err(format!("写入失败: {} ({})", target.display(), e));
+        }
+
+        let (created_group, group_was_new) = {
+            let project = self.find_project_mut(project_id).expect("opened checked");
+            let group_was_new = !project.groups.iter().any(|g| g.name.eq_ignore_ascii_case(&canonical_group));
+            let group = match project.groups.iter_mut()
+                .find(|g| g.name.eq_ignore_ascii_case(&canonical_group)) {
+                Some(g) => g,
+                None => {
+                    project.groups.push(Group {
+                        name: canonical_group.clone(),
+                        original_name: canonical_group.clone(),
+                        dir: group_dir.clone(),
+                        tables: Vec::new(),
+                        constants: Vec::new(),
+                        enums: Vec::new(),
+                        is_new: true,
+                        storage: crate::model::GroupStorage::Tbl,
+                        book_stamp: None,
+                    });
+                    project.groups.last_mut().unwrap()
+                }
+            };
+            group.tables.push(table);
+            sync_schema_from_groups(project);
+            (canonical_group.clone(), group_was_new)
+        };
+
+        if !self.save_project(project_id) {
+            let _ = std::fs::remove_file(&target);
+            if let Some(project) = self.find_project_mut(project_id) {
+                if let Some(g) = project.groups.iter_mut().find(|g| g.name == created_group) {
+                    g.tables.retain(|t| t.path != target);
+                }
+                project.groups.retain(|g| g.name != created_group
+                    || !group_was_new
+                    || !g.tables.is_empty() || !g.constants.is_empty() || !g.enums.is_empty());
+                sync_schema_from_groups(project);
+            }
+            return Err("导入后保存失败，已回滚".to_string());
+        }
+
+        self.ui_log(format!("[映射导入] {}/{} ← {}", project_id, created_group, plan.node_name));
+        Ok(ImportOutcome { group: created_group, nodes: 1 })
+    }
+
     /// 原生导入一个 xlsx：文件 = 组，sheet = 节点。
     ///
     /// 工作簿原样复制，保留样式；结构与数据从 workbook 表头 / sheet 读取。
@@ -6449,6 +6554,48 @@ package = \"com.user.kept\"
         let manifest = std::fs::read_to_string(
             dir.join("projects/p1").join(crate::project::PROJECT_MANIFEST_FILE)).unwrap();
         assert!(manifest.contains("[Items/Item] table xlsx"), "{manifest}");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn importing_mapped_excel_writes_tbl_and_manifest() {
+        let (dir, mut engine) = engine_with_saved_node("mapped_excel", "hero", "HeroBase");
+        let pid = engine.active_project_id().unwrap().to_string();
+        let src = dir.join("external/Foreign.xlsx");
+        std::fs::create_dir_all(src.parent().unwrap()).unwrap();
+        let mut wb = rust_xlsxwriter::Workbook::new();
+        let ws = wb.add_worksheet();
+        ws.set_name("Foreign").unwrap();
+        ws.write_string(0, 0, "Name").unwrap();
+        ws.write_string(0, 1, "ID").unwrap();
+        ws.write_string(1, 0, "亚瑟").unwrap();
+        ws.write_string(1, 1, "1").unwrap();
+        std::fs::write(&src, wb.save_to_buffer().unwrap()).unwrap();
+
+        let preview = crate::excel_mapping::read_sheet_preview(&src, "Foreign", 1, 2, 20).unwrap();
+        let fields = crate::excel_mapping::suggest_fields(&preview);
+        let plan = crate::excel_mapping::MappingPlan {
+            source: src,
+            sheet: "Foreign".into(),
+            header_row: 1,
+            data_start: 2,
+            desc_row: 0,
+            type_row: 0,
+            export_row: 0,
+            group_name: "imported".into(),
+            node_name: "Foreign".into(),
+            fields,
+        };
+        let out = engine.import_mapped_excel(&pid, &plan).expect("import mapped");
+        assert_eq!(out.group, "imported");
+        assert!(config_dir(&dir).join("imported/Foreign.tbl").is_file());
+        let manifest = std::fs::read_to_string(
+            dir.join("projects/p1").join(crate::project::PROJECT_MANIFEST_FILE)).unwrap();
+        assert!(manifest.contains("[imported/Foreign] table"), "{manifest}");
+        let t = engine.find_table("imported", "Foreign").unwrap();
+        assert_eq!(t.schema.fields[0].name, "id");
+        assert_eq!(t.records[0], vec!["1".to_string(), "亚瑟".to_string()]);
 
         let _ = std::fs::remove_dir_all(&dir);
     }

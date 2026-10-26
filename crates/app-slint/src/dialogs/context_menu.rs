@@ -33,6 +33,7 @@ pub enum MenuAction {
     MergeSchema,
     ImportTbl,
     ImportXlsx,
+    ImportExcelMapping,
     NewGroupInProject,
     NewXlsxGroupInProject,
     CloneProject,
@@ -89,6 +90,7 @@ impl MenuAction {
             MergeSchema => "tree.proj-merge-schema",
             ImportTbl => "tree.proj-import-tbl",
             ImportXlsx => "tree.proj-import-xlsx",
+            ImportExcelMapping => "tree.proj-import-excel-map",
             NewGroupInProject => "tree.proj-new-group",
             NewXlsxGroupInProject => "tree.proj-new-xlsx-group",
             CloneProject => "tree.proj-clone",
@@ -153,7 +155,7 @@ fn sections_for(kind: &CtxMenuKind, state: &AppState) -> Vec<Vec<MenuAction>> {
             if state.engine.is_opened(project_id) {
                 vec![
                     vec![SaveProject, ExportProject, ExportSchema, ExportTemplate, MergeSchema],
-                    vec![NewGroupInProject, NewXlsxGroupInProject, ImportTbl, ImportXlsx, CloneProject],
+                    vec![NewGroupInProject, NewXlsxGroupInProject, ImportTbl, ImportXlsx, ImportExcelMapping, CloneProject],
                     vec![PasteGroupTbl, PasteGroupXlsx],
                     vec![ProjectSettings, DeleteProject],
                     vec![CloseProject],
@@ -241,6 +243,7 @@ fn entry(action: MenuAction, kind: &CtxMenuKind, state: &AppState) -> Option<Ctx
         MenuAction::MergeSchema => "合并 Schema...".into(),
         MenuAction::ImportTbl => "导入 .tbl 文件...".into(),
         MenuAction::ImportXlsx => "导入 Excel Group...".into(),
+        MenuAction::ImportExcelMapping => "导入任意 Excel（映射）...".into(),
         MenuAction::CloneProject => "克隆项目...".into(),
         MenuAction::ProjectSettings => "项目设置...".into(),
         MenuAction::DeleteProject => "删除".into(),
@@ -404,6 +407,16 @@ pub fn wire(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
                                 }
                                 Err(e) => dialogs::alert::raise(&s, "导入 .tbl 失败", &e),
                             }
+                        }
+                    }
+                }
+                (Some(CtxMenuKind::TreeProject { project_id }), "tree.proj-import-excel-map") => {
+                    if let Some(file) = rfd::FileDialog::new()
+                        .add_filter("Excel", &["xlsx"])
+                        .pick_file()
+                    {
+                        if let Err(e) = dialogs::excel_mapping::open(&s, file, &project_id) {
+                            dialogs::alert::raise(&s, "打开 Excel 失败", &e);
                         }
                     }
                 }

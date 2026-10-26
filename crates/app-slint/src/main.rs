@@ -306,6 +306,7 @@ fn run_gui(workdir_arg: Option<PathBuf>) -> anyhow::Result<()> {
     dialogs::context_menu::wire(&app_window, &app_state);
     dialogs::pending::wire(&app_window, &app_state);
     dialogs::paste_group::wire(&app_window, &app_state);
+    dialogs::excel_mapping::wire(&app_window, &app_state);
     dialogs::type_selector::wire(&app_window, &app_state);
     dialogs::ref_picker::wire(&app_window, &app_state);
     dialogs::rules_panel::wire(&app_window, &app_state);

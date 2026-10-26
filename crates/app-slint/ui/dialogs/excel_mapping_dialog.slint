@@ -1,0 +1,599 @@
+// 任意 Excel 映射导入：顶部文件/组名 → Sheet tabs → 每个 tab 的 A/B/C → 固定底栏。
+// A = 原始数据，B = 映射调整，C = 最终效果。
+
+import { Theme } from "../theme.slint";
+import { DialogChrome } from "dialog_chrome.slint";
+import { Button, CheckBox, ComboBox, LineEdit, ScrollView } from "std-widgets.slint";
+
+export struct ExcelPreviewRow {
+    cells: [string],
+}
+
+export struct ExcelMapRow {
+    target-name: string,
+    source-index: int,
+    source-label: string,
+    type-index: int,
+    export-index: int,
+    desc: string,
+}
+
+export struct ExcelSheetTab {
+    name: string,
+    // 0 = 就绪，1 = 有问题，2 = 待映射
+    status: int,
+}
+
+export struct ExcelSourceCol {
+    label: string,
+    target: string,
+    mapped: bool,
+}
+
+component ExcelCell inherits Rectangle {
+    in property <string> text: "";
+    in property <bool> head: false;
+    in property <length> cw: 110px;
+    width: cw;
+    height: 24px;
+    background: head ? Theme.bg-toolbar : Theme.bg-panel;
+    border-color: Theme.border-light;
+    border-width: 1px;
+    Text {
+        x: 5px;
+        width: parent.width - 10px;
+        text: root.text;
+        font-size: Theme.fs-tiny;
+        color: root.head ? Theme.text-primary : Theme.text-secondary;
+        vertical-alignment: center;
+        overflow: elide;
+    }
+}
+
+export component ExcelMappingDialog inherits Rectangle {
+    in property <bool> open: false;
+    in property <string> file-name: "";
+    in-out property <string> group-name: "";
+    in property <[ExcelSheetTab]> tabs;
+    in property <int> active-tab: 0;
+
+    in-out property <string> header-row: "1";
+    in-out property <string> data-start: "2";
+    in-out property <string> desc-row: "0";
+    in-out property <string> type-row: "0";
+    in-out property <string> export-row: "0";
+    in-out property <string> node-name: "";
+    in property <string> error-text: "";
+    in property <bool> can-import: false;
+    in property <int> ready-count: 0;
+    in property <int> sheet-count: 0;
+
+    in property <[string]> preview-columns;
+    in property <[ExcelPreviewRow]> preview-rows;
+    in property <[ExcelSourceCol]> source-cols;
+    in property <[ExcelPreviewRow]> mapped-rows;
+    in property <[string]> header-desc;
+    in property <[string]> header-export;
+    in property <[string]> header-type;
+    in property <[string]> header-field;
+    in property <[ExcelMapRow]> fields;
+    in property <[string]> column-options;
+    in property <[string]> type-options;
+    in property <[string]> export-options;
+
+    callback sheet-selected(int);
+    callback source-col-toggled(int, bool);
+    callback header-row-changed(string);
+    callback data-start-changed(string);
+    callback desc-row-changed(string);
+    callback type-row-changed(string);
+    callback export-row-changed(string);
+    callback group-changed(string);
+    callback node-changed(string);
+    callback field-target-changed(int, string);
+    callback field-source-changed(int, int);
+    callback field-type-changed(int, int);
+    callback field-export-changed(int, int);
+    callback field-desc-changed(int, string);
+    callback add-field();
+    callback remove-field(int);
+    callback auto-match();
+    callback import-current();
+    callback import-all();
+    callback cancel();
+
+    visible: root.open;
+    width: 100%;
+    height: 100%;
+
+    DialogChrome {
+        title: "导入任意 Excel（映射）";
+        dialog-w: 1180px;
+        dialog-h: 760px;
+        primary-text: "导入全部";
+        show-secondary: true;
+        secondary-text: "导入当前 Sheet";
+        default-enabled: root.can-import;
+        primary-clicked => { root.import-all(); }
+        secondary-clicked => { root.import-current(); }
+        cancel-clicked => { root.cancel(); }
+        scrim-clicked => { root.cancel(); }
+
+        VerticalLayout {
+            padding: Theme.sp-4;
+            spacing: Theme.sp-2;
+
+            // 顶部：文件 + 组名
+            HorizontalLayout {
+                spacing: Theme.sp-3;
+                alignment: stretch;
+                Text {
+                    text: root.file-name;
+                    font-size: Theme.fs-small;
+                    color: Theme.text-secondary;
+                    vertical-alignment: center;
+                    horizontal-stretch: 1;
+                    overflow: elide;
+                }
+                Text {
+                    text: "组名:";
+                    font-size: Theme.fs-small;
+                    color: Theme.text-primary;
+                    vertical-alignment: center;
+                }
+                LineEdit {
+                    width: 180px;
+                    text <=> root.group-name;
+                    edited(s) => { root.group-changed(s); }
+                    accepted(s) => { root.group-changed(s); }
+                }
+            }
+
+            // Sheet tabs
+            HorizontalLayout {
+                height: 30px;
+                spacing: Theme.sp-1;
+                for tab[i] in root.tabs: Rectangle {
+                    height: 30px;
+                    width: max(84px, tab-text.preferred-width + 30px);
+                    background: i == root.active-tab ? Theme.bg-toolbar : transparent;
+                    border-color: i == root.active-tab ? Theme.border : transparent;
+                    border-width: 1px;
+                    border-radius: 3px;
+                    HorizontalLayout {
+                        padding-left: 8px;
+                        padding-right: 8px;
+                        spacing: 5px;
+                        alignment: start;
+                        Rectangle {
+                            width: 7px;
+                            height: 7px;
+                            border-radius: 4px;
+                            background: tab.status == 0 ? Theme.text-success
+                                : tab.status == 1 ? Theme.text-error
+                                : Theme.text-secondary;
+                        }
+                        tab-text := Text {
+                            text: tab.name;
+                            font-size: Theme.fs-tiny;
+                            color: i == root.active-tab ? Theme.text-primary : Theme.text-secondary;
+                            vertical-alignment: center;
+                        }
+                    }
+                    TouchArea {
+                        clicked => { root.sheet-selected(i); }
+                    }
+                }
+                Rectangle { horizontal-stretch: 1; }
+            }
+
+            // ── A 原始数据 ──
+            VerticalLayout {
+                height: 150px;
+                spacing: Theme.sp-2;
+                HorizontalLayout {
+                    spacing: Theme.sp-2;
+                    alignment: start;
+                    Text {
+                        text: "原始数据";
+                        font-size: Theme.fs-small;
+                        color: Theme.text-primary;
+                        vertical-alignment: center;
+                    }
+                    Text {
+                        text: "只读，用来确认表头与数据范围";
+                        font-size: Theme.fs-tiny;
+                        color: Theme.text-secondary;
+                        vertical-alignment: center;
+                    }
+                    Rectangle { horizontal-stretch: 1; }
+                    Text {
+                        text: "表头行";
+                        font-size: Theme.fs-tiny;
+                        color: Theme.text-secondary;
+                        vertical-alignment: center;
+                    }
+                    LineEdit {
+                        width: 42px;
+                        text <=> root.header-row;
+                        edited(s) => { root.header-row-changed(s); }
+                        accepted(s) => { root.header-row-changed(s); }
+                    }
+                    Text {
+                        text: "数据起始";
+                        font-size: Theme.fs-tiny;
+                        color: Theme.text-secondary;
+                        vertical-alignment: center;
+                    }
+                    LineEdit {
+                        width: 42px;
+                        text <=> root.data-start;
+                        edited(s) => { root.data-start-changed(s); }
+                        accepted(s) => { root.data-start-changed(s); }
+                    }
+                    Text {
+                        text: "描述行";
+                        font-size: Theme.fs-tiny;
+                        color: Theme.text-secondary;
+                        vertical-alignment: center;
+                    }
+                    LineEdit {
+                        width: 36px;
+                        text <=> root.desc-row;
+                        edited(s) => { root.desc-row-changed(s); }
+                        accepted(s) => { root.desc-row-changed(s); }
+                    }
+                    Text {
+                        text: "类型行";
+                        font-size: Theme.fs-tiny;
+                        color: Theme.text-secondary;
+                        vertical-alignment: center;
+                    }
+                    LineEdit {
+                        width: 36px;
+                        text <=> root.type-row;
+                        edited(s) => { root.type-row-changed(s); }
+                        accepted(s) => { root.type-row-changed(s); }
+                    }
+                    Text {
+                        text: "导出行";
+                        font-size: Theme.fs-tiny;
+                        color: Theme.text-secondary;
+                        vertical-alignment: center;
+                    }
+                    LineEdit {
+                        width: 36px;
+                        text <=> root.export-row;
+                        edited(s) => { root.export-row-changed(s); }
+                        accepted(s) => { root.export-row-changed(s); }
+                    }
+                    Button {
+                        text: "自动识别";
+                        clicked => { root.auto-match(); }
+                    }
+                }
+                Rectangle {
+                    vertical-stretch: 1;
+                    border-color: Theme.border;
+                    border-width: 1px;
+                    background: Theme.bg-panel;
+                    ScrollView {
+                        VerticalLayout {
+                            spacing: 0;
+                            HorizontalLayout {
+                                spacing: 0;
+                                for col in root.preview-columns: ExcelCell {
+                                    cw: 110px;
+                                    head: true;
+                                    text: col;
+                                }
+                            }
+                            for row in root.preview-rows: HorizontalLayout {
+                                spacing: 0;
+                                for cell in row.cells: ExcelCell {
+                                    cw: 110px;
+                                    text: cell;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // ── B 映射调整 ──
+            VerticalLayout {
+                vertical-stretch: 1;
+                spacing: Theme.sp-2;
+                HorizontalLayout {
+                    spacing: Theme.sp-2;
+                    alignment: start;
+                    Text {
+                        text: "映射调整";
+                        font-size: Theme.fs-small;
+                        color: Theme.text-primary;
+                        vertical-alignment: center;
+                    }
+                    Text {
+                        text: "左：源列状态　右：目标字段（id 固定第一行）";
+                        font-size: Theme.fs-tiny;
+                        color: Theme.text-secondary;
+                        vertical-alignment: center;
+                    }
+                }
+                HorizontalLayout {
+                    vertical-stretch: 1;
+                    spacing: Theme.sp-3;
+                    alignment: stretch;
+
+                    // B 左：源列状态（不显示数据）
+                    VerticalLayout {
+                        horizontal-stretch: 3;
+                        spacing: Theme.sp-2;
+                        HorizontalLayout {
+                            spacing: 0;
+                            Text {
+                                text: "源列";
+                                font-size: Theme.fs-tiny;
+                                color: Theme.text-secondary;
+                                horizontal-stretch: 1;
+                            }
+                            Text {
+                                text: "目标";
+                                font-size: Theme.fs-tiny;
+                                color: Theme.text-secondary;
+                                width: 64px;
+                            }
+                        }
+                        Rectangle {
+                            vertical-stretch: 1;
+                            border-color: Theme.border;
+                            border-width: 1px;
+                            background: Theme.bg-panel;
+                            ScrollView {
+                                VerticalLayout {
+                                    spacing: 0;
+                                    for col[i] in root.source-cols: HorizontalLayout {
+                                        width: 100%;
+                                        height: 28px;
+                                        padding-left: 6px;
+                                        padding-right: 6px;
+                                        spacing: 6px;
+                                        alignment: start;
+                                        CheckBox {
+                                            width: 20px;
+                                            checked: col.mapped;
+                                            toggled => { root.source-col-toggled(i, self.checked); }
+                                        }
+                                        Text {
+                                            text: col.label;
+                                            font-size: Theme.fs-tiny;
+                                            color: Theme.text-primary;
+                                            vertical-alignment: center;
+                                            horizontal-stretch: 1;
+                                            overflow: elide;
+                                        }
+                                        Rectangle {
+                                            width: 58px;
+                                            height: 18px;
+                                            border-color: col.mapped ? Theme.text-success : Theme.border;
+                                            border-width: 1px;
+                                            border-radius: 3px;
+                                            background: col.mapped ? Theme.bg-toolbar : transparent;
+                                            HorizontalLayout {
+                                                padding-left: 4px;
+                                                padding-right: 4px;
+                                                Text {
+                                                    text: col.target;
+                                                    font-size: Theme.fs-tiny;
+                                                    color: col.mapped ? Theme.text-success : Theme.text-secondary;
+                                                    vertical-alignment: center;
+                                                    horizontal-alignment: center;
+                                                    overflow: elide;
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        Text {
+                            text: "已映射的源列显示目标字段；未映射不参与导入。";
+                            font-size: Theme.fs-tiny;
+                            color: Theme.text-secondary;
+                            wrap: word-wrap;
+                        }
+                    }
+
+                    // B 右：目标字段
+                    VerticalLayout {
+                        horizontal-stretch: 7;
+                        spacing: Theme.sp-2;
+                        HorizontalLayout {
+                            spacing: Theme.sp-2;
+                            Text {
+                                text: "节点:";
+                                font-size: Theme.fs-small;
+                                vertical-alignment: center;
+                                width: 36px;
+                            }
+                            LineEdit {
+                                horizontal-stretch: 1;
+                                text <=> root.node-name;
+                                edited(s) => { root.node-changed(s); }
+                                accepted(s) => { root.node-changed(s); }
+                            }
+                        }
+                        HorizontalLayout {
+                            spacing: Theme.sp-2;
+                            Text {
+                                text: "目标字段";
+                                width: 110px;
+                                font-size: Theme.fs-tiny;
+                                color: Theme.text-secondary;
+                            }
+                            Text {
+                                text: "源列";
+                                width: 130px;
+                                font-size: Theme.fs-tiny;
+                                color: Theme.text-secondary;
+                            }
+                            Text {
+                                text: "类型";
+                                width: 76px;
+                                font-size: Theme.fs-tiny;
+                                color: Theme.text-secondary;
+                            }
+                            Text {
+                                text: "export";
+                                width: 84px;
+                                font-size: Theme.fs-tiny;
+                                color: Theme.text-secondary;
+                            }
+                            Text {
+                                text: "desc";
+                                horizontal-stretch: 1;
+                                font-size: Theme.fs-tiny;
+                                color: Theme.text-secondary;
+                            }
+                        }
+                        ScrollView {
+                            vertical-stretch: 1;
+                            VerticalLayout {
+                                spacing: Theme.sp-1;
+                                for row[i] in root.fields: HorizontalLayout {
+                                    height: 30px;
+                                    spacing: Theme.sp-2;
+                                    LineEdit {
+                                        width: 110px;
+                                        text: row.target-name;
+                                        changed text => { root.field-target-changed(i, self.text); }
+                                    }
+                                    Rectangle {
+                                        width: 130px;
+                                        height: 26px;
+                                        border-color: Theme.border;
+                                        border-width: 1px;
+                                        background: Theme.bg-panel;
+                                        Text {
+                                            x: 6px;
+                                            width: parent.width - 12px;
+                                            text: row.source-label;
+                                            font-size: Theme.fs-tiny;
+                                            color: Theme.text-primary;
+                                            vertical-alignment: center;
+                                            overflow: elide;
+                                        }
+                                    }
+                                    ComboBox {
+                                        width: 76px;
+                                        model: root.type-options;
+                                        current-index: row.type-index;
+                                        selected(v) => { root.field-type-changed(i, self.current-index); }
+                                    }
+                                    ComboBox {
+                                        width: 84px;
+                                        model: root.export-options;
+                                        current-index: row.export-index;
+                                        selected(v) => { root.field-export-changed(i, self.current-index); }
+                                    }
+                                    LineEdit {
+                                        horizontal-stretch: 1;
+                                        text: row.desc;
+                                        changed text => { root.field-desc-changed(i, self.text); }
+                                    }
+                                }
+                            }
+                        }
+                        Text {
+                            text: "通过左侧勾选列来增删字段；把字段名改成 id 会自动置顶。";
+                            font-size: Theme.fs-tiny;
+                            color: Theme.text-secondary;
+                            wrap: word-wrap;
+                        }
+                    }
+                }
+            }
+
+            // ── C 最终效果 ──
+            VerticalLayout {
+                height: 150px;
+                spacing: Theme.sp-2;
+                HorizontalLayout {
+                    spacing: Theme.sp-2;
+                    alignment: start;
+                    Text {
+                        text: "最终效果";
+                        font-size: Theme.fs-small;
+                        color: Theme.text-primary;
+                        vertical-alignment: center;
+                    }
+                    Text {
+                        text: "写入 .tbl 的四行表头 + 数据前几行";
+                        font-size: Theme.fs-tiny;
+                        color: Theme.text-secondary;
+                        vertical-alignment: center;
+                    }
+                    Rectangle { horizontal-stretch: 1; }
+                    Text {
+                        text: root.can-import ? "可导入" : "未就绪";
+                        font-size: Theme.fs-tiny;
+                        color: root.can-import ? Theme.text-success : Theme.text-secondary;
+                        vertical-alignment: center;
+                    }
+                }
+                Rectangle {
+                    vertical-stretch: 1;
+                    border-color: Theme.border;
+                    border-width: 1px;
+                    background: Theme.bg-panel;
+                    ScrollView {
+                        VerticalLayout {
+                            spacing: 0;
+                            HorizontalLayout {
+                                spacing: 0;
+                                ExcelCell { cw: 64px; head: true; text: "desc"; }
+                                for v in root.header-desc: ExcelCell { cw: 96px; head: true; text: v; }
+                            }
+                            HorizontalLayout {
+                                spacing: 0;
+                                ExcelCell { cw: 64px; head: true; text: "export"; }
+                                for v in root.header-export: ExcelCell { cw: 96px; head: true; text: v; }
+                            }
+                            HorizontalLayout {
+                                spacing: 0;
+                                ExcelCell { cw: 64px; head: true; text: "type"; }
+                                for v in root.header-type: ExcelCell { cw: 96px; head: true; text: v; }
+                            }
+                            HorizontalLayout {
+                                spacing: 0;
+                                ExcelCell { cw: 64px; head: true; text: "field"; }
+                                for v in root.header-field: ExcelCell { cw: 96px; head: true; text: v; }
+                            }
+                            for row in root.mapped-rows: HorizontalLayout {
+                                spacing: 0;
+                                ExcelCell { cw: 64px; text: ""; }
+                                for cell in row.cells: ExcelCell { cw: 96px; text: cell; }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // 固定底栏：状态 + 弹窗按钮行（DialogChrome 提供取消/当前/全部）
+            HorizontalLayout {
+                spacing: Theme.sp-2;
+                alignment: start;
+                Text {
+                    text: root.error-text != ""
+                        ? root.error-text
+                        : "\{root.ready-count}/\{root.sheet-count} 个 Sheet 可导入";
+                    font-size: Theme.fs-tiny;
+                    color: root.error-text != "" ? Theme.text-error : Theme.text-secondary;
+                    vertical-alignment: center;
+                    horizontal-stretch: 1;
+                    overflow: elide;
+                }
+            }
+        }
+    }
+}

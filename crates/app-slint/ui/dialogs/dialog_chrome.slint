@@ -76,7 +76,10 @@ export component DialogChrome inherits Rectangle {
 
             // 内容槽（外部 @children 注入）
             Rectangle {
+                width: 100%;
                 vertical-stretch: 1;
+                // 约束内容宽度，避免子内容的首选宽度把按钮行一起撑出弹窗。
+                clip: true;
                 @children
             }
 

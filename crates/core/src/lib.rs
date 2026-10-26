@@ -12,6 +12,7 @@ pub mod tbl_str;
 pub mod tblschema;
 pub mod manifest;
 pub mod importer;
+pub mod excel_mapping;
 pub mod template;
 pub mod project;
 pub mod validate;

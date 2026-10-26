@@ -39,8 +39,9 @@ import { ConfirmDialog } from "dialogs/confirm_dialog.slint";
 import { AlertDialog } from "dialogs/alert_dialog.slint";
 import { ExcelSyncDialog, EsRow, EsOp } from "dialogs/excel_sync_dialog.slint";
 import { PasteGroupDialog, PasteGroupRow } from "dialogs/paste_group_dialog.slint";
+import { ExcelMappingDialog, ExcelMapRow, ExcelPreviewRow, ExcelSheetTab, ExcelSourceCol } from "dialogs/excel_mapping_dialog.slint";
 
-export { TreeNode, HeaderCell, DataCell, DataRow, CellKind, RefItem, TsParamSlot, RefRow, RefHeader, SchemaItem, CtxMenuItem, TemplateItem, PasteGroupRow }
+export { TreeNode, HeaderCell, DataCell, DataRow, CellKind, RefItem, TsParamSlot, RefRow, RefHeader, SchemaItem, CtxMenuItem, TemplateItem, PasteGroupRow, ExcelMapRow, ExcelPreviewRow, ExcelSheetTab, ExcelSourceCol }
 
 export component AppWindow inherits Window {
     /// 窗口标题：`tablet vX — main`。Rust 端在加载 / 重载后写入（含版本与版本库分支）。
@@ -800,6 +801,55 @@ export component AppWindow inherits Window {
     callback pg-set-node-name(int, string);
     callback pg-confirm();
     callback pg-cancel();
+
+    // ── Dialog: 任意 Excel 映射导入 ─────────────────────────
+    in property <bool> dlg-excel-map-open: false;
+    in property <string> em-file-name: "";
+    in property <[ExcelSheetTab]> em-tabs;
+    in property <int> em-active-tab: 0;
+    in property <int> em-ready-count: 0;
+    in property <int> em-sheet-count: 0;
+    in-out property <string> em-header-row: "1";
+    in-out property <string> em-data-start: "2";
+    in-out property <string> em-desc-row: "0";
+    in-out property <string> em-type-row: "0";
+    in-out property <string> em-export-row: "0";
+    in-out property <string> em-group-name: "";
+    in-out property <string> em-node-name: "";
+    in property <string> em-error-text: "";
+    in property <bool> em-can-import: false;
+    in property <[string]> em-preview-columns;
+    in property <[ExcelPreviewRow]> em-preview-rows;
+    in property <[ExcelSourceCol]> em-source-cols;
+    in property <[ExcelPreviewRow]> em-mapped-rows;
+    in property <[string]> em-header-desc;
+    in property <[string]> em-header-export;
+    in property <[string]> em-header-type;
+    in property <[string]> em-header-field;
+    in property <[ExcelMapRow]> em-fields;
+    in property <[string]> em-column-options;
+    in property <[string]> em-type-options;
+    in property <[string]> em-export-options;
+    callback em-sheet-selected(int);
+    callback em-source-col-toggled(int, bool);
+    callback em-header-row-changed(string);
+    callback em-data-start-changed(string);
+    callback em-desc-row-changed(string);
+    callback em-type-row-changed(string);
+    callback em-export-row-changed(string);
+    callback em-group-changed(string);
+    callback em-node-changed(string);
+    callback em-field-target-changed(int, string);
+    callback em-field-source-changed(int, int);
+    callback em-field-type-changed(int, int);
+    callback em-field-export-changed(int, int);
+    callback em-field-desc-changed(int, string);
+    callback em-add-field();
+    callback em-remove-field(int);
+    callback em-auto-match();
+    callback em-import-current();
+    callback em-import-all();
+    callback em-cancel();
 
     in property <bool> dlg-input-open: false;
     in property <string> dlg-input-title: "输入";
@@ -1621,6 +1671,56 @@ export component AppWindow inherits Window {
         set-node-name(i, s) => { root.pg-set-node-name(i, s); }
         confirm => { root.pg-confirm(); }
         cancel => { root.pg-cancel(); }
+    }
+
+    ExcelMappingDialog {
+        open: root.dlg-excel-map-open;
+        file-name: root.em-file-name;
+        tabs: root.em-tabs;
+        active-tab: root.em-active-tab;
+        header-row: root.em-header-row;
+        data-start: root.em-data-start;
+        desc-row: root.em-desc-row;
+        type-row: root.em-type-row;
+        export-row: root.em-export-row;
+        group-name: root.em-group-name;
+        node-name: root.em-node-name;
+        error-text: root.em-error-text;
+        can-import: root.em-can-import;
+        ready-count: root.em-ready-count;
+        sheet-count: root.em-sheet-count;
+        preview-columns: root.em-preview-columns;
+        preview-rows: root.em-preview-rows;
+        source-cols: root.em-source-cols;
+        mapped-rows: root.em-mapped-rows;
+        header-desc: root.em-header-desc;
+        header-export: root.em-header-export;
+        header-type: root.em-header-type;
+        header-field: root.em-header-field;
+        fields: root.em-fields;
+        column-options: root.em-column-options;
+        type-options: root.em-type-options;
+        export-options: root.em-export-options;
+        sheet-selected(i) => { root.em-sheet-selected(i); }
+        source-col-toggled(i, v) => { root.em-source-col-toggled(i, v); }
+        header-row-changed(s) => { root.em-header-row-changed(s); }
+        data-start-changed(s) => { root.em-data-start-changed(s); }
+        desc-row-changed(s) => { root.em-desc-row-changed(s); }
+        type-row-changed(s) => { root.em-type-row-changed(s); }
+        export-row-changed(s) => { root.em-export-row-changed(s); }
+        group-changed(s) => { root.em-group-changed(s); }
+        node-changed(s) => { root.em-node-changed(s); }
+        field-target-changed(i, s) => { root.em-field-target-changed(i, s); }
+        field-source-changed(i, v) => { root.em-field-source-changed(i, v); }
+        field-type-changed(i, v) => { root.em-field-type-changed(i, v); }
+        field-export-changed(i, v) => { root.em-field-export-changed(i, v); }
+        field-desc-changed(i, s) => { root.em-field-desc-changed(i, s); }
+        add-field => { root.em-add-field(); }
+        remove-field(i) => { root.em-remove-field(i); }
+        auto-match => { root.em-auto-match(); }
+        import-current => { root.em-import-current(); }
+        import-all => { root.em-import-all(); }
+        cancel => { root.em-cancel(); }
     }
 
     InputDialog {

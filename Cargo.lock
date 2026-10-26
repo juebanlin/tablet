@@ -5205,6 +5205,7 @@ dependencies = [
  "log",
  "open",
  "rfd",
+ "rust_xlsxwriter",
  "simplelog",
  "slint",
  "slint-build",

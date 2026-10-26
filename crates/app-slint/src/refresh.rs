@@ -38,6 +38,7 @@ pub fn after_tree_change(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
     dialogs::alert::push(ui_h, state);
     // 粘贴命名确认成功后要在这里关闭对话框。
     dialogs::paste_group::push(ui_h, state);
+    dialogs::excel_mapping::push(ui_h, state);
 }
 
 /// grid 单元格写入或表头改了。dirty 标记会冒到树面板，所以也刷树。
@@ -66,6 +67,7 @@ pub fn after_ctx_menu(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
     dialogs::pending::push_input(ui_h, state);
     dialogs::pending::push_confirm(ui_h, state);
     dialogs::paste_group::push(ui_h, state);
+    dialogs::excel_mapping::push(ui_h, state);
     dialogs::clone_project::push(ui_h, state);
     dialogs::project_settings::push(ui_h, state);
     dialogs::data_export::push(ui_h, state);
@@ -103,5 +105,6 @@ pub fn initial(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
     dialogs::pending::push_input(ui_h, state);
     dialogs::pending::push_confirm(ui_h, state);
     dialogs::paste_group::push(ui_h, state);
+    dialogs::excel_mapping::push(ui_h, state);
     crate::excel_bridge::push(ui_h, state);
 }
