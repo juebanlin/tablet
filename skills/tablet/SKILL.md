@@ -1,6 +1,6 @@
 ---
 name: tablet
-description: 生成 / 修改 / 校验 tablet 配置表，并用 tablet-cli 跑通「建项目 → 验证 → 导出」流水线。当用户要新建或扩展 .tblschema 模板、设计字段与类型、追加 # @preset 预设数据、手改 .tbl 数据文件、给列加校验规则（# @rule）、从 Unity 插件 / bat 调外部工具刷新配置、查看工作区版本分支，或执行 tablet-cli 命令（project new / schema / validate / export / excel / workspace）时使用。涵盖 .tblschema v1 与 .tbl v3/v2 格式、7 个基础类型 + 复合范式 + @Ref、内置验证器与错误/警告分级、12 种导出格式、解析器强制的命名规则、退出码约定。
+description: 生成 / 修改 / 校验 tablet 配置表，并用 tablet-cli 跑通「建项目 → 验证 → 导出」流水线。当用户要新建或扩展 .tblschema 模板、设计字段与类型、追加 # @preset 预设数据、手改 .tbl 数据文件、把任意布局的 Excel 映射导入为 .tbl（GUI）、给列加校验规则（# @rule）、从 Unity 插件 / bat 调外部工具刷新配置、查看工作区版本分支，或执行 tablet-cli 命令（project new / schema / validate / export / excel / workspace）时使用。涵盖 .tblschema v1 与 .tbl v3/v2 格式、7 个基础类型 + 复合范式 + @Ref、内置验证器与错误/警告分级、12 种导出格式、解析器强制的命名规则、退出码约定。
 user-invocable: true
 allowed-tools:
   - Read
@@ -29,6 +29,7 @@ allowed-tools:
 | 从零建一套配置 | 写 `<id>.tblschema`（含 `# @preset` 数据）→ `project new --from-file` |
 | 已有的项目加/改数据 | 直接改 `projects/<id>/config/<group>/<Name>.tbl` → `workspace save` |
 | 数据在 `.xlsx` 里的组（工作簿组） | 见 §五之二：**不要手写 xlsx**，用 GUI / Excel / schema 命令 |
+| 用户给的是任意布局的 Excel | GUI：Project 根右键「导入任意 Excel（映射）...」；见 §五之四 |
 | 加一个组 / 表 / 常量 / 枚举 | `tablet-cli schema add-*`（会自动校验并落盘） |
 | 只想知道结构 | `tablet-cli schema show --fmt json` |
 | 看每个节点的有效校验规则 | `tablet-cli schema show --rules` |
@@ -209,7 +210,8 @@ max_level|int|100|cs|等级上限
 `validate` / `export` / `schema show` 完全一样，导出结果和 `.tbl` 组没有区别。
 
 - **结构与数据都在 workbook 里**：4 行表头定义字段，sheet 是数据；manifest 不含字段。
-- Table sheet：第 1–4 行是 desc / export / type / 字段名（**派生显示**，改了不生效），第 5 行起是数据。
+- Table sheet：第 1–4 行是 desc / export / type / 字段名，第 5 行起是数据。
+  这 4 行**就是结构真相源**，字段名 / 类型 / export 改了会按新表头加载。
 - Constant sheet：1 行表头 `name | type | value | export | desc`；Enum：`id | name | desc`。
 - **不要用文本工具手写 `.xlsx`**（二进制）。要改数据：GUI 里编辑、或「用 Excel 打开（原文件）」、
   或把整组转成 `.tbl`（复制组 → 粘贴为 .tbl Group）。
@@ -264,6 +266,18 @@ system 规则只读、不落盘；再挂一遍只会得到非阻断的 `RuleRedu
   不要手写 `project.toml`，用 GUI 的「项目设置 → 校验」。
 - CI 用 `validate --strict`：所有「仅提示」级也算失败。
 
+## 五之四、任意 Excel 映射导入（GUI）
+
+源 Excel 的表头行、列顺序、列名都不固定时，不要手写 `.tbl`，走 GUI：
+Project 根右键 →「导入任意 Excel（映射）...」。
+
+- 源文件只读；输出是标准 **Tbl 组**（`config/<group>/<Node>.tbl`），不是 xlsx 组。
+- 每个 Sheet 独立映射：选表头行、数据起始行、id 列、节点名和字段；可「导入当前」或「导入全部」。
+- 可选描述行 / 类型行 / 导出行（0 = 没有）；字段名规范成 snake_case，类型按样本推断，导入前可改。
+- 目前只映射 **Table**；Constant / Enum 仍用 `.tblschema` 模板或手写 `.tbl`。
+- 4 行表头已经合规的工作簿仍走「导入 Excel Group...」，那是原样复制、保留样式。
+- CLI 没有等价命令：`util xlsx-to-tbl` 需要 `.tblschema` 模板，不是任意列映射。
+
 ## 六、CLI 速查
 
 ```bash
@@ -275,7 +289,7 @@ tablet-cli [-w <workdir>] [--project <id>] [--fmt json] <命令>
 | 看模板 | `list-templates` |
 | 项目 | `project list` / `info` / `new` / `rename` / `delete --confirm` / `clone` |
 | 原生导入 | `project import-tbl --id P [--group G] <PATH>...`；`project import-xlsx --id P <FILE.xlsx>` |
-| 外部 Excel 映射 | `util xlsx-to-tbl <f.xlsx> --schema <tpl.tblschema> -o <dir>` |
+| 模板驱动 Excel 取数 | `util xlsx-to-tbl <f.xlsx> --schema <tpl.tblschema> -o <dir>`（列名要匹配模板；任意布局见 §五之四） |
 | 结构 | `schema show [--rules]`；`add-group --name G [--storage tbl\|xlsx]`；`add-table --group G --name N [--tbl-fmt v2\|v3]`；`add-constant --group G --name N`；`add-enum --group G --name N --entry 1:X:说明` |
 | 导出结构 | `schema export --out <file> [--group G] [--node G/N] [--with-preset]`；`schema export --as-template --meta-id ID` |
 | 改名 / 删除 | `schema rename-group --old A --new B`；`schema rename-node --group G --old A --new B`；`schema delete-group --name G`；`schema delete-node --group G --name N` |

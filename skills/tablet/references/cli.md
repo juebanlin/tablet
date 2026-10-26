@@ -44,6 +44,8 @@ tablet-cli project delete --id <id> --confirm
 - `delete` / `clone` 目标不存在 → exit 1，不会假装成功。
 - `import-tbl`：文件名 = 节点名，组名默认取共同父目录；节点名项目级冲突直接失败。
 - `import-xlsx`：文件 = 组，sheet = 节点；工作簿原样复制，保留样式。
+- 任意布局 Excel 的交互式列映射目前只在 GUI（Project 根右键「导入任意 Excel（映射）...」）；
+  CLI 的 `util xlsx-to-tbl` 仍要求 `.tblschema` 模板。
 
 ## schema
 
@@ -216,6 +218,7 @@ tablet-cli util gen-test --lang java|go --schema <s.tblschema> -o <dir>
 ```
 
 `util validate-type` 是写 schema 时最快的自测手段：先验一个值再落文件。
+`util xlsx-to-tbl` 按模板 section 的列名取数；任意布局映射请走 GUI「导入任意 Excel」。
 
 ---
 

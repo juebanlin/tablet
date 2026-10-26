@@ -7,7 +7,7 @@ AI 助手就能按规则**生成配置表并驱动 CLI 跑流水线**。
 
 | 技能 | 覆盖 |
 |---|---|
-| [`tablet/`](tablet/) | `.tblschema` / `.tbl` 文件格式 + `tablet-cli` 全部命令 + 退出码约定 + Unity 宿主调用 |
+| [`tablet/`](tablet/) | `.tblschema` / `.tbl` 文件格式 + `tablet-cli` 全部命令 + 任意 Excel 映射导入（GUI） + 退出码约定 + Unity 宿主调用 |
 
 一个技能管全流程（写文件 → 建项目 → 验证 → 导出），不再拆成 format / cli 两个包。
 两种组后端（`.tbl` 目录 / `.xlsx` 工作簿）都在里面，含两者的数据形态与互斥规则；
