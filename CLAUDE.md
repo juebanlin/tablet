@@ -36,6 +36,9 @@
 - 相关文档改动要同步：新增文档记得在 `docs/00-概述.md` §4 索引表加一行。
 - `skills/` 只写**当前最新范式**：不解释历史沿革、旧实现、兼容原因或防错废话；
   命令、格式和目录约定以当前代码为准。
+- `skills/tablet/` 是 skill 的唯一真理源；改完必须同步到 `.claude/skills/tablet/`
+  （该目录被 `.gitignore` 忽略，仅供本机加载），提交前用
+  `diff -rq skills/tablet .claude/skills/tablet` 确认零差异。
 
 ## 代码风格
 
