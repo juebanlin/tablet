@@ -40,9 +40,9 @@ pub fn open_if_conflict(
         .into_iter()
         .map(|n| PasteGroupRowState {
             kind: match n.kind {
-                tablet_core::ops::NodeKind::Table => "Table",
-                tablet_core::ops::NodeKind::Constant => "Constant",
-                tablet_core::ops::NodeKind::Enum => "Enum",
+                tablet_core::model::NodeKind::Table => "Table",
+                tablet_core::model::NodeKind::Constant => "Constant",
+                tablet_core::model::NodeKind::Enum => "Enum",
             }
             .to_string(),
             old_name: n.old_name,

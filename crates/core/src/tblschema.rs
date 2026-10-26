@@ -1,137 +1,28 @@
-﻿use std::path::Path;
-use anyhow::{Result, bail};
+﻿use anyhow::{Result, bail};
 use crate::model::*;
 use crate::tbl_str;
 use crate::types::SeparatorsSection;
+use crate::schema_model::*;
+use crate::schema_grammar::*;
 
-#[derive(Debug, Clone, Default, PartialEq)]
-pub struct SchemaMetadata {
-    pub id: String,         // 路径标识：[a-z0-9_-]{1,32}；缺省时由调用方按文件名兜底
-    pub name: String,       // 显示文本（含中文）；缺省时 = id
-    pub category: String,   // 分类筛选（test / slg / rpg / ...）
-    pub version: String,    // semver
-    /// 项目身份：创建时间。模板侧通常为空。
-    pub created_at: String,
-    /// 项目身份：来源模板 id。手动新建 / 模板自身为空。
-    pub source_template: String,
-    /// 项目身份：来源模板版本。
-    pub source_template_version: String,
-    /// derive 字段：任一 section.preset 非空 → true。serialize 前由调用方刷新；
-    /// 反序列化阶段跟随 # @meta has_preset 行（缺省 false）。
-    pub has_preset: bool,
-}
-
-#[derive(Debug, Clone, Default, PartialEq)]
-pub struct TblSchema {
-    pub meta: SchemaMetadata,
-    /// 分隔符配置（25 个叶子键，对齐 `SeparatorsSection`）。
-    /// 缺省 = `SeparatorsSection::default()`；schema 中 `# @sep` 行覆写。
-    /// 加载链路把它复制到 `ProjectConfig.separators`（`merge_config` 时以 schema 为准），
-    /// 作为运行时唯一来源。
-    pub separators: SeparatorsSection,
-    pub sections: Vec<SchemaSection>,
-}
-
-#[derive(Debug, Clone, Default, PartialEq)]
-pub struct SchemaSection {
-    pub group: String,
-    pub name: String,
-    pub mode: SchemaMode,
-    /// 该组的数据后端。默认 Tbl；manifest / 模板 section 末尾写 `xlsx` 时为 Xlsx。
-    /// 同一组的所有 section 必须一致（解析阶段校验）。
-    pub storage: GroupStorage,
-    /// Table 段：列声明；Constant / Enum 段：永远空（entries 在项目 .tbl 里，preset 例外）。
-    pub fields: Vec<SchemaField>,
-    /// 可选预设数据（与 .tbl `---` 之后行同形态）：
-    /// - Table：每行 = 一条 record（按列序）
-    /// - Constant：每行 = `name | type | value | export | desc`
-    /// - Enum：每行 = `id | name | desc`
-    /// 仅在「带预设」的 schema 文件 / 导出选项下出现；apply_schema_to_project 按 with_preset 决定是否灌入项目。
-    pub preset: Vec<Vec<String>>,
-    /// 被引用展示列（@10）：段内 `# @display: <列名>`。`None` = 显示原始 id。
-    /// 段内可选行，仅 Table / Enum 段有意义；apply_schema_to_project 会回填到节点。
-    pub display: Option<String>,
-    /// 节点级校验规则（@01.10.7）：段内 `# @rule: <列> = <表达式> [级别]`。
-    /// **行序即优先级**；apply_rules_to_groups 会回填到节点（含 original 快照）。
-    pub rules: Vec<Rule>,
-}
-
-#[derive(Debug, Clone, PartialEq, Default)]
-pub enum SchemaMode {
-    #[default]
-    Table,
-    Constant,
-    Enum,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct SchemaField {
-    pub name: String,
-    pub tbl_type: String,
-    pub export: String,
-    pub desc: String,
-}
-
-impl SchemaField {
-    pub fn export_display(&self) -> &str {
-        match self.export.as_str() {
-            "cs" | "" => "前后端",
-            "c" => "客户端",
-            "s" => "服务器",
-            "-" => "不导出",
-            _ => "前后端",
-        }
-    }
-
-    pub fn is_server_export(&self) -> bool {
-        matches!(self.export.as_str(), "cs" | "" | "s")
-    }
-}
-
-/// 校验 metadata id 是否合法 ([a-z0-9_-]{1,32})。
-pub fn is_valid_metadata_id(id: &str) -> bool {
-    if id.is_empty() || id.len() > 32 {
-        return false;
-    }
-    id.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_' || c == '-')
-}
-
-/// schema 文件的两种角色：模板（完整结构 + 可选数据）与运行时清单（只有索引/语义）。
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub(crate) enum SchemaKind {
-    Template,
-    Manifest,
-}
-
-/// 解析模板 `.tblschema`（v1）。允许字段行与 `# @preset`。
-pub fn parse_tblschema(content: &str) -> Result<TblSchema> {
-    parse_schema(content, SchemaKind::Template)
-}
-
-/// 第一行 magic 校验：
-/// - manifest 必须显式声明 `#!tblmanifest v1`；
-/// - template 声明了 `#!` 就必须是 `#!tblschema v1`；完全没头部的片段（merge 用）仍然接受。
-fn check_schema_header(content: &str, kind: SchemaKind) -> Result<()> {
+/// 模板首行 magic：没有 `#!` 的片段允许；有则必须是 `#!tblschema v1`。
+fn check_template_header(content: &str) -> Result<()> {
     let first = content.lines().map(str::trim).find(|l| !l.is_empty());
-    match kind {
-        SchemaKind::Manifest => {
-            if first != Some("#!tblmanifest v1") {
-                bail!("line 1: 缺少 `#!tblmanifest v1` 头部（运行时文件必须是 project.tblmanifest）");
-            }
-        }
-        SchemaKind::Template => {
-            if let Some(line) = first {
-                if line.starts_with("#!") && line != "#!tblschema v1" {
-                    bail!("line 1: 不支持的模板头部 {:?}（只接受 `#!tblschema v1`）", line);
-                }
-            }
+    if let Some(line) = first {
+        if line.starts_with("#!") && line != "#!tblschema v1" {
+            bail!("line 1: 不支持的模板头部 {:?}（只接受 `#!tblschema v1`）", line);
         }
     }
     Ok(())
 }
 
-pub(crate) fn parse_schema(content: &str, kind: SchemaKind) -> Result<TblSchema> {
-    check_schema_header(content, kind)?;
+/// 解析模板 `.tblschema`（v1）。允许字段行与 `# @preset`。
+pub fn parse_tblschema(content: &str) -> Result<TblSchema> {
+    parse_schema(content)
+}
+
+fn parse_schema(content: &str) -> Result<TblSchema> {
+    check_template_header(content)?;
     let mut sections = Vec::new();
     let mut current: Option<SchemaSection> = None;
     let mut meta = SchemaMetadata::default();
@@ -152,9 +43,6 @@ pub(crate) fn parse_schema(content: &str, kind: SchemaKind) -> Result<TblSchema>
             // 仅识别独立 `# @preset`（后接空白或行尾），其它带后缀写法当注释。
             if let Some(rest) = trimmed.trim_start_matches('#').trim_start().strip_prefix("@preset") {
                 if rest.trim().is_empty() {
-                    if kind == SchemaKind::Manifest {
-                        bail!("line {}: 运行时清单不允许 `# @preset`（数据必须放在 .tbl / xlsx 里）", line_num + 1);
-                    }
                     if current.is_none() {
                         bail!("line {}: `# @preset` 必须出现在某个 [section] 之后", line_num + 1);
                     }
@@ -235,14 +123,8 @@ pub(crate) fn parse_schema(content: &str, kind: SchemaKind) -> Result<TblSchema>
                 validate_section(&sec, line_num)?;
                 sections.push(sec);
             }
-            current = Some(parse_section_header(trimmed, line_num, kind)?);
+            current = Some(parse_section_header(trimmed, line_num)?);
         } else if let Some(ref mut sec) = current {
-            if kind == SchemaKind::Manifest && !in_preset {
-                bail!(
-                    "line {}: 运行时清单不允许字段/数据行（结构由 .tbl / xlsx 表头提供）",
-                    line_num + 1
-                );
-            }
             if in_preset {
                 // preset 行：按 `|` 切并 decode，trim 单元格。空行已在外层过滤。
                 // 走 tbl_str：让用户在 schema 里用 `\|` 表示字面竖线、`\n` 表示换行等。
@@ -342,291 +224,38 @@ pub(crate) fn parse_schema(content: &str, kind: SchemaKind) -> Result<TblSchema>
 ///   `# @meta id: full`
 ///   `#@meta name: 完整测试模板`
 /// key 大小写敏感；后者覆盖前者由调用方处理。
-fn parse_meta_line(line: &str) -> Option<(String, String)> {
-    // 去掉前导 '#'，再去空白
-    let body = line.trim_start_matches('#').trim();
-    let after = body.strip_prefix("@meta")?.trim_start();
-    let (key, value) = after.split_once(':')?;
-    Some((key.trim().to_string(), value.trim().to_string()))
-}
+
 
 /// 解析 `# @sep key = value` 行；返回 (key, value)。
 /// 接受 `# @sep List = ;` / `# @sep Map.entry = ,` / `# @sep Map_Tuple2.kv = :` 形式。
 /// 与 `parse_meta_line` 区别：分隔符值通过 `=` 切（避免与 `Map.kv` 中 ':' 冲突），
 /// 等号两侧 trim，但**值本身不再 trim 内部空格**——保留原样以便支持空白类分隔符。
-fn parse_sep_line(line: &str) -> Option<(String, String)> {
-    let body = line.trim_start_matches('#').trim();
-    let after = body.strip_prefix("@sep")?.trim_start();
-    let (key, value) = after.split_once('=')?;
-    Some((key.trim().to_string(), value.trim_start().trim_end_matches('\n').to_string()))
-}
+
 
 /// 解析 `# @rule:` 的正文（冒号之后的部分）：`<列> = <表达式> [error|warn|info]`。
 ///
 /// 语法与 `# @sep key = value` 同源：用第一个 `=` 切列名与表达式，
 /// 表达式整体交给表达式解析器，不靠空格切分（列名本身不可能含空格）。
-fn parse_rule_body(body: &str) -> Result<Rule, String> {
-    let body = body.trim();
-    let (col, rest) = body
-        .split_once('=')
-        .ok_or_else(|| "`# @rule` 缺少 `=`：应为 `<列> = <表达式> [级别]`".to_string())?;
-    let col = col.trim();
-    if col.is_empty() {
-        return Err("`# @rule` 缺少列名".to_string());
-    }
-    if col.chars().any(|c| c.is_whitespace()) {
-        return Err(format!("规则列名 \"{}\" 不能含空白", col));
-    }
 
-    let mut expr = rest.trim();
-    let mut level = Severity::Error;
-    if let Some(stripped) = expr.strip_suffix(']') {
-        if let Some(open) = stripped.rfind('[') {
-            let raw_level = stripped[open + 1..].trim();
-            match Severity::parse(raw_level) {
-                Some(lv) => {
-                    level = lv;
-                    expr = stripped[..open].trim();
-                }
-                None => return Err(format!(
-                    "未知的规则级别 \"{}\"（只接受 error / warn / info）", raw_level
-                )),
-            }
-        }
-    }
-    if expr.is_empty() {
-        return Err(format!("规则 \"{}\" 缺少表达式", col));
-    }
-
-    let kind = parse_rule_expr(expr)?;
-    Ok(Rule { column: col.to_string(), kind, level, source: RuleSource::User })
-}
 
 /// 拆函数调用 `name(args)`：引号内的括号不参与匹配。
-fn split_call(expr: &str) -> Option<(&str, &str)> {
-    let open = expr.find('(')?;
-    let name = expr[..open].trim();
-    let mut in_str = false;
-    let mut esc = false;
-    let mut end = None;
-    for (i, c) in expr[open + 1..].char_indices() {
-        if in_str {
-            if esc { esc = false; }
-            else if c == '\\' { esc = true; }
-            else if c == '"' { in_str = false; }
-        } else if c == '"' {
-            in_str = true;
-        } else if c == ')' {
-            end = Some(open + 1 + i);
-            break;
-        }
-    }
-    let end = end?;
-    if !expr[end + 1..].trim().is_empty() { return None; }
-    Some((name, &expr[open + 1..end]))
-}
+
 
 /// 顶层逗号切分（引号内的逗号不切），并去掉引号 / 反转义。
-fn split_args(inner: &str) -> Result<Vec<String>, String> {
-    let mut out = Vec::new();
-    let mut cur = String::new();
-    let mut in_str = false;
-    let mut esc = false;
-    let mut had_quote = false;
-    for c in inner.chars() {
-        if in_str {
-            if esc {
-                cur.push(match c { 'n' => '\n', 't' => '\t', _ => c });
-                esc = false;
-            } else if c == '\\' {
-                esc = true;
-            } else if c == '"' {
-                in_str = false;
-            } else {
-                cur.push(c);
-            }
-        } else if c == '"' {
-            in_str = true;
-            had_quote = true;
-        } else if c == ',' {
-            out.push(cur.trim().to_string());
-            cur.clear();
-            had_quote = false;
-        } else {
-            cur.push(c);
-        }
-    }
-    if in_str { return Err("参数里的引号没有闭合".to_string()); }
-    if !inner.trim().is_empty() || had_quote {
-        out.push(cur.trim().to_string());
-    }
-    Ok(out)
-}
 
-fn arity(args: &[String], n: usize, name: &str) -> Result<(), String> {
-    if args.len() != n {
-        return Err(format!("{} 需要 {} 个参数，实际给了 {}", name, n, args.len()));
-    }
-    Ok(())
-}
+
+
 
 /// 解析内置验证器调用。
-fn parse_rule_expr(expr: &str) -> Result<RuleKind, String> {
-    let (name, inner) = split_call(expr)
-        .ok_or_else(|| format!("无法解析规则表达式 \"{}\"", expr))?;
-    let args = split_args(inner)?;
-    match name {
-        "unique" => { arity(&args, 0, name)?; Ok(RuleKind::Unique) }
-        "non_empty" => { arity(&args, 0, name)?; Ok(RuleKind::NonEmpty) }
-        "ref_exists" => {
-            arity(&args, 1, name)?;
-            let (node, target_col) = args[0]
-                .split_once('.')
-                .ok_or_else(|| "ref_exists 需要 `<节点>.<列>`".to_string())?;
-            let node = node.trim();
-            let target_col = target_col.trim();
-            if node.is_empty() || target_col.is_empty()
-                || node.chars().any(|c| c.is_whitespace())
-                || target_col.chars().any(|c| c.is_whitespace()) {
-                return Err("ref_exists 需要 `<节点>.<列>`（两侧都不能为空或含空白）".to_string());
-            }
-            Ok(RuleKind::RefExists {
-                target_node: node.to_string(),
-                target_column: target_col.to_string(),
-            })
-        }
-        "range" => {
-            arity(&args, 2, name)?;
-            Ok(RuleKind::Range { min: args[0].clone(), max: args[1].clone() })
-        }
-        "len" => {
-            arity(&args, 2, name)?;
-            Ok(RuleKind::Len { min: args[0].clone(), max: args[1].clone() })
-        }
-        "one_of" => {
-            if args.is_empty() {
-                return Err("one_of 至少需要一个候选值".to_string());
-            }
-            Ok(RuleKind::OneOf { values: args })
-        }
-        "matches" => {
-            arity(&args, 1, name)?;
-            Ok(RuleKind::Matches { pattern: args[0].clone() })
-        }
-        "required_if" => {
-            arity(&args, 2, name)?;
-            if args[0].trim().is_empty() {
-                return Err("required_if 需要一个列名".to_string());
-            }
-            Ok(RuleKind::RequiredIf { column: args[0].clone(), value: args[1].clone() })
-        }
-        "compare" => {
-            arity(&args, 2, name)?;
-            let op = CompareOp::parse(&args[1])
-                .ok_or_else(|| format!("未知的比较运算符 \"{}\"（支持 < <= > >= == !=）", args[1]))?;
-            if args[0].trim().is_empty() {
-                return Err("compare 需要一个列名".to_string());
-            }
-            Ok(RuleKind::Compare { column: args[0].clone(), op })
-        }
-        "positive_int" | "upper_snake" => Err(format!(
-            "{}() 是系统内置规则（见 @01.8.11），不需要也不能在 schema 里声明", name
-        )),
-        _ => Err(format!(
-            "未知验证器 \"{}\"（支持 unique / non_empty / ref_exists / range / len / one_of / matches / required_if / compare）",
-            name
-        )),
-    }
-}
+
 
 /// 把单个 `# @sep` 行写入 `SeparatorsSection`。未知 key 忽略（向前兼容）。
-fn apply_sep_kv(sep: &mut SeparatorsSection, key: &str, value: &str) {
-    if let Some(k) = crate::types::SepKey::from_directive_key(key) {
-        k.set(sep, value.to_string());
-    }
-}
 
-fn parse_section_header(line: &str, line_num: usize, _kind: SchemaKind) -> Result<SchemaSection> {
-    let end_bracket = line.find(']').unwrap_or(0);
-    let path = &line[1..end_bracket];
-    let rest = line[end_bracket + 1..].trim();
 
-    let (group, name) = path.split_once('/')
-        .ok_or_else(|| anyhow::anyhow!("line {}: section must be [group/Name]", line_num + 1))?;
 
-    // 名字在这里就拦下来，别等到生成了 `bad_name.tpl` 才发现。
-    // 段名会变成 .tbl 文件名、生成代码里的类名；组名会变成目录名。两者都由
-    // `validate.rs` 定义规则，这里只是把同一套规则前移到**解析**这一步 ——
-    // `project new --from-file` / `util parse-schema` / `merge-schema` 都过这个口。
-    let (group, name) = (group.trim(), name.trim());
-    if !crate::validate::is_valid_group_name(group) {
-        bail!("line {}: 组名 {:?} 不合法（只能包含中英文数字下划线）", line_num + 1, group);
-    }
-    if !crate::validate::is_valid_node_name(name) {
-        bail!(
-            "line {}: 配置项名 {:?} 不合法（必须大写字母开头，只含英文数字下划线，如 HeroBase）",
-            line_num + 1, name
-        );
-    }
-
-    let parts: Vec<&str> = rest.split_whitespace().collect();
-    let mode_str = parts.first().copied().unwrap_or("");
-    let mode = match mode_str {
-        "table" => SchemaMode::Table,
-        "constant" => SchemaMode::Constant,
-        "enum" => SchemaMode::Enum,
-        _ => bail!("line {}: mode must be 'table' / 'constant' / 'enum'", line_num + 1),
-    };
-
-    // 后端标记：只认 `xlsx`（默认 tbl）。`index=` 是历史选项，继续忽略；
-    // 其它未知 token 直接报错，避免把拼错的 `xls` 当注释吞掉。
-    let mut storage = GroupStorage::Tbl;
-    for opt in parts.iter().skip(1) {
-        if *opt == "xlsx" {
-            storage = GroupStorage::Xlsx;
-        } else if opt.starts_with("index=") {
-            // index 永远是 id（@01.10），保留兼容旧模板
-        } else if *opt == "tbl" {
-            storage = GroupStorage::Tbl;
-        } else {
-            bail!(
-                "line {}: 未知 section 选项 {:?}（只支持 xlsx / tbl）",
-                line_num + 1, opt
-            );
-        }
-    }
-    Ok(SchemaSection {
-        group: group.trim().to_string(),
-        name: name.trim().to_string(),
-        mode,
-        storage,
-        fields: Vec::new(),
-        preset: Vec::new(),
-        display: None,
-
-        rules: Vec::new(),
-    })
-}
 
 /// 同一组只能有一种后端：解析后统一检查，避免 manifest 里一段 tbl、一段 xlsx。
-fn validate_storage_consistency(sections: &[SchemaSection]) -> Result<()> {
-    let mut seen: std::collections::HashMap<&str, GroupStorage> = std::collections::HashMap::new();
-    for sec in sections {
-        match seen.get(sec.group.as_str()) {
-            Some(&s) if s != sec.storage => {
-                bail!(
-                    "[{}/{}] 与同组其它 section 的 storage 不一致（同组必须统一为 tbl 或 xlsx）",
-                    sec.group, sec.name
-                );
-            }
-            Some(_) => {}
-            None => {
-                seen.insert(sec.group.as_str(), sec.storage);
-            }
-        }
-    }
-    Ok(())
-}
+
 
 fn parse_field_line(line: &str, line_num: usize, mode: &SchemaMode) -> Result<SchemaField> {
     let parts: Vec<&str> = line.split('|').collect();
@@ -704,33 +333,9 @@ pub fn serialize_tblschema(schema: &TblSchema) -> String {
     let mut s = String::new();
     writeln!(s, "#!tblschema v1").unwrap();
 
-    // metadata：仅非空字段输出
-    if !schema.meta.id.is_empty() {
-        writeln!(s, "# @meta id: {}", schema.meta.id).unwrap();
-    }
-    if !schema.meta.name.is_empty() && schema.meta.name != schema.meta.id {
-        writeln!(s, "# @meta name: {}", schema.meta.name).unwrap();
-    }
-    if !schema.meta.category.is_empty() {
-        writeln!(s, "# @meta category: {}", schema.meta.category).unwrap();
-    }
-    if !schema.meta.version.is_empty() {
-        writeln!(s, "# @meta version: {}", schema.meta.version).unwrap();
-    }
-    if !schema.meta.created_at.is_empty() {
-        writeln!(s, "# @meta created_at: {}", schema.meta.created_at).unwrap();
-    }
-    if !schema.meta.source_template.is_empty() {
-        writeln!(s, "# @meta source_template: {}", schema.meta.source_template).unwrap();
-    }
-    if !schema.meta.source_template_version.is_empty() {
-        writeln!(s, "# @meta source_template_version: {}", schema.meta.source_template_version).unwrap();
-    }
     // has_preset 是 derive 字段：以实际 sections 为准
     let has_preset = schema.sections.iter().any(|s| !s.preset.is_empty());
-    if has_preset {
-        writeln!(s, "# @meta has_preset: true").unwrap();
-    }
+    write_meta(&mut s, &schema.meta, has_preset);
 
     // separators：仅输出与默认不同的字段，避免普通 schema 满屏 25 行
     write_sep_diff(&mut s, &schema.separators);
@@ -740,9 +345,7 @@ pub fn serialize_tblschema(schema: &TblSchema) -> String {
         write_section_header(&mut s, sec);
 
         // 被引用展示列（@10）：非默认时输出。
-        if let Some(d) = &sec.display {
-            writeln!(s, "# @display: {}", d).unwrap();
-        }
+        write_display(&mut s, sec);
 
         // 仅 Table 段输出列声明；Constant / Enum 段是「结构在项目 .tbl 里」，schema 只留段头。
         if matches!(sec.mode, SchemaMode::Table) {
@@ -751,15 +354,7 @@ pub fn serialize_tblschema(schema: &TblSchema) -> String {
             }
         }
 
-        // 节点级校验规则：行序即优先级，原样按顺序输出。
-        for rule in &sec.rules {
-            let level = match rule.level {
-                Severity::Error => "",
-                Severity::Warning => " [warn]",
-                Severity::Info => " [info]",
-            };
-            writeln!(s, "# @rule: {} = {}{}", rule.column, rule.expr_string(), level).unwrap();
-        }
+        write_rules(&mut s, sec);
 
         // 预设数据 sub-block
         if !sec.preset.is_empty() {
@@ -778,31 +373,10 @@ pub fn serialize_tblschema(schema: &TblSchema) -> String {
 
 /// 写 `[group/Name] mode [xlsx]`。storage 是组属性，但 manifest / 模板都按 section
 /// 原样携带，读的人不用再查路径。
-pub(crate) fn write_section_header(s: &mut String, sec: &SchemaSection) {
-    use std::fmt::Write;
-    let mode = match sec.mode {
-        SchemaMode::Table => "table",
-        SchemaMode::Constant => "constant",
-        SchemaMode::Enum => "enum",
-    };
-    match sec.storage {
-        GroupStorage::Tbl => { writeln!(s, "[{}/{}] {}", sec.group, sec.name, mode).unwrap(); }
-        GroupStorage::Xlsx => { writeln!(s, "[{}/{}] {} xlsx", sec.group, sec.name, mode).unwrap(); }
-    }
-}
+
 
 /// 把 SeparatorsSection 中与默认不同的字段写成 `# @sep` 行。全部默认 = 不输出。
-pub(crate) fn write_sep_diff(s: &mut String, sep: &SeparatorsSection) {
-    use std::fmt::Write;
-    use crate::types::SepKey;
-    let d = SeparatorsSection::default();
-    for k in SepKey::ALL {
-        let v = k.get(sep);
-        if v != k.get(&d) {
-            writeln!(s, "# @sep {} = {}", k.as_directive_key(), v).unwrap();
-        }
-    }
-}
+
 
 /// 把 project 反向编码成 TblSchema：
 /// - Table 段：列定义照写；with_preset=true 时把 records 作为 preset 行
@@ -810,89 +384,9 @@ pub(crate) fn write_sep_diff(s: &mut String, sep: &SeparatorsSection) {
 /// - Enum 段：同 Constant
 ///
 /// meta 留空（调用方按导出场景填）。
-pub fn schema_from_project(groups: &[Group], with_preset: bool) -> TblSchema {
-    let mut sections = Vec::new();
-    for group in groups {
-        for table in &group.tables {
-            if table.deleted { continue; }
-            let fields = table.schema.fields.iter().map(|f| SchemaField {
-                name: f.name.clone(),
-                tbl_type: f.tbl_type.clone(),
-                export: export_to_code(&f.export),
-                desc: f.desc.clone(),
-            }).collect();
-            let preset = if with_preset {
-                table.records.iter().map(|r| r.clone()).collect()
-            } else {
-                Vec::new()
-            };
-            sections.push(SchemaSection {
-                group: group.name.clone(),
-                name: table.name.clone(),
-                mode: SchemaMode::Table,
-                storage: group.storage,
-                fields,
-                preset,
-                display: table.display_field.clone(),
-                rules: table.rules.clone(),
-            });
-        }
-        for constant in &group.constants {
-            if constant.deleted { continue; }
-            // 新范式：constant section 的 schema fields 永远空（结构信息全在项目 .tbl）
-            let preset = if with_preset {
-                constant.entries.iter()
-                    .filter(|e| !e.name.is_empty())
-                    .map(|e| vec![
-                        e.name.clone(),
-                        e.tbl_type.clone(),
-                        e.value.clone(),
-                        export_to_code(&e.export),
-                        e.desc.clone(),
-                    ])
-                    .collect()
-            } else {
-                Vec::new()
-            };
-            sections.push(SchemaSection {
-                group: group.name.clone(),
-                name: constant.name.clone(),
-                mode: SchemaMode::Constant,
-                storage: group.storage,
-                fields: Vec::new(),
-                preset,
-                display: None,
-                rules: Vec::new(),
-            });
-        }
-        for enum_def in &group.enums {
-            if enum_def.deleted { continue; }
-            let preset = if with_preset {
-                enum_def.entries.iter()
-                    .filter(|e| !e.id.is_empty() || !e.name.is_empty())
-                    .map(|e| vec![e.id.clone(), e.name.clone(), e.desc.clone()])
-                    .collect()
-            } else {
-                Vec::new()
-            };
-            sections.push(SchemaSection {
-                group: group.name.clone(),
-                name: enum_def.name.clone(),
-                mode: SchemaMode::Enum,
-                storage: group.storage,
-                fields: Vec::new(),
-                preset,
-                display: enum_def.display_field.clone(),
-                rules: enum_def.rules.clone(),
-            });
-        }
-    }
-    TblSchema { meta: SchemaMetadata::default(), separators: Default::default(), sections }
-}
 
-fn export_to_code(e: &Export) -> String {
-    e.code().to_string()
-}
+
+
 
 /// 把 schema sections 应用到 project：
 /// - Table 段写入 / 替换列定义；with_preset=true 时把 preset 行作为 records 灌入
@@ -901,263 +395,20 @@ fn export_to_code(e: &Export) -> String {
 ///     - with_preset=false：entries 留空（用户在 UI 里手动添加）
 ///
 /// 返回 (added_nodes, overwritten_nodes)。
-pub fn apply_schema_to_project(
-    groups: &mut Vec<Group>,
-    sections: &[SchemaSection],
-    config_dir: &Path,
-    with_preset: bool,
-) -> Result<(usize, usize)> {
-    validate_storage_consistency(sections)?;
-    // 先只读校验一遍：后端不一致必须在改动任何节点之前失败，避免留下半截导入。
-    for sec in sections {
-        if let Some(g) = groups.iter().find(|g| g.name == sec.group) {
-            if g.storage != sec.storage {
-                bail!(
-                    "组 {} 已存在且后端是 {}，模板要求 {}；不自动转换后端",
-                    sec.group, g.storage.as_str(), sec.storage.as_str()
-                );
-            }
-        }
-    }
 
-    let mut added = 0usize;
-    let mut overwritten = 0usize;
-
-    for sec in sections {
-        let group = match groups.iter_mut().find(|g| g.name == sec.group) {
-            Some(g) => {
-                if g.storage != sec.storage {
-                    bail!(
-                        "组 {} 已存在且后端是 {}，模板要求 {}；不自动转换后端",
-                        sec.group, g.storage.as_str(), sec.storage.as_str()
-                    );
-                }
-                g
-            }
-            None => {
-                let dir = if sec.storage == GroupStorage::Xlsx {
-                    config_dir.to_path_buf()
-                } else {
-                    config_dir.join(&sec.group)
-                };
-                groups.push(Group {
-                    name: sec.group.clone(),
-                    original_name: sec.group.clone(),
-                    dir,
-                    tables: Vec::new(),
-                    constants: Vec::new(),
-                    enums: Vec::new(),
-                    is_new: true,
-                    storage: sec.storage,
-                    book_stamp: None,
-                });
-                groups.last_mut().unwrap()
-            }
-        };
-        // 节点路径按组后端推导：xlsx 组所有节点都指向同一个工作簿。
-        let node_path = |group: &Group, name: &str| -> std::path::PathBuf {
-            if group.is_xlsx() {
-                group.book_path()
-            } else {
-                group.dir.join(format!("{}.tbl", name))
-            }
-        };
-
-        match sec.mode {
-            SchemaMode::Table => {
-                let fields: Vec<FieldDef> = sec.fields.iter().map(|f| FieldDef {
-                    name: f.name.clone(),
-                    desc: f.desc.clone(),
-                    tbl_type: f.tbl_type.clone(),
-                    // .tblschema 的字段行在 `parse_field_line` 已严格校验；这里拿到的是已校验数据
-                    export: Export::from_input(&f.export),
-                }).collect();
-                let new_len = fields.len();
-
-                let records: Vec<Vec<String>> = if with_preset {
-                    sec.preset.iter().map(|row| {
-                        let mut r = row.clone();
-                        r.resize(new_len, String::new()); // 多余/缺失列对齐
-                        r
-                    }).collect()
-                } else {
-                    Vec::new()
-                };
-
-                if let Some(table) = group.tables.iter_mut().find(|t| t.name == sec.name) {
-                    let old_len = table.schema.fields.len();
-                    table.schema.fields = fields;
-                    if with_preset {
-                        // preset 覆盖现有 records（与 overwritten 语义一致）
-                        table.records = records;
-                    } else {
-                        // 仅同步列结构，保留现有 records 但按新列数 resize
-                        for row in &mut table.records {
-                            row.resize(new_len, String::new());
-                            if new_len < old_len { row.truncate(new_len); }
-                        }
-                    }
-                    table.display_field = sec.display.clone();
-                    table.rules = sec.rules.clone();
-                    table.dirty = true;
-                    overwritten += 1;
-                } else {
-                    let path = node_path(group, &sec.name);
-                    group.tables.push(Table {
-                        name: sec.name.clone(),
-                        original_name: sec.name.clone(),
-                        path,
-                        schema: TableSchema { fields: fields.clone() },
-                        records,
-                        dirty: true,
-                        deleted: false,
-                        original_records: Vec::new(),
-                        original_fields: fields,
-                        saved: false,
-                        fmt_ver: crate::tbl::DEFAULT_TBL_VERSION,
-                        display_field: sec.display.clone(),
-                        original_display_field: None,
-                        rules: sec.rules.clone(),
-                        original_rules: Vec::new(),
-                    });
-                    added += 1;
-                }
-            }
-            SchemaMode::Constant => {
-                // preset 行：name | type | value | export | desc
-                let entries: Vec<ConstEntry> = if with_preset {
-                    sec.preset.iter().map(|row| ConstEntry {
-                        name:     row.first()  .cloned().unwrap_or_default(),
-                        tbl_type: row.get(1)   .cloned().unwrap_or_default(),
-                        value:    row.get(2)   .cloned().unwrap_or_default(),
-                        // 常量预设行同样在 parse_tblschema 里校验过
-                        export:   Export::from_input(row.get(3).map(String::as_str).unwrap_or("cs")),
-                        desc:     row.get(4)   .cloned().unwrap_or_default(),
-                    }).collect()
-                } else {
-                    Vec::new()
-                };
-
-                if let Some(constant) = group.constants.iter_mut().find(|c| c.name == sec.name) {
-                    if with_preset {
-                        constant.entries = entries;
-                    } // 不带预设：保留现有 entries，仅记一次 overwritten
-                    constant.dirty = true;
-                    overwritten += 1;
-                } else {
-                    let path = node_path(group, &sec.name);
-                    let snap = entries.clone();
-                    group.constants.push(Constant {
-                        name: sec.name.clone(),
-                        original_name: sec.name.clone(),
-                        path,
-                        entries,
-                        dirty: true,
-                        deleted: false,
-                        original_entries: snap, saved: false,
-                    });
-                    added += 1;
-                }
-            }
-            SchemaMode::Enum => {
-                // preset 行：id | name | desc
-                let entries: Vec<EnumEntry> = if with_preset {
-                    sec.preset.iter().map(|row| EnumEntry {
-                        id:   row.first().cloned().unwrap_or_default(),
-                        name: row.get(1) .cloned().unwrap_or_default(),
-                        desc: row.get(2) .cloned().unwrap_or_default(),
-                    }).collect()
-                } else {
-                    Vec::new()
-                };
-
-                if let Some(en) = group.enums.iter_mut().find(|e| e.name == sec.name) {
-                    if with_preset {
-                        en.entries = entries;
-                    }
-                    en.display_field = sec.display.clone();
-                    en.rules = sec.rules.clone();
-                    en.dirty = true;
-                    overwritten += 1;
-                } else {
-                    let path = node_path(group, &sec.name);
-                    let snap = entries.clone();
-                    group.enums.push(EnumDef {
-                        name: sec.name.clone(),
-                        original_name: sec.name.clone(),
-                        path,
-                        entries,
-                        dirty: true,
-                        deleted: false,
-                        original_entries: snap, saved: false,
-                        display_field: sec.display.clone(),
-                        original_display_field: None,
-                        rules: sec.rules.clone(),
-                        original_rules: Vec::new(),
-                    });
-                    added += 1;
-                }
-            }
-        }
-    }
-
-    Ok((added, overwritten))
-}
 
 /// 把 schema 各段里的 `# @display` 回填到对应节点（被引用展示列，@10）。
 ///
 /// `.tbl` 里不含被引用展示列信息——它只住在 project.tblmanifest。加载项目时先由 .tbl 得到
 /// groups（display_field 全为 None），再调本函数用 schema 段回填。按 (group, name) 匹配。
-pub fn apply_display_to_groups(groups: &mut [Group], schema: &TblSchema) {
-    for sec in &schema.sections {
-        let Some(display) = &sec.display else { continue };
-        let Some(group) = groups.iter_mut().find(|g| g.name == sec.group) else { continue };
-        match sec.mode {
-            SchemaMode::Table => {
-                if let Some(t) = group.tables.iter_mut().find(|t| t.name == sec.name) {
-                    t.display_field = Some(display.clone());
-                    // 这是**从盘上读回来的**值（`.tbl` 里没有 `# @display`，靠 schema 回填），
-                    // 所以快照要一起填——否则一打开就显示"改过"，项目永远亮 🟡。
-                    t.original_display_field = Some(display.clone());
-                }
-            }
-            SchemaMode::Enum => {
-                if let Some(e) = group.enums.iter_mut().find(|e| e.name == sec.name) {
-                    e.display_field = Some(display.clone());
-                    e.original_display_field = Some(display.clone());
-                }
-            }
-            SchemaMode::Constant => {}
-        }
-    }
-}
+
 
 /// 把 schema 各段里的 `# @rule` 回填到对应节点（节点级校验规则，@01.10.7）。
 ///
 /// 规则只住在 project.tblmanifest——`.tbl` 与 xlsx sheet 都不含。加载项目时先由数据文件
 /// 得到 groups（rules 全为空），再用本函数回填，**同时填 original 快照**
 /// （这是从盘上读回来的值，不能算脏）。按 (group, name) 匹配。
-pub fn apply_rules_to_groups(groups: &mut [Group], schema: &TblSchema) {
-    for sec in &schema.sections {
-        let Some(group) = groups.iter_mut().find(|g| g.name == sec.group) else { continue };
-        match sec.mode {
-            SchemaMode::Table => {
-                if let Some(t) = group.tables.iter_mut().find(|t| t.name == sec.name) {
-                    t.rules = sec.rules.clone();
-                    t.original_rules = sec.rules.clone();
-                }
-            }
-            // 常量不支持规则（@01.8.8）：schema 里写了也在解析阶段报错。
-            SchemaMode::Constant => {}
-            SchemaMode::Enum => {
-                if let Some(e) = group.enums.iter_mut().find(|e| e.name == sec.name) {
-                    e.rules = sec.rules.clone();
-                    e.original_rules = sec.rules.clone();
-                }
-            }
-        }
-    }
-}
+
 
 /// 解析后给缺失的 metadata 兜底：id 走文件名 stem，name 等于 id（如未填）。
 /// 调用方在已知文件路径时使用：例如 `LocalTemplates` 扫目录时把 `<stem>` 灌进去。
@@ -1173,6 +424,7 @@ pub fn fill_metadata_defaults(schema: &mut TblSchema, file_stem: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::schema_projection::{apply_display_to_groups, apply_rules_to_groups};
 
     /// 段名 / 组名在**解析**这一步就拦下来。
     ///

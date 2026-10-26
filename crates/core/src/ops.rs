@@ -1287,13 +1287,6 @@ impl AvailableProject {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub enum NodeKind {
-    Table,
-    Constant,
-    Enum,
-}
-
 /// 粘贴组预览里的一行。
 #[derive(Clone, Debug)]
 pub struct PasteNodePreview {
@@ -1310,14 +1303,6 @@ pub struct PasteGroupPreview {
     pub group_conflict: bool,
     pub nodes: Vec<PasteNodePreview>,
     pub has_conflict: bool,
-}
-
-/// 跨 project 复制粘贴的节点载荷（深拷贝）。
-#[derive(Clone, Debug, PartialEq)]
-pub enum NodeBody {
-    Table(Table),
-    Constant(Constant),
-    Enum(EnumDef),
 }
 
 /// 进程内剪贴板：tree 面板的复制粘贴载体（与 OS 剪贴板互不干扰）。
@@ -1607,10 +1592,10 @@ impl ProjectEngine {
     /// `with_preset`：当 schema.meta.has_preset=true 时是否把 # @preset 行一并灌入项目。
     pub fn create_project_in_memory_with(
         &mut self,
-        schema: crate::tblschema::TblSchema,
+        schema: crate::schema_model::TblSchema,
         with_preset: bool,
     ) -> Result<String, String> {
-        if !crate::tblschema::is_valid_metadata_id(&schema.meta.id) {
+        if !crate::schema_model::is_valid_metadata_id(&schema.meta.id) {
             return Err(format!("project id 不合法: {}", schema.meta.id));
         }
         if self.available_projects.iter().any(|a| a.id == schema.meta.id) {
@@ -1632,7 +1617,7 @@ impl ProjectEngine {
             config,
             schema: schema.clone(),
             // 还没落盘 → 「盘上」是空的
-            original_meta: crate::tblschema::SchemaMetadata::default(),
+            original_meta: crate::schema_model::SchemaMetadata::default(),
             original_separators: Default::default(),
             // 盘上没有 project.toml，而加载缺省时 export 是从全局继承的 → 现值就是"盘上值"
             original_export: config_export,
@@ -1644,7 +1629,7 @@ impl ProjectEngine {
         // 用 apply_schema_to_project 把 sections 展开为 groups+nodes：
         // 它会建出 group.is_new=true、节点 dirty=true、original=""，正好对齐"内存模式"语义。
         let data_dir = new_project.data_dir();
-        crate::tblschema::apply_schema_to_project(
+        crate::schema_projection::apply_schema_to_project(
             &mut new_project.groups,
             &schema.sections,
             &data_dir,
@@ -1674,7 +1659,7 @@ impl ProjectEngine {
     /// 的空壳在 `projects` / `available_projects` 里，也让调用方能如实报出来。
     pub fn create_project_from_schema(
         &mut self,
-        schema: crate::tblschema::TblSchema,
+        schema: crate::schema_model::TblSchema,
     ) -> Result<String, String> {
         let with_preset = schema.meta.has_preset;
         let id = self.create_project_in_memory_with(schema, with_preset)?;
@@ -1708,7 +1693,7 @@ impl ProjectEngine {
         new_id: &str,
         new_name: &str,
     ) -> Option<String> {
-        if !crate::tblschema::is_valid_metadata_id(new_id) {
+        if !crate::schema_model::is_valid_metadata_id(new_id) {
             self.error_log(format!("project id 不合法: {}", new_id));
             return None;
         }
@@ -1726,7 +1711,7 @@ impl ProjectEngine {
             chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
         // source_template* 沿用源（克隆来源最早还是那个 template）
         // 克隆体的「盘上」是空的，不能继承源项目盘上的那份
-        new_project.original_meta = crate::tblschema::SchemaMetadata::default();
+        new_project.original_meta = crate::schema_model::SchemaMetadata::default();
         new_project.original_separators = Default::default();
         new_project.original_export = new_project.config.export.clone();
         new_project.original_validate = new_project.config.validate.clone();
@@ -4372,7 +4357,7 @@ impl ProjectEngine {
     /// 检查范围：所有 available（即盘上 projects/<id>/），而非仅已打开。
     pub fn validate_project_id_rename(&self, new_id: &str, old_id: &str) -> Option<String> {
         if new_id.is_empty() { return Some("Project id 不能为空".to_string()); }
-        if !crate::tblschema::is_valid_metadata_id(new_id) {
+        if !crate::schema_model::is_valid_metadata_id(new_id) {
             return Some("Project id 必须是 [a-z0-9_-]，长度 1-32".to_string());
         }
         if new_id != old_id && self.available_projects.iter().any(|a| a.id == new_id) {
@@ -4739,7 +4724,7 @@ mod project_toml_template_tests {
     }
 
     fn make_project(workdir: PathBuf, project_root: PathBuf, id: &str) -> Project {
-        let mut schema = crate::tblschema::TblSchema::default();
+        let mut schema = crate::schema_model::TblSchema::default();
         schema.meta.id = id.to_string();
         schema.meta.name = id.to_string();
         let config = ProjectConfig::default();
@@ -4750,7 +4735,7 @@ mod project_toml_template_tests {
             project_root,
             config,
             schema,
-            original_meta: crate::tblschema::SchemaMetadata::default(),
+            original_meta: crate::schema_model::SchemaMetadata::default(),
             original_separators: Default::default(),
             original_export,
             original_validate,
@@ -6319,7 +6304,7 @@ package = \"com.user.kept\"
 
     // ── 从 schema 落地项目：L2 + 闸门 + L1 ────────────────────────────
 
-    fn schema_from(text: &str) -> crate::tblschema::TblSchema {
+    fn schema_from(text: &str) -> crate::schema_model::TblSchema {
         crate::tblschema::parse_tblschema(text).expect("parse schema")
     }
 

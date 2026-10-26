@@ -96,7 +96,7 @@ mod tests {
         use std::collections::HashMap;
 
         use crate::model::{Constant, ConstEntry, EnumDef, EnumEntry, Export, FieldDef, Table, TableSchema};
-        use crate::tblschema::SchemaMode;
+        use crate::schema_model::SchemaMode;
         use crate::types::SeparatorsSection;
         use crate::validate::{validate_constant, validate_enum, validate_table, RefIndex};
 

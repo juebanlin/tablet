@@ -57,9 +57,9 @@ pub fn run_schema_export(
     engine: &ProjectEngine,
     opts: &SchemaExportOptions,
 ) -> Result<SchemaExportOutcome> {
-    use tablet_core::tblschema::{
-        is_valid_metadata_id, schema_from_project, serialize_tblschema, TblSchema,
-    };
+    use tablet_core::schema_model::{is_valid_metadata_id, TblSchema};
+    use tablet_core::schema_projection::schema_from_project;
+    use tablet_core::tblschema::serialize_tblschema;
 
     let project = engine.active()
         .ok_or_else(|| anyhow::anyhow!("没有活跃的 Project"))?;

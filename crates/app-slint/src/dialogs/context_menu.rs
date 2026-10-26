@@ -192,7 +192,8 @@ fn sections_for(kind: &CtxMenuKind, state: &AppState) -> Vec<Vec<MenuAction>> {
 
 /// 判断一个动作在当前层级 / 状态下是否可用，并给出文案（不可用返回 None）。
 fn entry(action: MenuAction, kind: &CtxMenuKind, state: &AppState) -> Option<CtxMenuItem> {
-    use tablet_core::ops::{NodeBody, NodeClipboard, NodeKind};
+    use tablet_core::model::{NodeBody, NodeKind};
+    use tablet_core::ops::NodeClipboard;
 
     let cb = state.engine.node_clipboard.as_ref();
     let has_node_cb = cb.map_or(false, NodeClipboard::is_node);

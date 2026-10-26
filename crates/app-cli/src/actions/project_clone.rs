@@ -13,7 +13,7 @@ pub fn run_project_clone(
     if !engine.available().iter().any(|a| a.id == source_id) {
         bail!("源 Project 不存在: {}", source_id);
     }
-    if !tablet_core::tblschema::is_valid_metadata_id(new_id) {
+    if !tablet_core::schema_model::is_valid_metadata_id(new_id) {
         bail!("新 id 不合法（要求 [a-z0-9_-]{{1,32}}）：{}", new_id);
     }
     if engine.available().iter().any(|a| a.id == new_id) {

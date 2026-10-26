@@ -32,7 +32,7 @@ pub fn run_new_project(
     name: Option<&str>,
     switch_after: bool,
 ) -> Result<NewProjectOutcome> {
-    use tablet_core::tblschema::is_valid_metadata_id;
+    use tablet_core::schema_model::is_valid_metadata_id;
     if !is_valid_metadata_id(project_id) {
         anyhow::bail!("Project id 不合法（要求 [a-z0-9_-]{{1,32}}）：{}", project_id);
     }

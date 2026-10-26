@@ -4,21 +4,121 @@
 //! `.tbl` 表头或 workbook 表头，数据在数据文件里。模板 `.tblschema` 仍归
 //! [`crate::tblschema`] 管。
 //!
-//! 两种文件共享 section 语法，但清单不允许字段行和 `# @preset`；这条限制在
-//! 共享解析器里按 [`SchemaKind::Manifest`] 执行。
+//! 两种文件共享 section / directive 词法（`schema_grammar`），但清单自己的解析器
+//! 拒绝字段行和 `# @preset`；模板规则不进入本模块。
 
-use anyhow::Result;
+use anyhow::{Result, bail};
 
-use crate::model::Severity;
-use crate::tblschema::{
-    parse_schema, write_section_header, write_sep_diff, SchemaKind, TblSchema,
+use crate::schema_grammar::{
+    apply_sep_kv, parse_meta_line, parse_rule_body, parse_sep_line,
+    parse_section_header, validate_storage_consistency, write_display, write_meta,
+    write_rules, write_sep_diff, write_section_header,
 };
+use crate::schema_model::{
+    is_valid_metadata_id, SchemaMetadata, TblSchema,
+};
+use crate::types::SeparatorsSection;
 
 pub const MANIFEST_HEADER: &str = "#!tblmanifest v1";
 
-/// 解析运行时清单。
+/// 解析运行时清单。manifest 不允许字段行 / 数据行 / `# @preset`。
 pub fn parse_tblmanifest(content: &str) -> Result<TblSchema> {
-    parse_schema(content, SchemaKind::Manifest)
+    let first = content.lines().map(str::trim).find(|l| !l.is_empty());
+    if first != Some(MANIFEST_HEADER) {
+        bail!("line 1: 缺少 `{}` 头部（运行时文件必须是 project.tblmanifest）", MANIFEST_HEADER);
+    }
+
+    let mut sections = Vec::new();
+    let mut current: Option<crate::schema_model::SchemaSection> = None;
+    let mut meta = SchemaMetadata::default();
+    let mut meta_id_line: Option<usize> = None;
+    let mut separators = SeparatorsSection::default();
+    let mut seen_section = false;
+
+    for (line_num, line) in content.lines().enumerate() {
+        let trimmed = line.trim();
+        if trimmed.trim().is_empty() { continue; }
+
+        if trimmed.starts_with('#') {
+            if let Some(rest) = trimmed.trim_start_matches('#').trim_start().strip_prefix("@preset") {
+                if rest.trim().is_empty() {
+                    bail!("line {}: 运行时清单不允许 `# @preset`（数据必须放在 .tbl / xlsx 里）", line_num + 1);
+                }
+            }
+            if let Some(rest) = trimmed.trim_start_matches('#').trim_start().strip_prefix("@display") {
+                if let Some(v) = rest.trim_start().strip_prefix(':') {
+                    if let Some(ref mut sec) = current {
+                        let v = v.trim();
+                        sec.display = if v.is_empty() { None } else { Some(v.to_string()) };
+                    }
+                    continue;
+                }
+            }
+            if let Some(rest) = trimmed.trim_start_matches('#').trim_start().strip_prefix("@rule") {
+                let ours = rest.is_empty() || rest.starts_with(':')
+                    || rest.starts_with(|c: char| c.is_whitespace());
+                if ours {
+                    if current.is_none() {
+                        bail!("line {}: `# @rule` 必须出现在某个 [section] 之后", line_num + 1);
+                    }
+                    let after = rest.trim_start();
+                    let Some(body) = after.strip_prefix(':') else {
+                        bail!("line {}: `# @rule` 只支持 `# @rule: <列> = <表达式> [级别]`", line_num + 1);
+                    };
+                    if let Some(ref sec) = current {
+                        if matches!(sec.mode, crate::schema_model::SchemaMode::Constant) {
+                            bail!("line {}: constant 段不支持 `# @rule`", line_num + 1);
+                        }
+                    }
+                    let rule = parse_rule_body(body)
+                        .map_err(|msg| anyhow::anyhow!("line {}: {}", line_num + 1, msg))?;
+                    if let Some(ref mut sec) = current { sec.rules.push(rule); }
+                    continue;
+                }
+            }
+            if !seen_section {
+                if let Some((key, value)) = parse_meta_line(trimmed) {
+                    match key.as_str() {
+                        "id" => { meta_id_line = Some(line_num + 1); meta.id = value; }
+                        "name" => meta.name = value,
+                        "category" => meta.category = value,
+                        "version" => meta.version = value,
+                        "created_at" => meta.created_at = value,
+                        "source_template" => meta.source_template = value,
+                        "source_template_version" => meta.source_template_version = value,
+                        "has_preset" => { /* manifest 没有 preset；忽略 */ }
+                        _ => {}
+                    }
+                } else if let Some((key, value)) = parse_sep_line(trimmed) {
+                    apply_sep_kv(&mut separators, &key, &value);
+                }
+            }
+            continue;
+        }
+
+        if trimmed.starts_with('[') {
+            seen_section = true;
+            if let Some(sec) = current.take() {
+                sections.push(sec);
+            }
+            current = Some(parse_section_header(trimmed, line_num + 1)?);
+        } else if current.is_some() {
+            bail!("line {}: 运行时清单不允许字段/数据行（结构由 .tbl / xlsx 表头提供）", line_num + 1);
+        } else {
+            bail!("line {}: field outside section", line_num + 1);
+        }
+    }
+    if let Some(sec) = current { sections.push(sec); }
+
+    validate_storage_consistency(&sections)?;
+    if meta.name.is_empty() { meta.name = meta.id.clone(); }
+    meta.has_preset = false;
+    if let Some(n) = meta_id_line {
+        if !is_valid_metadata_id(&meta.id) {
+            bail!("line {}: `# @meta id` 不合法: {:?}", n, meta.id);
+        }
+    }
+    Ok(TblSchema { meta, separators, sections })
 }
 
 /// 序列化运行时清单：不写字段行、不写 preset。
@@ -27,44 +127,15 @@ pub fn serialize_tblmanifest(schema: &TblSchema) -> String {
     let mut s = String::new();
     writeln!(s, "{}", MANIFEST_HEADER).unwrap();
 
-    if !schema.meta.id.is_empty() {
-        writeln!(s, "# @meta id: {}", schema.meta.id).unwrap();
-    }
-    if !schema.meta.name.is_empty() && schema.meta.name != schema.meta.id {
-        writeln!(s, "# @meta name: {}", schema.meta.name).unwrap();
-    }
-    if !schema.meta.category.is_empty() {
-        writeln!(s, "# @meta category: {}", schema.meta.category).unwrap();
-    }
-    if !schema.meta.version.is_empty() {
-        writeln!(s, "# @meta version: {}", schema.meta.version).unwrap();
-    }
-    if !schema.meta.created_at.is_empty() {
-        writeln!(s, "# @meta created_at: {}", schema.meta.created_at).unwrap();
-    }
-    if !schema.meta.source_template.is_empty() {
-        writeln!(s, "# @meta source_template: {}", schema.meta.source_template).unwrap();
-    }
-    if !schema.meta.source_template_version.is_empty() {
-        writeln!(s, "# @meta source_template_version: {}", schema.meta.source_template_version).unwrap();
-    }
+    write_meta(&mut s, &schema.meta, false);
 
     write_sep_diff(&mut s, &schema.separators);
 
     for sec in &schema.sections {
         writeln!(s).unwrap();
         write_section_header(&mut s, sec);
-        if let Some(d) = &sec.display {
-            writeln!(s, "# @display: {}", d).unwrap();
-        }
-        for rule in &sec.rules {
-            let level = match rule.level {
-                Severity::Error => "",
-                Severity::Warning => " [warn]",
-                Severity::Info => " [info]",
-            };
-            writeln!(s, "# @rule: {} = {}{}", rule.column, rule.expr_string(), level).unwrap();
-        }
+        write_display(&mut s, sec);
+        write_rules(&mut s, sec);
     }
     s
 }

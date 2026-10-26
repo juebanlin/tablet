@@ -3,7 +3,8 @@
 
 use std::collections::{BTreeMap, HashSet};
 use tablet_core::local_state::UserData;
-use tablet_core::ops::{NodeKind, ProjectEngine};
+use tablet_core::model::NodeKind;
+use tablet_core::ops::ProjectEngine;
 use tablet_core::project::load_workspace;
 use tablet_core::types::{BaseType, Paradigm, TblType, TypeParam};
 use std::path::Path;
@@ -745,7 +746,7 @@ pub struct SchemaExportItem {
 pub struct SchemaImportState {
     pub open: bool,
     pub file_path: String,
-    pub schema: Option<tablet_core::tblschema::TblSchema>,
+    pub schema: Option<tablet_core::schema_model::TblSchema>,
     pub items: Vec<SchemaImportItem>,
     pub checked: Vec<bool>,
     pub conflicts: Vec<bool>,
@@ -759,7 +760,7 @@ pub struct SchemaImportItem {
     pub indent: u8,           // 0=group / 1=section
     pub group: String,
     pub name: String,
-    pub mode: tablet_core::tblschema::SchemaMode,
+    pub mode: tablet_core::schema_model::SchemaMode,
 }
 
 // ──────── 新建项目 / 克隆项目 ────────
@@ -783,7 +784,7 @@ pub struct CreateProjectState {
 
     // —— FromFile tab 专用 ——
     pub file_path: String,
-    pub file_schema: Option<tablet_core::tblschema::TblSchema>,
+    pub file_schema: Option<tablet_core::schema_model::TblSchema>,
     /// parse 失败时显示的错误（占位用，目前只记 log）
     pub file_error: String,
 
@@ -793,7 +794,7 @@ pub struct CreateProjectState {
     pub tpl_search: String,
     pub tpl_selected_id: String,
     /// FromTemplate 当前选中模板的 schema 缓存（按 tpl_selected_id 加载）
-    pub tpl_schema: Option<tablet_core::tblschema::TblSchema>,
+    pub tpl_schema: Option<tablet_core::schema_model::TblSchema>,
     pub tpl_meta_id: String,
     pub tpl_meta_version: String,
 
@@ -835,7 +836,7 @@ pub struct CreatePickerItem {
     pub indent: u8,
     pub group: String,
     pub name: String,
-    pub mode: tablet_core::tblschema::SchemaMode,
+    pub mode: tablet_core::schema_model::SchemaMode,
 }
 
 impl CreateProjectState {
@@ -850,7 +851,7 @@ impl CreateProjectState {
     }
 
     /// 当前 tab 决定的 source schema（FromFile / FromTemplate 共享 picker 与 with_preset）
-    pub fn source_schema(&self) -> Option<&tablet_core::tblschema::TblSchema> {
+    pub fn source_schema(&self) -> Option<&tablet_core::schema_model::TblSchema> {
         match self.tab {
             1 => self.file_schema.as_ref(),
             2 => self.tpl_schema.as_ref(),

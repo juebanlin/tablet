@@ -113,7 +113,7 @@ pub fn push_export(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
 
 /// 把 SchemaImportState 推到 slint 端：file_loaded / items / 冲突计数。
 pub fn push_import(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
-    use tablet_core::tblschema::SchemaMode;
+    use tablet_core::schema_model::SchemaMode;
     let st = state.borrow();
     let si = &st.schema_import;
     ui_h.set_dlg_schema_import_open(si.open);
@@ -391,10 +391,9 @@ pub fn wire(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
 /// - mode=Schema   → rfd 选路径保存（meta 留空时不写 # @meta 块）
 /// - mode=Template → 写到 default_local_dir()/<id>.tblschema（id 必填，已在 UI 层校验）
 fn run_export(state: &Rc<RefCell<AppState>>) {
-    use tablet_core::tblschema::{
-        is_valid_metadata_id, schema_from_project, serialize_tblschema,
-        SchemaMetadata, TblSchema,
-    };
+    use tablet_core::schema_model::{is_valid_metadata_id, SchemaMetadata, TblSchema};
+    use tablet_core::schema_projection::schema_from_project;
+    use tablet_core::tblschema::serialize_tblschema;
     use tablet_core::template::default_local_dir;
 
     let (selected, full_schema, mode, meta) = {
@@ -485,7 +484,8 @@ fn run_export(state: &Rc<RefCell<AppState>>) {
 
 /// Schema 导入：读 file_path → parse → 填充 items/checked/conflicts。
 fn load_import(state: &Rc<RefCell<AppState>>, file_path: &str) {
-    use tablet_core::tblschema::{parse_tblschema, SchemaMode};
+    use tablet_core::schema_model::SchemaMode;
+    use tablet_core::tblschema::parse_tblschema;
     let mut st = state.borrow_mut();
     st.schema_import.file_path = file_path.to_string();
     let content = match std::fs::read_to_string(file_path) {
@@ -552,7 +552,7 @@ fn load_import(state: &Rc<RefCell<AppState>>, file_path: &str) {
 
 /// Schema 导入：把当前选中的 sections 应用到 project。
 fn run_import(state: &Rc<RefCell<AppState>>) {
-    use tablet_core::tblschema::apply_schema_to_project;
+    use tablet_core::schema_projection::apply_schema_to_project;
     let mut st = state.borrow_mut();
     let schema = match st.schema_import.schema.clone() { Some(s) => s, None => return };
     let selected: Vec<(String, String)> = st.schema_import.items.iter().enumerate()

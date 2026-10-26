@@ -15,7 +15,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
 
-use crate::tblschema::TblSchema;
+use crate::schema_model::TblSchema;
 
 mod builtin;
 mod local;
@@ -96,7 +96,7 @@ pub fn instantiate_template(schema: &TblSchema, target_dir: &Path) -> Result<()>
     // 与建项目同一条路：sections → 内存节点（preset 作为初始数据灌入）
     let mut groups: Vec<crate::model::Group> = Vec::new();
     let config_dir = target_dir.join("config");
-    crate::tblschema::apply_schema_to_project(&mut groups, &schema.sections, &config_dir, true)
+    crate::schema_projection::apply_schema_to_project(&mut groups, &schema.sections, &config_dir, true)
         .map_err(|e| anyhow::anyhow!("{}", e))?;
 
     // tbl 组渲染到内存；xlsx 组直接写工作簿（与「新建 Excel Group」同一条保存器）。
@@ -132,9 +132,8 @@ pub fn instantiate_template(schema: &TblSchema, target_dir: &Path) -> Result<()>
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tblschema::{
-        fill_metadata_defaults, parse_tblschema, SchemaField, SchemaMetadata, SchemaMode, SchemaSection,
-    };
+    use crate::schema_model::{SchemaField, SchemaMetadata, SchemaMode, SchemaSection};
+    use crate::tblschema::{fill_metadata_defaults, parse_tblschema};
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     fn unique_tmp(label: &str) -> PathBuf {
@@ -395,7 +394,7 @@ mod tests {
 #[cfg(test)]
 mod xlsx_template_tests {
     use super::*;
-    use crate::tblschema::{SchemaField, SchemaMode, SchemaSection};
+    use crate::schema_model::{SchemaField, SchemaMode, SchemaSection};
 
     fn xlsx_schema() -> TblSchema {
         let mut schema = TblSchema {

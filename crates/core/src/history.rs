@@ -15,8 +15,7 @@
 //! **不要把 `original_*` / dirty 的恢复逻辑塞进 undo**：保存成功后栈就清了，
 //! 保存失败时也不应该把「上次落盘基线」一起撤回；撤销后由 `update_dirty()` 重算。
 
-use crate::model::Project;
-use crate::ops::{NodeBody, NodeKind};
+use crate::model::{NodeBody, NodeKind, Project};
 
 /// 每个 Project 最多保留多少步（与 Excel 默认 100 级一致）。
 pub const HISTORY_LIMIT: usize = 100;

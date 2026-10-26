@@ -29,7 +29,7 @@ use anyhow::{Context, Result};
 
 use crate::model::*;
 use crate::tbl::{self, TblFile};
-use crate::tblschema::TblSchema;
+use crate::schema_model::TblSchema;
 
 pub const PROJECTS_DIR: &str = "projects";
 pub const PROJECT_TOML_FILE: &str = "project.toml";
@@ -149,9 +149,9 @@ fn load_specific_project_impl(
         Vec::new()
     };
     // 被引用展示列（@10）：.tbl 不含该信息，从 manifest 段回填到节点。
-    crate::tblschema::apply_display_to_groups(&mut groups, &manifest);
+    crate::schema_projection::apply_display_to_groups(&mut groups, &manifest);
     // 节点级校验规则（@01.10.7）：同上，规则只住在 manifest。
-    crate::tblschema::apply_rules_to_groups(&mut groups, &manifest);
+    crate::schema_projection::apply_rules_to_groups(&mut groups, &manifest);
 
     // 刚从盘上读进来，盘上的就是它自己
     let original_export = config.export.clone();
@@ -489,7 +489,7 @@ fn pick_project<'a>(candidates: &'a [ProjectListEntry], preferred: &str) -> Opti
 fn read_project_manifest(
     project_root: &Path,
     project_id_fallback: &str,
-) -> Result<crate::tblschema::TblSchema> {
+) -> Result<crate::schema_model::TblSchema> {
     let path = project_root.join(PROJECT_MANIFEST_FILE);
     let txt = match std::fs::read_to_string(&path) {
         Ok(t) => t,
@@ -513,13 +513,13 @@ fn read_project_manifest(
 fn read_project_manifest_lenient(
     project_root: &Path,
     project_id_fallback: &str,
-) -> crate::tblschema::TblSchema {
+) -> crate::schema_model::TblSchema {
     read_project_manifest(project_root, project_id_fallback)
         .unwrap_or_else(|_| fallback_schema(project_id_fallback))
 }
 
-fn fallback_schema(id: &str) -> crate::tblschema::TblSchema {
-    let mut s = crate::tblschema::TblSchema::default();
+fn fallback_schema(id: &str) -> crate::schema_model::TblSchema {
+    let mut s = crate::schema_model::TblSchema::default();
     s.meta.id = id.to_string();
     s.meta.name = id.to_string();
     s
@@ -663,7 +663,7 @@ pub(crate) fn load_xlsx_group(
     let mut book = umya_spreadsheet::reader::xlsx::lazy_read(book_path)
         .with_context(|| format!("打开 {}", book_path.display()))?;
 
-    let sections: Vec<&crate::tblschema::SchemaSection> =
+    let sections: Vec<&crate::schema_model::SchemaSection> =
         schema.sections.iter().filter(|s| s.group == name).collect();
 
     let mut tables = Vec::new();
@@ -687,13 +687,13 @@ pub(crate) fn load_xlsx_group(
             .map_err(|e| anyhow::anyhow!("打开 sheet {} 失败: {}", sheet_name, e))?;
 
         match sec.mode {
-            crate::tblschema::SchemaMode::Table => {
+            crate::schema_model::SchemaMode::Table => {
                 tables.push(table_from_sheet(sec, ws, book_path)?);
             }
-            crate::tblschema::SchemaMode::Constant => {
+            crate::schema_model::SchemaMode::Constant => {
                 constants.push(constant_from_sheet(sec, ws, book_path)?);
             }
-            crate::tblschema::SchemaMode::Enum => {
+            crate::schema_model::SchemaMode::Enum => {
                 enums.push(enum_from_sheet(sec, ws, book_path)?);
             }
         }
@@ -732,7 +732,7 @@ pub(crate) fn file_stamp(path: &Path) -> Option<(std::time::SystemTime, u64)> {
 ///
 /// 字段名非空的列 = 模型列；字段名留空的列视为策划私有列，不进入模型、保存时原样保留。
 fn table_from_sheet(
-    sec: &crate::tblschema::SchemaSection,
+    sec: &crate::schema_model::SchemaSection,
     ws: &umya_spreadsheet::Worksheet,
     book_path: &Path,
 ) -> Result<Table> {
@@ -840,7 +840,7 @@ fn parse_xlsx_export(raw: &str) -> Option<crate::model::Export> {
 
 /// Constant sheet → `Constant`。1 行表头 `name|type|value|export|desc`，按位置读。
 fn constant_from_sheet(
-    sec: &crate::tblschema::SchemaSection,
+    sec: &crate::schema_model::SchemaSection,
     ws: &umya_spreadsheet::Worksheet,
     book_path: &Path,
 ) -> Result<Constant> {
@@ -871,7 +871,7 @@ fn constant_from_sheet(
 
 /// Enum sheet → `EnumDef`。1 行表头 `id|name|desc`，按位置读。
 fn enum_from_sheet(
-    sec: &crate::tblschema::SchemaSection,
+    sec: &crate::schema_model::SchemaSection,
     ws: &umya_spreadsheet::Worksheet,
     book_path: &Path,
 ) -> Result<EnumDef> {
@@ -913,7 +913,7 @@ pub(crate) fn load_xlsx_group_all_sheets(
     dir: &Path,
     book_path: &Path,
 ) -> Result<Group> {
-    use crate::tblschema::{SchemaMode, SchemaSection};
+    use crate::schema_model::{SchemaMode, SchemaSection};
     use crate::model::GroupStorage;
 
     let mut book = umya_spreadsheet::reader::xlsx::read(book_path)
@@ -974,8 +974,8 @@ pub(crate) fn load_xlsx_group_all_sheets(
 
 /// 认一张 sheet 是 table / constant / enum。
 /// Constant / Enum 的 1 行表头是固定值；其它一律按 Table 的 4 行表头读（读不出来会报错）。
-fn detect_sheet_mode(ws: &umya_spreadsheet::Worksheet) -> crate::tblschema::SchemaMode {
-    use crate::tblschema::SchemaMode;
+fn detect_sheet_mode(ws: &umya_spreadsheet::Worksheet) -> crate::schema_model::SchemaMode {
+    use crate::schema_model::SchemaMode;
     let cell = |c: u32| ws.value((c, 1)).trim().to_string();
     if cell(1) == "name" && cell(2) == "type" && cell(3) == "value"
         && cell(4) == "export" && cell(5) == "desc"

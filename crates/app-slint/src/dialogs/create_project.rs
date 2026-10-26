@@ -11,9 +11,10 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use slint::ComponentHandle;
-use tablet_core::tblschema::{
-    is_valid_metadata_id, parse_tblschema, SchemaMode, SchemaSection, TblSchema,
+use tablet_core::schema_model::{
+    is_valid_metadata_id, SchemaMode, SchemaSection, TblSchema,
 };
+use tablet_core::tblschema::parse_tblschema;
 use tablet_core::template::{
     default_local_dir, BuiltinTemplates, LocalTemplates, TemplateContent, TemplateMeta, TemplateSource,
 };

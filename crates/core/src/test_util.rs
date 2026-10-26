@@ -1,7 +1,7 @@
 use std::fmt::Write;
 use std::path::Path;
 use crate::template::{BuiltinTemplates, TemplateSource};
-use crate::tblschema::*;
+use crate::schema_model::*;
 use crate::types::{Paradigm, TblType, TypeParam};
 
 /// 测试数据生成选项

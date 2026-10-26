@@ -230,11 +230,11 @@ pub fn wire(ui_h: &AppWindow, state: &Rc<RefCell<AppState>>) {
                 Some(TreeTarget::Group { project_id, group }) =>
                     Some(CtxMenuKind::TreeGroup { project_id, name: group }),
                 Some(TreeTarget::Table { project_id, group, name }) =>
-                    Some(CtxMenuKind::TreeNode { project_id, group, name, kind: tablet_core::ops::NodeKind::Table }),
+                    Some(CtxMenuKind::TreeNode { project_id, group, name, kind: tablet_core::model::NodeKind::Table }),
                 Some(TreeTarget::Constant { project_id, group, name }) =>
-                    Some(CtxMenuKind::TreeNode { project_id, group, name, kind: tablet_core::ops::NodeKind::Constant }),
+                    Some(CtxMenuKind::TreeNode { project_id, group, name, kind: tablet_core::model::NodeKind::Constant }),
                 Some(TreeTarget::Enum { project_id, group, name }) =>
-                    Some(CtxMenuKind::TreeNode { project_id, group, name, kind: tablet_core::ops::NodeKind::Enum }),
+                    Some(CtxMenuKind::TreeNode { project_id, group, name, kind: tablet_core::model::NodeKind::Enum }),
                 None => None,
             };
             if let Some(k) = menu_kind {

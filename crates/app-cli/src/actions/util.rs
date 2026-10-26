@@ -74,8 +74,8 @@ fn format_tbl_file(tbl: &TblFile) -> String {
     }
 }
 
-fn format_schema(schema: &tablet_core::tblschema::TblSchema) -> String {
-    use tablet_core::tblschema::SchemaMode;
+fn format_schema(schema: &tablet_core::schema_model::TblSchema) -> String {
+    use tablet_core::schema_model::SchemaMode;
     let mut out = String::new();
     out.push_str(&format!("{{\"meta\":{{\"id\":\"{}\",\"name\":\"{}\"}},\"sections\":[",
         escape_json(&schema.meta.id), escape_json(&schema.meta.name)));

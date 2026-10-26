@@ -15,7 +15,7 @@ use std::path::Path;
 use anyhow::{Context, Result};
 
 use crate::model::{ConstEntry, EnumEntry, Export, FieldDef, Table, TableSchema};
-use crate::tblschema::{SchemaMode, TblSchema};
+use crate::schema_model::{SchemaMode, TblSchema};
 
 /// 把 `xlsx_path` 按 `schema` 的 section 映射成 `.tbl`，写到 `output_dir`。
 /// 返回写出的节点数。
@@ -164,7 +164,7 @@ fn find_col(ws: &umya_spreadsheet::Worksheet, row: u32, name: &str) -> Option<u3
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tblschema::{SchemaField, SchemaMode, SchemaSection};
+    use crate::schema_model::{SchemaField, SchemaMode, SchemaSection};
 
     #[test]
     fn maps_one_row_header_excel_to_tbl() {

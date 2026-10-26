@@ -7,7 +7,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use slint::ComponentHandle;
-use tablet_core::tblschema::is_valid_metadata_id;
+use tablet_core::schema_model::is_valid_metadata_id;
 
 use crate::state::AppState;
 use crate::{refresh, AppWindow};

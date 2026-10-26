@@ -101,13 +101,13 @@ fn set_selected_display_field(state: &Rc<RefCell<AppState>>, value: &str) {
             if st.engine.active_project_id() != Some(project_id.as_str()) { return; }
             // 表的「ID」= 不转换（清空）；其它列名显式存储（@10）
             let new = if value == DISPLAY_FIELD_ID { None } else { Some(value.to_string()) };
-            st.engine.set_display_field(&group, &name, tablet_core::ops::NodeKind::Table, new)
+            st.engine.set_display_field(&group, &name, tablet_core::model::NodeKind::Table, new)
         }
         Some(SelectedNode::Enum { project_id, group, name }) => {
             if st.engine.active_project_id() != Some(project_id.as_str()) { return; }
             // 枚举默认即 name：选 name = 清空（回默认）；其余显式存储（@10）
             let new = if value == tablet_core::model::ENUM_DEFAULT_DISPLAY_FIELD { None } else { Some(value.to_string()) };
-            st.engine.set_display_field(&group, &name, tablet_core::ops::NodeKind::Enum, new)
+            st.engine.set_display_field(&group, &name, tablet_core::model::NodeKind::Enum, new)
         }
         _ => return,
     };
