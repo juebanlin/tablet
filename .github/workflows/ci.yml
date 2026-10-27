@@ -39,25 +39,29 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
 
+      # 各 setup-* 一律用当前大版本（v4/v5 那批还跑在 Node 20 上，runner 已经在报弃用）
       - name: setup java
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v6
         with:
           distribution: temurin
           java-version: '17'
 
       - name: setup go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v7
         with:
           go-version: '1.22.x'
+          # 仓库里没有 go.mod / go.sum（Go 只是 e2e 里编一下生成代码），
+          # 开着模块缓存会在 restore 阶段报 "Dependencies file is not found"
+          cache: false
 
       - name: setup dotnet
-        uses: actions/setup-dotnet@v4
+        uses: actions/setup-dotnet@v6
         with:
           dotnet-version: '8.0.x'
 
       # TypeScript 产物此前没有任何 e2e 覆盖；tsc 走 npm 全局装
       - name: setup node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: '22.x'
 
