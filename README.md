@@ -1,152 +1,135 @@
 # tablet
 
-游戏 / 应用配置表编辑工具：以 `.tbl` / `.tblschema` 为本体的可视化 + CLI 工作流，支持多 Project 树根管理、模板驱动的新建项目、12 种语言平台导出（Java / Go / C++ / C# .NET / C# Unity / C# Godot / GDScript / Lua / TypeScript / XML / JSON / ...）。
+**把游戏配置表从「一堆 Excel 附件」变成可 review、可验证、可生成代码的工程资产。**
 
-- **`tablet`**（GUI）：Slint 写的桌面端，零参数 / `--gui` 走 GUI；其它参数转 CLI fallback
-- **`tablet-cli`**：纯命令行工具，Jenkins / 自动化批处理用
-- 组有两种存储后端：默认 `.tbl` 目录（文本、可 diff），也可以是一个 `.xlsx` 工作簿（节点 = sheet，用于接管存量 Excel，见 docs/02 §26.8）
+策划照常在表格里填数据，程序拿到的是类型安全的代码：数据以 `.tbl` 纯文本进入 Git，Excel 只当编辑器；一条命令同时产出 JSON / XML 和 10 份多语言配置代码。
 
-## v1.2.3 重大改进
-
-- 🎯 **配置管理重构**：移除配置继承，改为模板式补全，简化配置访问路径
-- 🎨 **全局设置界面**：统一管理仓库级导出配置和 UI 偏好
-- ⚙️ **项目设置补齐**：新增导出配置 tab，可视化配置 27 个导出选项
-- 🗂️ **导出配置细化**：
-  - TypeScript 拆分为 ServerTypeScriptExport / ClientTypeScriptExport，支持 ESM/CommonJS 模块格式
-  - C# 拆分为 DotNetExport / UnityCSharpExport / GodotCSharpExport，针对不同运行时优化
-- 📦 **导出配置枚举化**：类型安全的枚举替换字符串字面量（如 CppJsonLib）
-- 🧹 **代码清理**：移除单项目模式兼容代码，统一多项目架构
-- 🔧 **日志系统升级**：分级日志 + ICU4X 日志过滤优化
-
-## GUI
+- **`tablet`**：桌面端（Slint）。双击 / 零参数走 GUI，其它参数自动转给 CLI——部署只需要一个 exe。
+- **`tablet-cli`**：命令行入口，给 Jenkins / CI / 自动化脚本用，与 GUI 共享同一份 core。
+- 支持多 Project、模板建项、Excel 双向桥接、任意 Excel 映射导入，以及 `.tbl` / `.xlsx` 两种存储后端。
 
 ![tablet 主界面](res/ui_main.png)
 
-四大区域：
+## 它解决什么问题
 
-- **顶部菜单栏 + 工具栏** —— 「关于」→「检查更新」跳转 GitHub 仓库；「保存」提交当前 Project 的内存改动到 .tbl 文件（保存成功后清空该项目的撤销/重做），「重新加载」丢弃改动从磁盘重读。
-- **左侧 TreeSection** —— 多 Project 树根管理：
-  - 项目列表区：新建项目（模板 / 文件 / 空白三 tab） + 排序模式下拉（ID / Name / 创建时间 / 手工拖拽）
-  - 搜索框支持名称 + 拼音首字母匹配；过滤下拉按状态筛（全部 / 改动 / 新增 / 修改 / 删除）
-  - 节点三层：Project（📦）→ Group（📁 `.tbl` 组 / 📗 工作簿组）→ Table（📊）/ Constant（📋）/ Enum（🔢）
-  - 状态 chip：`+` 新增（绿） / `*` 修改（黄） / `-` 删除（红） / `!` 验证错（红）
-- **中间 GridSection** —— Excel 风格表格编辑：
-  - GridRibbon：`Excel 编辑`（调起外部 Excel/WPS/LibreOffice）+ 显示引用名称总闸 + 被引用展示列下拉（@10）
-  - Table 4 行表头（desc 描述 / export 导出方向 / type 类型 / field 字段名）+ 数据区直接编辑
-  - 单击进选区，双击进编辑，Ctrl+C/X/V 与 Excel 完全互通；列右键插入/删除列；行号右键插入/删除行
-  - 类型选择器 / 引用选择器弹窗，支持 14 种范式（List / Set / Map / Tuple2-4 / @ref ...）
-- **底部面板**（日志 + Excel 文件 两个 tab）——
-  - **日志 tab**：操作日志、验证错误、Excel 桥接事件、覆盖配置警告统一打到这里
-  - **Excel 文件 tab**：`.excel` 目录卡片式浏览器（单击选中 / 双击打开），顶部「同步」按钮打开同步面板
+| 常见痛点 | tablet 的做法 |
+|---|---|
+| 配置散落在 Excel 里，diff / review / 合并都痛苦 | `.tbl` 一行一记录，纯文本进 Git，自动 merge |
+| 表改了，代码没跟上 | 一套 schema 同时生成数据 + 10 份代码，CI 一键跑 |
+| 上线前才发现配置填错 | 节点级校验规则 + 分级策略，保存前拦截 |
+| 策划不愿换工具、存量 Excel 搬不动 | Excel 式编辑、外部 Excel 桥接、任意 Excel 映射导入；也可以整组直接读写 `.xlsx` |
+| 测试 / 正式 / 多渠道配置混在一起 | 多 Project 隔离，各自导出、各自配置 |
+| 保存一次满屏文件时间都变了 | 只写真正变了的文件；读不懂的文件直接报错，不静默兜底 |
 
-### 主要功能 / 操作入口
+## 适合谁
 
-- **新建项目**：项目列表区「新建项目」按钮 → 三 tab 对话框
-  - 「模板」：内置（`schemas/standard.tblschema` 等）+ 本地（`%APPDATA%/tablet/templates/`）+ 网络（占位）
-  - 「文件」：导入本地 `.tblschema` 文件骨架
-  - 「空白」：从零起项目
-- **TreeSection 右键菜单**（按节点类型分流）：
-  - **Project**（已打开）：保存 / 导出（多语言代码 + 数据）/ 导出 Schema / 导出为本地模板 / 合并 Schema / 新建 Group / 新建 Excel Group / 复制（克隆）/ 粘贴为 .tbl Group / 粘贴为 Excel Group / 项目设置（身份/分隔符/导出配置）/ 关闭 / 删除 / 在文件管理器打开
-  - **Project**（未打开）：打开 / 项目设置 / 在文件管理器打开 / 删除
-  - **Group**：新建 Table / 新建 Constant / 新建 Enum / 用 Excel 打开（`.tbl` 组走临时本；工作簿组直接开原文件）/ 复制 Group（含全部内容）/ 粘贴节点 / 粘贴为 .tbl Group / 粘贴为 Excel Group / 重命名 / 删除（工作簿组另有「从磁盘重新加载」）
-  - **叶节点**（Table / Constant / Enum）：复制 / 粘贴 / 重命名 / 删除
-  - **空白处**：新建 Group / 新建 Excel Group
-- **GridSection 右键菜单**：
-  - **列字母**（A/B/C ...）：左侧插入列 / 右侧插入列 / 删除列
-  - **行号**（1/2/3 ...）：上方插入行 / 下方插入行 / 删除行
-  - **单元格**：picker 弹窗（Ref / Type 列）/ 复制 / 剪切 / 粘贴 / 清空内容
-- **Excel 两条独立流**（@06）：
-  - **Excel 编辑桥接**：叶节点选中 → GridRibbon「Excel 编辑」/ Group 右键「用 Excel 打开」→ 导出 xlsx → 调起外部编辑器 → 监控关闭 → 自动回写内存模型。调起逻辑系统默认 → 平台候选链兜底；关闭探测三层降级（lock 文件 → Linux /proc fd → OS write）；编辑期间全屏 modal 屏蔽 UI；4h 超时自动放弃
-  - **Excel 同步面板**：底部面板「Excel 文件」tab →「同步」→ 对比 `.excel/*.xlsx` 与内存 group，逐表给同步动作（数据→ / ←数据 / 补列→ / 强制→ / 创建→ / ←导入）
-- **保存与并发**：
-  - 延迟写盘——编辑全部在内存，按「保存」才落 .tbl 文件
-  - 进程锁 `.data/tablet.lock` + PID 存活检查：**GUI 与 CLI 互斥**，同一工作区同时只有一个 tablet 进程在操作
-  - 工作簿组另有基线核对：外部 Excel 改过就拒绝保存；干净的组由后台轮询自动重载
-  - 树过滤器（全部 / 改动 / 新增 / 修改 / 删除）方便提交前 review
-- **导出**：通过 Project 右键「导出」一次跑全部已配置的目标——12 平台（Java / Go / C++ / C# .NET / Unity / Godot / GDScript / TypeScript / Lua / JSON / XML / xlsx）；导出前自动跑验证，错则中断
+- **策划 / 数值**：在 Excel 风格的表格里编辑，四行表头（描述 / 导出端 / 类型 / 字段名）、复制粘贴、列宽自适应、Ctrl+Z 连续撤销。
+- **程序**：一份 schema 生成服务端 + 客户端代码，业务扩展区间在重新导出时保留；生成代码有编译级 e2e 兜底。
+- **技术负责人 / CI**：`.tbl` 可 diff、可 review；CLI 把「验证 → 导出」串进流水线；工作区锁保证 GUI 与 CI 不会同时写。
 
-完整交互细节见 [docs/04-UI设计.md](docs/04-UI设计.md)。
+## 核心能力
+
+| 能力 | 说明 |
+|---|---|
+| **表格编辑** | Excel 式选区 / 编辑 / 剪贴板互通；7 种基础类型 + 14 种复合范式（List / Set / Map / Tuple2–4 / `@Ref` ...） |
+| **Excel 双向** | 调起外部 Excel / WPS 编辑后自动回写；底部「Excel 文件」面板做逐表同步；任意布局的 Excel 可映射导入（选表头 / 数据区 / id 列 + 列映射，多 Sheet 独立处理） |
+| **两种存储后端** | 默认 `.tbl` 目录（文本、可 diff）；也可整组用一个 `.xlsx`（节点 = sheet），直接接管存量 Excel |
+| **校验** | 内置校验 + 节点级 `# @rule`；错误 / 警告 / 提示三级，按项目策略决定阻断保存、仅提示还是忽略 |
+| **多语言导出** | JSON / XML + Java / Go / C++ / C#（.NET / Unity / Godot）/ TypeScript（服务端 / 客户端）/ Lua / GDScript，共 12 种格式 |
+| **多项目** | 同一仓库并存 `projects/<id>/`（如 slg-test / slg-prod），树上一键切换，互不影响 |
+| **可靠保存** | 编辑在内存、按「保存」落盘；只写真正变了的文件；工作区进程锁 + 工作簿外部改动检测 |
+| **AI / 自动化** | 随仓库分发 `skills/tablet`，AI 助手可独立完成「建项目 → 验证 → 导出」 |
+
+## 典型工作流
+
+```text
+策划：
+  打开 tablet → 左侧树选表 → 直接编辑 / 「Excel 编辑」
+      → 校验通过 → 保存 → .tbl（或 .xlsx）更新 → git commit / push
+
+程序 / CI：
+  git pull → tablet-cli validate → tablet-cli export all
+      → 生成 server/data + server/code + client → 编译运行
+```
+
+## v2.0.0 亮点
+
+- **任意 Excel 映射导入**：不必先改造成 tablet 格式——选表头行、数据区、id 列，把源列映射到字段，自动规范化命名、推断类型、补齐四行表头；多 Sheet 各自独立映射。
+- **工作簿组**：一组一个 `.xlsx`，节点 = sheet；结构与数据都以工作簿为准，适合接管存量 Excel。
+- **节点级校验规则**：`# @rule` 写规则，错误 / 警告 / 提示按项目策略决定是否阻断保存。
+- **按项目保存 + 连续撤销/重做 + 还原**：撤销历史按 Project 隔离；单个节点和项目设置都能「还原到已保存」。
+- **生成代码能力对齐**：字段注释、枚举反查、命名转换与撞名检测在 7 个后端拉平；业务扩展保留区间默认开启；Java 可选 Lombok `@Getter`。
+- **保存行为可预期**：只重写内容真的变了的文件；解析失败带行号 / 列 / 字段报错；GUI 与 CLI 通过工作区锁互斥。
+- **体验补强**：日志分级与过滤、列宽自适应 / 手动、工作区分支与提交号展示。
+
+## GUI 一览
+
+- **左侧项目树**：多 Project、新建项目（模板 / 文件 / 空白）、按 ID / 名称 / 创建时间排序、拼音首字母搜索、按状态过滤（全部 / 改动 / 新增 / 修改 / 删除）。
+- **中间表格**：四行表头（描述 / 导出端 / 类型 / 字段名）；「还原」「Excel 编辑」「校验规则」「显示引用名称」「被引用展示列」都在功能条上。
+- **顶部工具栏**：撤销 / 重做 / 保存 / 重新加载；标题栏显示版本、分支与提交号。
+- **底部面板**：日志（Info / Warn / Error 分级过滤）与 Excel 文件同步两个 tab。
+
+完整的右键菜单和交互细节见 [docs/04-UI设计.md](docs/04-UI设计.md)。
 
 ## CLI
 
-`tablet-cli` 是 Jenkins / CI / 终端脚本的入口，业务逻辑与 GUI 共享同一份 core。
-
-```bash
+```text
 $ tablet-cli --help
-tablet-cli v1.2.0 — TBL 配置管理工具（命令行模式）
+tablet-cli v2.0.0 — TBL 配置管理工具（命令行模式）
 
 Usage: tablet-cli [OPTIONS] <COMMAND>
 
 Commands:
-  project         项目管理 (list/info/new/rename/delete/clone)
-  schema          结构操作 (show/add-*/rename-*/delete-*)
-  export          导出数据/代码 (data/code/all)
+  project         项目管理
+  schema          结构操作
+  export          导出数据/代码
   validate        验证 .tbl 文件（支持五级粒度过滤）
-  excel           Excel 桥接 (export/import)
-  workspace       工作区操作 (save/reload/clear)
+  excel           Excel 桥接
+  workspace       工作区操作
   sep             分隔符查询
   util            底层工具（无需项目上下文）
   list-templates  列出可用模板
-
-Options:
-  -w, --workdir <WORKDIR>  工作目录 [default: .]
-      --project <PROJECT>  指定 Project id（对 util 无效）
-  -s, --set <KEY=VALUE>    覆盖配置项（对 util 无效）
-      --fmt <FORMAT>       输出格式（json = 结构化 JSON，适用查询类命令）
 ```
 
-主要功能：
-
 | 命令组 | 用途 |
-|--------|------|
-| `project list/info/new/clone/rename/delete` | 多项目管理（类似 docker container 管理） |
+|---|---|
+| `project list/info/new/clone/rename/delete` | 多项目管理 |
+| `project import-tbl/import-xlsx` | 原生导入存量 `.tbl` / Excel 工作簿 |
 | `schema show/add-*/rename-*/delete-*` | 项目结构增删改查 |
-| `export data --json/--xml [--group/--node]` | 数据导出（支持 group/node 粒度过滤） |
-| `export code --java/--go/... [--package/--namespace]` | 代码导出（支持 package/namespace 覆盖） |
-| `export all` | 全量导出（CI 一把梭） |
+| `export data --json/--xml` | 数据导出（可按 group / node 过滤） |
+| `export code --java/--go/...` | 代码导出（可覆盖 package / namespace） |
+| `export all` | 全量导出 |
 | `validate [--group/--node/--col/--row]` | 五级粒度验证 |
-| `excel export/import` | Excel 桥接（导出 xlsx 给策划编辑后回读） |
-| `workspace save/reload/clear` | 工作区状态管理 |
-| `sep show` | 分隔符配置查询（25 键 + 来源标注） |
+| `excel export/import` | Excel 桥接 |
+| `workspace save/reload/clear/info` | 工作区状态与分支信息 |
 | `util parse-*/validate-*/diff/fmt/stat/...` | 无上下文的单文件工具 |
 
-**典型 CI 流水线**：
-
 ```bash
+# 典型 CI 流水线
 tablet-cli --project slg-prod validate || exit 1
 tablet-cli --project slg-prod export all
 ```
 
-完整子命令清单 + 示例见 [docs/03-CLI工程.md](docs/03-CLI工程.md)。
+完整子命令与退出码约定见 [docs/03-CLI工程.md](docs/03-CLI工程.md)。
 
-## 文档
+## 仓库里长什么样
 
-完整设计与使用文档在 [`docs/`](docs/)：
+```text
+<repo>/
+├── tablet.toml                 工作区配置（全局默认 + 上次打开的项目）
+└── projects/<id>/
+    ├── project.tblmanifest     项目身份 + 节点索引 + 规则 / display
+    ├── project.toml            项目配置（[export] / [validate]）
+    └── config/
+        ├── <group>/<Name>.tbl  .tbl 组：结构与数据的真相源
+        └── <group>.xlsx        工作簿组：一个文件，sheet = 节点
+```
 
-- [00-概述](docs/00-概述.md) — 项目目标 / 文档导航
-- [01-tbl 系统](docs/01-tbl系统.md) — `.tbl` / `.tblschema` 文件格式与硬性规则
-- [02-核心功能](docs/02-核心功能.md) — Project / 模板 / 导出 / 验证 / 测试数据生成
-- [03-CLI 工程](docs/03-CLI工程.md) — 源码三层、仓库布局、`tablet-cli` 子命令清单
-- [04-UI 设计](docs/04-UI设计.md) — GUI 交互设计
-- [05-Slint 实现](docs/05-Slint实现.md) — GUI 实现细节
-- [06-Excel 桥接](docs/06-Excel桥接.md) — Excel 来回往返
-- [07-开发路线](docs/07-开发路线.md) — 历史决策 / 演进记录
-- [08-测试](docs/08-测试.md) — 测试体系
-- [09-平台发布](docs/09-平台发布.md) — 跨平台发布策略
+`.tbl`、`.tblschema`、`project.tblmanifest`、`project.toml` 都应进版本控制；`.tbl-cache/` 与 `.data/` 是工具临时物。
 
-## AI 辅助技能
+## 下载与构建
 
-[`skills/`](skills/) 目录下提供可分发的 AI 编程技能包，拷贝到你的项目 `.claude/skills/` 目录即可让 AI 助手操作 tablet 工具链。
-
-| 技能 | 用途 |
-|------|------|
-| [`skills/tablet/`](skills/tablet/) | `.tblschema` / `.tbl` 格式 + `tablet-cli` 命令 + 「建项目 → 验证 → 导出」流水线 |
-
-一个技能覆盖写文件与跑命令。详见 [`skills/README.md`](skills/README.md)。
-
-## 构建
-
-详细发布脚本见 [`scripts/README.md`](scripts/README.md)。
+预编译包（Windows / Linux / macOS）见 [Releases](https://github.com/juebanlin/tablet/releases)。
 
 ```bash
 # 开发：dev profile（编译速度优先）
@@ -156,6 +139,22 @@ cargo build -p tablet-cli       # CLI 二进制 → target/debug/tablet-cli[.exe
 # 发布：按宿主跑
 bash scripts/release.sh host
 ```
+
+详细发布矩阵与平台兼容性见 [docs/09-平台发布.md](docs/09-平台发布.md)。
+
+## 文档与 AI 技能
+
+完整设计与使用文档在 [`docs/`](docs/)，建议从 [00-概述](docs/00-概述.md) 开始：
+
+- [01-tbl 系统](docs/01-tbl系统.md) — `.tbl` / `.tblschema` 文件格式与硬性规则
+- [02-核心功能](docs/02-核心功能.md) — Project / 模板 / 导出 / 验证 / 存储布局
+- [03-CLI 工程](docs/03-CLI工程.md) — 源码分层、仓库布局、子命令与退出码
+- [04-UI 设计](docs/04-UI设计.md) — GUI 交互与右键菜单
+- [06-Excel 桥接](docs/06-Excel桥接.md) / [14-Excel 映射导入](docs/14-Excel映射导入.md)
+- [11-生成代码特性对照](docs/11-生成代码特性对照.md) — 各语言产物的能力矩阵
+- [12-保存与连续撤销](docs/12-保存与连续撤销.md) — 保存语义与撤销模型
+
+[`skills/tablet/`](skills/tablet/) 是可直接分发的 AI 技能包：拷贝到项目的 `.claude/skills/`，AI 助手就能读写配置表并跑完整流水线。
 
 ## 授权
 
