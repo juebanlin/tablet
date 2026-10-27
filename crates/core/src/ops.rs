@@ -538,12 +538,15 @@ fn save_project_files(project: &mut Project) -> (usize, usize, Vec<String>, bool
             return (0, 0, msgs, true);
         }
     }
-    // `project.toml` 是**可选的 `[export]` 覆盖段**：只在用户真的改过 export 时才写。
-    // 没改过就不该有文件——export 继续从工作区 `tablet.toml` 继承，改全局能传播。
-    // 写的内容是项目**当前的** `config.export`（曾经这里写的是 `ExportConfig::default()`，
+    // `project.toml` 是项目**自带的完整配置**（`[export]` + `[validate]`）：
+    // 首次保存就落盘，之后只在设置真的改过（或文件被删）时才重写。
+    // 内容取自项目**当前**的 `config`（曾经这里写的是 `ExportConfig::default()`，
     // 于是"新建项目首次保存"会把从全局拷来的配置静默重置掉，@02.26.3）。
-    if project.toml_changed() {
-        let path = project.project_root.join(crate::project::PROJECT_TOML_FILE);
+    //
+    // 首次保存写全量而不是空壳，是因为这个文件从此就是项目的真相：
+    // 文件在，export 就不再从工作区 `tablet.toml` 继承（见 `parse_project_config`）。
+    let path = project.project_root.join(crate::project::PROJECT_TOML_FILE);
+    if project.toml_changed() || !path.is_file() {
         match crate::project::project_toml_text(&project.config.export, &project.config.validate) {
             Ok(txt) => match std::fs::write(&path, txt) {
                 Ok(()) => {
@@ -573,13 +576,16 @@ fn save_project_files(project: &mut Project) -> (usize, usize, Vec<String>, bool
     // `schema_changed()` 为假 —— 旧代码就此跳过，`project.tblmanifest` 永远停在上一次
     // 结构变更时的样子。CLI 的工作流正是「改 .tbl → workspace save」，那条路必须把投影
     // 刷新掉，否则下一个 `project new --from-file` / `util scaffold` 拿到的还是旧结构。
+    //
+    // **不能顺手把 `schema_changed()` 也 OR 进来。** 列定义（desc / type / export）变了
+    // 它也为真，但 manifest 只记节点索引、不记字段行——写出来的是一字不差的同一份字节，
+    // 唯一的变化是文件 mtime（git 看不出，编辑器 / 同步盘 / 备份却会被惊动）。
+    // 结构真变了的那些（加列 / 改名 / 规则 / display）文本自己会不同，第三条判据接得住。
     project.resync_schema();
     let schema_txt = crate::manifest::serialize_tblmanifest(&project.schema);
     let schema_path = project.project_root.join(crate::project::PROJECT_MANIFEST_FILE);
     let schema_on_disk = std::fs::read_to_string(&schema_path).ok();
-    let schema_needs_write = first_save
-        || project.schema_changed()
-        || schema_on_disk.as_deref() != Some(schema_txt.as_str());
+    let schema_needs_write = schema_on_disk.as_deref() != Some(schema_txt.as_str());
     // **真正的写放在组循环之后**：schema 是 groups 的投影，如果某个组没写进去
     // （xlsx 被 Excel 占用 / 外部改过），先把 schema 落盘就会造出「schema 里有这个节点、
     // 盘上却没有它的数据」——项目当场打不开。要么一起成功，要么一起不写。
@@ -715,21 +721,28 @@ fn save_project_files(project: &mut Project) -> (usize, usize, Vec<String>, bool
     project.groups.retain(|g| !emptied.contains(&g.name));
 
     // 组都写成功了才写 schema 投影（见上面的注释）。
-    if !failed && schema_needs_write {
-        match std::fs::write(&path, txt) {
-            Ok(()) => {
-                // 落盘后「盘上是什么」才追上内存
-                project.original_meta = project.schema.meta.clone();
-                project.original_separators = project.schema.separators.clone();
-                count += 1;
+    if !failed {
+        if schema_needs_write {
+            match std::fs::write(&path, txt) {
+                Ok(()) => {
+                    // 落盘后「盘上是什么」才追上内存
+                    project.original_meta = project.schema.meta.clone();
+                    project.original_separators = project.schema.separators.clone();
+                    count += 1;
+                }
+                Err(e) => {
+                    failed = true;
+                    write_failures.push(format!(
+                        "[保存失败] 写 {} 失败: {}",
+                        path.display(), e
+                    ));
+                }
             }
-            Err(e) => {
-                failed = true;
-                write_failures.push(format!(
-                    "[保存失败] 写 {} 失败: {}",
-                    path.display(), e
-                ));
-            }
+        } else {
+            // 盘上已经是同一份字：不算一次写入，但快照照样对齐内存，
+            // 免得「文本相同、结构上有字段不等」的属性一直亮 🟡。
+            project.original_meta = project.schema.meta.clone();
+            project.original_separators = project.schema.separators.clone();
         }
     }
     if failed && first_save {
@@ -4745,35 +4758,42 @@ mod project_toml_template_tests {
     }
 
     #[test]
-    fn project_toml_is_only_written_when_export_actually_changed() {
-        // `project.toml` 是**可选的 [export] 覆盖段**：没改过就不该有文件，
-        // export 继续从工作区 tablet.toml 继承（@02.26.3）。
-        let dir = unique_tmp("toml_optional");
+    fn first_save_writes_full_project_toml() {
+        // `project.toml` 是项目自带的**完整配置**：首次保存就落盘，
+        // 不只写 [export]——[validate] 也整段写出（@02.26.3）。
+        let dir = unique_tmp("toml_full");
         std::fs::create_dir_all(&dir).unwrap();
         let project_root = dir.join("projects").join("p1");
         let mut project = make_project(dir.clone(), project_root.clone(), "p1");
         let toml_path = project_root.join(crate::project::PROJECT_TOML_FILE);
 
-        save_project_files(&mut project);
-        assert!(!toml_path.exists(), "没改过 export 就不该生成覆盖文件");
-        assert!(project_root.join(crate::project::PROJECT_MANIFEST_FILE).exists(),
-            "但 tblschema 首次落盘还是要写");
-
-        // 改 export（模拟「项目设置」）→ 保存才写入
-        project.config.export.json.as_mut().unwrap().empty_as = Some(crate::enums::JsonEmptyAs::Omit);
-        assert!(project.toml_changed(), "改了 export → 该写 project.toml");
-        save_project_files(&mut project);
+        let (count, _, warnings, failed) = save_project_files(&mut project);
+        assert!(!failed, "{warnings:?}");
+        assert!(toml_path.is_file(), "首次保存就该生成 project.toml");
+        assert!(project_root.join(crate::project::PROJECT_MANIFEST_FILE).exists());
+        assert_eq!(count, 2, "manifest + project.toml");
 
         let txt = std::fs::read_to_string(&toml_path).unwrap();
         assert!(txt.lines().any(|l| l.trim() == "[export.json]"), "缺 [export.json]: {}", txt);
+        assert!(txt.lines().any(|l| l.trim() == "[validate]"), "缺 [validate]: {}", txt);
+        assert!(txt.contains("error = \"block\""), "默认校验策略也要显式落盘: {}", txt);
         assert!(!txt.lines().any(|l| l.trim() == "[project]"), "项目级 toml 不应有 [project] 段");
         assert!(!txt.lines().any(|l| l.trim() == "[ui]"), "项目级 toml 不应有 [ui] 段（工作区级）");
-        assert!(!project.toml_changed(), "落盘后应当回到「没改过」");
 
         // 没改过再存一次，不该重写
         let before = std::fs::read_to_string(&toml_path).unwrap();
-        save_project_files(&mut project);
+        let (count, _, _, failed) = save_project_files(&mut project);
+        assert!(!failed);
+        assert_eq!(count, 0, "干净项目不该再写任何文件");
         assert_eq!(std::fs::read_to_string(&toml_path).unwrap(), before, "没改过不该重写");
+
+        // 改 export（模拟「项目设置」）→ 重写成新的完整配置
+        project.config.export.json.as_mut().unwrap().empty_as = Some(crate::enums::JsonEmptyAs::Omit);
+        assert!(project.toml_changed(), "改了 export → 该写 project.toml");
+        save_project_files(&mut project);
+        assert!(std::fs::read_to_string(&toml_path).unwrap()
+            .contains("empty_as = \"omit\""), "重写要带上新值");
+        assert!(!project.toml_changed(), "落盘后应当回到「没改过」");
 
         // 重载：写出去的必须是**项目当前的**配置，不是默认值。
         // 曾经这里写的是 `ExportConfig::default()`，于是"新建项目首次保存"会把
@@ -4792,7 +4812,7 @@ mod project_toml_template_tests {
 
     #[test]
     fn saving_does_not_touch_an_unchanged_project_toml() {
-        // 只要没在「项目设置」里动 export，保存就不碰 project.toml。
+        // 文件已经存在、设置又没改过 → 保存不碰它（手写的注释 / 省略字段都留着）。
         let dir = unique_tmp("preserve");
         let project_root = dir.join("projects").join("p1");
         std::fs::create_dir_all(&project_root).unwrap();
@@ -4965,6 +4985,40 @@ package = \"com.user.kept\"
 
     fn config_dir(dir: &Path) -> PathBuf {
         dir.join("projects").join("p1").join("config")
+    }
+
+    /// 只改列属性（类型 / 导出 / 描述）：`.tbl` 要写，`project.tblmanifest` 不该重写。
+    ///
+    /// manifest 不记字段行，重写出来是**一字不差的同一份字节**，唯一的变化是 mtime。
+    /// 曾经的判据里 OR 了 `schema_changed()`，于是每次改表头都白刷一次文件时间
+    /// （git 看不出来，编辑器 / 同步盘 / 备份会被惊动）。
+    #[test]
+    fn field_edit_writes_tbl_but_not_manifest() {
+        let (dir, mut engine) = engine_with_saved_node("save_field_edit", "g", "T");
+        let manifest = dir.join("projects").join("p1")
+            .join(crate::project::PROJECT_MANIFEST_FILE);
+        let before = std::fs::read_to_string(&manifest).unwrap();
+
+        engine.commit_header_edit("g", "T", 2, 0, "str".to_string());
+        let (count, _, warnings, failed) = save_project_files(engine.project_mut());
+        assert!(!failed, "{warnings:?}");
+        assert_eq!(count, 1, "只该写 T.tbl；manifest 内容没变就不该重写");
+        assert_eq!(std::fs::read_to_string(&manifest).unwrap(), before, "manifest 内容应原样");
+        assert!(!engine.project_mut().is_dirty(), "保存后不该还有未落盘改动");
+    }
+
+    /// 对照：manifest 真会变时仍然要写（`# @display` 只存在 manifest 里）。
+    #[test]
+    fn manifest_is_still_written_when_its_text_changes() {
+        let (dir, mut engine) = engine_with_saved_node("save_display_edit", "g", "T");
+        let manifest = dir.join("projects").join("p1")
+            .join(crate::project::PROJECT_MANIFEST_FILE);
+
+        engine.set_display_field("g", "T", NodeKind::Table, Some("id".into()));
+        let (count, _, warnings, failed) = save_project_files(engine.project_mut());
+        assert!(!failed, "{warnings:?}");
+        assert_eq!(count, 2, "T.tbl + project.tblmanifest");
+        assert!(std::fs::read_to_string(&manifest).unwrap().contains("# @display: id"));
     }
 
     #[test]

@@ -5,15 +5,18 @@
 //! 仓库级 `tablet.toml` 是全局**默认值**（不随 Project 切换）。Project 自己的
 //! 身份元数据存在 `<workdir>/projects/<id>/project.tblmanifest` 的 `# @meta` 段里
 //! （id / name / created_at / source_template / source_template_version / category / version）。
-//! 可选的配置覆盖（仅 `[export]`）落在同目录下的 `project.toml`：
-//! `[ui]` / `[separators]` / `[project]` 写在项目级会被加载流程剥掉
+//! 项目自己的完整配置（`[export]` / `[validate]`）落在同目录下的 `project.toml`，
+//! 首次保存即生成；`[ui]` / `[separators]` / `[project]` 写在项目级会被加载流程剥掉
 //! （`[ui]` 是工作区级；`[separators]` 以 manifest `# @sep` 为准；
-//! `[project]` 是仓库状态）。
+//! `[project]` 是仓库状态）。文件缺席时按全局 `tablet.toml` 继承。
 //!
 //! ```toml
-//! [export]                     # 可选：覆盖全局 [export]（field-level deep merge）
+//! [export]                     # 全量写出；手写的部分字段也会用全局值补齐
 //! [export.server.java]
 //! package = "com.foo.bar"
+//!
+//! [validate]                   # 校验策略（error / warning / info）
+//! error = "block"
 //! ```
 //!
 //! 加载顺序：项目 toml > 全局 toml > 内置默认。
@@ -60,15 +63,14 @@ pub fn write_default_global_config(workdir: &Path) -> Result<()> {
 /// 用单字段包装让 serde 把 `export` 输出为顶层 `[export]` 表（子段带规范前缀），
 /// 可被项目配置解析器（`parse_project_config`）读取。
 ///
-/// `project.toml` 是**可选的覆盖段**：没有这个文件时 `config.export` 从工作区
-/// `tablet.toml` 继承；文件只在用户真的在「项目设置」里改过 export 时才生成。
-/// 所以这里序列化的是项目**当前的**配置，不是默认值——写默认值会让"新建项目
-/// 首次保存"把从全局拷来的配置静默重置掉（@02.26.3）。
+/// `project.toml` 是项目**自带的完整配置**：首次保存就落盘，内容取自项目**当前**的
+/// `config`（不是默认值——写默认值会把从全局拷来的配置静默重置掉，@02.26.3）。
+/// `[export]` 和 `[validate]` 两段都写全，文件本身就是项目配置的真相；
+/// 只有文件缺席时才从工作区 `tablet.toml` 继承（见 `parse_project_config`）。
 pub fn project_toml_text(export: &ExportConfig, validate: &ValidateConfig) -> Result<String> {
     #[derive(serde::Serialize)]
     struct ProjectRoot<'a> {
         export: &'a ExportConfig,
-        #[serde(skip_serializing_if = "ValidateConfig::is_default")]
         validate: &'a ValidateConfig,
     }
     Ok(toml::to_string(&ProjectRoot { export, validate })?)
@@ -1498,12 +1500,14 @@ mistyped = \"block\"
     }
 
     #[test]
-    fn project_toml_text_is_comment_free_export_only() {
-        // 项目级 toml 仅含 [export] 段、无注释——[ui]/[project]/[separators] 都是工作区级。
+    fn project_toml_text_is_comment_free_full_config() {
+        // 项目级 toml 含 [export] / [validate] 全量段、无注释——
+        // [ui]/[project]/[separators] 都是工作区级。
         let txt = project_toml_text(&ExportConfig::default(), &ValidateConfig::default())
             .expect("text");
-        // 默认校验策略不写出来，保持老文件形状不变
-        assert!(!txt.contains("[validate]"), "默认策略不该写进 project.toml");
+        // 完整配置：默认校验策略也要写出来，项目不依赖"文件里没写 = 默认"
+        assert!(txt.contains("[validate]"), "校验策略是项目配置的一部分，必须写全");
+        assert!(txt.contains("error = \"block\""), "缺省策略也要显式落盘");
         let _: GlobalConfig = toml::from_str(&txt)
             .expect("project.toml default must parse as GlobalConfig");
         assert!(!txt.lines().any(|l| l.trim_start().starts_with('#')), "project.toml 不应带注释");

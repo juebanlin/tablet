@@ -74,7 +74,7 @@ tablet/
 game-config/
 ├── projects/                   ← 全部 Project，按 id 分目录
 │   ├── slg-test/               ← 一个 Project
-│   │   ├── project.toml        ← Project 可选配置覆盖（仅 [export] 段，字段级 deep merge）
+│   │   ├── project.toml        ← Project 完整配置（[export] / [validate]，首次保存生成）
 │   │   ├── project.tblmanifest   ← 项目身份 + 节点索引 + storage + 规则 / display + separators
 │   │   ├── config/             ← .tbl 文件，Group = 子目录
 │   │   │   ├── hero/
@@ -112,7 +112,7 @@ Group 名仅在工具内部使用，不进生成代码路径，因此允许中�
 
 ## 4. tablet.toml 配置
 
-工具配置文件（`GlobalConfig`），定义启动展开偏好、导出目标、UI 行为、类型分隔符默认值。所有字段都有默认值，新建项目可只写少量字段。**`tablet.toml` 是仓库全局配置，所有 Project 共享；Project 自身的元数据放在 `projects/<id>/project.tblmanifest`，可选的导出配置覆盖放在 `projects/<id>/project.toml`（@02 Project）**。
+工具配置文件（`GlobalConfig`），定义启动展开偏好、导出目标、UI 行为、类型分隔符默认值。所有字段都有默认值，新建项目可只写少量字段。**`tablet.toml` 是仓库全局配置，所有 Project 共享；Project 自身的元数据放在 `projects/<id>/project.tblmanifest`，项目配置（`[export]` / `[validate]`）放在 `projects/<id>/project.toml`，首次保存时整份生成（@02 Project）**。
 
 **配置分层与合并规则**：
 - **export**：Project 的 `[export]` 段按 **field-level deep-merge** 覆盖全局；缺失字段回退到全局（例如：项目只写 `[export.server.cpp]`，其它语言用全局配置）

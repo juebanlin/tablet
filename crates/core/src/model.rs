@@ -88,13 +88,15 @@ impl Project {
         self.schema = s;
     }
 
-    /// `project.tblmanifest` 现在写盘会和盘上不一样吗。
+    /// 结构上是否偏离盘上：`meta` / `separators` 或任一子节点的 `schema_changed()`。
     ///
     /// 项目「自己的属性」只有 `meta` 与 `separators`；`schema.sections` 是 groups 的
     /// 投影，所以结构变化由**子节点自己**回答（`Group::schema_changed`），不在这里
     /// 另存一份快照去比——那等于把缓存和它自己的副本对一遍。
     ///
-    /// 用途：`save_project_files` 决定要不要写 schema 文件。
+    /// **这不是「`project.tblmanifest` 要不要写」的判据。** 列定义（desc / type /
+    /// export）变了这里也为真，但 manifest 不记字段行，重写出来是同一份字节，只会白刷
+    /// mtime。落盘判据是文本比较，见 `ops::save_project_files`。
     pub fn schema_changed(&self) -> bool {
         self.state.is_pending()
             || self.schema.meta != self.original_meta
@@ -116,11 +118,12 @@ impl Project {
 
     /// `project.toml` 现在写盘会和盘上不一样吗。
     ///
-    /// 这个文件里只有 `[export]`，与 `schema_changed()` 管的是**两个不同的文件**，
-    /// 所以要分开问：改 export 不该顺手重写 `project.tblmanifest`，反之亦然。
+    /// 这个文件里是项目的完整配置（`[export]` / `[validate]`），与 `schema_changed()`
+    /// 管的是**两个不同的文件**，所以要分开问：改设置不该顺手重写
+    /// `project.tblmanifest`，反之亦然。
     ///
-    /// `project.toml` 是**可选的覆盖段**——没改过就不该有文件，让 export 继续从
-    /// 工作区 `tablet.toml` 继承（@02.26.3）。
+    /// 注意：**首次保存不看这个谓词**——文件缺席时即使没改过也要写一份完整配置
+    /// （`save_project_files` 的条件是 `toml_changed() || !path.is_file()`，@02.26.3）。
     pub fn toml_changed(&self) -> bool {
         self.config.export != self.original_export
             || self.config.validate != self.original_validate
@@ -658,9 +661,6 @@ impl ValidateConfig {
             Severity::Info => self.info,
         }
     }
-
-    /// 是否与默认策略一致（序列化时默认不输出）。
-    pub fn is_default(&self) -> bool { self == &ValidateConfig::default() }
 
     /// 给 UI 用的三项（级别, 动作）。
     pub fn entries(&self) -> [(Severity, SeverityAction); 3] {

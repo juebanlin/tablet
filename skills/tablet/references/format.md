@@ -310,7 +310,7 @@ Enum sheet（1 行表头）
 ├── tablet.toml                      工作区配置（全局默认 + last_project）
 └── projects/<id>/
     ├── project.tblmanifest            节点索引 / storage / 规则 / display（不含字段）
-    ├── project.toml                 可选的 [export] 覆盖
+    ├── project.toml                 项目配置（[export] / [validate]，首次保存生成）
     ├── config/<group>/<Name>.tbl    Tbl 组：数据与结构真相源
     ├── config/<group>.xlsx          Xlsx 组：结构与数据真相源（4 行表头 + sheet）
     ├── gen/                         导出默认落点

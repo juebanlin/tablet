@@ -355,7 +355,7 @@ tablet-cli -w <config仓库根> --project game export code --csharp-unity
 
 ## 九、仓库约定（.gitignore）
 
-**必须提交**：`tablet.toml`、`projects/<id>/project.tblmanifest`、`projects/<id>/project.toml`（若存在）、
+**必须提交**：`tablet.toml`、`projects/<id>/project.tblmanifest`、`projects/<id>/project.toml`（首次保存即生成）、
 `projects/<id>/config/**`（`.tbl` 文件，以及 xlsx 组的 `config/<group>.xlsx`）。
 
 **应忽略**（工具产生的临时物 / 派生产物）：
