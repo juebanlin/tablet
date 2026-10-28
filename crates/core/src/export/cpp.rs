@@ -663,6 +663,26 @@ mod tests {
     }
 
     #[test]
+    fn nested_tuple_uses_list_tuple2_paradigm() {
+        // 对应 Java 运行时「List<Tuple2<...>> 先命中 List<?>」的 bug：
+        // C++ 的解析表达式按 TblType 生成，不存在运行时模板匹配，这里钉住产物。
+        assert_eq!(
+            cpp_field_type("List<Tuple2<int,str>>", &no_enums()),
+            "std::vector<Tuple2<int32_t, std::string>>"
+        );
+        assert_eq!(
+            cpp_field_type("Map<str,Tuple2<int,int>>", &no_enums()),
+            "std::unordered_map<std::string, Tuple2<int32_t, int32_t>>"
+        );
+
+        let t = TblType::parse("List<Tuple2<int,str>>").unwrap();
+        let expr = cpp_parse_expr("raw", &t, "sep", &no_enums());
+        assert!(expr.contains("parse_tuple2<int32_t, std::string>"), "got {}", expr);
+        assert!(expr.contains("sep.list_tuple2_list"), "got {}", expr);
+        assert!(expr.contains("sep.list_tuple2_tuple"), "got {}", expr);
+    }
+
+    #[test]
     fn parse_expr_for_base_and_list() {
         let t = TblType::parse("int").unwrap();
         let expr = cpp_parse_expr("raw", &t, "sep", &no_enums());

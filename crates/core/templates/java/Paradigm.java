@@ -5,67 +5,104 @@ import java.util.regex.Pattern;
 
 @SuppressWarnings("unchecked")
 public enum Paradigm {
-    INT("int"),
-    LONG("long"),
-    FLOAT("float"),
-    DOUBLE("double"),
-    BOOL("bool"),
-    STR("str"),
-    LIST("List<?>"),
-    SET("Set<?>"),
-    MAP("Map<?,?>"),
-    TUPLE2("Tuple2<?,?>"),
-    TUPLE3("Tuple3<?,?,?>"),
-    TUPLE4("Tuple4<?,?,?,?>"),
-    LIST_TUPLE2("List<Tuple2<?,?>>"),
-    LIST_TUPLE3("List<Tuple3<?,?,?>>"),
-    LIST_TUPLE4("List<Tuple4<?,?,?,?>>"),
-    MAP_TUPLE2("Map<?,Tuple2<?,?>>"),
-    MAP_TUPLE3("Map<?,Tuple3<?,?,?>>"),
-    MAP_TUPLE4("Map<?,Tuple4<?,?,?,?>>"),
-    MAP_LIST("Map<?,List<?>>"),
+    INT, LONG, FLOAT, DOUBLE, BOOL, STR,
+    LIST, SET, MAP,
+    TUPLE2, TUPLE3, TUPLE4,
+    LIST_TUPLE2, LIST_TUPLE3, LIST_TUPLE4,
+    MAP_TUPLE2, MAP_TUPLE3, MAP_TUPLE4, MAP_LIST,
     ;
 
-    private final String template;
-
-    Paradigm(String template) {
-        this.template = template;
-    }
-
-    public String template() { return template; }
-
+    /**
+     * 按类型的**结构**判定（根类型 + 泛型参数），不做文本模板通配匹配。
+     *
+     * 旧实现用 "List<?>" 这类模板逐条匹配，? 会吞掉任意字符串：
+     * List<Tuple2<str,str>> 同时命中 LIST 和 LIST_TUPLE2，先声明的 LIST 胜出，
+     * 解析结果退化成 List<String>，业务侧转 Tuple2 时 ClassCastException。
+     * 结构化判定没有歧义，也不需要靠枚举顺序。
+     */
     public static Paradigm of(String tblType) {
-        // 从复杂到简单匹配，避免短模板误匹配
-        for (Paradigm p : values()) {
-            if (p.matches(tblType)) return p;
+        try {
+            return ofNode(TypeNode.parse(tblType));
+        } catch (RuntimeException e) {
+            return STR; // 畸形类型不在这里抛：导出侧已校验，运行时按字符串兜底
         }
-        return STR;
     }
 
-    private boolean matches(String tblType) {
-        return matchTemplate(template, tblType, 0, 0);
-    }
-
-    private static boolean matchTemplate(String pattern, String input, int pi, int ii) {
-        while (pi < pattern.length() && ii < input.length()) {
-            char pc = pattern.charAt(pi);
-            if (pc == '?') {
-                // ? 匹配到下一个模板字符或结尾
-                pi++;
-                if (pi >= pattern.length()) return ii <= input.length();
-                char next = pattern.charAt(pi);
-                // 找 input 中下一个 next 字符的位置
-                for (int k = ii; k < input.length(); k++) {
-                    if (input.charAt(k) == next && matchTemplate(pattern, input, pi, k)) return true;
+    private static Paradigm ofNode(TypeNode t) {
+        switch (t.name) {
+            case "int": return INT;
+            case "long": return LONG;
+            case "float": return FLOAT;
+            case "double": return DOUBLE;
+            case "bool": return BOOL;
+            case "str": case "txt": return STR;
+            case "Set": return SET;
+            case "List":
+                if (t.args.size() == 1) {
+                    String inner = t.args.get(0).name;
+                    if ("Tuple2".equals(inner)) return LIST_TUPLE2;
+                    if ("Tuple3".equals(inner)) return LIST_TUPLE3;
+                    if ("Tuple4".equals(inner)) return LIST_TUPLE4;
                 }
-                return false;
-            } else {
-                if (pc != input.charAt(ii)) return false;
-                pi++;
-                ii++;
+                return LIST;
+            case "Map":
+                if (t.args.size() == 2) {
+                    String val = t.args.get(1).name;
+                    if ("Tuple2".equals(val)) return MAP_TUPLE2;
+                    if ("Tuple3".equals(val)) return MAP_TUPLE3;
+                    if ("Tuple4".equals(val)) return MAP_TUPLE4;
+                    if ("List".equals(val)) return MAP_LIST;
+                }
+                return MAP;
+            case "Tuple2": return TUPLE2;
+            case "Tuple3": return TUPLE3;
+            case "Tuple4": return TUPLE4;
+            default: return STR;
+        }
+    }
+
+    /** 类型字符串的结构化表示：根名 + 泛型参数（基础类型没有参数）。 */
+    private static final class TypeNode {
+        final String name;
+        final List<TypeNode> args;
+
+        TypeNode(String name, List<TypeNode> args) {
+            this.name = name;
+            this.args = args;
+        }
+
+        static TypeNode parse(String type) {
+            String t = type == null ? "" : type.trim();
+            int lt = t.indexOf('<');
+            if (lt < 0) return new TypeNode(t, new ArrayList<TypeNode>());
+            int rt = t.lastIndexOf('>');
+            if (rt < lt) throw new IllegalArgumentException("非法类型: " + type);
+            String name = t.substring(0, lt).trim();
+            List<TypeNode> args = new ArrayList<>();
+            for (String part : splitTopLevel(t.substring(lt + 1, rt), ',')) {
+                String p = part.trim();
+                if (!p.isEmpty()) args.add(parse(p));
+            }
+            return new TypeNode(name, args);
+        }
+    }
+
+    /** 按顶层分隔符切分，忽略 <> 内部的分隔符。 */
+    private static List<String> splitTopLevel(String s, char delimiter) {
+        List<String> parts = new ArrayList<>();
+        int depth = 0;
+        int start = 0;
+        for (int i = 0; i < s.length(); i++) {
+            char c = s.charAt(i);
+            if (c == '<') depth++;
+            else if (c == '>') depth--;
+            else if (c == delimiter && depth == 0) {
+                parts.add(s.substring(start, i));
+                start = i + 1;
             }
         }
-        return pi == pattern.length() && ii == input.length();
+        parts.add(s.substring(start));
+        return parts;
     }
 
     public Object defaultValue() {
@@ -114,12 +151,28 @@ public enum Paradigm {
         }
     }
 
-    private String[] extractInnerTypes(String tblType) {
-        int start = tblType.indexOf('<');
-        if (start < 0) return new String[0];
-        int end = tblType.lastIndexOf('>');
-        String inner = tblType.substring(start + 1, end);
-        return inner.split(",", -1);
+    /**
+     * 取出类型里所有**叶子类型**（按出现顺序）。
+     *
+     * 和 {@link #of} 共用同一份结构解析：List<Tuple2<str,str>> 的叶子是
+     * ["str","str"]，不是按逗号硬切出来的 ["Tuple2<str","str>"]。
+     */
+    private static String[] extractInnerTypes(String tblType) {
+        List<String> out = new ArrayList<>();
+        try {
+            collectLeaves(TypeNode.parse(tblType), out);
+        } catch (RuntimeException ignored) {
+            // 畸形类型：交给 parse() 的默认分支按字符串处理
+        }
+        return out.toArray(new String[0]);
+    }
+
+    private static void collectLeaves(TypeNode t, List<String> out) {
+        if (t.args.isEmpty()) {
+            out.add(t.name);
+            return;
+        }
+        for (TypeNode arg : t.args) collectLeaves(arg, out);
     }
 
     private static List<Object> splitPrimitives(String raw, String sep, String elemType) {

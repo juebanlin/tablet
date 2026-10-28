@@ -52,6 +52,65 @@ run_roundtrip() {
     assert_exit 0
     assert_file_exists "$proj/TestMain.java"
 
+    # 嵌套类型的运行时解析：Paradigm.of 必须挑中最具体的模板，extractInnerTypes
+    # 必须按泛型层级取叶子类型。List<Tuple2<...>> 先命中 List<?> 会退化成 List<String>，
+    # 业务侧遍历时 CCE——这里直接钉住 Paradigm/TplUtil 的行为。
+    cat > "$proj/TestParadigm.java" <<EOF
+package $JAVA_PACKAGE;
+
+import java.util.*;
+import $JAVA_PACKAGE.types.Tuple2;
+
+public class TestParadigm {
+    static int failures = 0;
+
+    static void check(String what, boolean ok) {
+        System.out.println((ok ? "PASS " : "FAIL ") + what);
+        if (!ok) failures++;
+    }
+
+    public static void main(String[] args) {
+        SepConfig sep = new SepConfig();
+
+        // 1) 模板选择：具体模板优先于通配模板
+        check("List<Tuple2<str,str>> -> LIST_TUPLE2", Paradigm.of("List<Tuple2<str,str>>") == Paradigm.LIST_TUPLE2);
+        check("List<Tuple3<int,int,int>> -> LIST_TUPLE3", Paradigm.of("List<Tuple3<int,int,int>>") == Paradigm.LIST_TUPLE3);
+        check("Map<str,Tuple2<int,int>> -> MAP_TUPLE2", Paradigm.of("Map<str,Tuple2<int,int>>") == Paradigm.MAP_TUPLE2);
+        check("Map<str,List<int>> -> MAP_LIST", Paradigm.of("Map<str,List<int>>") == Paradigm.MAP_LIST);
+        check("List<int> -> LIST", Paradigm.of("List<int>") == Paradigm.LIST);
+        check("Map<str,int> -> MAP", Paradigm.of("Map<str,int>") == Paradigm.MAP);
+        check("Tuple2<int,str> -> TUPLE2", Paradigm.of("Tuple2<int,str>") == Paradigm.TUPLE2);
+
+        // 2) 嵌套解析：元素类型与值都要对
+        List<?> l1 = (List<?>) TplUtil.parseField("a,1;b,2", "List<Tuple2<str,int>>", sep);
+        check("List<Tuple2<str,int>> size", l1.size() == 2);
+        check("List<Tuple2<str,int>> elem is Tuple2", l1.get(0) instanceof Tuple2);
+        Tuple2<?, ?> t0 = (Tuple2<?, ?>) l1.get(0);
+        check("List<Tuple2<str,int>> values", "a".equals(t0.v1) && Integer.valueOf(1).equals(t0.v2));
+
+        List<?> l2 = (List<?>) TplUtil.parseField("1,10;2,20", "List<Tuple2<int,int>>", sep);
+        Tuple2<?, ?> t1 = (Tuple2<?, ?>) l2.get(1);
+        check("List<Tuple2<int,int>> values", Integer.valueOf(2).equals(t1.v1) && Integer.valueOf(20).equals(t1.v2));
+
+        Map<?, ?> m1 = (Map<?, ?>) TplUtil.parseField("hp:1,9999;mp:2,5000", "Map<str,Tuple2<int,int>>", sep);
+        check("Map<str,Tuple2<int,int>> size", m1.size() == 2);
+        check("Map<str,Tuple2<int,int>> value is Tuple2", m1.get("hp") instanceof Tuple2);
+        Tuple2<?, ?> tv = (Tuple2<?, ?>) m1.get("hp");
+        check("Map<str,Tuple2<int,int>> values", Integer.valueOf(1).equals(tv.v1) && Integer.valueOf(9999).equals(tv.v2));
+
+        Map<?, ?> m2 = (Map<?, ?>) TplUtil.parseField("a:1,2,3;b:4,5", "Map<str,List<int>>", sep);
+        List<?> inner = (List<?>) m2.get("a");
+        check("Map<str,List<int>> values", inner.size() == 3 && Integer.valueOf(1).equals(inner.get(0)));
+
+        if (failures > 0) {
+            System.out.println("FAILED " + failures);
+            System.exit(1);
+        }
+        System.out.println("ALL OK");
+    }
+}
+EOF
+
     local java_src
     java_src=$(find "$proj" -path "*/gen/server/java" -type d | head -1)
     if [ -z "$java_src" ]; then
@@ -68,7 +127,8 @@ run_roundtrip() {
     java_files=$(find "$java_src" -name "*.java")
     set +e
     javac ${javac_args[@]+"${javac_args[@]}"} -cp "$java_src:$LOMBOK_JAR_PATH" \
-        $java_files "$proj/TestMain.java" -d "$proj/out" 2>"$proj/javac_err.txt"
+        $java_files "$proj/TestMain.java" "$proj/TestParadigm.java" \
+        -d "$proj/out" 2>"$proj/javac_err.txt"
     local javac_exit=$?
     set -e
     if [ $javac_exit -ne 0 ]; then
@@ -107,6 +167,18 @@ run_roundtrip() {
         _pass "[lombok=$lombok] output contains leader=1002 (@HeroBase)"
     else
         _fail "[lombok=$lombok] output missing leader=1002 (@HeroBase)"
+    fi
+
+    # 嵌套类型解析的定点测试（不经 schema / 导出，直接打运行时的 Paradigm/TplUtil）
+    set +e
+    local paradigm_out
+    paradigm_out=$(java -cp "$proj/out" "$JAVA_PACKAGE".TestParadigm 2>&1)
+    local paradigm_exit=$?
+    set -e
+    if [ $paradigm_exit -ne 0 ]; then
+        _fail "[lombok=$lombok] nested type parse failed: $paradigm_out"
+    else
+        _pass "[lombok=$lombok] nested type parse ok"
     fi
 }
 

@@ -571,6 +571,25 @@ mod tests {
     }
 
     #[test]
+    fn nested_tuple_uses_list_tuple2_paradigm() {
+        // 对应 Java 运行时那个「List<Tuple2<...>> 先命中 List<?>」的 bug：
+        // Go 的解析表达式按 TblType 生成，不存在运行时模板匹配，这里钉住产物。
+        let no_enum = HashSet::new();
+        assert_eq!(go_type_for("List<Tuple2<int,str>>", &no_enum), "[]Tuple2[int32,string]");
+        assert_eq!(
+            go_type_for("Map<str,Tuple2<int,int>>", &no_enum),
+            "map[string]Tuple2[int32,int32]"
+        );
+
+        let t = TblType::parse("List<Tuple2<int,str>>").unwrap();
+        let expr = parse_expr("raw", &t, "sep");
+        assert!(expr.contains("ParseListItems"), "got {}", expr);
+        assert!(expr.contains("ParseTuple2"), "got {}", expr);
+        assert!(expr.contains("sep.ListTuple2List"), "got {}", expr);
+        assert!(expr.contains("sep.ListTuple2Tuple"), "got {}", expr);
+    }
+
+    #[test]
     fn struct_field_comments_use_desc_then_fall_back_to_type() {
         use super::super::test_fixtures::{field, table};
         let t = table("Item", vec![

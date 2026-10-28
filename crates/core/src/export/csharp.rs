@@ -586,6 +586,27 @@ mod tests {
     }
 
     #[test]
+    fn parse_expr_for_nested_tuple() {
+        // 对应 Java 运行时「List<Tuple2<...>> 先命中 List<?>」的 bug：
+        // C# 的解析表达式按 TblType 生成，不存在运行时模板匹配，这里钉住产物。
+        assert_eq!(
+            cs_field_type("List<Tuple2<int,str>>", &no_enums()),
+            "List<Tuple2<int, string>>"
+        );
+        assert_eq!(
+            cs_field_type("Map<str,Tuple2<int,int>>", &no_enums()),
+            "Dictionary<string, Tuple2<int, int>>"
+        );
+
+        let t = TblType::parse("List<Tuple2<int,str>>").unwrap();
+        let expr = cs_parse_expr("raw", &t, "sep", &no_enums());
+        assert!(expr.contains("TblParse.ParseList<Tuple2<int, string>>"), "got {}", expr);
+        assert!(expr.contains("TblParse.ParseTuple2<int, string>"), "got {}", expr);
+        assert!(expr.contains("sep.ListTuple2List"), "got {}", expr);
+        assert!(expr.contains("sep.ListTuple2Tuple"), "got {}", expr);
+    }
+
+    #[test]
     fn ref_enum_parse_uses_cast() {
         let mut e = HashSet::new();
         e.insert("HeroType".to_string());
