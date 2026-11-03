@@ -673,10 +673,10 @@ tablet-cli --fmt json schema show
 ```
 hero/
   └── HeroBase      (table, 5 fields, 120 rows)
-      · id = unique() [系统]
-      · id = non_empty() [系统]
-      · id = positive_int() [系统]
-      · name = matches(^[A-Z][A-Z0-9_]*$) [警告]
+      · column id: unique() [系统]
+      · column id: non_empty() [系统]
+      · column id: positive_int() [系统]
+      · column name: matches(^[A-Z][A-Z0-9_]*$) [警告]
 ```
 
 内置规则不落盘、不可编辑（@01.8.11）；`--fmt json` 时节点对象多一个 `rules` 数组。

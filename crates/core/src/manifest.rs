@@ -62,9 +62,16 @@ pub fn parse_tblmanifest(content: &str) -> Result<TblSchema> {
                         bail!("line {}: `# @rule` 必须出现在某个 [section] 之后", line_num + 1);
                     }
                     let after = rest.trim_start();
-                    let Some(body) = after.strip_prefix(':') else {
-                        bail!("line {}: `# @rule` 只支持 `# @rule: <列> = <表达式> [级别]`", line_num + 1);
-                    };
+                    if after.starts_with(':') {
+                        bail!("line {}: 旧格式 `# @rule: <列> = ...` 已废弃；\
+                               请改用 `# @rule column <列>: ...` 或 `# @rule table: ...`",
+                              line_num + 1);
+                    }
+                    if !(after.starts_with("column") || after.starts_with("table")) {
+                        bail!("line {}: `# @rule` 只支持 `# @rule column <列>: <表达式>` \
+                               或 `# @rule table: <表达式>` [级别]", line_num + 1);
+                    }
+                    let body = after;
                     if let Some(ref sec) = current {
                         if matches!(sec.mode, crate::schema_model::SchemaMode::Constant) {
                             bail!("line {}: constant 段不支持 `# @rule`", line_num + 1);
@@ -153,7 +160,7 @@ mod tests {
 
 [hero/HeroBase] table
 # @display: name
-# @rule: id = range(1, 10)
+# @rule column id: range(1, 10)
 
 [building/Building] table xlsx
 "#;
@@ -173,6 +180,24 @@ mod tests {
         assert!(out.contains("# @display: name"));
         assert!(!out.contains("id | int"), "不能写字段行");
 
+        let back = parse_tblmanifest(&out).expect("re-parse");
+        assert_eq!(back, s);
+    }
+
+    #[test]
+    fn manifest_round_trips_when_rule() {
+        let src = r#"#!tblmanifest v1
+# @meta id: demo
+
+[g/T] table
+# @rule column value: when(and(in(type, 1, 2), ge(quality, 2)), non_empty()) [warn]
+"#;
+        let s = parse_tblmanifest(src).expect("parse");
+        let out = serialize_tblmanifest(&s);
+        assert!(
+            out.contains("when(and(in(type, 1, 2), ge(quality, 2)), non_empty()) [warn]"),
+            "{}", out
+        );
         let back = parse_tblmanifest(&out).expect("re-parse");
         assert_eq!(back, s);
     }

@@ -10,6 +10,7 @@ pub mod enums;
 pub mod tbl;
 pub mod tbl_str;
 pub mod rules;
+pub mod rule_engine;
 pub mod schema_model;
 pub mod schema_grammar;
 pub mod schema_projection;

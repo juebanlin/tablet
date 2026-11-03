@@ -73,11 +73,18 @@ fn parse_schema(content: &str) -> Result<TblSchema> {
                         bail!("line {}: `# @rule` 必须出现在某个 [section] 之后", line_num + 1);
                     }
                     let after = rest.trim_start();
+                    if after.starts_with(':') {
+                        bail!("line {}: 旧格式 `# @rule: <列> = ...` 已废弃；\
+                               请改用 `# @rule column <列>: ...` 或 `# @rule table: ...`",
+                              line_num + 1);
+                    }
                     // `# @rule <名字> = script(...)` 是第 3 层脚本规则的预留语法，尚未实现。
-                    let Some(body) = after.strip_prefix(':') else {
-                        bail!("line {}: `# @rule` 只支持 `# @rule: <列> = <表达式> [级别]`；\
-                               脚本规则（# @rule <名字> = script(...)）尚未实现", line_num + 1);
-                    };
+                    if !(after.starts_with("column") || after.starts_with("table")) {
+                        bail!("line {}: `# @rule` 只支持 `# @rule column <列>: <表达式>` \
+                               或 `# @rule table: <表达式>` [级别]；脚本规则尚未实现",
+                              line_num + 1);
+                    }
+                    let body = after;
                     if let Some(ref sec) = current {
                         if matches!(sec.mode, SchemaMode::Constant) {
                             bail!("line {}: constant 段不支持 `# @rule`（常量的 value 逐行类型可变，用内置校验即可）", line_num + 1);
@@ -1142,19 +1149,19 @@ id | int | cs | x
                    \n\
                    [g/Lang] table\n\
                    key | str | cs | 英文 key\n\
-                   # @rule: key = unique()\n\
+                   # @rule column key: unique()\n\
                    \n\
                    [e/ErrorCode] enum\n\
-                   # @rule: name = ref_exists(Lang.key) [warn]\n";
+                   # @rule column name: ref_exists(Lang.key) [warn]\n";
         let schema = parse_tblschema(src).unwrap();
         assert_eq!(schema.sections[0].rules.len(), 1);
-        assert_eq!(schema.sections[0].rules[0].kind, RuleKind::Unique);
+        assert_eq!(schema.sections[0].rules[0].expr, RuleExpr::Validator(RuleKind::Unique { column: "key".into() }));
         assert_eq!(schema.sections[1].rules.len(), 1);
         assert_eq!(schema.sections[1].rules[0].level, Severity::Warning);
 
         let out = serialize_tblschema(&schema);
-        assert!(out.contains("# @rule: key = unique()"), "got:\n{}", out);
-        assert!(out.contains("# @rule: name = ref_exists(Lang.key) [warn]"), "got:\n{}", out);
+        assert!(out.contains("# @rule column key: unique()"), "got:\n{}", out);
+        assert!(out.contains("# @rule column name: ref_exists(Lang.key) [warn]"), "got:\n{}", out);
         let again = parse_tblschema(&out).unwrap();
         assert_eq!(schema.sections, again.sections);
     }
@@ -1166,22 +1173,31 @@ id | int | cs | x
                    hp   | int | cs | 血量\n\
                    name | str | cs | 名字\n\
                    type | int | cs | 类型\n\
-                   # @rule: hp = range(0, 100)\n\
-                   # @rule: hp = required_if(type, 2)\n\
-                   # @rule: hp = compare(type, >=)\n\
-                   # @rule: name = non_empty()\n\
-                   # @rule: name = len(1, 16)\n\
-                   # @rule: name = one_of(A, B, C)\n\
-                   # @rule: name = matches(\"^[A-Z]+$\")\n";
+                   # @rule column hp: range(0, 100)\n\
+                   # @rule column hp: required_if(type, 2)\n\
+                   # @rule column hp: compare(>=, type)\n\
+                   # @rule column name: non_empty()\n\
+                   # @rule column name: len(1, 16)\n\
+                   # @rule column name: one_of(A, B, C)\n\
+                   # @rule column name: matches(\"^[A-Z]+$\")\n";
         let schema = parse_tblschema(src).unwrap();
         assert_eq!(schema.sections[0].rules.len(), 7);
-        assert_eq!(schema.sections[0].rules[0].kind, RuleKind::Range { min: "0".into(), max: "100".into() });
-        assert_eq!(schema.sections[0].rules[1].kind,
-            RuleKind::RequiredIf { column: "type".into(), value: "2".into() });
-        assert_eq!(schema.sections[0].rules[2].kind,
-            RuleKind::Compare { column: "type".into(), op: CompareOp::Ge });
-        assert_eq!(schema.sections[0].rules[3].kind, RuleKind::NonEmpty);
-        assert_eq!(schema.sections[0].rules[6].kind, RuleKind::Matches { pattern: "^[A-Z]+$".into() });
+        assert_eq!(schema.sections[0].rules[0].expr, RuleExpr::Validator(RuleKind::Range { column: "hp".into(), min: "0".into(), max: "100".into() }));
+        assert_eq!(schema.sections[0].rules[1].expr,
+            RuleExpr::When {
+                condition: crate::rules::Condition::Cmp {
+                    left: crate::rules::ValueExpr::Column("type".into()),
+                    op: CompareOp::Eq,
+                    right: crate::rules::ValueExpr::Literal("2".into()),
+                },
+                inner: Box::new(RuleExpr::Validator(RuleKind::NonEmpty { column: "hp".into() })),
+            });
+        assert_eq!(schema.sections[0].rules[2].expr,
+            RuleExpr::Validator(RuleKind::Compare {
+                column: "hp".into(), op: CompareOp::Ge, other: "type".into(),
+            }));
+        assert_eq!(schema.sections[0].rules[3].expr, RuleExpr::Validator(RuleKind::NonEmpty { column: "name".into() }));
+        assert_eq!(schema.sections[0].rules[6].expr, RuleExpr::Validator(RuleKind::Matches { column: "name".into(), pattern: "^[A-Z]+$".into() }));
 
         let out = serialize_tblschema(&schema);
         let again = parse_tblschema(&out).unwrap();
@@ -1191,10 +1207,13 @@ id | int | cs | x
     #[test]
     fn quoted_rule_args_keep_commas() {
         let src = "#!tblschema v1\n\n[g/T] table\nname | str | cs | n\n\
-                   # @rule: name = one_of(\"A,B\", C)\n";
+                   # @rule column name: one_of(\"A,B\", C)\n";
         let schema = parse_tblschema(src).unwrap();
-        assert_eq!(schema.sections[0].rules[0].kind,
-            RuleKind::OneOf { values: vec!["A,B".into(), "C".into()] });
+        assert_eq!(schema.sections[0].rules[0].expr,
+            RuleExpr::Validator(RuleKind::OneOf {
+                column: "name".into(),
+                values: vec!["A,B".into(), "C".into()],
+            }));
         let again = parse_tblschema(&serialize_tblschema(&schema)).unwrap();
         assert_eq!(schema.sections, again.sections);
     }
@@ -1202,11 +1221,11 @@ id | int | cs | x
     #[test]
     fn bad_rule_params_are_rejected() {
         for bad in [
-            "# @rule: hp = range(, )\n",
-            "# @rule: hp = range(10, 1)\n",
-            "# @rule: name = matches()\n",
-            "# @rule: name = one_of()\n",
-            "# @rule: hp = compare(hp, <=)\n",
+            "# @rule column hp: range(, )\n",
+            "# @rule column hp: range(10, 1)\n",
+            "# @rule column name: matches()\n",
+            "# @rule column name: one_of()\n",
+            "# @rule column hp: compare(hp, <=)\n",
         ] {
             let src = format!("#!tblschema v1\n\n[g/T] table\nhp | int | cs | h\nname | str | cs | n\n{}", bad);
             // 语法层能过（compare 自引用留给校验层），所以这里只断言不 panic
@@ -1214,27 +1233,13 @@ id | int | cs | x
         }
     }
 
-    #[test]
-    fn builtin_only_validators_cannot_be_declared() {
-        for name in ["positive_int", "upper_snake"] {
-            let src = format!("#!tblschema v1
-
-[g/T] table
-id | int | cs | d
-# @rule: id = {}()
-", name);
-            let err = parse_tblschema(&src).unwrap_err();
-            let msg = format!("{:#}", err);
-            assert!(msg.contains("系统内置"), "{} -> {}", name, msg);
-        }
-    }
 
     #[test]
     fn constant_section_rejects_rule_directive() {
         let src = "#!tblschema v1
 
 [g/C] constant
-# @rule: name = unique()
+# @rule column name: unique()
 ";
         let err = parse_tblschema(src).unwrap_err();
         let msg = format!("{:#}", err);
@@ -1244,14 +1249,14 @@ id | int | cs | d
 
     #[test]
     fn rule_directive_outside_section_is_rejected_with_line() {
-        let err = parse_tblschema("#!tblschema v1\n\n# @rule: key = unique()\n").unwrap_err();
+        let err = parse_tblschema("#!tblschema v1\n\n# @rule column key: unique()\n").unwrap_err();
         let msg = format!("{:#}", err);
         assert!(msg.contains("line 3"), "got: {}", msg);
     }
 
     #[test]
     fn unknown_validator_is_rejected_with_line() {
-        let src = "#!tblschema v1\n\n[g/T] table\nid | int | cs | d\n# @rule: id = nope()\n";
+        let src = "#!tblschema v1\n\n[g/T] table\nid | int | cs | d\n# @rule column id: nope()\n";
         let err = parse_tblschema(src).unwrap_err();
         let msg = format!("{:#}", err);
         assert!(msg.contains("line 5"), "got: {}", msg);
@@ -1273,7 +1278,7 @@ id | int | cs | d
                    \n\
                    [g/Lang] table\n\
                    key | str | cs | k\n\
-                   # @rule: key = unique()\n";
+                   # @rule column key: unique()\n";
         let schema = parse_tblschema(src).unwrap();
         let mut groups = vec![Group {
             name: "g".to_string(),

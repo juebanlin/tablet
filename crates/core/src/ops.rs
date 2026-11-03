@@ -172,11 +172,13 @@ fn rewrite_node_body_refs(body: &mut NodeBody, mapping: &HashMap<String, String>
 
 fn rewrite_rule_refs(rules: &mut [Rule], mapping: &HashMap<String, String>) {
     for r in rules {
-        if let RuleKind::RefExists { target_node, .. } = &mut r.kind {
-            if let Some(new) = mapping.get(target_node) {
-                *target_node = new.clone();
+        r.expr.for_each_validator_mut(&mut |v| {
+            if let RuleKind::RefExists { target_node, .. } = v {
+                if let Some(new) = mapping.get(target_node) {
+                    *target_node = new.clone();
+                }
             }
-        }
+        });
     }
 }
 
@@ -328,12 +330,14 @@ fn rewrite_refs_after_rename(project: &mut Project, old: &str, new: &str) -> usi
 fn rename_rule_targets(rules: &mut [Rule], old: &str, new: &str) -> usize {
     let mut n = 0;
     for r in rules {
-        if let RuleKind::RefExists { target_node, .. } = &mut r.kind {
-            if target_node == old {
-                *target_node = new.to_string();
-                n += 1;
+        r.expr.for_each_validator_mut(&mut |v| {
+            if let RuleKind::RefExists { target_node, .. } = v {
+                if target_node == old {
+                    *target_node = new.to_string();
+                    n += 1;
+                }
             }
-        }
+        });
     }
     n
 }
@@ -1257,7 +1261,13 @@ fn type_refs_any(tbl_type: &str, names: &std::collections::HashSet<String>) -> b
 }
 
 fn rule_refs_any(r: &Rule, names: &std::collections::HashSet<String>) -> bool {
-    matches!(&r.kind, RuleKind::RefExists { target_node, .. } if names.contains(target_node))
+    let mut hit = false;
+    r.expr.for_each_validator(&mut |v| {
+        if let RuleKind::RefExists { target_node, .. } = v {
+            if names.contains(target_node) { hit = true; }
+        }
+    });
+    hit
 }
 
 /// 扫描得到的 project 元数据（不持有数据）。
@@ -2661,7 +2671,7 @@ impl ProjectEngine {
                         let now = t.schema.fields[col].name.clone();
                         if old != now {
                             for r in t.rules.iter_mut() {
-                                if r.column == old { r.column = now.clone(); }
+                                r.rename_column(&old, &now);
                             }
                         }
                     }
@@ -5180,7 +5190,8 @@ package = \"com.user.kept\"
         let (_dir, mut engine) = engine_with_saved_node("rules_roundtrip", "g", "T");
         // 对 id 挂 unique()：系统已保证唯一 → 只产生一条警告，不阻断保存
         assert!(engine.set_node_rules("g", "T", vec![
-            Rule { column: "id".into(), kind: RuleKind::Unique, level: Severity::Error , source: RuleSource::User },
+            Rule::column_rule("id", RuleKind::Unique { column: "id".into() },
+                              Severity::Error, RuleSource::User),
         ]));
         engine.revalidate("g", "T");
         assert!(engine.validation_errors.is_empty(), "警告不该进错误索引");
@@ -5190,7 +5201,8 @@ package = \"com.user.kept\"
         engine.reload();
         let (_, rules) = engine.node_rules("g", "T").expect("节点还在");
         assert_eq!(rules.len(), 1, "规则必须从 project.tblmanifest 读回来");
-        assert_eq!(rules[0].kind, RuleKind::Unique);
+        assert_eq!(rules[0].expr,
+            RuleExpr::Validator(RuleKind::Unique { column: "id".into() }));
         assert!(!engine.find_table("g", "T").unwrap().dirty, "重新加载后规则不该让节点变脏");
     }
 
@@ -5242,12 +5254,16 @@ package = \"com.user.kept\"
             original_entries: vec![EnumEntry { id: "10001".into(), name: "A".into(), desc: String::new() }],
             saved: true,
             display_field: None, original_display_field: None,
-            rules: vec![Rule {
-                column: "name".into(),
-                kind: RuleKind::RefExists { target_node: "Lang".into(), target_column: "key".into() },
-                level: Severity::Warning,
-                source: RuleSource::User,
-            }],
+            rules: vec![Rule::column_rule(
+                "name",
+                RuleKind::RefExists {
+                    column: "name".into(),
+                    target_node: "Lang".into(),
+                    target_column: "key".into(),
+                },
+                Severity::Warning,
+                RuleSource::User,
+            )],
             original_rules: Vec::new(),
         };
         project.groups.push(Group {
@@ -5314,12 +5330,16 @@ package = \"com.user.kept\"
             original_fields: vec![id_field(), ref_field],
             saved: true, fmt_ver: crate::tbl::DEFAULT_TBL_VERSION,
             display_field: None, original_display_field: None,
-            rules: vec![Rule {
-                column: "ref".into(),
-                kind: RuleKind::RefExists { target_node: "B".into(), target_column: "id".into() },
-                level: Severity::Error,
-                source: RuleSource::User,
-            }],
+            rules: vec![Rule::column_rule(
+                "ref",
+                RuleKind::RefExists {
+                    column: "ref".into(),
+                    target_node: "B".into(),
+                    target_column: "id".into(),
+                },
+                Severity::Error,
+                RuleSource::User,
+            )],
             original_rules: Vec::new(),
         };
         project.groups.push(Group {
@@ -5360,12 +5380,12 @@ package = \"com.user.kept\"
             original_fields: vec![id_field()],
             saved: true, fmt_ver: crate::tbl::DEFAULT_TBL_VERSION,
             display_field: None, original_display_field: None,
-            rules: vec![Rule {
-                column: "id".into(),
-                kind: RuleKind::Range { min: "1".into(), max: "10".into() },
-                level: Severity::Error,
-                source: RuleSource::User,
-            }],
+            rules: vec![Rule::column_rule(
+                "id",
+                RuleKind::Range { column: "id".into(), min: "1".into(), max: "10".into() },
+                Severity::Error,
+                RuleSource::User,
+            )],
             original_rules: Vec::new(),
         };
         project.groups.push(Group {
@@ -5384,13 +5404,16 @@ package = \"com.user.kept\"
     fn validation_policy_controls_blocking() {
         let (_dir, mut engine) = engine_with_saved_node("policy_block", "g", "T");
         engine.set_node_rules("g", "T", vec![
-            Rule {
-                column: "id".into(),
-                kind: RuleKind::RefExists { target_node: "Lang".into(), target_column: "key".into() },
-                level: Severity::Warning,
-
-                source: RuleSource::User,
-            },
+            Rule::column_rule(
+                "id",
+                RuleKind::RefExists {
+                    column: "id".into(),
+                    target_node: "Lang".into(),
+                    target_column: "key".into(),
+                },
+                Severity::Warning,
+                RuleSource::User,
+            ),
         ]);
         engine.revalidate("g", "T");
         // 默认策略：warn → report，不阻断
@@ -5417,13 +5440,16 @@ package = \"com.user.kept\"
     fn warn_level_rule_with_missing_target_does_not_block_save() {
         let (_dir, mut engine) = engine_with_saved_node("rules_warn", "g", "T");
         assert!(engine.set_node_rules("g", "T", vec![
-            Rule {
-                column: "id".into(),
-                kind: RuleKind::RefExists { target_node: "Lang".into(), target_column: "key".into() },
-                level: Severity::Warning,
-
-                source: RuleSource::User,
-            },
+            Rule::column_rule(
+                "id",
+                RuleKind::RefExists {
+                    column: "id".into(),
+                    target_node: "Lang".into(),
+                    target_column: "key".into(),
+                },
+                Severity::Warning,
+                RuleSource::User,
+            ),
         ]));
         engine.revalidate("g", "T");
         assert!(engine.validation_errors.is_empty(), "warn 级规则的目标缺失只算警告");

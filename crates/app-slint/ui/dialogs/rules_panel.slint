@@ -1,15 +1,14 @@
-// 校验规则面板（@01.10.7）：列优先 + 「填表 → 添加」。
+// 校验规则面板（@01.10.7 / @16）：作用域 Tab + 自定义规则卡片列表 + 系统规则只读。
 //
-// 布局：左侧列清单（占满高度）；右侧上方是当前列的规则列表（吃掉多余高度），
-// 下方是紧凑表单；底部是整宽的结果条。列表与结果都有空态占位，不留大白框。
-//
-// 规则只住在 project.tblmanifest；表单里改的是草稿，点「添加 / 保存」才落到节点。
+// 自定义规则是「一条规则一张卡片」：每张卡片都有独立的级别、根组、成员树、
+// 表达式预览和折叠/删除；卡片之间不共享 and/or。系统规则由引擎生成，只读。
+// 布局约束：卡片区是唯一可伸缩的滚动区；工具栏、新建按钮、Inspector、状态条
+// 全部固定高度，避免 ScrollView 的首选高度把弹窗顶出可视区域。
 
 import { Theme } from "../theme.slint";
 import { DialogChrome } from "dialog_chrome.slint";
 import { Button, ComboBox, LineEdit, ScrollView } from "std-widgets.slint";
 
-// 行内小按钮（↑ ↓ ×）：标准 Button 有最小宽度，塞不进 22px 的列。
 component MiniButton inherits Rectangle {
     in property <string> glyph;
     in property <bool> enabled: true;
@@ -32,88 +31,339 @@ component MiniButton inherits Rectangle {
     }
 }
 
+component Chip inherits Rectangle {
+    in property <string> text;
+    in property <bool> enabled: true;
+    in property <bool> primary: false;
+    in property <bool> danger: false;
+    callback clicked();
+
+    height: 22px;
+    min-width: 26px;
+    border-radius: 4px;
+    border-width: 1px;
+    border-color: !root.enabled ? Theme.border-light
+        : (root.primary ? #0d6b60 : (root.danger ? #e2bcbc : Theme.border-light));
+    background: !root.enabled ? Theme.bg-header
+        : (root.primary ? #0d6b60
+            : (ta.has-hover ? (root.danger ? #fdf1f1 : Theme.bg-row-hover) : Theme.bg-panel));
+
+    HorizontalLayout {
+        padding-left: 8px;
+        padding-right: 8px;
+        Text {
+            text: root.text;
+            color: !root.enabled ? Theme.text-disabled
+                : (root.primary ? #ffffff : (root.danger ? #a32b2b : Theme.text-primary));
+            font-size: Theme.fs-small;
+            vertical-alignment: center;
+            overflow: elide;
+        }
+    }
+
+    ta := TouchArea {
+        clicked => { if (root.enabled) { root.clicked(); } }
+    }
+}
+
+component ActionButton inherits Rectangle {
+    in property <string> text;
+    in property <bool> danger: false;
+    in property <bool> enabled: true;
+    callback clicked();
+
+    width: 30px;
+    height: 22px;
+    border-radius: 4px;
+    border-width: 1px;
+    border-color: !root.enabled ? Theme.border-light : (root.danger ? #e2bcbc : Theme.border-light);
+    background: !root.enabled ? Theme.bg-header
+        : (ta.has-hover ? (root.danger ? #fdf1f1 : Theme.bg-row-hover) : Theme.bg-panel);
+
+    Text {
+        text: root.text;
+        color: !root.enabled ? Theme.text-disabled : (root.danger ? #a32b2b : Theme.text-primary);
+        font-size: 10px;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+        overflow: elide;
+    }
+
+    ta := TouchArea {
+        clicked => { if (root.enabled) { root.clicked(); } }
+    }
+}
+
+// 固定宽度操作列：普通成员 100px（+行/+组/删除），组尾 133px（多一个分散）。
+component RowActions inherits Rectangle {
+    in property <bool> group: false;
+    in property <bool> can-insert: true;
+    in property <bool> can-group: true;
+    in property <bool> can-delete: false;
+    in property <bool> can-dissolve: false;
+    callback insert-row();
+    callback insert-group();
+    callback delete();
+    callback dissolve();
+
+    width: root.group ? 133px : 100px;
+    height: 22px;
+
+    HorizontalLayout {
+        alignment: end;
+        spacing: 3px;
+        if root.can-insert : ActionButton { text: "+行"; clicked => { root.insert-row(); } }
+        if root.can-insert && root.can-group : ActionButton { text: "+组"; clicked => { root.insert-group(); } }
+        if root.can-insert : Rectangle { width: 1px; height: 14px; background: Theme.border-light; }
+        if root.group && root.can-dissolve : ActionButton { text: "分散"; clicked => { root.dissolve(); } }
+        if root.can-delete : ActionButton { text: "删除"; danger: true; clicked => { root.delete(); } }
+    }
+}
+
+component Tag inherits Rectangle {
+    in property <string> text;
+    in property <color> bg: Theme.bg-panel;
+    in property <color> fg: Theme.text-secondary;
+
+    width: 48px;
+    height: 17px;
+    border-radius: 3px;
+    background: root.bg;
+
+    Text {
+        text: root.text;
+        color: root.fg;
+        font-size: 9px;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+        overflow: elide;
+    }
+}
+
 export struct RuleColumnRow {
     name: string,
-    badge: string,          // 「2 条」/「系统唯一」/「不支持规则」/ 空
+    badge: string,
     unsupported: bool,
     selected: bool,
 }
 
 export struct RuleCard {
-    num: string,            // 用户规则序号；内置规则为「·」
-    title: string,          // 「ref_exists(Lang.key)」
-    level: string,          // 「错误」/「警告」/「信息」；内置规则为「系统」
+    num: string,
+    title: string,
+    level: string,
     is-warning: bool,
     is-info: bool,
-    selected: bool,         // 正在表单里编辑
-    is-builtin: bool,       // 系统内置：只读、不可删、不可调序
+    selected: bool,
+    is-builtin: bool,
     can-up: bool,
     can-down: bool,
 }
 
 export struct RuleIssueRow {
-    severity: string,       // "error" / "warning" / "info"
+    severity: string,
     text: string,
+}
+
+export struct RuleTreeRow {
+    depth: int,
+    kind: string,              // rule_head / root_head / root_empty / group_open / validator / cond_leaf / group_close / expr / gap
+    title: string,
+    detail: string,
+    rule_index: int,
+    rule_level_index: int,
+    rule_summary: string,
+    rule_collapsed: bool,
+    rule_active: bool,
+    connector: string,
+    connector-index: int,
+    selected: bool,
+    can-delete: bool,
+    can-move-up: bool,
+    can-move-down: bool,
+    logic-index: int,
+    not: bool,
+    can-add-validator: bool,
+    can-add-group: bool,
+    can-add-when: bool,
+    can-add-condition: bool,
+    can-add-condition-group: bool,
+    has-child-groups: bool,
+    can-dissolve: bool,
+    can-merge: bool,
+    column-index: int,
+    op-index: int,
+    op-options: [string],
+    value-mode: string,
+    value: string,
+    pattern: string,
+    values: [string],
+}
+
+export struct RuleFunctionItem {
+    is-group: bool,
+    group: string,
+    key: string,
+    label: string,
+    summary: string,
+    tags: string,
+    enabled: bool,
+    selected: bool,
+}
+
+export struct PickerParam {
+    name: string,
+    kind: string,
+    desc: string,
 }
 
 export component RulesPanel inherits Rectangle {
     in property <bool> open: false;
     in property <string> node-label: "";
+
+    in-out property <int> tab-index: 0;
+    in property <bool> has-table-tab: false;
     in property <[RuleColumnRow]> columns;
     in property <string> column-title: "";
-
     in property <[RuleCard]> rules;
+    in-out property <int> rule-tab-index: 0; // 0 = 自定义规则，1 = 系统规则（只读）
 
-    // 表单（新增 / 编辑共用）
-    in property <string> form-title: "新增规则";
-    in property <[string]> form-kind-options;
-    in-out property <int> form-kind-index: 0;
-    in property <bool> form-has-target: false;
-    in property <[string]> form-target-node-options;
-    in-out property <int> form-target-node-index: 0;
-    in property <[string]> form-target-column-options;
-    in-out property <int> form-target-column-index: 0;
-    in-out property <int> form-level-index: 0;
-    in property <string> form-desc: "";
-    in property <bool> form-can-apply: false;
-    in property <string> form-apply-label: "添加";
-    in property <bool> form-editing: false;
-    in property <string> form-hint: "";
-    in property <bool> can-add: false;
+    // 以下为旧版属性，保留接线；新布局不再使用。
+    in property <string> rule-system-text: "";
+    in property <int> rule-current-card: -1;
+    in property <bool> rule-can-delete: false;
+    in property <bool> rule-can-up: false;
+    in property <bool> rule-can-down: false;
+    in property <string> first-issue: "";
+    in property <string> editor-title: "新建规则";
+    in property <string> editor-path: "";
+    in-out property <int> editor-mode: 0;
+    in property <bool> simple-available: true;
+    in property <bool> can-add-node: false;
+    in-out property <int> level-index: 0;
+    in property <bool> can-save: false;
+    in property <string> save-label: "保存规则";
+    in property <string> preview: "";
+    in property <string> hint: "";
+    in property <bool> new-rule-selected: false;
+    in property <bool> can-new-rule: true;
+    in property <bool> can-confirm: false;
+    in property <bool> discard-open: false;
+    in property <string> discard-message: "";
+    in property <[RuleTreeRow]> tree;
+    in property <[string]> cond-column-options;
 
-    // 通用参数编辑（按验证器类型显示不同组合）
-    in property <string> form-param-a-label: "";
-    in-out property <string> form-param-a: "";
-    in property <string> form-param-b-label: "";
-    in-out property <string> form-param-b: "";
-    in property <string> form-param-column-label: "";
-    in property <[string]> form-param-column-options;
-    in-out property <int> form-param-column-index: 0;
-    in property <[string]> form-param-op-options;
-    in-out property <int> form-param-op-index: 0;
+    // Inspector
+    in property <bool> inspector-visible: false;
+    in property <string> inspector-title: "";
+    in property <[string]> inspector-kind-options;
+    in-out property <int> inspector-kind-index: 0;
+    in property <string> inspector-primary-label: "";
+    in property <[string]> inspector-primary-options;
+    in-out property <int> inspector-primary-index: 0;
+    in property <string> inspector-param-a-label: "";
+    in-out property <string> inspector-param-a: "";
+    in property <string> inspector-param-b-label: "";
+    in-out property <string> inspector-param-b: "";
+    in property <string> inspector-param-column-label: "";
+    in property <[string]> inspector-param-column-options;
+    in-out property <int> inspector-param-column-index: 0;
+    in property <[string]> inspector-param-op-options;
+    in-out property <int> inspector-param-op-index: 0;
+    in property <bool> inspector-has-target: false;
+    in property <[string]> inspector-target-node-options;
+    in-out property <int> inspector-target-node-index: 0;
+    in property <[string]> inspector-target-column-options;
+    in-out property <int> inspector-target-column-index: 0;
+    in property <string> inspector-desc: "";
+    in property <string> inspector-hint: "";
+    in property <bool> inspector-is-condition: false;
+    in property <string> inspector-kind-label: "验证器";
+    in property <string> inspector-docs-use: "";
+    in property <string> inspector-docs-example: "";
+
+    // Picker
+    in property <bool> palette-open: false;
+    in property <string> palette-title: "添加校验项";
+    in property <[RuleFunctionItem]> palette-items;
+    in property <string> palette-name: "";
+    in property <string> palette-signature: "";
+    in property <string> palette-desc: "";
+    in property <string> palette-tags: "";
+    in property <[PickerParam]> palette-params;
+    in property <string> palette-example: "";
+    in property <string> palette-action-label: "添加";
+    in property <[string]> quick-function-options;
+    in-out property <int> quick-function-index: 0;
+    in property <bool> palette-can-add: false;
+    in-out property <int> palette-filter-index: 0;
+    in property <string> palette-hint: "";
 
     in property <[RuleIssueRow]> issues;
     in property <int> error-count: 0;
     in property <int> warning-count: 0;
     in property <int> info-count: 0;
-    in property <bool> can-confirm: true;
 
+    callback tab-changed(int);
+    callback editor-mode-changed(int);
+    callback simple-add-validator();
     callback select-column(int);
-    callback add-rule();
+    callback new-rule();
     callback select-rule(int);
     callback delete-rule(int);
+    callback rule-toggle(int);
+    callback rule-level(int, string);
+    callback discard-confirm();
+    callback discard-cancel();
     callback move-up(int);
     callback move-down(int);
-    callback set-kind(string);
-    callback set-param-a(string);
-    callback set-param-b(string);
-    callback set-param-column(string);
-    callback set-param-op(string);
-    callback set-target-node(string);
-    callback set-target-column(string);
+
+    callback tree-select(int);
+    callback tree-delete(int);
+    callback tree-insert-row(int);
+    callback tree-insert-group(int);
+    callback tree-merge-root();
+    callback tree-dissolve(int);
+    callback tree-move-up(int);
+    callback tree-move-down(int);
+    callback tree-set-group-logic(int, string);
+    callback tree-toggle-group-not(int, bool);
+    callback tree-add-validator(int);
+    callback tree-add-group(int);
+    callback tree-add-when(int);
+    callback query-add-sibling-group(int);
+    callback query-change-function(int);
+    callback query-set-row-logic(int, string);
+    callback query-quick-function(string);
+    callback query-quick-add(int);
+    callback tree-add-condition(int);
+    callback tree-add-condition-group(int);
+
+    callback cond-set-column(int, string);
+    callback cond-set-op(int, string);
+    callback cond-set-value(int, string);
+    callback cond-add-value(int, string);
+    callback cond-remove-value(int, int);
+    callback cond-set-pattern(int, string);
+
+    callback palette-select(int);
+    callback palette-pick(int);
+    callback palette-add();
+    callback palette-cancel();
+    callback palette-search(string);
+    callback palette-filter(int);
+
+    callback inspector-set-kind(string);
+    callback inspector-set-primary(string);
+    callback inspector-set-param-a(string);
+    callback inspector-set-param-b(string);
+    callback inspector-set-param-column(string);
+    callback inspector-set-param-op(string);
+    callback inspector-set-target-node(string);
+    callback inspector-set-target-column(string);
     callback set-level(string);
-    callback apply();
-    callback cancel-edit();
+
+    callback save-rule();
+    callback revert-rule();
     callback confirm();
     callback cancel();
 
@@ -121,10 +371,11 @@ export component RulesPanel inherits Rectangle {
     width: 100%;
     height: 100%;
 
-    DialogChrome {
+    // 关闭时不要构建整棵规则树/参数面板：避免不可见控件的布局参与主界面计算。
+    if root.open : DialogChrome {
         title: "校验规则 — " + root.node-label;
-        dialog-w: 900px;
-        dialog-h: 620px;
+        dialog-w: min(1080px, root.width - 32px);
+        dialog-h: min(760px, root.height - 32px);
         primary-text: "确定";
         primary-enabled: root.can-confirm;
         primary-clicked => { root.confirm(); }
@@ -132,50 +383,119 @@ export component RulesPanel inherits Rectangle {
         scrim-clicked => { root.cancel(); }
 
         VerticalLayout {
-            padding: Theme.sp-4;
-            spacing: Theme.sp-3;
+            padding-left: 8px;
+            padding-right: 8px;
+            padding-top: 6px;
+            padding-bottom: 6px;
+            spacing: 6px;
 
-            Text {
-                text: "选择一列后管理该列的规则；改动点「添加 / 保存」后生效。";
-                color: Theme.text-secondary;
-                font-size: Theme.fs-small;
+            // ── 作用域 Tab ────────────────────────────────────────────
+            HorizontalLayout {
+                height: 30px;
+                spacing: 4px;
+                Rectangle {
+                    width: 104px;
+                    background: root.tab-index == 0 ? #e2f1ee : transparent;
+                    Rectangle {
+                        y: parent.height - 2px;
+                        height: 2px;
+                        background: root.tab-index == 0 ? #0d6b60 : transparent;
+                    }
+                    Text {
+                        text: "列规则";
+                        color: root.tab-index == 0 ? #0d6b60 : Theme.text-secondary;
+                        font-weight: root.tab-index == 0 ? 600 : 400;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+                    TouchArea { clicked => { root.tab-changed(0); } }
+                }
+                if root.has-table-tab : Rectangle {
+                    width: 104px;
+                    background: root.tab-index == 1 ? #e2f1ee : transparent;
+                    Rectangle {
+                        y: parent.height - 2px;
+                        height: 2px;
+                        background: root.tab-index == 1 ? #0d6b60 : transparent;
+                    }
+                    Text {
+                        text: "表级规则";
+                        color: root.tab-index == 1 ? #0d6b60 : Theme.text-secondary;
+                        font-weight: root.tab-index == 1 ? 600 : 400;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+                    TouchArea { clicked => { root.tab-changed(1); } }
+                }
+                Rectangle { horizontal-stretch: 1; }
             }
 
+            // 有未保存改动时，切换作用域 / 列前先让用户选择是否丢弃。
+            if root.discard-open : Rectangle {
+                height: 32px;
+                border-width: 1px;
+                border-color: #eed7a7;
+                border-radius: 4px;
+                background: #fff8e8;
+                HorizontalLayout {
+                    padding-left: 8px;
+                    padding-right: 6px;
+                    spacing: 6px;
+                    Text {
+                        text: root.discard-message;
+                        color: #8a5a00;
+                        font-size: 10px;
+                        vertical-alignment: center;
+                        horizontal-stretch: 1;
+                        overflow: elide;
+                    }
+                    Chip {
+                        text: "丢弃并切换";
+                        danger: true;
+                        clicked => { root.discard-confirm(); }
+                    }
+                    Chip {
+                        text: "取消";
+                        clicked => { root.discard-cancel(); }
+                    }
+                }
+            }
+
+            // ── 主体：左列清单 + 右规则编辑 ───────────────────────────
             HorizontalLayout {
                 vertical-stretch: 1;
-                spacing: Theme.sp-3;
+                spacing: 8px;
 
-                // ── 左：列清单 ─────────────────────────────────────
-                Rectangle {
-                    width: 220px;
+                if root.tab-index == 0 : Rectangle {
+                    width: min(176px, root.width * 0.18);
+                    vertical-stretch: 1;
                     border-color: Theme.border-light;
                     border-width: 1px;
                     background: Theme.bg-panel;
-
+                    clip: true;
                     VerticalLayout {
                         spacing: 0;
                         Rectangle {
-                            height: Theme.row-h;
+                            height: 28px;
                             background: Theme.bg-header;
                             Text {
                                 text: "列";
                                 color: Theme.text-secondary;
-                                vertical-alignment: center;
-                                x: Theme.sp-2;
                                 font-size: Theme.fs-small;
+                                x: 8px;
+                                vertical-alignment: center;
                             }
                         }
                         ScrollView {
                             vertical-stretch: 1;
                             VerticalLayout {
                                 for c[i] in root.columns : Rectangle {
-                                    height: Theme.row-h;
-                                    background: c.selected ? Theme.bg-row-selected : transparent;
-
+                                    height: 30px;
+                                    background: c.selected ? #e8f3f0 : transparent;
                                     HorizontalLayout {
-                                        padding-left: Theme.sp-2;
-                                        padding-right: Theme.sp-2;
-                                        spacing: Theme.sp-1;
+                                        padding-left: 8px;
+                                        padding-right: 8px;
+                                        spacing: 4px;
                                         Text {
                                             text: c.name;
                                             color: c.unsupported ? Theme.text-disabled : Theme.text-primary;
@@ -187,334 +507,910 @@ export component RulesPanel inherits Rectangle {
                                             text: c.badge;
                                             color: c.unsupported ? Theme.text-disabled : Theme.text-secondary;
                                             vertical-alignment: center;
-                                            font-size: Theme.fs-small;
+                                            font-size: 10px;
+                                            overflow: elide;
                                         }
                                     }
-
-                                    TouchArea {
-                                        clicked => { root.select-column(i); }
-                                    }
+                                    TouchArea { clicked => { root.select-column(i); } }
                                 }
                             }
                         }
                     }
                 }
 
-                // ── 右：规则列表 + 表单 ─────────────────────────────
-                VerticalLayout {
+                Rectangle {
                     horizontal-stretch: 1;
-                    spacing: Theme.sp-2;
+                    vertical-stretch: 1;
+                    border-color: Theme.border-light;
+                    border-width: 1px;
+                    background: Theme.bg-panel;
+                    clip: true;
 
-                    // 当前列标题条
-                    Rectangle {
-                        height: 26px;
-                        background: Theme.bg-header;
+                    VerticalLayout {
+                        spacing: 0;
+
+                        // 编辑器标题栏：只保留整组保存 / 还原。
                         HorizontalLayout {
-                            padding-left: Theme.sp-2;
-                            padding-right: Theme.sp-2;
+                            height: 34px;
+                            padding-left: 10px;
+                            padding-right: 8px;
+                            spacing: 6px;
                             Text {
-                                text: root.column-title;
+                                text: root.rule-tab-index == 0
+                                    ? "规则编辑  " + root.editor-path
+                                    : "系统规则（只读）";
                                 color: Theme.text-primary;
-                                vertical-alignment: center;
                                 font-weight: 600;
+                                vertical-alignment: center;
+                                horizontal-stretch: 1;
                                 overflow: elide;
                             }
+                            if root.rule-tab-index == 0 : Chip {
+                                text: "还原";
+                                clicked => { root.revert-rule(); }
+                            }
+                            if root.rule-tab-index == 0 : Chip {
+                                text: "保存规则";
+                                primary: true;
+                                enabled: root.can-save;
+                                clicked => { root.save-rule(); }
+                            }
                         }
-                    }
 
-                    HorizontalLayout {
-                        spacing: Theme.sp-2;
-                        Text {
-                            text: "规则（优先级从上到下）";
-                            color: Theme.text-secondary;
-                            vertical-alignment: center;
-                            horizontal-stretch: 1;
-                            font-size: Theme.fs-small;
+                        // 自定义 / 系统 两个只读/可编辑视图。
+                        HorizontalLayout {
+                            height: 30px;
+                            padding-left: 8px;
+                            padding-right: 8px;
+                            spacing: 4px;
+                            Rectangle {
+                                width: 96px;
+                                height: 24px;
+                                border-radius: 4px;
+                                border-width: 1px;
+                                border-color: root.rule-tab-index == 0 ? #0d6b60 : Theme.border-light;
+                                background: root.rule-tab-index == 0 ? #e2f1ee : Theme.bg-panel;
+                                Text {
+                                    text: "自定义规则";
+                                    color: root.rule-tab-index == 0 ? #0d6b60 : Theme.text-primary;
+                                    font-size: Theme.fs-small;
+                                    horizontal-alignment: center;
+                                    vertical-alignment: center;
+                                }
+                                TouchArea { clicked => { root.rule-tab-index = 0; } }
+                            }
+                            Rectangle {
+                                width: 96px;
+                                height: 24px;
+                                border-radius: 4px;
+                                border-width: 1px;
+                                border-color: root.rule-tab-index == 1 ? #0d6b60 : Theme.border-light;
+                                background: root.rule-tab-index == 1 ? #e2f1ee : Theme.bg-panel;
+                                Text {
+                                    text: "系统规则";
+                                    color: root.rule-tab-index == 1 ? #0d6b60 : Theme.text-primary;
+                                    font-size: Theme.fs-small;
+                                    horizontal-alignment: center;
+                                    vertical-alignment: center;
+                                }
+                                TouchArea { clicked => { root.rule-tab-index = 1; } }
+                            }
+                            Rectangle { horizontal-stretch: 1; }
                         }
-                        Button {
-                            text: "+ 添加规则";
-                            enabled: root.can-add;
-                            clicked => { root.add-rule(); }
-                        }
-                    }
 
-                    // 规则列表：吃掉右侧所有多余高度
-                    Rectangle {
-                        vertical-stretch: 1;
-                        border-color: Theme.border-light;
-                        border-width: 1px;
-                        background: Theme.bg-panel;
+                        // ── 自定义规则：卡片列表（唯一滚动区）────────────
+                        if root.rule-tab-index == 0 : VerticalLayout {
+                            vertical-stretch: 1;
+                            spacing: 0;
 
-                        ScrollView {
-                            VerticalLayout {
-                                if root.rules.length == 0 : HorizontalLayout {
-                                    padding: Theme.sp-3;
-                                    Text {
-                                        text: "该列还没有规则。";
-                                        color: Theme.text-secondary;
-                                        font-size: Theme.fs-small;
+                            ScrollView {
+                                vertical-stretch: 1;
+                                VerticalLayout {
+                                    padding-left: 8px;
+                                    padding-right: 8px;
+                                    spacing: 0;
+                                    for row[i] in root.tree : Rectangle {
+                                        height: row.kind == "gap" ? 8px
+                                            : (row.kind == "rule_head" ? 36px
+                                            : (row.kind == "expr" ? 28px : 30px));
+                                        background: row.kind == "gap" ? transparent
+                                            : (row.kind == "rule_head" ? Theme.bg-header
+                                            : (row.kind == "expr" ? #f8fafc
+                                            : (row.rule_active ? #fbfefd : Theme.bg-panel)));
+                                        border-width: row.kind == "gap" ? 0px : 1px;
+                                        border-color: row.rule_active ? #b9dcd4 : Theme.border-light;
+                                        border-radius: (row.kind == "expr"
+                                            || (row.kind == "rule_head" && row.rule_collapsed)) ? 5px : 0px;
+                                        clip: true;
+
+                                        // 行点击：选中所在规则的节点（卡片同时被激活）。
+                                        if row.kind != "gap" && row.kind != "rule_head" && row.kind != "expr" : TouchArea {
+                                            width: 100%;
+                                            height: 100%;
+                                            clicked => { root.tree-select(i); }
+                                        }
+
+                                        HorizontalLayout {
+                                            padding-left: 8px + row.depth * 14px;
+                                            padding-right: 6px;
+                                            spacing: 4px;
+
+                                            // ── 规则卡片头 ───────────────────────
+                                            if row.kind == "rule_head" : Text {
+                                                text: row.title;
+                                                color: Theme.text-primary;
+                                                font-weight: 600;
+                                                font-size: Theme.fs-small;
+                                                vertical-alignment: center;
+                                            }
+                                            if row.kind == "rule_head" : ComboBox {
+                                                width: 76px;
+                                                height: 22px;
+                                                model: ["错误", "警告", "信息"];
+                                                current-index: row.rule_level_index;
+                                                selected(s) => { root.rule-level(row.rule_index, s); }
+                                            }
+                                            if row.kind == "rule_head" : Text {
+                                                text: row.rule_summary;
+                                                width: min(300px, root.width * 0.26);
+                                                color: Theme.text-secondary;
+                                                font-family: "Cascadia Mono";
+                                                font-size: 10px;
+                                                vertical-alignment: center;
+                                                overflow: elide;
+                                            }
+                                            if row.kind == "rule_head" : Rectangle { horizontal-stretch: 1; }
+                                            if row.kind == "rule_head" : Chip {
+                                                text: row.rule_collapsed ? "展开" : "收起";
+                                                clicked => { root.rule-toggle(row.rule_index); }
+                                            }
+                                            if row.kind == "rule_head" : Chip {
+                                                text: "删除";
+                                                danger: true;
+                                                clicked => { root.delete-rule(row.rule_index); }
+                                            }
+
+                                            // ── 根组标题：不写字，只保留右侧「合并」 ──
+                                            if row.kind == "root_head" : Rectangle { horizontal-stretch: 1; }
+                                            if row.kind == "root_head" && row.can-merge : Chip {
+                                                text: "合并";
+                                                clicked => {
+                                                    root.tree-select(i);
+                                                    root.tree-merge-root();
+                                                }
+                                            }
+
+                                            // ── 空根组 ───────────────────────────
+                                            if row.kind == "root_empty" : Text {
+                                                text: "暂无成员";
+                                                color: Theme.text-secondary;
+                                                font-size: 10px;
+                                                vertical-alignment: center;
+                                                horizontal-stretch: 1;
+                                            }
+                                            if row.kind == "root_empty" : RowActions {
+                                                can-insert: true;
+                                                can-group: true;
+                                                can-delete: false;
+                                                insert-row => { root.tree-insert-row(i); }
+                                                insert-group => { root.tree-insert-group(i); }
+                                            }
+
+                                            // ── 组开头 ───────────────────────────
+                                            if row.kind == "group_open" : Text {
+                                                text: "(";
+                                                color: Theme.text-secondary;
+                                                font-family: "Cascadia Mono";
+                                                font-size: 15px;
+                                                width: 12px;
+                                                vertical-alignment: center;
+                                            }
+                                            if row.kind == "group_open" : Tag {
+                                                text: "组";
+                                                bg: #eef0ff;
+                                                fg: #4957a8;
+                                            }
+                                            if row.kind == "group_open" : Rectangle { horizontal-stretch: 1; }
+
+                                            // ── 组结尾 ───────────────────────────
+                                            if row.kind == "group_close" : Text {
+                                                text: ")";
+                                                color: Theme.text-secondary;
+                                                font-family: "Cascadia Mono";
+                                                font-size: 15px;
+                                                width: 12px;
+                                                vertical-alignment: center;
+                                            }
+                                            if row.kind == "group_close" && row.connector != "" : ComboBox {
+                                                width: 64px;
+                                                height: 22px;
+                                                model: ["and", "or"];
+                                                current-index: row.connector-index;
+                                                selected(s) => { root.tree-set-group-logic(i, s); }
+                                            }
+                                            if row.kind == "group_close" : Rectangle { horizontal-stretch: 1; }
+                                            if row.kind == "group_close" : RowActions {
+                                                group: true;
+                                                can-insert: row.can-add-validator;
+                                                can-group: row.can-add-group;
+                                                can-delete: row.can-delete;
+                                                can-dissolve: row.can-dissolve;
+                                                insert-row => { root.tree-insert-row(i); }
+                                                insert-group => { root.tree-insert-group(i); }
+                                                delete => { root.tree-delete(i); }
+                                                dissolve => { root.tree-dissolve(i); }
+                                            }
+
+                                            // ── 验证器 ───────────────────────────
+                                            if row.kind == "validator" : Tag {
+                                                text: "验证器";
+                                                bg: #e8f4ec;
+                                                fg: #236b3d;
+                                            }
+                                            if row.kind == "validator" : Text {
+                                                text: row.title + row.detail;
+                                                width: min(250px, root.width * 0.22);
+                                                color: row.selected ? #0d6b60 : #236b3d;
+                                                font-family: "Cascadia Mono";
+                                                font-size: 11px;
+                                                vertical-alignment: center;
+                                                overflow: elide;
+                                            }
+                                            if row.kind == "validator" && row.connector != "" : ComboBox {
+                                                width: 64px;
+                                                height: 22px;
+                                                model: ["and", "or"];
+                                                current-index: row.connector-index;
+                                                selected(s) => { root.tree-set-group-logic(i, s); }
+                                            }
+                                            if row.kind == "validator" : Rectangle { horizontal-stretch: 1; }
+                                            if row.kind == "validator" : RowActions {
+                                                can-insert: row.can-add-validator;
+                                                can-group: row.can-add-group;
+                                                can-delete: row.can-delete;
+                                                insert-row => { root.tree-insert-row(i); }
+                                                insert-group => { root.tree-insert-group(i); }
+                                                delete => { root.tree-delete(i); }
+                                            }
+
+                                            // ── 条件叶子 ─────────────────────────
+                                            if row.kind == "cond_leaf" : Tag {
+                                                text: "条件";
+                                                bg: #fff3d9;
+                                                fg: #8a5a00;
+                                            }
+                                            if row.kind == "cond_leaf" : Text {
+                                                text: row.title + row.detail;
+                                                width: min(250px, root.width * 0.22);
+                                                color: row.selected ? #8a5a00 : #8a5a00;
+                                                font-family: "Cascadia Mono";
+                                                font-size: 11px;
+                                                vertical-alignment: center;
+                                                overflow: elide;
+                                            }
+                                            if row.kind == "cond_leaf" && row.connector != "" : ComboBox {
+                                                width: 64px;
+                                                height: 22px;
+                                                model: ["and", "or"];
+                                                current-index: row.connector-index;
+                                                selected(s) => { root.tree-set-group-logic(i, s); }
+                                            }
+                                            if row.kind == "cond_leaf" : Rectangle { horizontal-stretch: 1; }
+                                            if row.kind == "cond_leaf" : RowActions {
+                                                can-insert: row.can-add-validator;
+                                                can-group: row.can-add-group;
+                                                can-delete: row.can-delete;
+                                                insert-row => { root.tree-insert-row(i); }
+                                                insert-group => { root.tree-insert-group(i); }
+                                                delete => { root.tree-delete(i); }
+                                            }
+
+                                            // ── 表达式预览 ───────────────────────
+                                            if row.kind == "expr" : Text {
+                                                text: "表达式";
+                                                color: Theme.text-secondary;
+                                                font-size: 10px;
+                                                vertical-alignment: center;
+                                            }
+                                            if row.kind == "expr" : Text {
+                                                text: row.detail;
+                                                color: Theme.text-primary;
+                                                font-family: "Cascadia Mono";
+                                                font-size: 10px;
+                                                vertical-alignment: center;
+                                                horizontal-stretch: 1;
+                                                overflow: elide;
+                                            }
+                                        }
                                     }
                                 }
-                                for r[i] in root.rules : Rectangle {
-                                    height: Theme.row-h;
-                                    background: r.selected ? Theme.bg-row-selected : transparent;
+                            }
 
-                                    // 放在内容之前：后面的按钮要能盖在它上面接点击
-                                    TouchArea {
-                                        clicked => { if (!r.is-builtin) { root.select-rule(i); } }
+                            HorizontalLayout {
+                                height: 30px;
+                                padding-left: 8px;
+                                padding-right: 8px;
+                                spacing: 4px;
+                                Chip {
+                                    text: "+ 新建规则";
+                                    enabled: root.can-new-rule;
+                                    clicked => { root.new-rule(); }
+                                }
+                                Rectangle { horizontal-stretch: 1; }
+                            }
+
+                            // Inspector：固定高度，内部滚动；不参与卡片区的高度计算。
+                            Rectangle {
+                                height: root.height < 720px ? 148px : 190px;
+                                border-width: 1px;
+                                border-color: Theme.border-light;
+                                background: Theme.bg-toolbar;
+                                clip: true;
+
+                                if !root.inspector-visible : VerticalLayout {
+                                    padding: 8px;
+                                    Text {
+                                        text: "选中一条条件 / 验证器后，在这里编辑参数和查看说明。";
+                                        color: Theme.text-secondary;
+                                        font-size: Theme.fs-small;
+                                        wrap: word-wrap;
+                                    }
+                                }
+
+                                if root.inspector-visible : VerticalLayout {
+                                    padding-left: 8px;
+                                    padding-right: 8px;
+                                    padding-top: 6px;
+                                    padding-bottom: 6px;
+                                    spacing: 4px;
+                                    HorizontalLayout {
+                                        height: 24px;
+                                        spacing: 6px;
+                                        Text {
+                                            text: root.inspector-title;
+                                            color: Theme.text-primary;
+                                            font-weight: 600;
+                                            font-size: Theme.fs-small;
+                                            vertical-alignment: center;
+                                        }
+                                        Text {
+                                            text: root.inspector-kind-label;
+                                            color: Theme.text-secondary;
+                                            font-size: 10px;
+                                            vertical-alignment: center;
+                                        }
+                                        ComboBox {
+                                            height: 22px;
+                                            width: 150px;
+                                            model: root.inspector-kind-options;
+                                            current-index <=> root.inspector-kind-index;
+                                            selected(s) => { root.inspector-set-kind(s); }
+                                        }
+                                        Rectangle { horizontal-stretch: 1; }
                                     }
 
                                     HorizontalLayout {
-                                        padding-left: Theme.sp-2;
-                                        padding-right: Theme.sp-2;
-                                        spacing: Theme.sp-2;
-                                        Text {
-                                            text: r.num;
-                                            width: 20px;
-                                            color: Theme.text-secondary;
-                                            vertical-alignment: center;
-                                            font-size: Theme.fs-small;
+                                        vertical-stretch: 1;
+                                        spacing: 8px;
+                                        ScrollView {
+                                            width: 46%;
+                                            VerticalLayout {
+                                                spacing: 3px;
+                                                if root.inspector-primary-label != "" : HorizontalLayout {
+                                                    height: 24px;
+                                                    spacing: 4px;
+                                                    Text {
+                                                        text: root.inspector-primary-label;
+                                                        width: 70px;
+                                                        color: Theme.text-secondary;
+                                                        font-size: 10px;
+                                                        vertical-alignment: center;
+                                                        overflow: elide;
+                                                    }
+                                                    ComboBox {
+                                                        height: 22px;
+                                                        horizontal-stretch: 1;
+                                                        model: root.inspector-primary-options;
+                                                        current-index <=> root.inspector-primary-index;
+                                                        selected(s) => { root.inspector-set-primary(s); }
+                                                    }
+                                                }
+                                                if root.inspector-param-column-label != "" : HorizontalLayout {
+                                                    height: 24px;
+                                                    spacing: 4px;
+                                                    Text {
+                                                        text: root.inspector-param-column-label;
+                                                        width: 70px;
+                                                        color: Theme.text-secondary;
+                                                        font-size: 10px;
+                                                        vertical-alignment: center;
+                                                    }
+                                                    ComboBox {
+                                                        height: 22px;
+                                                        horizontal-stretch: 1;
+                                                        model: root.inspector-param-column-options;
+                                                        current-index <=> root.inspector-param-column-index;
+                                                        selected(s) => { root.inspector-set-param-column(s); }
+                                                    }
+                                                }
+                                                if root.inspector-param-op-options.length > 0 : HorizontalLayout {
+                                                    height: 24px;
+                                                    spacing: 4px;
+                                                    Text {
+                                                        text: "运算符";
+                                                        width: 70px;
+                                                        color: Theme.text-secondary;
+                                                        font-size: 10px;
+                                                        vertical-alignment: center;
+                                                    }
+                                                    ComboBox {
+                                                        height: 22px;
+                                                        horizontal-stretch: 1;
+                                                        model: root.inspector-param-op-options;
+                                                        current-index <=> root.inspector-param-op-index;
+                                                        selected(s) => { root.inspector-set-param-op(s); }
+                                                    }
+                                                }
+                                                if root.inspector-param-a-label != "" : HorizontalLayout {
+                                                    height: 24px;
+                                                    spacing: 4px;
+                                                    Text {
+                                                        text: root.inspector-param-a-label;
+                                                        width: 70px;
+                                                        color: Theme.text-secondary;
+                                                        font-size: 10px;
+                                                        vertical-alignment: center;
+                                                        overflow: elide;
+                                                    }
+                                                    LineEdit {
+                                                        height: 22px;
+                                                        horizontal-stretch: 1;
+                                                        text <=> root.inspector-param-a;
+                                                        edited(s) => { root.inspector-set-param-a(s); }
+                                                    }
+                                                }
+                                                if root.inspector-param-b-label != "" : HorizontalLayout {
+                                                    height: 24px;
+                                                    spacing: 4px;
+                                                    Text {
+                                                        text: root.inspector-param-b-label;
+                                                        width: 70px;
+                                                        color: Theme.text-secondary;
+                                                        font-size: 10px;
+                                                        vertical-alignment: center;
+                                                    }
+                                                    LineEdit {
+                                                        height: 22px;
+                                                        horizontal-stretch: 1;
+                                                        text <=> root.inspector-param-b;
+                                                        edited(s) => { root.inspector-set-param-b(s); }
+                                                    }
+                                                }
+                                                if root.inspector-has-target : VerticalLayout {
+                                                    spacing: 3px;
+                                                    HorizontalLayout {
+                                                        height: 24px;
+                                                        spacing: 4px;
+                                                        Text {
+                                                            text: "目标节点";
+                                                            width: 70px;
+                                                            color: Theme.text-secondary;
+                                                            font-size: 10px;
+                                                            vertical-alignment: center;
+                                                        }
+                                                        ComboBox {
+                                                            height: 22px;
+                                                            horizontal-stretch: 1;
+                                                            model: root.inspector-target-node-options;
+                                                            current-index <=> root.inspector-target-node-index;
+                                                            selected(s) => { root.inspector-set-target-node(s); }
+                                                        }
+                                                    }
+                                                    HorizontalLayout {
+                                                        height: 24px;
+                                                        spacing: 4px;
+                                                        Text {
+                                                            text: "目标列";
+                                                            width: 70px;
+                                                            color: Theme.text-secondary;
+                                                            font-size: 10px;
+                                                            vertical-alignment: center;
+                                                        }
+                                                        ComboBox {
+                                                            height: 22px;
+                                                            horizontal-stretch: 1;
+                                                            model: root.inspector-target-column-options;
+                                                            current-index <=> root.inspector-target-column-index;
+                                                            selected(s) => { root.inspector-set-target-column(s); }
+                                                        }
+                                                    }
+                                                }
+                                                if root.inspector-hint != "" : Text {
+                                                    text: root.inspector-hint;
+                                                    color: Theme.mark-modified;
+                                                    font-size: 10px;
+                                                    wrap: word-wrap;
+                                                }
+                                            }
                                         }
-                                        Text {
-                                            text: r.title;
-                                            color: r.is-builtin ? Theme.text-secondary : Theme.text-primary;
-                                            vertical-alignment: center;
+
+                                        Rectangle { width: 1px; background: Theme.border-light; }
+
+                                        ScrollView {
                                             horizontal-stretch: 1;
-                                            overflow: elide;
+                                            VerticalLayout {
+                                                spacing: 3px;
+                                                Text {
+                                                    text: "说明";
+                                                    color: Theme.text-secondary;
+                                                    font-size: 10px;
+                                                    font-weight: 600;
+                                                }
+                                                Text {
+                                                    text: root.inspector-desc;
+                                                    color: Theme.text-primary;
+                                                    font-size: 11px;
+                                                    wrap: word-wrap;
+                                                }
+                                                Text {
+                                                    text: "适用";
+                                                    color: Theme.text-secondary;
+                                                    font-size: 10px;
+                                                    font-weight: 600;
+                                                }
+                                                Text {
+                                                    text: root.inspector-docs-use;
+                                                    color: Theme.text-primary;
+                                                    font-size: 11px;
+                                                    wrap: word-wrap;
+                                                }
+                                                Text {
+                                                    text: "示例";
+                                                    color: Theme.text-secondary;
+                                                    font-size: 10px;
+                                                    font-weight: 600;
+                                                }
+                                                Text {
+                                                    text: root.inspector-docs-example;
+                                                    color: Theme.text-primary;
+                                                    font-family: "Cascadia Mono";
+                                                    font-size: 10px;
+                                                    wrap: word-wrap;
+                                                }
+                                            }
                                         }
-                                        Text {
-                                            width: 40px;
-                                            text: r.level;
-                                            color: r.is-builtin ? Theme.text-secondary :
-                                                   (r.is-info ? Theme.text-secondary :
-                                                   (r.is-warning ? Theme.mark-modified : Theme.text-error));
-                                            vertical-alignment: center;
-                                            font-size: Theme.fs-small;
-                                        }
-                                        MiniButton {
-                                            visible: !r.is-builtin;
-                                            glyph: "↑";
-                                            enabled: r.can-up;
-                                            clicked => { root.move-up(i); }
-                                        }
-                                        MiniButton {
-                                            visible: !r.is-builtin;
-                                            glyph: "↓";
-                                            enabled: r.can-down;
-                                            clicked => { root.move-down(i); }
-                                        }
-                                        MiniButton {
-                                            visible: !r.is-builtin;
-                                            glyph: "×";
-                                            clicked => { root.delete-rule(i); }
+                                    }
+                                }
+                            }
+                        }
+
+                        // ── 系统规则：只读 ─────────────────────────────
+                        if root.rule-tab-index == 1 : VerticalLayout {
+                            vertical-stretch: 1;
+                            spacing: 6px;
+                            padding: 8px;
+                            ScrollView {
+                                vertical-stretch: 1;
+                                VerticalLayout {
+                                    spacing: 0;
+                                    if root.rules.length == 0 : Text {
+                                        text: "（无系统规则）";
+                                        color: Theme.text-secondary;
+                                        font-size: 10px;
+                                    }
+                                    for r[i] in root.rules : Rectangle {
+                                        visible: r.is-builtin;
+                                        height: r.is-builtin ? 32px : 0px;
+                                        border-width: 1px;
+                                        border-color: Theme.border-light;
+                                        background: Theme.bg-panel;
+                                        HorizontalLayout {
+                                            padding-left: 8px;
+                                            padding-right: 8px;
+                                            spacing: 6px;
+                                            Tag { text: "系统"; bg: #eef0ff; fg: #4957a8; }
+                                            Text {
+                                                text: r.title;
+                                                color: Theme.text-secondary;
+                                                font-family: "Cascadia Mono";
+                                                font-size: 10px;
+                                                vertical-alignment: center;
+                                                horizontal-stretch: 1;
+                                                overflow: elide;
+                                            }
+                                            Text {
+                                                text: "只读";
+                                                color: Theme.text-disabled;
+                                                font-size: 10px;
+                                                vertical-alignment: center;
+                                            }
                                         }
                                     }
                                 }
                             }
                         }
                     }
+                }
+            }
 
-                    // 表单：高度由内容决定
-                    Rectangle {
-                        border-color: Theme.border-light;
-                        border-width: 1px;
-                        background: Theme.bg-toolbar;
-
-                        VerticalLayout {
-                            padding: Theme.sp-3;
-                            spacing: Theme.sp-2;
-
-                            Text {
-                                text: root.form-title;
-                                color: Theme.text-primary;
-                                font-size: Theme.fs-normal;
-                                font-weight: 600;
-                            }
-
-                            HorizontalLayout {
-                                spacing: Theme.sp-2;
-                                alignment: start;
-                                Text { text: "类型"; width: 32px; vertical-alignment: center; color: Theme.text-secondary; font-size: Theme.fs-small; }
-                                ComboBox {
-                                    width: 200px;
-                                    model: root.form-kind-options;
-                                    current-index <=> root.form-kind-index;
-                                    selected(s) => { root.set-kind(s); }
-                                }
-                                Text { text: "级别"; width: 32px; vertical-alignment: center; color: Theme.text-secondary; font-size: Theme.fs-small; }
-                                ComboBox {
-                                    width: 96px;
-                                    model: ["错误", "警告", "信息"];
-                                    current-index <=> root.form-level-index;
-                                    selected(s) => { root.set-level(s); }
-                                }
-                            }
-
-                            HorizontalLayout {
-                                visible: root.form-has-target;
-                                spacing: Theme.sp-2;
-                                alignment: start;
-                                Text { text: "目标"; width: 32px; vertical-alignment: center; color: Theme.text-secondary; font-size: Theme.fs-small; }
-                                ComboBox {
-                                    width: 190px;
-                                    model: root.form-target-node-options;
-                                    current-index <=> root.form-target-node-index;
-                                    selected(s) => { root.set-target-node(s); }
-                                }
-                                Text { text: "."; vertical-alignment: center; color: Theme.text-primary; }
-                                ComboBox {
-                                    width: 170px;
-                                    model: root.form-target-column-options;
-                                    current-index <=> root.form-target-column-index;
-                                    selected(s) => { root.set-target-column(s); }
-                                }
-                            }
-
-                            // 通用参数：range / len / one_of / matches / required_if / compare
-                            HorizontalLayout {
-                                visible: root.form-param-a-label != "";
-                                spacing: Theme.sp-2;
-                                alignment: start;
-                                Text {
-                                    text: root.form-param-a-label;
-                                    width: 96px;
-                                    vertical-alignment: center;
-                                    color: Theme.text-secondary;
-                                    font-size: Theme.fs-small;
-                                }
-                                LineEdit {
-                                    width: 180px;
-                                    text <=> root.form-param-a;
-                                    edited(s) => { root.set-param-a(s); }
-                                }
-                                Text {
-                                    visible: root.form-param-b-label != "";
-                                    text: root.form-param-b-label;
-                                    width: 40px;
-                                    vertical-alignment: center;
-                                    color: Theme.text-secondary;
-                                    font-size: Theme.fs-small;
-                                }
-                                LineEdit {
-                                    visible: root.form-param-b-label != "";
-                                    width: 180px;
-                                    text <=> root.form-param-b;
-                                    edited(s) => { root.set-param-b(s); }
-                                }
-                            }
-
-                            HorizontalLayout {
-                                visible: root.form-param-column-label != "";
-                                spacing: Theme.sp-2;
-                                alignment: start;
-                                Text {
-                                    text: root.form-param-column-label;
-                                    width: 96px;
-                                    vertical-alignment: center;
-                                    color: Theme.text-secondary;
-                                    font-size: Theme.fs-small;
-                                }
-                                ComboBox {
-                                    width: 190px;
-                                    model: root.form-param-column-options;
-                                    current-index <=> root.form-param-column-index;
-                                    selected(s) => { root.set-param-column(s); }
-                                }
-                                Text {
-                                    visible: root.form-param-op-options.length > 0;
-                                    text: "运算符";
-                                    width: 48px;
-                                    vertical-alignment: center;
-                                    color: Theme.text-secondary;
-                                    font-size: Theme.fs-small;
-                                }
-                                ComboBox {
-                                    visible: root.form-param-op-options.length > 0;
-                                    width: 96px;
-                                    model: root.form-param-op-options;
-                                    current-index <=> root.form-param-op-index;
-                                    selected(s) => { root.set-param-op(s); }
-                                }
-                            }
-
-                            Text {
-                                text: root.form-desc;
-                                color: Theme.text-info;
-                                font-size: Theme.fs-small;
-                                overflow: elide;
-                            }
-                            Text {
-                                visible: root.form-hint != "";
-                                text: root.form-hint;
-                                color: Theme.mark-modified;
-                                font-size: Theme.fs-small;
-                                overflow: elide;
-                            }
-
-                            HorizontalLayout {
-                                alignment: end;
-                                spacing: Theme.sp-2;
-                                Button {
-                                    text: "取消编辑";
-                                    visible: root.form-editing;
-                                    clicked => { root.cancel-edit(); }
-                                }
-                                Button {
-                                    text: root.form-apply-label;
-                                    enabled: root.form-can-apply;
-                                    clicked => { root.apply(); }
-                                }
-                            }
-                        }
+            // ── 底部整体结果 ─────────────────────────────────────────
+            Rectangle {
+                height: 26px;
+                border-width: 1px;
+                border-color: Theme.border-light;
+                background: Theme.bg-header;
+                HorizontalLayout {
+                    padding-left: 8px;
+                    padding-right: 8px;
+                    spacing: 6px;
+                    Text {
+                        text: "整体结果";
+                        color: Theme.text-secondary;
+                        font-size: 10px;
+                        vertical-alignment: center;
+                    }
+                    Text {
+                        text: root.error-count > 0 ? "未通过"
+                            : (root.warning-count > 0 ? "通过（有警告）" : "通过");
+                        color: root.error-count > 0 ? #a32b2b
+                            : (root.warning-count > 0 ? Theme.mark-modified : Theme.text-secondary);
+                        font-size: 10px;
+                        vertical-alignment: center;
+                    }
+                    Text {
+                        text: root.error-count + " 错误 · " + root.warning-count + " 警告 · "
+                            + root.info-count + " 信息";
+                        color: Theme.text-secondary;
+                        font-size: 10px;
+                        vertical-alignment: center;
+                    }
+                    if root.hint != "" : Text {
+                        text: root.hint;
+                        color: Theme.mark-modified;
+                        font-size: 10px;
+                        vertical-alignment: center;
+                        horizontal-stretch: 1;
+                        overflow: elide;
+                    }
+                    Rectangle { horizontal-stretch: 1; }
+                    Text {
+                        text: root.rule-system-text;
+                        color: Theme.text-disabled;
+                        font-size: 10px;
+                        vertical-alignment: center;
+                        overflow: elide;
                     }
                 }
             }
+        }
 
-            // ── 结果（整宽） ────────────────────────────────────────
+        // ── 函数选择器 ────────────────────────────────────────────────
+        if root.palette-open : Rectangle {
+            x: 0;
+            y: 0;
+            width: 100%;
+            height: 100%;
+            background: #00000044;
+
             HorizontalLayout {
-                spacing: Theme.sp-2;
-                Text {
-                    text: "本节点校验结果";
-                    color: Theme.text-secondary;
-                    vertical-alignment: center;
-                    font-size: Theme.fs-small;
-                }
-                Text {
-                    text: "错误 \{root.error-count} · 警告 \{root.warning-count} · 信息 \{root.info-count}";
-                    color: root.error-count > 0 ? Theme.text-error : Theme.text-secondary;
-                    vertical-alignment: center;
-                    font-size: Theme.fs-small;
-                }
-            }
+                alignment: center;
+                VerticalLayout {
+                    alignment: center;
+                    Rectangle {
+                        width: 760px;
+                        height: 500px;
+                        background: Theme.bg-panel;
+                        border-radius: 6px;
+                        border-width: 1px;
+                        border-color: Theme.border-light;
+                        VerticalLayout {
+                            spacing: 0;
 
-            Rectangle {
-                height: 88px;
-                border-color: Theme.border-light;
-                border-width: 1px;
-                background: Theme.bg-panel;
-
-                ScrollView {
-                    VerticalLayout {
-                        if root.issues.length == 0 : HorizontalLayout {
-                            padding: Theme.sp-3;
-                            Text {
-                                text: "没有校验问题。";
-                                color: Theme.text-secondary;
-                                font-size: Theme.fs-small;
-                            }
-                        }
-                        for it in root.issues : Rectangle {
-                            height: Theme.row-h;
                             HorizontalLayout {
-                                padding-left: Theme.sp-2;
-                                padding-right: Theme.sp-2;
+                                height: 38px;
+                                padding-left: 8px;
+                                padding-right: 8px;
+                                spacing: 4px;
                                 Text {
-                                    text: it.text;
-                                    color: it.severity == "error" ? Theme.text-error :
-                                           (it.severity == "warning" ? Theme.mark-modified : Theme.text-secondary);
+                                    text: root.palette-title;
+                                    color: Theme.text-primary;
+                                    font-weight: 600;
                                     vertical-alignment: center;
+                                }
+                                Rectangle { horizontal-stretch: 1; }
+                                MiniButton { glyph: "×"; clicked => { root.palette-cancel(); } }
+                            }
+
+                            HorizontalLayout {
+                                height: 36px;
+                                padding-left: 8px;
+                                padding-right: 8px;
+                                spacing: 4px;
+                                LineEdit {
+                                    horizontal-stretch: 1;
+                                    placeholder-text: "搜索函数名或描述";
+                                    edited(s) => { root.palette-search(s); }
+                                }
+                                Chip {
+                                    text: "全部";
+                                    primary: root.palette-filter-index == 0;
+                                    clicked => { root.palette-filter(0); }
+                                }
+                                Chip {
+                                    text: "列校验";
+                                    primary: root.palette-filter-index == 1;
+                                    clicked => { root.palette-filter(1); }
+                                }
+                                if root.tab-index == 1 : Chip {
+                                    text: "行级";
+                                    primary: root.palette-filter-index == 2;
+                                    clicked => { root.palette-filter(2); }
+                                }
+                                if root.tab-index == 1 : Chip {
+                                    text: "全表";
+                                    primary: root.palette-filter-index == 3;
+                                    clicked => { root.palette-filter(3); }
+                                }
+                            }
+
+                            HorizontalLayout {
+                                vertical-stretch: 1;
+                                spacing: 0;
+
+                                Rectangle {
+                                    width: 400px;
+                                    border-width: 1px;
+                                    border-color: Theme.border-light;
+                                    ScrollView {
+                                        VerticalLayout {
+                                            padding: 4px;
+                                            spacing: 1px;
+                                            if root.palette-items.length == 0 : HorizontalLayout {
+                                                padding: 8px;
+                                                Text {
+                                                    text: "无匹配函数";
+                                                    color: Theme.text-secondary;
+                                                    font-size: Theme.fs-small;
+                                                }
+                                            }
+                                            for item[i] in root.palette-items : VerticalLayout {
+                                                if item.is-group : HorizontalLayout {
+                                                    height: 20px;
+                                                    padding-left: 6px;
+                                                    padding-top: 3px;
+                                                    Text {
+                                                        text: item.group;
+                                                        color: Theme.text-secondary;
+                                                        font-size: 10px;
+                                                    }
+                                                }
+                                                if !item.is-group : Rectangle {
+                                                    height: 40px;
+                                                    border-radius: 4px;
+                                                    background: item.selected ? #e2f1ee : transparent;
+                                                    VerticalLayout {
+                                                        padding-left: 6px;
+                                                        padding-top: 2px;
+                                                        spacing: 0;
+                                                        Text {
+                                                            text: item.label;
+                                                            color: Theme.text-primary;
+                                                            font-family: "Cascadia Mono";
+                                                            font-size: 11px;
+                                                        }
+                                                        Text {
+                                                            text: item.summary;
+                                                            color: Theme.text-secondary;
+                                                            font-size: 10px;
+                                                            overflow: elide;
+                                                        }
+                                                    }
+                                                    TouchArea {
+                                                        clicked => { root.palette-select(i); }
+                                                        double-clicked => { root.palette-pick(i); }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+
+                                Rectangle {
+                                    horizontal-stretch: 1;
+                                    ScrollView {
+                                        VerticalLayout {
+                                            padding: 8px;
+                                            spacing: 4px;
+                                            Text {
+                                                text: root.palette-name;
+                                                color: Theme.text-primary;
+                                                font-family: "Cascadia Mono";
+                                                font-size: 15px;
+                                                font-weight: 600;
+                                            }
+                                            Text {
+                                                text: root.palette-signature;
+                                                color: Theme.text-secondary;
+                                                font-family: "Cascadia Mono";
+                                                font-size: 10px;
+                                                wrap: word-wrap;
+                                            }
+                                            Text {
+                                                text: root.palette-desc;
+                                                color: Theme.text-primary;
+                                                font-size: Theme.fs-small;
+                                                wrap: word-wrap;
+                                            }
+                                            Text {
+                                                text: "参数";
+                                                color: Theme.text-secondary;
+                                                font-size: 10px;
+                                            }
+                                            for p[k] in root.palette-params : HorizontalLayout {
+                                                spacing: 4px;
+                                                Text {
+                                                    text: p.name;
+                                                    width: 90px;
+                                                    color: Theme.text-primary;
+                                                    font-family: "Cascadia Mono";
+                                                    font-size: 10px;
+                                                }
+                                                Text {
+                                                    text: p.kind;
+                                                    width: 58px;
+                                                    color: Theme.text-secondary;
+                                                    font-size: 10px;
+                                                }
+                                                Text {
+                                                    text: p.desc;
+                                                    horizontal-stretch: 1;
+                                                    color: Theme.text-secondary;
+                                                    font-size: 10px;
+                                                    wrap: word-wrap;
+                                                }
+                                            }
+                                            Text {
+                                                text: root.palette-tags;
+                                                color: Theme.text-info;
+                                                font-size: 10px;
+                                                wrap: word-wrap;
+                                            }
+                                            Text {
+                                                text: "示例";
+                                                color: Theme.text-secondary;
+                                                font-size: 10px;
+                                            }
+                                            Text {
+                                                text: root.palette-example;
+                                                color: Theme.text-primary;
+                                                font-family: "Cascadia Mono";
+                                                font-size: 10px;
+                                                wrap: word-wrap;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+
+                            HorizontalLayout {
+                                height: 38px;
+                                padding-left: 8px;
+                                padding-right: 8px;
+                                spacing: 4px;
+                                Text {
+                                    text: root.palette-hint;
+                                    color: Theme.text-secondary;
+                                    font-size: 10px;
+                                    vertical-alignment: center;
+                                    horizontal-stretch: 1;
                                     overflow: elide;
-                                    font-size: Theme.fs-small;
+                                }
+                                Chip { text: "取消"; clicked => { root.palette-cancel(); } }
+                                Chip {
+                                    text: root.palette-action-label;
+                                    primary: true;
+                                    enabled: root.palette-can-add;
+                                    clicked => { root.palette-add(); }
                                 }
                             }
                         }

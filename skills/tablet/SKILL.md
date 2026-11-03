@@ -140,7 +140,7 @@ name   | str      | cs | 名字
 kind   | @HeroType| cs | 职业
 skills | List<int>| cs | 技能
 born   | Tuple2<int,int> | cs | 坐标
-# @rule: name = unique()        ← 只写 schema，不落 .tbl
+# @rule column name: unique()  ← 只写 schema，不落 .tbl
 # @preset
 1001 | 亚瑟 | 1 | 1;2;3 | 5,10
 
@@ -224,47 +224,98 @@ max_level|int|100|cs|等级上限
 规则**只写在 `project.tblmanifest` 的段内**（不写 `.tbl`、不进 Excel），对 Table / Enum 生效；
 Constant 不支持（`value` 逐行类型不同，写了会在解析期带行号报错）。
 
+### 格式
+
+```text
+# @rule column <列名>: <表达式> [error|warn|info]
+# @rule table: <表达式> [error|warn|info]
+```
+
+- `column <列名>`：列级规则。列名同时是错误锚点，也是列域函数**省略的主列参数**。
+- `table`：表级规则。可使用逐行多列 / 全表函数，只能用于 Table。
+- 一条一行，**行序即优先级**；级别缺省 `error`。
+- 旧格式 `# @rule: <列> = <表达式>` 已废弃，加载直接报错（完整模型见 `docs/16-规则表达式与作用域.md`）。
+
+### 列域验证器
+
+列级写法省略主列；表级写法所有列参数显式。同一个函数只有这一份实现。
+
+| 函数 | 列级 / 表级 | 含义 | 适用列 |
+|---|---|---|---|
+| `unique` | `unique()` / `unique(col)` | 非空值不重复（整数 `01` == `1`） | 全部标量 |
+| `non_empty` | `non_empty()` / `non_empty(col)` | 必填（整行全空占位行不算） | 全部标量 |
+| `ref_exists` | `ref_exists(节点.列)` / `ref_exists(col, 节点.列)` | 值必须出现在目标列 | 全部标量 |
+| `range` | `range(min, max)` / `range(col, min, max)` | 数值区间，留空一侧不限 | 整数 / 浮点 |
+| `len` | `len(min, max)` / `len(col, min, max)` | 字符数区间 | 文本 |
+| `one_of` | `one_of(v...)` / `one_of(col, v...)` | 必须是候选之一 | 全部标量 |
+| `matches` | `matches("正则")` / `matches(col, "正则")` | 匹配正则（整串用 `^...$`） | 文本 |
+| `compare` | `compare(op, other)` / `compare(col, op, other)` | 跨列比较；`op` = `< <= > >= == !=` | 整数 / 浮点 |
+| `positive_int` | `positive_int()` / `positive_int(col)` | 必须是正整数 | 整数 |
+| `upper_snake` | `upper_snake()` / `upper_snake(col)` | 必须 UPPER_SNAKE_CASE | 文本 |
+
+### 表级验证器（只能 `table:`）
+
+| 函数 | 含义 | 粒度 |
+|---|---|---|
+| `all_non_empty(col1, col2, ...)` | 这些列都必须有值 | 逐行 |
+| `at_least_one(col1, col2, ...)` | 至少一列有值 | 逐行 |
+| `exactly_one(col1, col2, ...)` | 恰好一列有值 | 逐行 |
+| `row_count(min, max)` | 非占位行数在区间内 | 全表 |
+| `id_contiguous()` | id 集合恰好是 `1..=N` | 全表 |
+| `unique_combination(col1, ...)` | 列组合不重复 | 全表 |
+| `no_empty_rows()` | 不允许整行全空占位行（预留，未实现） | 全表 |
+
+### 条件与组合
+
+`when(条件, 规则表达式)` 是**行集合过滤器**：条件不成立的行不参与验证器；全表函数也只统计命中的行
+（`unique` 带条件 = 只在命中行内查重）。条件函数：
+
+| 条件函数 | 用法 |
+|---|---|
+| `eq/ne/lt/le/gt/ge(a, b)` | 比较；`lt/le/gt/ge` 两边必须是数值 |
+| `in(列, 值, ...)` | 列属于候选集合 |
+| `match(列, "正则")` | 列匹配正则（与验证器 `matches` 区分） |
+| `and(...)` / `or(...)` / `not(...)` | 组合条件；`and/or` ≥ 2 个参数 |
+
+裸标识符 = 列，引号字符串 / 数字 = 字面量；反斜杠原样保留（`\d` 与 `\\d` 等价）。
+`and/or` 也能组合规则表达式（规则上下文）；规则级 `or` 目前只允许逐行粒度的子表达式。
+**不支持跨表条件**。`required_if(条件列, 值)` 是输入糖，加载时展开为
+`when(eq(条件列, 值), non_empty(...))`，不参与序列化；新规则建议直接用 `when`。
+
+### 示例
+
 ```text
 [hero/Hero] table
 id   | int | cs | 英雄ID
 name | str | cs | 名字
-kind | int | cs | 类型（引用 HeroType）
+kind | int | cs | 类型
 hp   | int | s  | 血量
 atk  | int | s  | 攻击
-# @rule: name = non_empty()
-# @rule: kind = ref_exists(HeroType.id)
-# @rule: hp = range(0, )
-# @rule: hp = required_if(kind, 2)
-# @rule: atk = compare(hp, <) [warn]
+# @rule column name: non_empty()
+# @rule column kind: ref_exists(HeroType.id)
+# @rule column hp: range(0, )
+# @rule column hp: required_if(kind, 2)
+# @rule column atk: compare(<, hp) [warn]
+# @rule table: all_non_empty(name, hp)
+# @rule table: row_count(1, 100)
 ```
 
-- 格式 `<列> = <验证器> [error|warn|info]`；一条一行，**行序即优先级**；级别缺省 `error`。
-- 一列可以有多条规则；同一目标重复会被拒绝（表单禁用 + 校验层兜底）。
+### 内置与约束
 
-| 验证器 | 含义 | 适用列 |
-|---|---|---|
-| `unique()` | 非空值不重复 | 全部 |
-| `non_empty()` | 必填（整行全空占位行不算） | 全部 |
-| `ref_exists(节点.列)` | 值必须出现在目标列里 | 全部 |
-| `range(下限, 上限)` | 数值区间，留空一侧不限 | 整数 / 浮点 |
-| `len(下限, 上限)` | 字符数区间 | 文本 |
-| `one_of(a, b, c)` | 必须是候选之一 | 全部 |
-| `matches("正则")` | 匹配正则（整串用 `^...$`） | 文本 |
-| `required_if(列, 值)` | 条件必填 | 全部 |
-| `compare(列, 运算符)` | 跨列比较（两边都要是数字） | 整数 / 浮点 |
-
-**系统内置规则自动生效，不要重复声明**：table 的 `id`（唯一 / 必填 / 正整数）、
+系统内置规则自动生效，**不要重复声明**：table 的 `id`（唯一 / 必填 / 正整数）、
 enum 的 `id`（唯一 / 必填 / 正整数）、enum 的 `name`（唯一 / 必填 / UPPER_SNAKE）。
-system 规则只读、不落盘；再挂一遍只会得到非阻断的 `RuleRedundant` 警告。
+`positive_int` / `upper_snake` 也开放给用户显式书写；与内置重复只会得到非阻断的 `RuleRedundant` 警告。
 
-**无意义组合会直接报错**：`ref_exists` / `compare` / `required_if` 引用本列自己；
-区间两端都空；`matches("")` 空正则；列类型与验证器不匹配（复合类型列不参与）。
+无意义组合直接报错：`ref_exists` / `compare` 引用本列自己；区间两端都空；
+`matches("")` 空正则；函数不在当前 scope；列参数不存在 / 是复合类型 / 类型不匹配；
+条件列不存在或大小比较用在非数值列。
 
-- 改了被引用节点（`@X` 或 `ref_exists` 的目标）后，依赖它的节点会**自动重算**，不用手动全量验证。
+- 改了被引用节点（`@X` 或 `ref_exists` 的目标）后，依赖它的节点会**自动重算**。
 - 阻断保存的级别由项目策略决定（`project.toml` 的 `[validate]`：error / warning / info
   各取 `block` / `report` / `ignore`，默认 error=block、warning=report、info=ignore）。
   不要手写 `project.toml`，用 GUI 的「项目设置 → 校验」。
 - CI 用 `validate --strict`：所有「仅提示」级也算失败。
+- 查看有效规则：`tablet-cli schema show --rules`。
 
 ## 五之四、任意 Excel 映射导入（GUI）
 

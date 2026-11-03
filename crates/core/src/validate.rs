@@ -7,6 +7,8 @@ use crate::types::{BaseType, Paradigm, SeparatorsSection, TblType, TypeParam};
 
 /// 表头层错误使用的行号哨兵值，区分于普通数据行。
 pub const SCHEMA_ROW: usize = usize::MAX;
+/// 表级错误（规则作用于整张表，无法定位到具体数据行）。
+pub const TABLE_ROW: usize = usize::MAX - 1;
 
 /// Table 表头四行（按 UI/编辑器从上到下顺序，1-based "第 N 行"）。
 /// 与 .tbl 文件序列化顺序无关，仅决定日志/UI 的展示行号。
@@ -125,6 +127,10 @@ pub enum ValidationCode {
     RuleCompareViolation,
     RulePositiveIntViolation,
     RuleUpperSnakeViolation,
+    /// 行级多列函数（all_non_empty / at_least_one / exactly_one）失败。
+    RuleRowViolation,
+    /// 全表函数（row_count / id_contiguous / unique_combination）失败。
+    RuleTableViolation,
     Other,
 }
 
@@ -145,13 +151,17 @@ pub struct ValidationError {
     pub message: String,
     /// 这条错误由节点的第几条规则产生（`# @rule` 的行序）；非规则错误为 None。
     pub rule_index: Option<usize>,
+    /// 行级/表级规则涉及的列（列级规则为空或单列）。
+    pub affected: Vec<String>,
 }
 
 impl ValidationError {
     pub fn is_schema(&self) -> bool { self.row == SCHEMA_ROW }
 
+    pub fn is_table_level(&self) -> bool { self.row == TABLE_ROW }
+
     /// cell 层用：仅有 code + message，行/列/字段由调用方在 row 层填充。
-    fn cell(code: ValidationCode, message: String) -> Self {
+    pub(crate) fn cell(code: ValidationCode, message: String) -> Self {
         Self {
             code, severity: Severity::Error, row: 0, col: 0,
             header_row: None,
@@ -159,6 +169,7 @@ impl ValidationError {
             value: String::new(),
             message,
             rule_index: None,
+            affected: Vec::new(),
         }
     }
 
@@ -173,25 +184,30 @@ impl ValidationError {
     pub fn is_info(&self) -> bool { self.severity == Severity::Info }
 
     /// 标记这条错误来自节点的第几条规则。
-    fn with_rule_index(mut self, idx: usize) -> Self {
+    pub(crate) fn with_rule_index(mut self, idx: usize) -> Self {
         self.rule_index = Some(idx);
         self
     }
 
-    fn with_pos(mut self, row: usize, col: usize) -> Self {
+    pub(crate) fn with_pos(mut self, row: usize, col: usize) -> Self {
         self.row = row; self.col = col; self
     }
 
-    fn with_row(mut self, row: usize) -> Self {
+    pub(crate) fn with_row(mut self, row: usize) -> Self {
         self.row = row; self
     }
 
-    fn with_field(mut self, field: impl Into<String>) -> Self {
+    pub(crate) fn with_field(mut self, field: impl Into<String>) -> Self {
         self.field = field.into(); self
     }
 
-    fn with_value(mut self, value: impl Into<String>) -> Self {
+    pub(crate) fn with_value(mut self, value: impl Into<String>) -> Self {
         self.value = value.into(); self
+    }
+
+    pub(crate) fn with_affected(mut self, affected: Vec<String>) -> Self {
+        self.affected = affected;
+        self
     }
 
     /// Constant/Enum cell 层常用：一次填好 col + field + value（row 由 row 层补）。
@@ -203,7 +219,7 @@ impl ValidationError {
     }
 
     /// schema 层常用：标记为表头错误（row=SCHEMA_ROW），可选指定 Table 表头行号。
-    fn schema(code: ValidationCode, message: String, col: usize, header_row: Option<TableHeaderRow>) -> Self {
+    pub(crate) fn schema(code: ValidationCode, message: String, col: usize, header_row: Option<TableHeaderRow>) -> Self {
         Self {
             code,
             severity: Severity::Error,
@@ -214,6 +230,7 @@ impl ValidationError {
             value: String::new(),
             message,
             rule_index: None,
+            affected: Vec::new(),
         }
     }
 }
@@ -453,6 +470,21 @@ impl<'a> NodeRef<'a> {
     }
 }
 
+fn collect_ref_targets(
+    expr: &RuleExpr,
+    out: &mut std::collections::HashSet<(String, String)>,
+) {
+    match expr {
+        RuleExpr::Validator(RuleKind::RefExists { target_node, target_column, .. }) => {
+            out.insert((target_node.clone(), target_column.clone()));
+        }
+        RuleExpr::Validator(_) => {}
+        RuleExpr::When { inner, .. } => collect_ref_targets(inner, out),
+        RuleExpr::And(cs) | RuleExpr::Or(cs) =>
+            for c in cs { collect_ref_targets(c, out); },
+    }
+}
+
 impl RuleIndex {
     /// 只建 schema 层信息（节点 / 列存在性 + 值类），不读任何数据行。
     pub fn build_schema(groups: &[Group]) -> Self {
@@ -475,9 +507,7 @@ impl RuleIndex {
         let mut wanted: std::collections::HashSet<(String, String)> = std::collections::HashSet::new();
         for node in NodeRef::all(groups) {
             for rule in node.rules() {
-                if let RuleKind::RefExists { target_node, target_column } = &rule.kind {
-                    wanted.insert((target_node.clone(), target_column.clone()));
-                }
+                collect_ref_targets(&rule.expr, &mut wanted);
             }
         }
         if wanted.is_empty() {
@@ -1069,505 +1099,48 @@ pub fn validate_enum_schema(enum_def: &EnumDef) -> Vec<ValidationError> {
 // ────────────────────────────────────────────────────────────────────────────
 
 /// 本地列名 → 0-based 列下标。
-fn rule_col_index(columns: &[ColumnSpec], column: &str) -> Option<usize> {
-    columns.iter().position(|(c, _)| c == column)
-}
-
 fn is_numeric(c: ValueClass) -> bool {
     matches!(c, ValueClass::Int | ValueClass::Float)
 }
 
-/// 这条规则能不能挂在这种类型的列上。UI 下拉与校验层共用。
+/// 这条验证器能否挂在这种类型的列上（UI 下拉过滤用）。
 pub fn rule_kind_applies(kind: &RuleKind, class: ValueClass) -> bool {
     match kind {
-        RuleKind::Range { .. } | RuleKind::Compare { .. } | RuleKind::PositiveInt => is_numeric(class),
-        RuleKind::Len { .. } | RuleKind::Matches { .. } | RuleKind::UpperSnake =>
+        RuleKind::Range { .. } | RuleKind::Compare { .. } | RuleKind::PositiveInt { .. } =>
+            is_numeric(class),
+        RuleKind::Len { .. } | RuleKind::Matches { .. } | RuleKind::UpperSnake { .. } =>
             class == ValueClass::Text,
         _ => true,
     }
 }
 
-/// 解析区间端点：空串 = 不限。
-fn parse_bound(raw: &str) -> Result<Option<f64>, String> {
-    let t = raw.trim();
-    if t.is_empty() { return Ok(None); }
-    t.parse::<f64>()
-        .map(Some)
-        .map_err(|_| format!("\"{}\" 不是数字", t))
+/// 给 GUI 用：草稿条件的 schema 错误。
+pub fn condition_ui_error(condition: &Condition, columns: &[ColumnSpec]) -> Option<String> {
+    crate::rule_engine::condition_ui_error(condition, columns)
 }
 
-/// 区间参数校验：两端可空，填了必须是数字且 min <= max。
-fn check_bounds(min: &str, max: &str) -> Result<(), String> {
-    let lo = parse_bound(min)?;
-    let hi = parse_bound(max)?;
-    if lo.is_none() && hi.is_none() {
-        return Err("至少填一侧端点（两端都空等于没有规则）".to_string());
-    }
-    if let (Some(a), Some(b)) = (lo, hi) {
-        if a > b { return Err(format!("下限 {} 大于上限 {}", a, b)); }
-    }
-    Ok(())
+/// 规则参数形状是否完整（UI 用；不检查列是否存在）。
+pub fn rule_params_valid(expr: &RuleExpr) -> bool {
+    crate::rule_engine::rule_params_valid(expr)
 }
 
-/// 规则能否真正执行：本地列存在且类型支持、参数合法、引用的列 / 目标可解析。
-fn rule_is_usable(
-    rule: &Rule,
-    mode: NodeMode,
-    node_name: &str,
-    columns: &[ColumnSpec],
-    cidx: &RuleIndex,
-) -> bool {
-    let Some(idx) = rule_col_index(columns, &rule.column) else { return false; };
-    let Some(class) = columns[idx].1 else { return false; };
-    if rule.kind.is_builtin_only() && rule.source != RuleSource::Builtin { return false; }
-    if !rule_kind_applies(&rule.kind, class) { return false; }
-    // 内置规则当然「与内置重复」，只约束用户规则。
-    if rule.source == RuleSource::User && rule.conflicts_with_builtin(mode) { return false; }
-    match &rule.kind {
-        RuleKind::RefExists { target_node, target_column } => {
-            if !cidx.node_exists(target_node)
-                || cidx.is_ambiguous(target_node)
-                || !cidx.column_exists(target_node, target_column)
-                || cidx.column_class(target_node, target_column).is_none() {
-                return false;
-            }
-            if target_node == node_name && target_column == &rule.column { return false; }
-        }
-        RuleKind::Range { min, max } | RuleKind::Len { min, max } => {
-            if check_bounds(min, max).is_err() { return false; }
-        }
-        RuleKind::OneOf { values } => {
-            if values.is_empty() { return false; }
-        }
-        RuleKind::Matches { pattern } => {
-            if regex::Regex::new(pattern).is_err() { return false; }
-        }
-        RuleKind::RequiredIf { column, .. } => {
-            if column == &rule.column || rule_col_index(columns, column).is_none() { return false; }
-        }
-        RuleKind::Compare { column, .. } => {
-            if column == &rule.column { return false; }
-            let Some(other) = rule_col_index(columns, column) else { return false; };
-            let Some(other_class) = columns[other].1 else { return false; };
-            if !is_numeric(other_class) { return false; }
-        }
-        _ => {}
-    }
-    true
-}
-
-/// 规则的 schema 层校验：只回答「这条规则本身能不能跑」，不看数据行。
-pub fn validate_rules_schema(
-    mode: NodeMode,
-    node_name: &str,
-    columns: &[ColumnSpec],
-    rules: &[Rule],
-    cidx: &RuleIndex,
-) -> Vec<ValidationError> {
-    let mut errors = Vec::new();
-    for (rule_idx, rule) in rules.iter().enumerate() {
-        let level = rule.level;
-        let col_idx = match rule_col_index(columns, &rule.column) {
-            Some(i) => i,
-            None => {
-                errors.push(
-                    ValidationError::schema(
-                        ValidationCode::RuleColumnMissing,
-                        format!("规则引用的列 \"{}\" 不存在", rule.column),
-                        0, None,
-                    ).with_field(rule.column.as_str()).with_level(level)
-                     .with_rule_index(rule_idx)
-                );
-                continue;
-            }
-        };
-        let Some(class) = columns[col_idx].1 else {
-            errors.push(
-                ValidationError::schema(
-                    ValidationCode::RuleTypeIncompatible,
-                    format!(
-                        "列 \"{}\" 的类型不支持校验规则（List / Set / Map / Tuple 等复合类型不参与）",
-                        rule.column
-                    ),
-                    col_idx, None,
-                ).with_field(rule.column.as_str()).with_level(level)
-                 .with_rule_index(rule_idx)
-            );
-            continue;
-        };
-        if rule.kind.is_builtin_only() && rule.source != RuleSource::Builtin {
-            errors.push(
-                ValidationError::schema(
-                    ValidationCode::RuleParamInvalid,
-                    format!(
-                        "{} 是系统内置规则，不能写在 schema 里（见 @01.8.11）",
-                        rule.expr_string()
-                    ),
-                    col_idx, None,
-                ).with_field(rule.column.as_str()).with_level(level)
-                 .with_rule_index(rule_idx)
-            );
-            continue;
-        }
-        if !rule_kind_applies(&rule.kind, class) {
-            errors.push(
-                ValidationError::schema(
-                    ValidationCode::RuleTypeIncompatible,
-                    format!(
-                        "{} 不适用于列 \"{}\" 的类型（{}）",
-                        rule.expr_string(), rule.column, class_name(class)
-                    ),
-                    col_idx, None,
-                ).with_field(rule.column.as_str()).with_level(level)
-                 .with_rule_index(rule_idx)
-            );
-            continue;
-        }
-        // 内置规则本身当然「与内置重复」，不做冗余判断。
-        if rule.source == RuleSource::User && rule.conflicts_with_builtin(mode) {
-            errors.push(
-                ValidationError::schema(
-                    ValidationCode::RuleRedundant,
-                    format!(
-                        "列 \"{}\" 已由系统保证唯一，{} 不会生效",
-                        rule.column, rule.expr_string()
-                    ),
-                    col_idx, None,
-                ).with_field(rule.column.as_str()).with_level(Severity::Warning)
-                 .with_rule_index(rule_idx)
-            );
-            continue;
-        }
-
-        let mut bad: Option<(ValidationCode, String)> = None;
-        match &rule.kind {
-            RuleKind::RefExists { target_node, target_column } => {
-                let target = format!("{}.{}", target_node, target_column);
-                bad = if target_node == node_name && target_column == &rule.column {
-                    Some((ValidationCode::RuleParamInvalid,
-                        "ref_exists 的目标不能是本列自己（恒成立，没有意义）".to_string()))
-                } else if !cidx.node_exists(target_node) {
-                    Some((ValidationCode::RuleTargetMissing,
-                        format!("ref_exists 的目标节点 \"{}\" 不存在", target_node)))
-                } else if cidx.is_ambiguous(target_node) {
-                    Some((ValidationCode::RuleTargetAmbiguous,
-                        format!("ref_exists 的目标节点 \"{}\" 在项目里重名", target_node)))
-                } else if !cidx.column_exists(target_node, target_column) {
-                    Some((ValidationCode::RuleTargetColumnMissing,
-                        format!("ref_exists 的目标列 \"{}\" 不存在", target)))
-                } else if cidx.column_class(target_node, target_column).is_none() {
-                    Some((ValidationCode::RuleTypeIncompatible,
-                        format!("ref_exists 的目标列 \"{}\" 是复合类型，不支持引用校验", target)))
-                } else {
-                    None
-                };
-            }
-            RuleKind::Range { min, max } | RuleKind::Len { min, max } => {
-                if let Err(msg) = check_bounds(min, max) {
-                    bad = Some((ValidationCode::RuleParamInvalid, msg));
-                }
-            }
-            RuleKind::OneOf { values } => {
-                if values.is_empty() {
-                    bad = Some((ValidationCode::RuleParamInvalid, "one_of 至少需要一个候选值".to_string()));
-                }
-            }
-            RuleKind::Matches { pattern } => {
-                if pattern.trim().is_empty() {
-                    bad = Some((ValidationCode::RuleParamInvalid,
-                        "正则不能为空（空正则匹配一切，等于没写）".to_string()));
-                } else if let Err(e) = regex::Regex::new(pattern) {
-                    bad = Some((ValidationCode::RuleParamInvalid, format!("正则不合法: {}", e)));
-                }
-            }
-            RuleKind::RequiredIf { column, .. } => {
-                if column == &rule.column {
-                    bad = Some((ValidationCode::RuleParamInvalid,
-                        "required_if 引用的列不能是本列自己".to_string()));
-                } else if rule_col_index(columns, column).is_none() {
-                    bad = Some((ValidationCode::RuleColumnMissing,
-                        format!("required_if 引用的列 \"{}\" 不存在", column)));
-                }
-            }
-            RuleKind::Compare { column, .. } => {
-                if column == &rule.column {
-                    bad = Some((ValidationCode::RuleParamInvalid,
-                        "compare 引用的列不能是本列自己".to_string()));
-                } else if let Some(other) = rule_col_index(columns, column) {
-                    match columns[other].1 {
-                        Some(c) if is_numeric(c) => {}
-                        _ => bad = Some((ValidationCode::RuleTypeIncompatible,
-                            format!("compare 引用的列 \"{}\" 不是数值类型", column))),
-                    }
-                } else {
-                    bad = Some((ValidationCode::RuleColumnMissing,
-                        format!("compare 引用的列 \"{}\" 不存在", column)));
-                }
-            }
-            _ => {}
-        }
-        if let Some((code, msg)) = bad {
-            errors.push(
-                ValidationError::schema(code, msg, col_idx, None)
-                    .with_field(rule.column.as_str())
-                    .with_level(level)
-                    .with_rule_index(rule_idx)
-            );
-        }
-    }
-    errors
-}
-
-/// 规则参数本身是否合法（UI 用来决定「添加 / 保存」是否可用）。
-pub fn rule_params_valid(kind: &RuleKind) -> bool {
-    match kind {
-        RuleKind::Range { min, max } | RuleKind::Len { min, max } => check_bounds(min, max).is_ok(),
-        RuleKind::OneOf { values } => !values.is_empty(),
-        RuleKind::Matches { pattern } =>
-            !pattern.trim().is_empty() && regex::Regex::new(pattern).is_ok(),
-        RuleKind::RefExists { target_node, target_column } =>
-            !target_node.is_empty() && !target_column.is_empty(),
-        RuleKind::RequiredIf { column, .. } | RuleKind::Compare { column, .. } =>
-            !column.is_empty(),
-        _ => true,
-    }
-}
-
-fn class_name(class: ValueClass) -> &'static str {
-    match class {
-        ValueClass::Int => "整数",
-        ValueClass::Float => "浮点",
-        ValueClass::Text => "文本",
-    }
-}
-
-/// 规则的数据行校验。只跑 `rule_is_usable` 通过的规则。
-fn validate_rule_rows(
+fn validate_node_rules<F, G>(
     mode: NodeMode,
     node_name: &str,
     columns: &[ColumnSpec],
     rules: &[Rule],
     cidx: &RuleIndex,
     row_count: usize,
-    cell: impl Fn(usize, &str) -> Option<String>,
-    row_is_empty: impl Fn(usize) -> bool,
-) -> Vec<ValidationError> {
-    let mut errors = Vec::new();
-    for (rule_idx, rule) in rules.iter().enumerate() {
-        if !rule_is_usable(rule, mode, node_name, columns, cidx) { continue; }
-        let col_idx = match rule_col_index(columns, &rule.column) { Some(i) => i, None => continue };
-        let level = rule.level;
-        let src_class = columns[col_idx].1.unwrap_or(ValueClass::Text);
-        let mut push = |row: usize, code: ValidationCode, msg: String, value: &str| {
-            errors.push(
-                ValidationError::cell(code, msg)
-                    .with_pos(row, col_idx)
-                    .with_field(rule.column.as_str())
-                    .with_value(value)
-                    .with_level(level)
-                    .with_rule_index(rule_idx)
-            );
-        };
-        match &rule.kind {
-            RuleKind::Unique => {
-                let mut seen: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
-                for row in 0..row_count {
-                    let v = match cell(row, &rule.column) { Some(v) => v, None => continue };
-                    let nv = src_class.normalize(&v);
-                    if nv.is_empty() { continue; }
-                    if let Some(&first) = seen.get(&nv) {
-                        push(row, ValidationCode::RuleUniqueViolation,
-                            format!("值 \"{}\" 与第 {} 行重复", nv, first + 1), &nv);
-                    } else {
-                        seen.insert(nv, row);
-                    }
-                }
-            }
-            RuleKind::RefExists { target_node, target_column } => {
-                let (tclass, set) = match cidx.values(target_node, target_column) {
-                    Some(x) => x,
-                    None => continue,
-                };
-                for row in 0..row_count {
-                    let v = match cell(row, &rule.column) { Some(v) => v, None => continue };
-                    let nv = tclass.normalize(&v);
-                    if nv.is_empty() { continue; }
-                    if !set.contains(&nv) {
-                        push(row, ValidationCode::RuleRefValueMissing,
-                            format!("引用值 \"{}\" 不存在于 {}.{}", nv, target_node, target_column), &nv);
-                    }
-                }
-            }
-            RuleKind::Range { min, max } => {
-                let lo = parse_bound(min).ok().flatten();
-                let hi = parse_bound(max).ok().flatten();
-                for row in 0..row_count {
-                    let v = match cell(row, &rule.column) { Some(v) => v, None => continue };
-                    let t = v.trim();
-                    if t.is_empty() { continue; }
-                    let Some(n) = t.parse::<f64>().ok() else {
-                        push(row, ValidationCode::RuleRangeViolation,
-                            format!("值 \"{}\" 不是数字，无法做区间校验", t), t);
-                        continue;
-                    };
-                    let below = lo.map_or(false, |b| n < b);
-                    let above = hi.map_or(false, |b| n > b);
-                    if below || above {
-                        let range = match (lo, hi) {
-                            (Some(a), Some(b)) => format!("[{}, {}]", a, b),
-                            (Some(a), None) => format!("≥ {}", a),
-                            (None, Some(b)) => format!("≤ {}", b),
-                            (None, None) => String::new(),
-                        };
-                        push(row, ValidationCode::RuleRangeViolation,
-                            format!("值 {} 不在允许区间 {} 内", n, range), t);
-                    }
-                }
-            }
-            RuleKind::NonEmpty => {
-                for row in 0..row_count {
-                    // 整行全空 = 占位行（表尾/枚举尾的空行），不算缺填。
-                    if row_is_empty(row) { continue; }
-                    let v = match cell(row, &rule.column) { Some(v) => v, None => continue };
-                    if v.trim().is_empty() {
-                        push(row, ValidationCode::RuleNotEmptyViolation, "该列必填，不能为空".to_string(), "");
-                    }
-                }
-            }
-            RuleKind::Len { min, max } => {
-                let lo = parse_bound(min).ok().flatten();
-                let hi = parse_bound(max).ok().flatten();
-                for row in 0..row_count {
-                    let v = match cell(row, &rule.column) { Some(v) => v, None => continue };
-                    if v.is_empty() { continue; }
-                    let n = v.chars().count() as f64;
-                    let below = lo.map_or(false, |b| n < b);
-                    let above = hi.map_or(false, |b| n > b);
-                    if below || above {
-                        let range = match (lo, hi) {
-                            (Some(a), Some(b)) => format!("[{}, {}]", a, b),
-                            (Some(a), None) => format!("≥ {}", a),
-                            (None, Some(b)) => format!("≤ {}", b),
-                            (None, None) => String::new(),
-                        };
-                        push(row, ValidationCode::RuleLenViolation,
-                            format!("长度 {} 不在允许区间 {} 内", n as i64, range), &v);
-                    }
-                }
-            }
-            RuleKind::OneOf { values } => {
-                let set: std::collections::HashSet<String> =
-                    values.iter().map(|v| src_class.normalize(v)).collect();
-                for row in 0..row_count {
-                    let v = match cell(row, &rule.column) { Some(v) => v, None => continue };
-                    let nv = src_class.normalize(&v);
-                    if nv.is_empty() { continue; }
-                    if !set.contains(&nv) {
-                        push(row, ValidationCode::RuleOneOfViolation,
-                            format!("值 \"{}\" 不在允许集合 {{{}}} 内", nv, values.join(", ")), &nv);
-                    }
-                }
-            }
-            RuleKind::Matches { pattern } => {
-                let Ok(re) = regex::Regex::new(pattern) else { continue };
-                for row in 0..row_count {
-                    let v = match cell(row, &rule.column) { Some(v) => v, None => continue };
-                    if v.is_empty() { continue; }
-                    if !re.is_match(&v) {
-                        push(row, ValidationCode::RulePatternViolation,
-                            format!("值 \"{}\" 不匹配正则 {}", v, pattern), &v);
-                    }
-                }
-            }
-            RuleKind::RequiredIf { column, value } => {
-                let Some(other_idx) = rule_col_index(columns, column) else { continue };
-                let other_class = columns[other_idx].1.unwrap_or(ValueClass::Text);
-                let want = other_class.normalize(value);
-                for row in 0..row_count {
-                    if row_is_empty(row) { continue; }
-                    let other = match cell(row, column) { Some(v) => v, None => continue };
-                    if other_class.normalize(&other) != want { continue; }
-                    let v = cell(row, &rule.column).unwrap_or_default();
-                    if v.trim().is_empty() {
-                        push(row, ValidationCode::RuleRequiredIfMissing,
-                            format!("当 {} = {} 时，本列必填", column, value), "");
-                    }
-                }
-            }
-            // 只由 builtin_rules 生成。
-            RuleKind::PositiveInt => {
-                for row in 0..row_count {
-                    let v = match cell(row, &rule.column) { Some(v) => v, None => continue };
-                    let t = v.trim();
-                    if t.is_empty() { continue; }
-                    match t.parse::<i64>() {
-                        Ok(n) if n <= 0 => push(row, ValidationCode::RulePositiveIntViolation,
-                            format!("值 {} 必须是正整数（不能为 0 或负数）", n), t),
-                        // 非数字：表由类型检查负责；枚举没有类型检查，这里必须报。
-                        Err(_) => push(row, ValidationCode::RulePositiveIntViolation,
-                            format!("值 \"{}\" 必须是整数", t), t),
-                        _ => {}
-                    }
-                }
-            }
-            RuleKind::UpperSnake => {
-                for row in 0..row_count {
-                    let v = match cell(row, &rule.column) { Some(v) => v, None => continue };
-                    if v.is_empty() { continue; }
-                    if !is_valid_enum_entry_name(&v) {
-                        push(row, ValidationCode::RuleUpperSnakeViolation,
-                            format!("值 \"{}\" 不是 UPPER_SNAKE_CASE（需大写字母开头，只含大写字母/数字/下划线）", v),
-                            &v);
-                    }
-                }
-            }
-            RuleKind::Compare { column, op } => {
-                for row in 0..row_count {
-                    let left = match cell(row, &rule.column) { Some(v) => v, None => continue };
-                    let right = match cell(row, column) { Some(v) => v, None => continue };
-                    let lt = left.trim();
-                    let rt = right.trim();
-                    if lt.is_empty() || rt.is_empty() { continue; }
-                    let (Some(a), Some(b)) = (lt.parse::<f64>().ok(), rt.parse::<f64>().ok()) else {
-                        push(row, ValidationCode::RuleCompareViolation,
-                            format!("值 \"{}\" 或 \"{}\" 不是数字，无法比较", lt, rt), lt);
-                        continue;
-                    };
-                    let ok = match op {
-                        CompareOp::Lt => a < b,
-                        CompareOp::Le => a <= b,
-                        CompareOp::Gt => a > b,
-                        CompareOp::Ge => a >= b,
-                        CompareOp::Eq => a == b,
-                        CompareOp::Ne => a != b,
-                    };
-                    if !ok {
-                        push(row, ValidationCode::RuleCompareViolation,
-                            format!("本列值 {} 应 {} {} 列的值 {}", a, op.as_str(), column, b), lt);
-                    }
-                }
-            }
-        }
-    }
-    errors
-}
-
-/// 三种模式共用的规则校验入口（schema + 行）。
-fn validate_node_rules(
-    mode: NodeMode,
-    node_name: &str,
-    columns: &[ColumnSpec],
-    rules: &[Rule],
-    cidx: &RuleIndex,
-    row_count: usize,
-    cell: impl Fn(usize, &str) -> Option<String>,
-    row_is_empty: impl Fn(usize) -> bool,
-) -> Vec<ValidationError> {
-    let mut errors = validate_rules_schema(mode, node_name, columns, rules, cidx);
-    errors.extend(validate_rule_rows(
+    cell: F,
+    row_is_empty: G,
+) -> Vec<ValidationError>
+where
+    F: Fn(usize, &str) -> Option<String>,
+    G: Fn(usize) -> bool,
+{
+    crate::rule_engine::validate_node_rules(
         mode, node_name, columns, rules, cidx, row_count, cell, row_is_empty,
-    ));
-    errors
+    )
 }
 
 pub fn validate_table(
@@ -1821,319 +1394,5 @@ mod tests {
 
     fn code_hits(errs: &[ValidationError], code: ValidationCode) -> usize {
         errs.iter().filter(|e| e.code == code).count()
-    }
-
-    #[test]
-    fn unique_rule_reports_duplicate_and_skips_empty() {
-        let mut t = mk_table("T", &[("id", "int"), ("code", "str")],
-            &[vec!["1", "A"], vec!["2", "A"], vec!["3", ""], vec!["4", ""]]);
-        t.rules = vec![Rule { column: "code".into(), kind: RuleKind::Unique, level: Severity::Error , source: RuleSource::User }];
-        let groups = vec![mk_group("g", vec![t], vec![])];
-        let idx = RuleIndex::build(&groups);
-        let errs = validate_table(&groups[0].tables[0], &SeparatorsSection::default(), None, Some(&idx));
-        let hits: Vec<_> = errs.iter()
-            .filter(|e| e.code == ValidationCode::RuleUniqueViolation)
-            .collect();
-        assert_eq!(hits.len(), 1, "只有第 2 行重复: {:?}", errs.iter().map(|e| &e.message).collect::<Vec<_>>());
-        assert_eq!(hits[0].row, 1);
-        assert!(hits[0].rule_index.is_some(), "规则错误要带 rule_index（内置规则排在前）");
-        assert_eq!(hits[0].severity, Severity::Error);
-    }
-
-    #[test]
-    fn unique_rule_on_system_unique_column_is_redundant_warning() {
-        let mut e = mk_enum("E", &[("1", "A"), ("2", "B")]);
-        e.rules = vec![Rule { column: "name".into(), kind: RuleKind::Unique, level: Severity::Error , source: RuleSource::User }];
-        let groups = vec![mk_group("g", vec![], vec![e])];
-        let idx = RuleIndex::build(&groups);
-        let errs = validate_enum(&groups[0].enums[0], Some(&idx));
-        assert_eq!(code_hits(&errs, ValidationCode::RuleRedundant), 1);
-        // 冗余规则不生效，所以不会有真正的重复错误
-        assert_eq!(code_hits(&errs, ValidationCode::RuleUniqueViolation), 0);
-        let hit = errs.iter().find(|e| e.code == ValidationCode::RuleRedundant).unwrap();
-        assert_eq!(hit.severity, Severity::Warning);
-    }
-
-    #[test]
-    fn ref_exists_reports_missing_value() {
-        let mut lang = mk_table("Lang", &[("id", "int"), ("key", "str")],
-            &[vec!["1", "PLAYER_NOT_FOUND"], vec!["2", "PARAM_INVALID"]]);
-        lang.rules = vec![Rule { column: "key".into(), kind: RuleKind::Unique, level: Severity::Error , source: RuleSource::User }];
-        let mut code = mk_enum("ErrorCode", &[("10001", "PLAYER_NOT_FOUND"), ("10002", "MISSING")]);
-        code.rules = vec![Rule {
-            column: "name".into(),
-            kind: RuleKind::RefExists { target_node: "Lang".into(), target_column: "key".into() },
-            level: Severity::Warning,
-
-            source: RuleSource::User,
-        }];
-        let groups = vec![mk_group("g", vec![lang], vec![code])];
-        let idx = RuleIndex::build(&groups);
-        let errs = validate_enum(&groups[0].enums[0], Some(&idx));
-        let hits: Vec<_> = errs.iter()
-            .filter(|e| e.code == ValidationCode::RuleRefValueMissing)
-            .collect();
-        assert_eq!(hits.len(), 1, "{:?}", errs.iter().map(|e| &e.message).collect::<Vec<_>>());
-        assert_eq!(hits[0].row, 1);
-        assert_eq!(hits[0].severity, Severity::Warning);
-    }
-
-    #[test]
-    fn ref_exists_missing_target_uses_rule_level() {
-        let mut code = mk_enum("ErrorCode", &[("10001", "PLAYER_NOT_FOUND")]);
-        code.rules = vec![Rule {
-            column: "name".into(),
-            kind: RuleKind::RefExists { target_node: "Lang".into(), target_column: "key".into() },
-            level: Severity::Warning,
-
-            source: RuleSource::User,
-        }];
-        let groups = vec![mk_group("g", vec![], vec![code])];
-        let idx = RuleIndex::build(&groups);
-        let errs = validate_enum(&groups[0].enums[0], Some(&idx));
-        let hit = errs.iter().find(|e| e.code == ValidationCode::RuleTargetMissing).unwrap();
-        assert_eq!(hit.severity, Severity::Warning);
-        assert!(hit.is_schema());
-    }
-
-    #[test]
-    fn rule_missing_local_column_is_reported() {
-        let mut t = mk_table("T", &[("id", "int")], &[]);
-        t.rules = vec![Rule { column: "nope".into(), kind: RuleKind::Unique, level: Severity::Error , source: RuleSource::User }];
-        let groups = vec![mk_group("g", vec![t], vec![])];
-        let idx = RuleIndex::build(&groups);
-        let errs = validate_table(&groups[0].tables[0], &SeparatorsSection::default(), None, Some(&idx));
-        assert_eq!(code_hits(&errs, ValidationCode::RuleColumnMissing), 1);
-    }
-
-    #[test]
-    fn non_empty_skips_fully_empty_placeholder_rows() {
-        let mut t = mk_table("T", &[("id", "int"), ("name", "str")],
-            &[vec!["1", "A"], vec!["2", ""], vec!["", ""]]);
-        t.rules = vec![Rule { column: "name".into(), kind: RuleKind::NonEmpty, level: Severity::Error , source: RuleSource::User }];
-        let groups = vec![mk_group("g", vec![t], vec![])];
-        let idx = RuleIndex::build(&groups);
-        let errs = validate_table(&groups[0].tables[0], &SeparatorsSection::default(), None, Some(&idx));
-        let hits: Vec<_> = errs.iter().filter(|e| e.code == ValidationCode::RuleNotEmptyViolation).collect();
-        assert_eq!(hits.len(), 1, "只有第 2 行缺填: {:?}", errs.iter().map(|e| &e.message).collect::<Vec<_>>());
-        assert_eq!(hits[0].row, 1);
-    }
-
-    #[test]
-    fn range_len_one_of_matches_report_violations() {
-        let mut t = mk_table("T",
-            &[("id", "int"), ("hp", "int"), ("code", "str"), ("kind", "str")],
-            &[vec!["1", "120", "AB", "A"], vec!["2", "50", "x", "Z"]]);
-        t.rules = vec![
-            Rule { column: "hp".into(), kind: RuleKind::Range { min: "0".into(), max: "100".into() }, level: Severity::Error , source: RuleSource::User },
-            Rule { column: "code".into(), kind: RuleKind::Len { min: "2".into(), max: "4".into() }, level: Severity::Error , source: RuleSource::User },
-            Rule { column: "kind".into(), kind: RuleKind::OneOf { values: vec!["A".into(), "B".into()] }, level: Severity::Error , source: RuleSource::User },
-            Rule { column: "code".into(), kind: RuleKind::Matches { pattern: "^[A-Z]+$".into() }, level: Severity::Error , source: RuleSource::User },
-        ];
-        let groups = vec![mk_group("g", vec![t], vec![])];
-        let idx = RuleIndex::build(&groups);
-        let errs = validate_table(&groups[0].tables[0], &SeparatorsSection::default(), None, Some(&idx));
-        assert_eq!(code_hits(&errs, ValidationCode::RuleRangeViolation), 1, "{:?}", errs.iter().map(|e| &e.message).collect::<Vec<_>>());
-        assert_eq!(code_hits(&errs, ValidationCode::RuleLenViolation), 1);
-        assert_eq!(code_hits(&errs, ValidationCode::RuleOneOfViolation), 1);
-        assert_eq!(code_hits(&errs, ValidationCode::RulePatternViolation), 1);
-    }
-
-    #[test]
-    fn required_if_and_compare_report_violations() {
-        let mut t = mk_table("T",
-            &[("id", "int"), ("type", "int"), ("skill", "int"), ("min_lv", "int"), ("max_lv", "int")],
-            &[vec!["1", "2", "10", "1", "5"], vec!["2", "2", "", "9", "5"], vec!["3", "0", "", "1", "5"]]);
-        t.rules = vec![
-            Rule { column: "skill".into(),
-                   kind: RuleKind::RequiredIf { column: "type".into(), value: "2".into() },
-
-                       source: RuleSource::User,
-                   level: Severity::Error },
-            Rule { column: "min_lv".into(),
-                   kind: RuleKind::Compare { column: "max_lv".into(), op: CompareOp::Le },
-
-                       source: RuleSource::User,
-                   level: Severity::Error },
-        ];
-        let groups = vec![mk_group("g", vec![t], vec![])];
-        let idx = RuleIndex::build(&groups);
-        let errs = validate_table(&groups[0].tables[0], &SeparatorsSection::default(), None, Some(&idx));
-        assert_eq!(code_hits(&errs, ValidationCode::RuleRequiredIfMissing), 1, "{:?}", errs.iter().map(|e| &e.message).collect::<Vec<_>>());
-        assert_eq!(code_hits(&errs, ValidationCode::RuleCompareViolation), 1);
-    }
-
-    #[test]
-    fn self_references_and_empty_params_are_rejected() {
-        let mut t = mk_table("T", &[("id", "int"), ("parent", "int"), ("code", "str")],
-            &[vec!["1", "1", "A"]]);
-        t.rules = vec![
-            // ref_exists 自己指自己
-            Rule { column: "id".into(),
-                   kind: RuleKind::RefExists { target_node: "T".into(), target_column: "id".into() },
-
-                       source: RuleSource::User,
-                   level: Severity::Error },
-            // compare 自己比自己
-            Rule { column: "parent".into(),
-                   kind: RuleKind::Compare { column: "parent".into(), op: CompareOp::Le },
-
-                       source: RuleSource::User,
-                   level: Severity::Error },
-            // required_if 引用本列
-            Rule { column: "code".into(),
-                   kind: RuleKind::RequiredIf { column: "code".into(), value: "A".into() },
-
-                       source: RuleSource::User,
-                   level: Severity::Error },
-            // 两端都空 / 空正则
-            Rule { column: "parent".into(), kind: RuleKind::Range { min: "".into(), max: "".into() }, level: Severity::Error , source: RuleSource::User },
-            Rule { column: "code".into(), kind: RuleKind::Matches { pattern: "".into() }, level: Severity::Error , source: RuleSource::User },
-        ];
-        let groups = vec![mk_group("g", vec![t], vec![])];
-        let idx = RuleIndex::build(&groups);
-        let errs = validate_table(&groups[0].tables[0], &SeparatorsSection::default(), None, Some(&idx));
-        assert_eq!(code_hits(&errs, ValidationCode::RuleParamInvalid), 5,
-            "{:?}", errs.iter().map(|e| &e.message).collect::<Vec<_>>());
-    }
-
-    #[test]
-    fn builtin_rules_are_the_single_source_of_truth() {
-        let t = builtin_rules(NodeMode::Table);
-        let has = |rules: &[Rule], col: &str, kind: RuleKind| {
-            rules.iter().any(|r| r.column == col && r.kind == kind)
-        };
-        assert!(has(&t, "id", RuleKind::Unique));
-        assert!(has(&t, "id", RuleKind::NonEmpty));
-        assert!(has(&t, "id", RuleKind::PositiveInt));
-        assert!(t.iter().all(|r| r.source == RuleSource::Builtin));
-
-        let e = builtin_rules(NodeMode::Enum);
-        assert!(has(&e, "id", RuleKind::PositiveInt));
-        assert!(has(&e, "name", RuleKind::UpperSnake));
-        assert!(has(&e, "name", RuleKind::NonEmpty));
-
-        assert!(builtin_rules(NodeMode::Constant).is_empty());
-
-        // 有效规则 = 内置在前 + 用户在后
-        let user = vec![Rule {
-            column: "name".into(), kind: RuleKind::Len { min: "1".into(), max: "8".into() },
-            level: Severity::Error, source: RuleSource::User,
-        }];
-        let eff = effective_rules(NodeMode::Enum, &user);
-        assert_eq!(eff.len(), builtin_rules(NodeMode::Enum).len() + 1);
-        assert_eq!(eff.last().unwrap().source, RuleSource::User);
-    }
-
-    #[test]
-    fn table_id_must_be_positive() {
-        // 正整数检查现在由内置规则 `id = positive_int()` 执行（@01.8.11）。
-        let t = mk_table("T", &[("id", "int"), ("name", "str")],
-            &[vec!["0", "a"], vec!["-1", "b"], vec!["1", "c"]]);
-        let groups = vec![mk_group("g", vec![t], vec![])];
-        let idx = RuleIndex::build(&groups);
-        let errs = validate_table(&groups[0].tables[0], &SeparatorsSection::default(), None, Some(&idx));
-        let hits: Vec<_> = errs.iter()
-            .filter(|e| e.code == ValidationCode::RulePositiveIntViolation)
-            .collect();
-        assert_eq!(hits.len(), 2, "0 与 -1 都应报错: {:?}", errs.iter().map(|e| &e.message).collect::<Vec<_>>());
-        assert!(hits.iter().all(|e| e.message.contains("正整数")));
-    }
-
-    #[test]
-    fn non_empty_and_range_conflict_with_builtins() {
-        let ne = Rule {
-            column: "name".into(), kind: RuleKind::NonEmpty,
-            level: Severity::Error, source: RuleSource::User,
-        };
-        assert!(ne.conflicts_with_builtin(NodeMode::Enum), "enum name 已保证必填");
-
-        let only_min = Rule {
-            column: "id".into(), kind: RuleKind::Range { min: "1".into(), max: "".into() },
-            level: Severity::Error, source: RuleSource::User,
-        };
-        assert!(only_min.conflicts_with_builtin(NodeMode::Enum), "枚举 id 已保证 > 0");
-
-        let with_max = Rule {
-            column: "id".into(), kind: RuleKind::Range { min: "1".into(), max: "100".into() },
-            level: Severity::Error, source: RuleSource::User,
-        };
-        assert!(!with_max.conflicts_with_builtin(NodeMode::Enum), "加了上限就有新约束");
-    }
-
-    #[test]
-    fn value_class_of_type_classifies_scalars_and_rejects_composites() {
-        assert_eq!(value_class_of_type("int"), Some(ValueClass::Int));
-        assert_eq!(value_class_of_type("long"), Some(ValueClass::Int));
-        assert_eq!(value_class_of_type("str"), Some(ValueClass::Text));
-        assert_eq!(value_class_of_type("txt"), Some(ValueClass::Text));
-        assert_eq!(value_class_of_type("float"), Some(ValueClass::Float));
-        assert_eq!(value_class_of_type("@HeroType"), Some(ValueClass::Text));
-        assert_eq!(value_class_of_type("List<int>"), None);
-        assert_eq!(value_class_of_type("Map<int,str>"), None);
-        assert_eq!(value_class_of_type("Tuple2<int,int>"), None);
-    }
-
-    #[test]
-    fn unique_compares_integers_numerically() {
-        let mut t = mk_table("T", &[("id", "int"), ("code", "int")],
-            &[vec!["1", "01"], vec!["2", "1"], vec!["3", "2"]]);
-        t.rules = vec![Rule { column: "code".into(), kind: RuleKind::Unique, level: Severity::Error , source: RuleSource::User }];
-        let groups = vec![mk_group("g", vec![t], vec![])];
-        let idx = RuleIndex::build(&groups);
-        let errs = validate_table(&groups[0].tables[0], &SeparatorsSection::default(), None, Some(&idx));
-        assert_eq!(code_hits(&errs, ValidationCode::RuleUniqueViolation), 1,
-            "01 与 1 应视为重复: {:?}", errs.iter().map(|e| &e.message).collect::<Vec<_>>());
-    }
-
-    #[test]
-    fn rule_on_composite_column_is_incompatible() {
-        let mut t = mk_table("T", &[("id", "int"), ("tags", "List<int>")], &[]);
-        t.rules = vec![Rule { column: "tags".into(), kind: RuleKind::Unique, level: Severity::Error , source: RuleSource::User }];
-        let groups = vec![mk_group("g", vec![t], vec![])];
-        let idx = RuleIndex::build(&groups);
-        let errs = validate_table(&groups[0].tables[0], &SeparatorsSection::default(), None, Some(&idx));
-        assert_eq!(code_hits(&errs, ValidationCode::RuleTypeIncompatible), 1);
-        assert_eq!(code_hits(&errs, ValidationCode::RuleUniqueViolation), 0);
-    }
-
-    #[test]
-    fn ref_exists_compares_integers_numerically() {
-        let lang = mk_table("Lang", &[("id", "int")], &[vec!["01"], vec!["2"]]);
-        let mut code = mk_table("Code", &[("id", "int"), ("target", "int")],
-            &[vec!["1", "1"], vec!["2", "2"]]);
-        code.rules = vec![Rule {
-            column: "target".into(),
-            kind: RuleKind::RefExists { target_node: "Lang".into(), target_column: "id".into() },
-            level: Severity::Error,
-
-            source: RuleSource::User,
-        }];
-        let groups = vec![mk_group("g", vec![lang, code], vec![])];
-        let idx = RuleIndex::build(&groups);
-        let errs = validate_table(&groups[0].tables[1], &SeparatorsSection::default(), None, Some(&idx));
-        assert_eq!(code_hits(&errs, ValidationCode::RuleRefValueMissing), 0,
-            "1 应匹配 01: {:?}", errs.iter().map(|e| &e.message).collect::<Vec<_>>());
-    }
-
-    #[test]
-    fn rule_index_only_scans_referenced_target_columns() {
-        let lang = mk_table("Lang", &[("id", "int"), ("key", "str")],
-            &[vec!["1", "A"]]);
-        let mut code = mk_enum("ErrorCode", &[("1", "A")]);
-        code.rules = vec![Rule {
-            column: "name".into(),
-            kind: RuleKind::RefExists { target_node: "Lang".into(), target_column: "key".into() },
-            level: Severity::Error,
-
-            source: RuleSource::User,
-        }];
-        let groups = vec![mk_group("g", vec![lang], vec![code])];
-        let idx = RuleIndex::build(&groups);
-        assert!(idx.values("Lang", "key").is_some());
-        // 没被任何规则引用的列不建值集
-        assert!(idx.values("Lang", "id").is_none());
-        // schema 层仍然知道列存在
-        assert!(idx.column_exists("Lang", "id"));
     }
 }

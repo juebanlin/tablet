@@ -506,7 +506,7 @@ camelCase 撞名等价于 PascalCase 撞名（源名必以小写字母开头，�
 | schema | 类型字符串可被解析 | "类型 \"X\" 不合法" |
 | schema | 引用类型有效（被引用项存在且非 constant） | 见 @8.5 |
 
-**id 列的约束已全部由内置规则执行**（@8.11）：`id = unique()`（同表不重复）、`id = non_empty()`（有数据但 id 为空）、`id = positive_int()`（> 0）。
+**id 列的约束已全部由内置规则执行**（@8.11）：`column id: unique()`（同表不重复）、`column id: non_empty()`（有数据但 id 为空）、`column id: positive_int()`（> 0）。
 报错位置是具体数据格，消息是规则引擎的通用文案（"值 \"1\" 与第 1 行重复" / "该列必填，不能为空" / "值 0 必须是正整数"）。
 
 ### 8.3 类型值验证
@@ -630,8 +630,8 @@ camelCase 撞名等价于 PascalCase 撞名（源名必以小写字母开头，�
 
 **id / name 的列约束已全部由内置规则执行**（@8.11）：
 
-- `id = unique()` / `non_empty()` / `positive_int()`（正整数、0 与负数都报错、非数字也报错）；
-- `name = unique()` / `non_empty()` / `upper_snake()`。
+- `column id: unique()` / `non_empty()` / `positive_int()`（正整数、0 与负数都报错、非数字也报错）；
+- `column name: unique()` / `non_empty()` / `upper_snake()`。
 
 报错定位从原来的**表头级**改成了具体数据格（`B1` 这种），同一格的关键字错误优先于格式错误，不重复报。
 
@@ -671,7 +671,7 @@ camelCase 撞名等价于 PascalCase 撞名（源名必以小写字母开头，�
 | constant | — | 不支持节点级规则（@8.8） |
 
 - 这些规则**不写进** `project.tblmanifest`，**不可编辑、不可删除**；规则面板以「系统」标出，CLI 用 `schema show --rules` 查看。
-- `positive_int()` / `upper_snake()` 只由系统生成，写在 schema 里会被拒绝。
+- `positive_int()` / `upper_snake()` 系统内置仍自动生效；用户显式书写合法，与内置重复时只报一条非阻断的 `RuleRedundant`。
 - 与内置规则重复的用户规则**不执行**，只报一条非阻断的 `RuleRedundant`：enum 的 `name` 上再挂 `unique()` / `non_empty()`；enum 的 `id` 上挂 `range(1, )`（只加下限且 ≤1）。
 - **内置规则由规则引擎执行**（不再有硬编码的 id/name 检查）：改约束只需要改 `builtin_rules`，
   UI 徽标、CLI 输出、冗余判断、校验行为会一起跟上。
@@ -856,60 +856,103 @@ title | str | cs | 标题
 格式（段内，`[group/Name] mode` 段头之后）：
 
 ```
-# @rule: <列名> = <内置验证器调用> [error|warn]
+# @rule column <列名>: <表达式> [error|warn|info]
+# @rule table: <表达式> [error|warn|info]
 ```
 
+- `column <列名>`：规则挂在列上；列名同时是**错误锚点**和列域函数**省略的主列参数**。
+- `table`：规则挂在节点上，可使用逐行多列函数与全表函数；只能用于 Table。
 - 只对 **Table / Enum** 有意义：Table 用字段名，Enum 用 `id` / `name` / `desc`。
   Constant 不支持（`value` 列逐行类型不同，没有统一比较口径；见 @8.8），写了会在解析阶段带行号报错。
-- 一列可以有多条规则，一行一条；**行序即优先级**（决定报告与展示顺序）。
-- 级别缺省 `error`：命中即阻断保存；`warn` 只提示，不阻断。
+- 一列 / 一张表可以有多条规则，一行一条；**行序即优先级**（决定报告与展示顺序）。
+- 级别缺省 `error`：命中即阻断保存；`warn` 只提示，不阻断；`info` 仅记录。
 - 规则**只住在 `project.tblmanifest`**：不写进 `.tbl`、不进 Excel / xlsx sheet。
+- 旧格式 `# @rule: <列> = <表达式>` 已废弃，加载时直接报错（@16）。完整函数目录、类型分层与求值语义见 @16。
 
-v1 内置验证器：
+#### 列域验证器
 
-| 验证器 | 含义 | 适用列 |
-|--------|------|--------|
-| `unique()` | 该列非空值在节点内不重复 | 全部 |
-| `non_empty()` | 该列必须有值（整行全空的占位行不算） | 全部 |
-| `ref_exists(节点.列)` | 每个非空值都必须出现在目标列里 | 全部 |
-| `range(下限, 上限)` | 数值必须落在区间内；留空一侧表示不限 | 整数 / 浮点 |
-| `len(下限, 上限)` | 按字符数限制长度；留空一侧表示不限 | 文本 |
-| `one_of(a, b, c)` | 值必须是候选之一（含逗号的值用引号包起来） | 全部 |
-| `matches("正则")` | 文本必须匹配正则；整串匹配请写 `^...$` | 文本 |
-| `required_if(列, 值)` | 本行该列等于值时，本列必须有值 | 全部 |
-| `compare(列, 运算符)` | 与另一列按 `< <= > >= == !=` 比较（两边都要是数字） | 整数 / 浮点 |
+列级写法省略主列参数（由 `column` 锚点补）；表级写法所有列参数显式。同一个函数只有这一份实现。
 
-适用列：只有标量列（`int` / `long` / `float` / `bool` / `str` / `txt` / `@Xxx`）；复合并列表不参与。
-整数类按整数比较（`01` == `1`）、浮点按浮点比较（`1.0` == `1`），其余按 trim 后字符串比较。
+| 函数 | 列级 / 表级写法 | 含义 | 适用列 |
+|------|----------------|------|--------|
+| `unique` | `unique()` / `unique(col)` | 非空值在节点内不重复；整数按数值比较（`01` == `1`） | 全部标量 |
+| `non_empty` | `non_empty()` / `non_empty(col)` | 必须有值；整行全空的占位行不算 | 全部标量 |
+| `range` | `range(min, max)` / `range(col, min, max)` | 数值区间；留空一侧不限 | 整数 / 浮点 |
+| `len` | `len(min, max)` / `len(col, min, max)` | 字符数区间；留空一侧不限 | 文本 |
+| `one_of` | `one_of(v...)` / `one_of(col, v...)` | 值属于候选集合；含逗号的值加引号 | 全部标量 |
+| `matches` | `matches("正则")` / `matches(col, "正则")` | 正则匹配；整串匹配写 `^...$` | 文本 |
+| `ref_exists` | `ref_exists(节点.列)` / `ref_exists(col, 节点.列)` | 值必须存在于目标列 | 全部标量 |
+| `compare` | `compare(op, other)` / `compare(col, op, other)` | 与另一列比较；`op` = `< <= > >= == !=` | 整数 / 浮点 |
+| `positive_int` | `positive_int()` / `positive_int(col)` | 必须是正整数（不能为 0 或负数） | 整数 |
+| `upper_snake` | `upper_snake()` / `upper_snake(col)` | 必须 UPPER_SNAKE_CASE | 文本 |
 
-**没有意义的组合会被拒绝**（schema 错误，不是静默跳过）：
+`positive_int` / `upper_snake` 以前只作为系统内置规则，现在也开放给用户显式书写；系统内置仍然自动生效，
+重复书写只会得到一条非阻断的 `RuleRedundant` 警告。
 
-- `ref_exists` 的目标不能是**本列自己**（同节点同列）；同表不同列的自引用（`prereq_lord -> Building.id`）是允许的。
-- `compare` / `required_if` 引用的列不能是本列自己。
-- `range` / `len` 两端都留空 = 没有规则；下限大于上限同样报错。
-- `matches("")` 空正则匹配一切，等于没写，直接报错。
-- 系统已保证的约束（见 @8.11）再挂一遍只会得到一条非阻断的 `RuleRedundant` 警告：
-  `unique()` / `non_empty()` 与内置规则重复；enum 的 `id` 上挂 `range(1, )` 也算重复。
-- `positive_int()` / `upper_snake()` 是系统只读规则，写进 schema 会被拒绝。
+`required_if(条件列, 值)`（表级 `required_if(col, 条件列, 值)`）是**输入糖**，加载时展开为
+`when(eq(条件列, 值), non_empty(...))`，不参与序列化。新规则建议直接用 `when` + 条件树。
+
+#### 行级 / 全表验证器（只能 `table:`）
+
+| 函数 | 参数 | 含义 | 粒度 |
+|------|------|------|------|
+| `all_non_empty(col1, col2, ...)` | ≥ 2 个标量列 | 这些列都必须有值 | 逐行 |
+| `at_least_one(col1, col2, ...)` | ≥ 2 个标量列 | 至少一列有值 | 逐行 |
+| `exactly_one(col1, col2, ...)` | ≥ 2 个标量列 | 恰好一列有值 | 逐行 |
+| `row_count(min, max)` | 非占位行数区间；可空一侧 | 行数在区间内 | 全表 |
+| `id_contiguous()` | — | id 集合恰好是 `1..=N`（N = 非占位行数） | 全表 |
+| `unique_combination(col1, ...)` | ≥ 2 个标量列 | 列组合不重复；任一分量为空的行跳过 | 全表 |
+| `no_empty_rows()` | — | 不允许整行全空的占位行 | 全表（**预留，未实现**） |
+
+#### 组合子
+
+- `when(条件, 规则表达式)`：**行集合过滤器**。条件不成立的行不参与内层验证器；全表函数也只统计命中的行，
+  即 `unique` 带条件 = 只在命中行内查重。
+- `and(规则...)` / `or(规则...)`：规则级组合；`or` 目前只允许逐行粒度的子表达式。
+- 规则级 `not` 不支持；`not` 只用于条件。
+- 多条独立规则在节点内天然按 AND 叠加，常见场景不必写规则级 `and`。
+
+#### 条件（`when` 的第一个参数）
+
+| 函数 | 参数 | 说明 |
+|------|------|------|
+| `eq(a, b)` / `ne(a, b)` | 列引用或字面量 | 等于 / 不等于；按列类型归一化（`01 == 1`） |
+| `lt/le/gt/ge(a, b)` | 数值列或数字字面量 | 大小比较 |
+| `in(col, v...)` | 第一个必须是列，后面是候选值 | 属于候选集合 |
+| `match(col, "正则")` | 第一个必须是列 | 正则匹配（与验证器 `matches` 区分） |
+| `and(c...)` / `or(c...)` | ≥ 2 个条件 | 全部 / 任一成立 |
+| `not(c)` | 1 个条件 | 取反 |
+
+值表达式：裸标识符 = 本行对应列；引号字符串 = 字面量；裸数字 / `true` / `false` = 字面量；
+正则里的反斜杠原样保留（`\d` 与 `\\d` 等价）。条件只读本节点当前行，**不支持跨表条件**。
 
 ```
-[lang/Lang] table
-id  | int | cs | 多语言ID
-key | str | cs | 英文 key
-# @rule: key = unique()
+# 列级：type=1 时 value 必须是 "id#count"
+# @rule column value: when(eq(type, 1), matches("^\d+#\d+$"))
 
-[error/ErrorCode] enum
-# @display: name
-# @rule: name = ref_exists(Lang.key) [warn]
-# @rule: name = unique()
+# type 是 2 或 3 时，value 必须全大写
+# @rule column value: when(or(eq(type, 2), eq(type, 3)), matches("^[A-Z_]+$"))
+
+# type 是 1/2 且 quality >= 2 时，value 必填
+# @rule column value: when(and(in(type, 1, 2), ge(quality, 2)), non_empty()) [warn]
+
+# 表级：逐行多列 + 全表校验
+# @rule table: all_non_empty(value, price)
+# @rule table: row_count(1, 100)
+# @rule table: unique_combination(type, quality)
 ```
 
-约束：
+#### 约束
 
-- **必须在某个 `[section]` 之后**；段外报错（带行号），不静默忽略。
-- 缺 `=`、未知验证器、未知级别都会报错（带行号）。
-- 规范输出顺序：段头 → 字段行 → `# @display` → `# @rule` → `# @preset`。解析与位置无关，只有序列化端按此输出。
-- `# @rule <名字> = script(...)` 是第 3 层脚本规则的预留语法，当前会报「尚未实现」。
+- `ref_exists` 的目标不能是本列自己（同节点同列）；同表不同列的自引用允许。
+- `compare` 引用的列不能是本列自己；两边都必须是数值。
+- `range` / `len` 两端都留空 = 没有规则；下限大于上限报错。
+- `matches("")` 空正则匹配一切，等于没写，直接报错；`one_of` 至少一个候选。
+- 函数必须在当前 scope：列级只能用列域函数；行级 / 全表函数只能出现在 `table:`。
+- 列参数必须是标量列；函数对列类型有要求（如 `range` 只接受数值列）。
+- 条件列必须存在且是标量；大小比较只接受数值；条件两边都是字面量会被拒绝。
+- 系统已保证的约束再挂一遍只会得到一条非阻断的 `RuleRedundant` 警告。
+- `# @rule column <列>: script(...)` 是脚本规则的预留语法，当前报「尚未实现」。
 - 未知 `#` 行仍按注释忽略（前向兼容）。
 
 ### 10.8 注释与空行
@@ -951,7 +994,7 @@ key | str | cs | 英文 key
 
 [hero/HeroBase] table
 # @display: name
-# @rule: id = unique()
+# @rule column id: unique()
 
 [building/Building] table xlsx
 ```

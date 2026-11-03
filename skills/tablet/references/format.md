@@ -85,40 +85,78 @@ Map_List.kv  Map_List.item  Map_List.entry
 
 ```text
 # @display: name
-# @rule: key = unique()
-# @rule: name = ref_exists(Lang.key) [warn]
+# @rule column key: unique()
+# @rule column name: ref_exists(Lang.key) [warn]
+# @rule table: all_non_empty(name, hp)
 ```
 
 `# @display` 写在段头之后。含义：别的表用 `@本段名` 引用时，UI / Excel 显示这一列而不是原始 id。
 只对 table / enum 有意义；列必须是 `str` / `int` / `txt` 的独立列。
 
-`# @rule` 是节点级校验规则（格式 `<列> = <验证器> [error|warn|info]`，一条一行，行序即优先级）：
+`# @rule` 是节点级校验规则，两种作用域：
 
-| 验证器 | 含义 | 适用列 |
+```text
+# @rule column <列名>: <表达式> [error|warn|info]
+# @rule table: <表达式> [error|warn|info]
+```
+
+- `column <列名>`：列级规则；列名是错误锚点，也是列域函数省略的主列参数。
+- `table`：表级规则；可用逐行多列 / 全表函数，只能用于 Table。
+- 一条一行，**行序即优先级**；级别缺省 `error`。
+- 每条规则独立：一条 `# @rule` 内可以组合，跨规则不能写 `and/or`；整体结果按各规则级别聚合
+  （error 阻断，warn / info 默认只报告）。
+- 旧格式 `# @rule: <列> = ...` 已废弃，加载直接报错。
+
+列域验证器（列级省略主列，表级显式）：
+
+| 函数 | 列级 / 表级 | 含义 | 适用列 |
+|---|---|---|---|
+| `unique` | `unique()` / `unique(col)` | 非空值不重复（整数 `01` == `1`） | 全部标量 |
+| `non_empty` | `non_empty()` / `non_empty(col)` | 必填（整行全空占位行不算） | 全部标量 |
+| `ref_exists` | `ref_exists(节点.列)` / `ref_exists(col, 节点.列)` | 值必须出现在目标列 | 全部标量 |
+| `range` | `range(min, max)` / `range(col, min, max)` | 数值区间，留空一侧不限 | 整数 / 浮点 |
+| `len` | `len(min, max)` / `len(col, min, max)` | 字符数区间 | 文本 |
+| `one_of` | `one_of(v...)` / `one_of(col, v...)` | 必须是候选之一 | 全部标量 |
+| `matches` | `matches("正则")` / `matches(col, "正则")` | 匹配正则（整串用 `^...$`） | 文本 |
+| `compare` | `compare(op, other)` / `compare(col, op, other)` | 跨列比较；`op` = `< <= > >= == !=` | 整数 / 浮点 |
+| `positive_int` | `positive_int()` / `positive_int(col)` | 必须是正整数 | 整数 |
+| `upper_snake` | `upper_snake()` / `upper_snake(col)` | 必须 UPPER_SNAKE_CASE | 文本 |
+
+表级验证器（只能 `table:`）：
+
+| 函数 | 含义 | 粒度 |
 |---|---|---|
-| `unique()` | 该列非空值不重复 | 全部 |
-| `non_empty()` | 必填（整行全空占位行不算） | 全部 |
-| `ref_exists(节点.列)` | 值必须出现在目标列里 | 全部 |
-| `range(下限, 上限)` | 数值区间，留空一侧不限 | 整数 / 浮点 |
-| `len(下限, 上限)` | 字符数区间 | 文本 |
-| `one_of(a, b, c)` | 必须是候选之一 | 全部 |
-| `matches("正则")` | 匹配正则（整串用 `^...$`） | 文本 |
-| `required_if(列, 值)` | 条件必填 | 全部 |
-| `compare(列, 运算符)` | 跨列比较 | 整数 / 浮点 |
+| `all_non_empty(col1, col2, ...)` | 这些列都必须有值 | 逐行 |
+| `at_least_one(col1, col2, ...)` | 至少一列有值 | 逐行 |
+| `exactly_one(col1, col2, ...)` | 恰好一列有值 | 逐行 |
+| `row_count(min, max)` | 非占位行数在区间内 | 全表 |
+| `id_contiguous()` | id 集合恰好是 `1..=N` | 全表 |
+| `unique_combination(col1, ...)` | 列组合不重复 | 全表 |
+| `no_empty_rows()` | 不允许整行全空占位行（预留，未实现） | 全表 |
 
-系统内置规则（`positive_int()` / `upper_snake()`，以及 id/name 上的 `unique()` / `non_empty()`）
-是只读的：不写 schema、不可编辑、不可删除；再挂一遍只会得到冗余警告（@01.8.11）。
-查看某个节点的有效规则：`tablet-cli schema show --rules`。
+**组合**：`when(条件, 规则表达式)` 是函数（行集合过滤器），不是组；条件只读本节点当前行，
+不成立的行跳过验证器，全表函数也只统计命中的行。条件函数和验证器函数都用 `and/or` 连接；
+`and/or` 可组合规则表达式（规则级 `or` 目前只允许逐行粒度）。
+嵌套 `when` 等价于 AND。`required_if(条件列, 值)` 是输入糖，加载时展开成
+`when(eq(条件列, 值), non_empty(...))`，不参与序列化。
 
-无意义组合直接报错：`ref_exists`/`compare`/`required_if` 不能引用本列自己；区间两端不能都空；
-`matches("")` 空正则不接受。
+| 条件函数 | 用法 |
+|---|---|
+| `eq/ne/lt/le/gt/ge(a, b)` | 比较；`lt/le/gt/ge` 两边必须是数值 |
+| `in(列, 值, ...)` | 列属于候选集合 |
+| `match(列, "正则")` | 列匹配正则（与验证器 `matches` 区分） |
+| `and(...)` / `or(...)` / `not(...)` | 组合条件；`and/or` ≥ 2 个参数 |
+
+裸标识符 = 列，引号字符串 / 数字 = 字面量；反斜杠原样保留（`\d` 与 `\\d` 等价）。
+**不支持跨表条件**。
 
 - 只对 **Table / Enum** 有意义；**constant 段不支持**（`value` 逐行类型不同）。
 - 只对**标量列**生效（`int` / `long` / `float` / `bool` / `str` / `txt` / `@Xxx`）；`List<>` / `Map<>` / `Tuple*` 等复合类型不参与。整数列按数值比较（`01` == `1`），其余按 trim 后字符串比较。
 - 级别缺省 `error`；`[warn]` / `[info]` 是否阻断由项目策略决定（`project.toml` 的 `[validate]`，默认 warn=仅提示、info=忽略）。
 - 规则只存 `project.tblmanifest`，不写进 `.tbl`，也不进 Excel。
-- 一列可以有多条规则。系统已保证的约束（table/enum 的 `id` 唯一·必填·正整数、enum 的 `name`
+- 一列 / 一张表可以有多条规则。系统已保证的约束（table/enum 的 `id` 唯一·必填·正整数、enum 的 `name`
   唯一·必填·UPPER_SNAKE）不要再手写，重复只会得到一条非阻断的冗余警告。
+- `positive_int` / `upper_snake` 也开放给用户显式书写；系统内置仍自动生效。
 
 ### Table 段体
 
@@ -291,7 +329,7 @@ Enum sheet（1 行表头）
 
 [hero/HeroBase] table
 # @display: name
-# @rule: id = unique()
+# @rule column id: unique()
 
 [building/Building] table xlsx
 ```

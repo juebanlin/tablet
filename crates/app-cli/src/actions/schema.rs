@@ -192,7 +192,7 @@ fn rule_lines(mode: tablet_core::model::NodeMode, user: &[tablet_core::model::Ru
                 Severity::Info => "信息",
             },
         };
-        format!("{} = {} [{}]", r.column, r.kind.expr_string(), tag)
+        format!("{} [{}]", r.body_string(), tag)
     }).collect()
 }
 

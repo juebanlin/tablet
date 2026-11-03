@@ -7,7 +7,9 @@ use crate::enums::{
 use crate::schema_model::{SchemaMetadata, TblSchema};
 pub use crate::schema_model::GroupStorage;
 pub use crate::rules::{
-    builtin_rules, effective_rules, CompareOp, NodeMode, Rule, RuleKind, RuleSource, Severity,
+    builtin_rules, effective_rules, function_spec, CompareOp, Condition, FunctionSpec,
+    FunctionStatus, Granularity, NodeMode, ParamKind, Rule, RuleExpr, RuleKind, RuleScope,
+    RuleSource, RuleTarget, Severity, ValueExpr, FUNCTIONS,
 };
 
 /// 项目状态：区分已落盘 vs 未落盘
