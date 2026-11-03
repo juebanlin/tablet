@@ -1,6 +1,6 @@
 ---
 name: tablet
-description: 生成 / 修改 / 校验 tablet 配置表，并用 tablet-cli 跑通「建项目 → 验证 → 导出」流水线。当用户要新建或扩展 .tblschema 模板、设计字段与类型、追加 # @preset 预设数据、手改 .tbl 数据文件、把任意布局的 Excel 映射导入为 .tbl（GUI）、给列加校验规则（# @rule）、从 Unity 插件 / bat 调外部工具刷新配置、查看工作区版本分支，或执行 tablet-cli 命令（project new / schema / validate / export / excel / workspace）时使用。涵盖 .tblschema v1 与 .tbl v3/v2 格式、7 个基础类型 + 复合范式 + @Ref、内置验证器与错误/警告分级、12 种导出格式、解析器强制的命名规则、退出码约定。
+description: 生成 / 修改 / 校验 tablet 配置表，并用 tablet-cli 跑通「建项目 → 验证 → 导出」流水线。当用户要新建或扩展 .tblschema 模板、设计字段与类型、追加 # @preset 预设数据、手改 .tbl 数据文件、把任意布局的 Excel 映射导入为 .tbl（GUI）、给列 / 表加校验规则（# @rule，多规则各自级别）、从 Unity 插件 / bat 调外部工具刷新配置、查看工作区版本分支，或执行 tablet-cli 命令（project new / schema / validate / export / excel / workspace）时使用。涵盖 .tblschema v1 与 .tbl v3/v2 格式、7 个基础类型 + 复合范式 + @Ref、规则表达式（when/and/or）、错误/警告/信息分级、12 种导出格式、解析器强制的命名规则、退出码约定。
 user-invocable: true
 allowed-tools:
   - Read
@@ -233,7 +233,10 @@ Constant 不支持（`value` 逐行类型不同，写了会在解析期带行号
 
 - `column <列名>`：列级规则。列名同时是错误锚点，也是列域函数**省略的主列参数**。
 - `table`：表级规则。可使用逐行多列 / 全表函数，只能用于 Table。
-- 一条一行，**行序即优先级**；级别缺省 `error`。
+- 一条一行，**行序即优先级**；每条规则一个级别，缺省 `error`。
+- 同一作用域可以有多条规则，**规则之间完全独立**：一条规则内可以组合，跨规则不能写 `and/or`。
+- 整体结果是各规则 Issue 的聚合：`error` 阻断保存，`warning` / `info` 默认只报告
+  （项目策略可改；`validate --strict` 把提示级也算失败）。
 - 旧格式 `# @rule: <列> = <表达式>` 已废弃，加载直接报错（完整模型见 `docs/16-规则表达式与作用域.md`）。
 
 ### 列域验证器
@@ -277,6 +280,26 @@ Constant 不支持（`value` 逐行类型不同，写了会在解析期带行号
 | `match(列, "正则")` | 列匹配正则（与验证器 `matches` 区分） |
 | `and(...)` / `or(...)` / `not(...)` | 组合条件；`and/or` ≥ 2 个参数 |
 
+### 规则体成员函数
+
+规则体是一个组；**组成员是函数调用**，`unique(...)`、`range(...)`、`when(条件, 规则表达式)`
+都是**同一级**的成员。`when` 不是组，也不是 `and/or` 那种连接符：它是成员函数，
+第一个参数是条件，第二个参数是规则表达式；条件不成立的行不参与该成员内的验证器，
+全表函数也只统计命中的行。
+
+| 成员 | 用法 | 说明 |
+|---|---|---|
+| 验证器 | `unique(...)` / `range(...)` / ... | 产生 Issue；见上面的函数表 |
+| `when` | `when(条件, 规则表达式)` | 过滤成员，与验证器同级；可放在组里与其他成员用 `and/or` 连接 |
+
+### 组合子
+
+| 函数 | 用法 | 说明 |
+|---|---|---|
+| `and` | `and(规则表达式...)` / `and(条件...)` | 全部满足；条件上下文和规则上下文同名 |
+| `or` | `or(规则表达式...)` / `or(条件...)` | 至少一个满足；规则级 `or` 只允许逐行粒度 |
+| `not` | `not(条件)` | 只在条件上下文；规则级 `not` 不支持 |
+
 裸标识符 = 列，引号字符串 / 数字 = 字面量；反斜杠原样保留（`\d` 与 `\\d` 等价）。
 `and/or` 也能组合规则表达式（规则上下文）；规则级 `or` 目前只允许逐行粒度的子表达式。
 **不支持跨表条件**。`required_if(条件列, 值)` 是输入糖，加载时展开为
@@ -294,7 +317,7 @@ atk  | int | s  | 攻击
 # @rule column name: non_empty()
 # @rule column kind: ref_exists(HeroType.id)
 # @rule column hp: range(0, )
-# @rule column hp: required_if(kind, 2)
+# @rule column hp: when(eq(kind, 2), non_empty())
 # @rule column atk: compare(<, hp) [warn]
 # @rule table: all_non_empty(name, hp)
 # @rule table: row_count(1, 100)
