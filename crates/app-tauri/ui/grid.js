@@ -64,7 +64,7 @@ function clamp(n, lo, hi) {
 }
 
 class SheetGrid {
-  constructor({ scroll, table, onSelection, onCommit, onLog, onContextMenu, onRefPicker, onTypeSelector }) {
+  constructor({ scroll, table, onSelection, onCommit, onLog, onContextMenu, onRefPicker, onTypeSelector, onViewChange }) {
     this.scroll = scroll;
     this.table = table;
     this.onSelection = onSelection || (() => {});
@@ -73,6 +73,7 @@ class SheetGrid {
     this.onContextMenu = onContextMenu || (() => {});
     this.onRefPicker = onRefPicker || (() => Promise.resolve(null));
     this.onTypeSelector = onTypeSelector || (() => Promise.resolve(null));
+    this.onViewChange = onViewChange || (() => {});
     this._clip = "";
     this._refPopup = null;
     this._refOutside = null;
@@ -81,9 +82,13 @@ class SheetGrid {
 
     this.node = null;
     this.nodeKey = "";
+    // Univer 窗口打开该组时，主界面只读（防止两处同时改同一份数据）。
+    this.locked = false;
     this.colWidths = [];
     this.widthsByKey = new Map();
     this.autoWidth = true;
+    // 失焦是否提交（全局设置）；关闭时失焦丢弃当前编辑。
+    this.autoCommitOnBlur = true;
 
     this.tds = [];
     this.rownums = [];
@@ -95,6 +100,7 @@ class SheetGrid {
     this.kind = "none"; // none | cell | range | row | col | all
     this.editing = null; // { type:'cell'|'header', r/hi, c/ci, el, original }
     this.dragging = false;
+    this.dragAxis = null; // row / col 表头拖动扩选
     this.hover = null;
     this._lastBounds = null;
     this._dragPoint = null;
@@ -104,6 +110,19 @@ class SheetGrid {
   }
 
   // ── 数据 ────────────────────────────────────────────────
+  // Univer 编辑锁：只拦截编辑入口，选择 / 滚动 / 复制仍可用。
+  setLocked(on) {
+    const next = !!on;
+    if (this.locked === next) return;
+    this.locked = next;
+    if (next && this.editing) this.cancelEdit();
+    this.scroll.classList.toggle("grid-locked", next);
+  }
+
+  setAutoCommitOnBlur(on) {
+    this.autoCommitOnBlur = on !== false;
+  }
+
   setData(node, opts = {}) {
     // 后端快照刷新：编辑中的输入框直接丢弃，不能把本地编辑再提交回去（会形成回环）。
     if (this.editing) this.cancelEdit();
@@ -125,8 +144,17 @@ class SheetGrid {
     this.colWidths = new Array(cols).fill(0);
     this.errorSet = new Set((node?.errors || []).map(([r, c]) => `${r}:${c}`));
     if (node) {
-      if (!this.autoWidth && cached) this.colWidths = cached.slice();
-      else this.autoFitAll(true);
+      this.autoWidth = node.autoWidth !== false;
+      for (let c = 0; c < cols; c++) this.colWidths[c] = this.autoFitWidth(c);
+      if (!this.autoWidth) {
+        const names = node.headers?.[node.headers.length - 1] || [];
+        const saved = node.columnWidths || {};
+        for (let c = 0; c < cols; c++) {
+          const w = cached?.[c] ?? saved[names[c]];
+          if (Number.isFinite(w)) this.colWidths[c] = clamp(Math.round(w), 40, 800);
+        }
+      }
+      if (cached && !this.autoWidth) this.colWidths = cached.slice();
     }
     this.render();
 
@@ -175,7 +203,13 @@ class SheetGrid {
     return this.node?.rows[r]?.[c] ?? "";
   }
 
+  /** 界面显示值（引用列可能显示名字）；存储/复制/编辑一律用 cellText。 */
+  displayCellText(r, c) {
+    return this.node?.displayRows?.[r]?.[c] ?? this.cellText(r, c);
+  }
+
   setCellText(r, c, text) {
+    if (this.locked) return false;
     if (!this.node || this.node.kinds[c] === "readonly") return false;
     if (this.cellText(r, c) === text) return false;
     this.node.rows[r][c] = text;
@@ -276,6 +310,8 @@ class SheetGrid {
       const miss = q("[data-ref-missing]");
       miss.hidden = !data.target_missing;
       miss.textContent = data.target_missing ? `引用的配置项「${target}」不存在` : "";
+      q("[data-ref-ok]").disabled = !!data.target_missing;
+      manualEl.disabled = !!data.target_missing;
     };
     const renderHead = () => {
       const desc = data.has_desc
@@ -471,6 +507,11 @@ class SheetGrid {
     return (this.node?.kinds[c] || "text") === "readonly";
   }
 
+  /** 该列是否只能通过选择器改（引用 / 类型 / 导出），公式栏必须只读。 */
+  isPickerCol(c) {
+    return ["ref", "type", "export"].includes(this.node?.kinds[c] || "");
+  }
+
   isNumericCol(c) {
     const typeRow = this.node?.headers?.find((h) => h.length && /^(int|long|float|double)$/.test(h[c]));
     return !!typeRow;
@@ -587,7 +628,7 @@ class SheetGrid {
   }
 
   paintCell(td, r, c) {
-    const text = this.cellText(r, c);
+    const text = this.displayCellText(r, c);
     const kind = this.node.kinds[c] || "text";
     const arrow = ["ref", "export", "type"].includes(kind) && text !== "";
     td.innerHTML = "";
@@ -608,9 +649,20 @@ class SheetGrid {
   }
 
   cacheWidths() {
-    if (this.nodeKey && this.colWidths.length) {
-      this.widthsByKey.set(this.nodeKey, this.colWidths.slice());
+    if (!this.nodeKey || !this.colWidths.length) return;
+    this.widthsByKey.set(this.nodeKey, this.colWidths.slice());
+    this.emitViewChange();
+  }
+
+  /** 当前列宽（列名 → px）交给 main.js 持久化到 `.data/user-data.json`。 */
+  emitViewChange() {
+    if (!this.node) return;
+    const names = this.node.headers?.[this.node.headers.length - 1] || [];
+    const widths = {};
+    for (let c = 0; c < this.cols; c++) {
+      if (names[c]) widths[names[c]] = this.colWidths[c];
     }
+    this.onViewChange({ auto: this.autoWidth, widths });
   }
 
   autoFitAll(silent) {
@@ -631,15 +683,24 @@ class SheetGrid {
   setAutoWidth(on) {
     this.autoWidth = on;
     if (on) this.autoFitAll(true);
-    else this.cacheWidths();
+    // 自动模式下也把当前手动宽度一起存下去（取消勾选时可恢复）。
+    this.cacheWidths();
   }
 
   // ── 选择 ────────────────────────────────────────────────
   bounds() {
     if (this.kind === "none" || !this.node) return null;
     if (this.kind === "all") return { r0: 0, r1: this.rows - 1, c0: 0, c1: this.cols - 1 };
-    if (this.kind === "row") return { r0: this.focus.r, r1: this.focus.r, c0: 0, c1: this.cols - 1 };
-    if (this.kind === "col") return { r0: 0, r1: this.rows - 1, c0: this.focus.c, c1: this.focus.c };
+    if (this.kind === "row") {
+      const r0 = Math.min(this.anchor.r, this.focus.r);
+      const r1 = Math.max(this.anchor.r, this.focus.r);
+      return { r0, r1, c0: 0, c1: this.cols - 1 };
+    }
+    if (this.kind === "col") {
+      const c0 = Math.min(this.anchor.c, this.focus.c);
+      const c1 = Math.max(this.anchor.c, this.focus.c);
+      return { r0: 0, r1: this.rows - 1, c0, c1 };
+    }
     return {
       r0: Math.min(this.anchor.r, this.focus.r),
       r1: Math.max(this.anchor.r, this.focus.r),
@@ -674,11 +735,25 @@ class SheetGrid {
     this.notify();
   }
 
+  extendRowTo(r) {
+    if (!this.node || this.kind !== "row") return;
+    this.focus = { r: clamp(r, 0, this.rows - 1), c: this.focus.c };
+    this.applySelection();
+    this.notify();
+  }
+
   selectCol(c) {
     if (!this.node) return;
     this.kind = "col";
     this.focus = { r: this.focus.r, c: clamp(c, 0, this.cols - 1) };
     this.anchor = { ...this.focus };
+    this.applySelection();
+    this.notify();
+  }
+
+  extendColTo(c) {
+    if (!this.node || this.kind !== "col") return;
+    this.focus = { r: this.focus.r, c: clamp(c, 0, this.cols - 1) };
     this.applySelection();
     this.notify();
   }
@@ -772,9 +847,11 @@ class SheetGrid {
       kind: this.kind,
       info: this.selectionInfo(),
       coord: this.kind === "none" ? "" : `${colLetter(this.focus.c)}${this.focus.r + 1}`,
-      value: this.kind === "cell" || this.kind === "range" ? this.cellText(this.focus.r, this.focus.c) : "",
+      value: this.kind === "cell" ? this.cellText(this.focus.r, this.focus.c) : "",
       editable:
-        (this.kind === "cell" || this.kind === "range") && !this.isReadonlyCol(this.focus.c),
+        this.kind === "cell" &&
+        !this.isReadonlyCol(this.focus.c) &&
+        !this.isPickerCol(this.focus.c),
       hover: this.hover ? `${colLetter(this.hover.c)}${this.hover.r + 1}` : "",
     });
   }
@@ -805,6 +882,7 @@ class SheetGrid {
 
   // ── 编辑 ────────────────────────────────────────────────
   beginCellEdit(r, c, initial) {
+    if (this.locked) return;
     if (!this.node || this.isReadonlyCol(c)) return;
     const kind = this.node.kinds[c] || "text";
     // 引用列：单值用选择器；List<@X>/Set<@X> 用多选。
@@ -841,6 +919,7 @@ class SheetGrid {
   }
 
   beginHeaderEdit(hi, ci, initial) {
+    if (this.locked) return;
     if (!this.node || !this.node.editableHeaders) return;
     const kind = this.node.headerKinds?.[hi]?.[ci] || "text";
     if (kind === "readonly") return;
@@ -910,7 +989,10 @@ class SheetGrid {
         this.commitEdit(true, "right");
       }
     });
-    input.addEventListener("blur", () => this.commitEdit(true));
+    input.addEventListener("blur", () => {
+      if (this.autoCommitOnBlur) this.commitEdit(true);
+      else this.cancelEdit();
+    });
   }
 
   commitEdit(save, move) {
@@ -1041,11 +1123,13 @@ class SheetGrid {
       }
       const rownum = e.target.closest("th[data-row]");
       if (rownum) {
+        this.dragAxis = "row";
         this.selectRow(+rownum.dataset.row);
         return;
       }
       const colhead = e.target.closest("th[data-col]");
       if (colhead) {
+        this.dragAxis = "col";
         this.selectCol(+colhead.dataset.col);
         return;
       }
@@ -1072,6 +1156,17 @@ class SheetGrid {
     });
 
     document.addEventListener("pointermove", (e) => {
+      if (this.dragAxis) {
+        const el = document.elementFromPoint(e.clientX, e.clientY);
+        if (this.dragAxis === "row") {
+          const th = el?.closest?.("th[data-row]");
+          if (th) this.extendRowTo(+th.dataset.row);
+        } else {
+          const th = el?.closest?.("th[data-col]");
+          if (th) this.extendColTo(+th.dataset.col);
+        }
+        return;
+      }
       if (this.dragging) {
         this._dragPoint = { x: e.clientX, y: e.clientY };
         this.dragToPoint(e.clientX, e.clientY);
@@ -1090,6 +1185,7 @@ class SheetGrid {
 
     document.addEventListener("pointerup", () => {
       this.dragging = false;
+      this.dragAxis = null;
       cancelAnimationFrame(this._raf);
       this._raf = 0;
     });

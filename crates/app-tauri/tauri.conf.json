@@ -3,7 +3,8 @@
   "productName": "tablet-tauri",
   "identifier": "com.juebanlin.tablet.tauri",
   "build": {
-    "frontendDist": "ui"
+    "frontendDist": "ui",
+    "beforeBuildCommand": "npm --prefix univer-editor ci && npm --prefix univer-editor run build"
   },
   "app": {
     "withGlobalTauri": true,

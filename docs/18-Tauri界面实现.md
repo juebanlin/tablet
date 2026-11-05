@@ -3,6 +3,8 @@
 > **状态：进行中（2026-11）。** 本文记录 Tauri 版 GUI 的实现约定与当前进度。
 > 双 GUI 布局 / 打包 / 崩溃日志见 @17；界面需求与交互语义见 @04。
 > **核心约定：从 Slint 版反推「用户需要什么」，再用 Tauri/Web 的方式实现；不照抄 Slint 的实现机制。**
+> **分层约定：core ← GUI / CLI 平级。GUI 业务（表格、Excel、Schema、导出、规则）直接调 core，
+> 不调 `tablet-cli` 的 action 层；`tablet-cli` 只负责 CLI 参数解析与命令执行，GUI 仅在 CLI 模式下转发给它。**
 
 ## 1. 为什么不能照抄 Slint
 
@@ -80,7 +82,11 @@ Slint 和 Web 是两套完全不同的 UI 机制。Slint 源码里大量写法�
 - **全局设置**：界面（表头/数据选择器单击·双击、失焦提交、实时校验、项目列表显示 ID、Constant 允许 @Xxx）、日志级别、默认分隔符（25 项）；写入 `tablet.toml`
 - **导出执行**：JSON/XML + Java/Go/C++/C#(.NET·Unity·Godot)/Lua/GDScript/TS(客户端·服务端) 勾选导出，输出路径取项目导出配置
 - **Schema 导入导出**：导出整项目 / 按分组·节点过滤 / 可选预设；导入 `.tblschema` 并合并（新增 / 覆盖统计）
-- **Excel**：分组导出 `.xlsx`、导入回写、`.excel/` 文件列表与打开目录、「用 Excel 打开」、任意 Excel 映射导入（sheet / 表头行 / 数据起始行 / 自动字段建议）
+- **Excel**：分组导出 `.xlsx`、导入回写、`.excel/` 文件列表与打开目录、「用 Excel 打开」、任意 Excel 映射导入（sheet / 表头行 / 数据起始行 / 自动字段建议）；快速编辑会话可「结束」（自动回写内存）或「放弃改动」；xlsx 组每 2s 检测外部修改，干净时自动重载，本地有脏改动时提示并跳过。
+- **视图偏好**：列宽 / 自动列宽按 (project, group, kind, node) 持久化到 `.data/user-data.json`，与项目 dirty 无关；项目排序方式写入 `tablet.toml`，跨启动保留。
+- **全局设置生效**：失焦提交、实时校验、项目列表显示元数据 ID 都已接入实际行为；「应用模板」使用全局分隔符 / 导出模板，新建项目继承全局分隔符。
+- **锁与生命周期**：Univer / Excel 编辑中的组在主界面整块置灰；项目级操作（撤销/重做、规则保存、Schema 合并、重新加载、关闭/删除项目、映射导入）在后端也会拒绝；关闭有脏改动的项目 / 主窗口会先确认。
+- **Univer 编辑（Tauri 专属）**：网格 Ribbon「Univer 编辑」为当前组打开独立窗口；**一个窗口 = 一个 Group 工作簿**（sheet = 该组 Table/Constant/Enum），可同时打开多个窗口并排查看 / 比对；sheet 切换条自绘、只允许切换（不提供增删 / 重命名）。可回写 / 重新加载；回写只进内存，主界面点「保存」才落盘。编辑中的组在主界面整块 GridSection 置灰只读，树上的组操作 / 粘贴 / 新建节点 / 删除重命名也被拦截，避免两边同时改。
 - **问题面板**：校验错误 / 警告列表，点击跳转到对应节点与单元格；重新验证按钮
 - **关于**：版本 / 目标平台 / 工作区 / 版本库；检查更新打开 GitHub
 - **操作 Toast**：保存、导出、导入、校验结果与错误提示
@@ -94,10 +100,10 @@ Slint 和 Web 是两套完全不同的 UI 机制。Slint 源码里大量写法�
 | Toolbar（撤销/重做/保存/重新加载/当前项目+脏标记） | 已对齐；额外增加 验证 / 导出 / 设置 / 关于 |
 | TreeSection（标题 / 新建+排序 / 搜索+过滤+完整组 / 节点列表） | 已对齐；搜索支持拼音首字母；排序下拉已接通 |
 | GridHeaderBar（标题、行列数、自动列宽） | 已对齐 |
-| GridRibbon（还原 / Excel / 校验规则 / 显示引用名称 / 被引用展示列） | 已对齐 |
+| GridRibbon（还原 / Excel / 校验规则 / 显示引用名称 / 被引用展示列） | 已对齐；额外增加「Univer 编辑」 |
 | FormulaBar（折叠单行 / 展开多行 / 只读标记） | 已对齐（textarea 多行，只读显示「只读」） |
 | GridArea（选择、框选、键盘、编辑、表头类型·导出下拉、引用选择器、列宽、右键） | 已对齐；单值 / 列表引用都有选择器；类型走「选择类型」对话框，export 是自绘下拉 |
-| StatusBar（选区 / 光标 / Excel 会话 / 单元格错误原因） | 已对齐：单格有校验问题时追加 `⚠ 原因`（即时重算，不受实时校验开关影响） |
+| StatusBar（选区 / 光标 / Excel·Univer 会话 / 单元格错误原因） | 已对齐：单格有校验问题时追加 `⚠ 原因`（即时重算，不受实时校验开关影响）；Univer 编辑中的组显示只读提示 |
 | BottomPanel 日志 | 已对齐（级别过滤、清空、最新在上） |
 | BottomPanel Excel 文件 | 已对齐：卡片网格 104×68、单选 / Ctrl 多选、双击打开；工具条 同步 / 刷新 / 删除 / 打开 / 打开目录 |
 | 右键菜单（项目 / 组 / 节点 / 表格） | 已按 Slint 项集复刻：新建 Table v3/v2、导入 .tbl / Excel Group、另存为模板、合并 Schema、粘贴 v2/v3、粘贴 Group（tbl/xlsx）、打开目录、重新加载；**不可用项直接隐藏**（与 Slint 版一致） |
@@ -108,11 +114,12 @@ Slint 和 Web 是两套完全不同的 UI 机制。Slint 源码里大量写法�
 | 全局设置（UI / 分隔符模板 / 导出模板） | 已对齐：编辑缓冲 + 每字段 ↺ + 「使用默认值」重置当前 tab；导出模板 29 个叶子与项目设置共用同一套控件 |
 | 导出（数据 + 多语言代码） | 已对齐 |
 | Schema 导入 / 导出 | 已对齐：metadata（ID/名称/分类/版本）+ 组/节点三态勾选 + 预设开关；导入先读预览并标 `⚠ 已存在(将覆盖) / ✓ 新增`；「另存为模板」走同一对话框 |
-| 任意 Excel 映射导入 | 基础对齐（sheet / 表头行 / 数据起始行 / 字段建议） |
+| 任意 Excel 映射导入 | 已补到「原表预览 + 可编辑字段映射（目标名 / 源列 / 类型 / 导出 / 说明，可增删）+ 最终 4 行表头预览 + Sheet 切换 + 导入全部 Sheet」；每个 Sheet 只能共用当前映射（Slint 是逐 Sheet 独立映射） |
 | 引用选择器 | 已对齐 Slint 版：id + 辅助列的表格（表头两行：说明 + 字段名）；表可切「智能 / 全部」列展示（默认取全局 `[ui.ref_picker]`）；当前值可直接输入；搜索 id / 任意列；单值单击选中、双击或「确定」提交，列表引用多选；「清空 / 取消 / 确定」 |
 | 类型选择器 | 已对齐：独立对话框（数据类型 / 引用类型双 tab）；范式列表 + 参数槽 + `结果 / 示例 / Java / Go / Lua` 预览；constant 按全局开关禁用引用 tab |
 | 规则编辑器 | 已按 rule-builder-v2 / Slint 版重做：规则卡片树，**每一行就是一个函数**（验证器函数或条件函数 eq/ne/in/match…），行尾 and·or；`＋行` 新增函数行、`＋组` 新增组；底部 inspector 统一「更换函数 + 参数 + 说明/示例」。条件行与同组验证器由保存时编译成 `when(条件, 验证器)`（与 Slint 相同，树里不出现 when 节点） |
-| Excel 实时编辑 | 已实现（与 Slint 同一模型）：每次拉起导出**独立副本** `.tbl-cache/<组>-<毫秒>.xlsx` → 用 Excel 打开 → 2s 轮询 mtime → 自动导入回内存；重拉不受 Excel 对上一份副本的文件锁影响；状态栏显示编辑中，右键可「结束 Excel 编辑」；会话结束删副本，启动时兜底清理残留 |
+| Excel 实时编辑 | 已实现（与 Slint 同一模型）：每次拉起导出**独立副本** `.tbl-cache/<组>-<毫秒>.xlsx` → 用 Excel 打开 → 2s 轮询 mtime → 自动导入回内存（**只改内存，不落盘**）；重拉不受 Excel 对上一份副本的文件锁影响；状态栏显示编辑中，右键可「结束 Excel 编辑」或「放弃 Excel 改动」；会话结束删副本，启动时兜底清理残留 |
+| Xlsx 组外部修改 | 已对齐 Slint：2s 轮询工作簿 stamp；干净组自动重载，脏组提示一次并跳过；Univer / Excel 会话中的组不自动重载 |
 | Excel 同步面板 | 已实现：读取 `core::excel_sync::plan_group`，逐 (组, 节点) 显示两侧行列数 / desc 差异 / 表头越权提示 / 可用操作（数据→、补列→、强制→、←数据、创建→、←导入）；点按钮前 core 会重算计划，过期操作直接拒绝 |
 | 粘贴 Group（冲突命名） | 已对齐：先只读预览，有重名才弹「粘贴 Group」对话框，组名 + 每个子项可改（预填 `_copy`）；无冲突直接粘贴 |
 | 克隆 / 关闭 / 删除项目 | 已对齐 |
@@ -123,13 +130,24 @@ Slint 和 Web 是两套完全不同的 UI 机制。Slint 源码里大量写法�
 
 - **行颜色标记**：`core` 不把 `#@color` 解析进数据模型（Slint 版同样渲染为透明），没有数据来源可展示；不属于 Tauri 版与 Slint 版的差异。
 - **Excel 实时编辑的实现方式**：用 mtime 轮询（2s）而不是 Windows 文件句柄监控；Excel 保存后最多 2 秒回写。Excel 未保存时不会读到半成品。临时副本写在 `.tbl-cache/`（不出现在 `.excel/` 文件列表与同步面板里）；结束会话时删除，Excel 仍持锁导致删不掉时留到下次启动清理，不影响再次拉起（每次都是新文件名）。
-- **项目排序**：「创建时间」在 UI 树数据里没有字段，退回按名称；排序状态是会话内状态。
+- **项目排序**：「创建时间」在 UI 树数据里没有字段，退回按名称；排序方式已持久化到 `tablet.toml`，但「手动」与 Slint 一样没有拖拽重排入口。
+- **Univer 编辑**：只用 Apache-2.0 的 `@univerjs/presets` / `preset-sheets-core`，xlsx 依赖通过 SheetJS + 现有 xlsx 桥接往返，不接 Univer Pro；样式 / 批注 / 合并等布局不持久化。一个窗口只放一个 Group（多开窗口 = 多组并排比对）；Univer 自带 sheet bar 关闭，窗口顶部的 sheet 条只允许切换，不提供增删 / 重命名。表头与 sheet 名由 `import_xlsx_into_group` 严格校验，改坏会整次拒绝。回写前比对 Group 指纹，主界面若已改过同组会要求重新加载。
+- **Univer 前端资源**：首次引入 Node/Vite 工具链，产物 `ui/univer/` 不提交；`tauri build` 由 `beforeBuildCommand` 自动构建，日常 `cargo build` 前需手动执行
+  `cd crates/app-tauri/univer-editor && npm ci && npm run build`（未构建时按钮会提示）。
 
 ## 5. 开发 / 调试 / AI 驱动
 
 Tauri 版把 WebView2 的 CDP 端口作为一等调试入口。相比 Slint 版只能靠 `PrintWindow` 截屏 + `PostMessage` 点击，这套能力可以直接读页面状态、模拟操作、截屏，适合 AI 驱动回归。
 
 ### 5.1 启动
+
+首次运行前先构建 Univer 编辑器资源（产物在 `ui/univer/`，编译期内嵌）：
+
+```bash
+cd crates/app-tauri/univer-editor
+npm ci
+npm run build
+```
 
 ```powershell
 powershell -File crates/app-tauri/scripts/start-debug.ps1 -Workdir <工作区>
@@ -174,8 +192,11 @@ node crates/app-tauri/scripts/dev.mjs eval "<js 表达式>"          # 任意页
 - `verify-ui-polish.mjs`：新建项目来源切换复位 / 多列横向滚动与列字母 / 拖选半透明样式
 - `verify-ref-picker.mjs`：枚举 / 表引用的表格展示（智能·全部列）/ 搜索 / 单击双击提交 / 列表多选
 - `verify-excel-sync.mjs`：Excel 会话建立 / mtime 轮询 / 自动回写 / 结束会话
+- `verify-univer.mjs`：Univer 窗口打开 / 每组一个窗口 / 编辑回写内存 / 主界面置灰只读 / 保存落盘（需先构建 `ui/univer/`；用 `WORKDIR=<工作区绝对路径>` 指明测试工作区）
+- `verify-audit.mjs`：列宽持久化 / 显示值与原值分离 / 保存失败提示 / 全局设置生效 / 导出预设（需 `WORKDIR` 与含 `hero/HeroBase` 的 full fixture）
 
 每个脚本都会改动工作区数据（编辑单元格、导入节点等），**请各自使用独立的新工作区**，不要在同一个工作区连续跑多个脚本。
 `verify-rules.mjs` / `verify-io.mjs` 需要带 `hero/HeroBase`、`building/Building` 的工作区，用 `crates/app-tauri/scripts/fixtures/demo.tblschema` 建：`tablet-cli -w <dir> project new --from-file .../demo.tblschema --id demo`。
+`verify-global-export.mjs` / `verify-ui-polish.mjs` / `verify-audit.mjs` 依赖 `hero/Hero`、`global/GameConst` 等节点，用 `crates/app-tauri/scripts/fixtures/full.tblschema` 建工作区。
 
 截图默认写入 `target/tauri-shots/`。浏览器里也可以直接打开 `ui/index.html` 调版式，但此时没有 Rust 侧数据。

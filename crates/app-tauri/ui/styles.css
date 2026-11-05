@@ -256,6 +256,7 @@ button { cursor: default; }
   display: flex;
   flex-direction: column;
   background: var(--surface);
+  position: relative;
 }
 
 .grid-header {
@@ -333,6 +334,35 @@ button { cursor: default; }
 .grid-empty { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; font-size: var(--fs-md); color: var(--disabled); }
 .grid-scroll { position: absolute; inset: 0; overflow: auto; }
 .grid-scroll:focus { outline: none; }
+/* Univer 窗口正在编辑该组：整块 GridSection 置灰并拦截交互。 */
+.grid-lock-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 12;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: color-mix(in srgb, var(--surface) 55%, #8a8a8a 45%);
+  backdrop-filter: grayscale(1);
+  cursor: not-allowed;
+}
+.grid-lock-overlay[hidden] { display: none; }
+.grid-lock-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 16px 22px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  box-shadow: 0 6px 24px #00000026;
+  cursor: default;
+  text-align: center;
+}
+.grid-lock-title { font-size: var(--fs-md); font-weight: 600; }
+.grid-lock-sub { font-size: var(--fs-sm); color: var(--muted); }
+.grid-lock-card .btn { margin-top: 4px; }
 /* WebView2 默认是「覆盖式、自动隐藏」滚动条：列一多，横向滚动条平时看不见，
    容易被当成不支持横向滚动。表格区改成常驻滚动条（Slint 版 ScrollView 也是常驻）。 */
 .grid-scroll::-webkit-scrollbar { width: 12px; height: 12px; }
@@ -1136,7 +1166,7 @@ button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .about-rows .v { flex: 1; word-break: break-all; font-family: var(--font-mono); font-size: var(--fs-xs); }
 
 .em-fields {
-  max-height: 220px;
+  max-height: 260px;
   overflow: auto;
   border: 1px solid var(--border);
   border-radius: var(--radius);
@@ -1144,8 +1174,18 @@ button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
   margin-bottom: 8px;
   font-size: var(--fs-xs);
 }
-.em-field { display: flex; gap: 10px; padding: 2px 0; font-family: var(--font-mono); color: var(--text-2); }
-.em-field .col { width: 64px; flex: none; color: var(--muted); }
+.em-field { display: flex; gap: 6px; align-items: center; padding: 2px 0; color: var(--text-2); }
+.em-field .col { width: 28px; flex: none; color: var(--muted); text-align: right; }
+.em-field input, .em-field select { min-width: 0; }
+.em-field .em-name { width: 120px; }
+.em-field .em-desc { flex: 1; min-width: 80px; }
+.em-field .em-type { width: 108px; }
+.em-field .em-export { width: 74px; }
+.em-field .em-src { width: 120px; }
+.em-preview { max-height: 150px; overflow: auto; border: 1px solid var(--border); border-radius: var(--radius); margin-bottom: 8px; }
+.em-preview table { border-collapse: collapse; font-size: var(--fs-xs); white-space: nowrap; }
+.em-preview th, .em-preview td { border-bottom: 1px solid var(--border); border-right: 1px solid var(--border); padding: 2px 6px; text-align: left; }
+.em-preview th { position: sticky; top: 0; background: var(--surface-2); }
 
 /* ── 引用选择器（id + 辅助列的表格）────────────────────────── */
 .ref-popup {

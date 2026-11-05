@@ -1,0 +1,151 @@
+:root {
+  --bg: #f6f7f9;
+  --surface: #ffffff;
+  --border: #d9dde3;
+  --text: #1f2328;
+  --muted: #6b7280;
+  --accent: #2f6fed;
+  --accent-soft: #e8f0fe;
+  --danger: #c62828;
+  --warning: #8a5300;
+  --warning-soft: #fff4d6;
+  --row: 28px;
+  font-family: "Segoe UI Variable Text", "Segoe UI", "Microsoft YaHei UI",
+    "Microsoft YaHei", "PingFang SC", "Noto Sans CJK SC", system-ui, sans-serif;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #1b1e23;
+    --surface: #23272e;
+    --border: #3a4048;
+    --text: #e6e8eb;
+    --muted: #9aa3ad;
+    --accent: #6b9bff;
+    --accent-soft: #26344d;
+    --danger: #ff8a80;
+    --warning: #ffd58a;
+    --warning-soft: #3a2f1b;
+  }
+}
+
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; }
+body { background: var(--bg); color: var(--text); font-size: 13px; }
+
+.app { height: 100%; display: flex; flex-direction: column; }
+
+.bar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 8px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  min-height: 38px;
+}
+
+.title {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 600;
+  overflow: hidden;
+}
+.title .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.title .dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--accent);
+  flex: none;
+}
+
+.actions { flex: none; display: flex; gap: 6px; }
+
+/* 自绘 sheet 标签：Univer 自带 sheet bar 关掉，只允许切换，不允许增删/重命名。 */
+.sheet-tabs {
+  flex: none;
+  display: flex;
+  gap: 2px;
+  overflow-x: auto;
+  padding: 0 8px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+}
+.sheet-tabs:empty { display: none; }
+.sheet-tab {
+  flex: none;
+  padding: 4px 12px;
+  border: 1px solid transparent;
+  border-bottom: none;
+  border-radius: 4px 4px 0 0;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  font: inherit;
+}
+.sheet-tab:hover { background: var(--accent-soft); color: var(--text); }
+.sheet-tab.active {
+  background: var(--bg);
+  border-color: var(--border);
+  color: var(--text);
+  font-weight: 600;
+}
+.btn {
+  font: inherit;
+  padding: 4px 10px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--surface);
+  color: var(--text);
+  cursor: pointer;
+}
+.btn:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+.btn:disabled { color: var(--muted); opacity: 0.55; cursor: default; }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+.btn.primary:hover:not(:disabled) { color: #fff; filter: brightness(1.06); }
+
+.hint {
+  flex: none;
+  min-height: 0;
+  padding: 0 10px;
+  color: var(--warning);
+  background: var(--warning-soft);
+  font-size: 12px;
+  line-height: 22px;
+}
+.hint:empty { display: none; }
+
+.editor { flex: 1; min-height: 0; position: relative; background: var(--surface); }
+
+.empty {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--muted);
+  background: var(--bg);
+  pointer-events: none;
+}
+.empty[hidden] { display: none; }
+
+.toast {
+  position: fixed;
+  left: 50%;
+  bottom: 24px;
+  transform: translateX(-50%);
+  max-width: 70vw;
+  padding: 7px 14px;
+  border-radius: 6px;
+  color: #fff;
+  background: #1f2328dd;
+  box-shadow: 0 4px 14px #0000002a;
+  z-index: 20;
+  white-space: pre-wrap;
+}
+.toast.error { background: #b3261edd; }

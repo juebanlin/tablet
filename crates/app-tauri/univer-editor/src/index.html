@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Univer 编辑</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <div class="app">
+      <header class="bar">
+        <div class="title">
+          <span class="dot" id="dirty-dot" hidden></span>
+          <span class="name" id="sheet-name">Univer 编辑</span>
+        </div>
+        <div class="actions">
+          <button class="btn primary" id="btn-apply" disabled>回写</button>
+          <button class="btn" id="btn-reload" disabled>重新加载</button>
+          <button class="btn" id="btn-close">关闭窗口</button>
+        </div>
+      </header>
+      <div class="sheet-tabs" id="sheet-tabs"></div>
+      <div class="hint" id="hint"></div>
+      <div class="editor" id="univer-container"></div>
+      <div class="empty" id="empty">正在加载…</div>
+      <div class="toast" id="toast" hidden></div>
+    </div>
+    <script type="module" src="./main.js"></script>
+  </body>
+</html>

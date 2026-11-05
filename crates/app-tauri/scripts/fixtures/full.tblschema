@@ -1,0 +1,68 @@
+#!tblschema v1
+# @meta id: demo
+# @meta name: 演示项目
+
+[hero/HeroType] enum
+# @display: name
+# @preset
+1 | WARRIOR | 战士
+2 | MAGE    | 法师
+3 | ARCHER  | 弓手
+
+[hero/HeroBase] table
+id   | int       | cs | 英雄ID
+name | str       | cs | 名字
+kind | @HeroType | cs | 职业
+hp   | int       | s  | 血量
+atk  | int       | s  | 攻击
+# @preset
+1001 | 亚瑟 | 1 | 1200 | 80
+1002 | 梅林 | 2 | 700  | 120
+
+[hero/Hero] table
+id     | int | cs | 英雄ID
+name   | str | cs | 名字
+hp     | int | s  | 血量
+atk    | int | s  | 攻击
+def    | int | s  | 防御
+crit   | int | s  | 暴击
+speed  | int | s  | 速度
+rarity | int | cs | 稀有度
+f1     | int | cs | 附加1
+f2     | int | cs | 附加2
+f3     | int | cs | 附加3
+f4     | int | cs | 附加4
+# @preset
+2001 | 测试英雄 | 100 | 10 | 5 | 3 | 20 | 1 | 1 | 2 | 3 | 4
+
+[global/GameConst] constant
+# @preset
+max_level | int | 100 | cs | 等级上限
+min_level | int | 1   | cs | 最低等级
+
+[enums/BuildingType] enum
+# @display: desc
+# @preset
+1 | RESOURCE | 资源
+2 | MILITARY | 军事
+3 | SPECIAL  | 特殊
+
+[building/Building] table
+id   | int           | cs | 建筑ID
+name | str           | cs | 名称
+kind | @BuildingType | cs | 类型
+cost | int           | s  | 造价
+# @preset
+1 | 主城 | 1 | 1000
+2 | 兵营 | 2 | 500
+3 | 哨塔 | 3 | 300
+
+[item/Equip] table
+id    | int          | cs | 装备ID
+name  | str          | cs | 名称
+price | int          | s  | 价格
+bonus | Map<str,int> | s  | 属性加成
+# @preset
+2001 | 铁剑 | 100 | atk:10
+2002 | 皮甲 | 80  | def:5
+2003 | 项链 | 60  | hp:3

@@ -11,13 +11,16 @@ mod shell;
 
 use std::sync::Mutex;
 
+use tauri::{Emitter, Manager};
+
 use backend::{
     Backend, CreateProjectRequest, ExcelMapRequest, ExcelPollItem, ExcelPreview, ExportFormatsUi,
     CellIssue, ExcelSyncRowUi, ExportReport, ExportUi, GlobalSettingsUi, PasteGroupPreviewUi,
     PasteGroupRowUi,
     ProjectSettings, RefPickerData, RuleItem, RulesPayload,
     SchemaImportPreview, SchemaOutlineGroup, SchemaPreview, SepInput, Snapshot, TemplateItem,
-    TypePickerInfo, TypePreview, ValidateUi,
+    TypePickerInfo, TypePreview, UniverApplyResult, UniverGroupPayload, UniverOpenRequest,
+    ValidateUi,
 };
 
 struct AppState {
@@ -54,6 +57,7 @@ fn commit_cell(
     value: String,
 ) -> Result<Snapshot, String> {
     let mut b = lock(&state)?;
+    b.ensure_unlocked()?;
     b.commit_cell(row, col, value);
     Ok(b.snapshot())
 }
@@ -66,6 +70,7 @@ fn commit_header(
     value: String,
 ) -> Result<Snapshot, String> {
     let mut b = lock(&state)?;
+    b.ensure_unlocked()?;
     b.commit_header(header_row, col, value);
     Ok(b.snapshot())
 }
@@ -76,6 +81,7 @@ fn clear_cells(
     cells: Vec<(usize, usize)>,
 ) -> Result<Snapshot, String> {
     let mut b = lock(&state)?;
+    b.ensure_unlocked()?;
     b.clear_cells(cells);
     Ok(b.snapshot())
 }
@@ -88,6 +94,7 @@ fn paste_cells(
     cells: Vec<Vec<String>>,
 ) -> Result<Snapshot, String> {
     let mut b = lock(&state)?;
+    b.ensure_unlocked()?;
     b.paste_cells(row, col, cells);
     Ok(b.snapshot())
 }
@@ -95,6 +102,7 @@ fn paste_cells(
 #[tauri::command]
 fn insert_row(state: tauri::State<'_, AppState>, at: usize) -> Result<Snapshot, String> {
     let mut b = lock(&state)?;
+    b.ensure_unlocked()?;
     b.insert_row(at);
     Ok(b.snapshot())
 }
@@ -106,6 +114,7 @@ fn delete_rows(
     end: usize,
 ) -> Result<Snapshot, String> {
     let mut b = lock(&state)?;
+    b.ensure_unlocked()?;
     b.delete_rows(start, end);
     Ok(b.snapshot())
 }
@@ -113,6 +122,7 @@ fn delete_rows(
 #[tauri::command]
 fn insert_column(state: tauri::State<'_, AppState>, at: usize) -> Result<Snapshot, String> {
     let mut b = lock(&state)?;
+    b.ensure_unlocked()?;
     b.insert_column(at);
     Ok(b.snapshot())
 }
@@ -120,6 +130,7 @@ fn insert_column(state: tauri::State<'_, AppState>, at: usize) -> Result<Snapsho
 #[tauri::command]
 fn delete_column(state: tauri::State<'_, AppState>, at: usize) -> Result<Snapshot, String> {
     let mut b = lock(&state)?;
+    b.ensure_unlocked()?;
     b.delete_column(at);
     Ok(b.snapshot())
 }
@@ -147,6 +158,7 @@ fn new_node(
     fmt: Option<String>,
 ) -> Result<Snapshot, String> {
     let mut b = lock(&state)?;
+    b.ensure_group_unlocked(&project, &group)?;
     b.new_node(&project, &group, &kind, name, fmt);
     Ok(b.snapshot())
 }
@@ -159,6 +171,7 @@ fn rename_group(
     new_name: String,
 ) -> Result<Snapshot, String> {
     let mut b = lock(&state)?;
+    b.ensure_group_unlocked(&project, &old_name)?;
     b.rename_group(&project, old_name, new_name);
     Ok(b.snapshot())
 }
@@ -172,6 +185,7 @@ fn rename_node(
     new_name: String,
 ) -> Result<Snapshot, String> {
     let mut b = lock(&state)?;
+    b.ensure_group_unlocked(&project, &group)?;
     b.rename_node(&project, &group, old_name, new_name);
     Ok(b.snapshot())
 }
@@ -183,6 +197,7 @@ fn delete_group(
     group: String,
 ) -> Result<Snapshot, String> {
     let mut b = lock(&state)?;
+    b.ensure_group_unlocked(&project, &group)?;
     b.delete_group(&project, &group);
     Ok(b.snapshot())
 }
@@ -195,6 +210,7 @@ fn delete_node(
     name: String,
 ) -> Result<Snapshot, String> {
     let mut b = lock(&state)?;
+    b.ensure_group_unlocked(&project, &group)?;
     b.delete_node(&project, &group, &name);
     Ok(b.snapshot())
 }
@@ -231,6 +247,7 @@ fn paste_node(
     fmt: Option<String>,
 ) -> Result<Snapshot, String> {
     let mut b = lock(&state)?;
+    b.ensure_group_unlocked(&project, &group)?;
     b.paste_node(&project, &group, fmt);
     Ok(b.snapshot())
 }
@@ -243,6 +260,7 @@ fn revert_node(
     name: String,
 ) -> Result<Snapshot, String> {
     let mut b = lock(&state)?;
+    b.ensure_group_unlocked(&project, &group)?;
     b.revert_node(&project, &group, &name);
     Ok(b.snapshot())
 }
@@ -368,6 +386,7 @@ fn rules_save(
     rules: Vec<RuleItem>,
 ) -> Result<Snapshot, String> {
     let mut b = lock(&state)?;
+    b.ensure_group_unlocked(&project, &group)?;
     b.rules_save(&project, &group, &name, rules)?;
     Ok(b.snapshot())
 }
@@ -386,7 +405,46 @@ fn set_display_field(
     field: Option<String>,
 ) -> Result<Snapshot, String> {
     let mut b = lock(&state)?;
+    b.ensure_unlocked()?;
     b.set_display_field_selected(field);
+    Ok(b.snapshot())
+}
+
+#[tauri::command]
+fn save_grid_view(
+    state: tauri::State<'_, AppState>,
+    project: String,
+    group: String,
+    kind: String,
+    name: String,
+    auto: bool,
+    widths: std::collections::BTreeMap<String, f32>,
+) -> Result<(), String> {
+    lock(&state)?.save_grid_view(&project, &group, &kind, &name, auto, widths)
+}
+
+#[tauri::command]
+fn xlsx_poll(
+    state: tauri::State<'_, AppState>,
+) -> Result<Vec<backend::XlsxExternalChangeUi>, String> {
+    Ok(lock(&state)?.xlsx_poll())
+}
+
+#[tauri::command]
+fn reload_xlsx_external(
+    state: tauri::State<'_, AppState>,
+    project: String,
+    group: String,
+) -> Result<Snapshot, String> {
+    let mut b = lock(&state)?;
+    b.reload_xlsx_external(&project, &group)?;
+    Ok(b.snapshot())
+}
+
+#[tauri::command]
+fn set_project_sort(state: tauri::State<'_, AppState>, sort: String) -> Result<Snapshot, String> {
+    let mut b = lock(&state)?;
+    b.set_project_sort(&sort)?;
     Ok(b.snapshot())
 }
 
@@ -464,6 +522,7 @@ fn schema_import(
     sections: Option<Vec<String>>,
 ) -> Result<Snapshot, String> {
     let mut b = lock(&state)?;
+    b.ensure_active_project_unlocked()?;
     b.schema_import(path, with_preset, sections)?;
     Ok(b.snapshot())
 }
@@ -650,7 +709,9 @@ fn excel_begin_edit(
     group: String,
     open: Option<bool>,
 ) -> Result<String, String> {
-    lock(&state)?.excel_begin_edit(&project, &group, open.unwrap_or(true))
+    let mut b = lock(&state)?;
+    b.ensure_group_unlocked(&project, &group)?;
+    b.excel_begin_edit(&project, &group, open.unwrap_or(true))
 }
 
 #[tauri::command]
@@ -676,8 +737,137 @@ fn excel_end_edit(
     group: String,
 ) -> Result<Snapshot, String> {
     let mut b = lock(&state)?;
-    b.excel_end_edit(&project, &group);
+    b.excel_end_edit(&project, &group)?;
     Ok(b.snapshot())
+}
+
+#[tauri::command]
+fn excel_abandon(
+    state: tauri::State<'_, AppState>,
+    project: String,
+    group: String,
+) -> Result<Snapshot, String> {
+    let mut b = lock(&state)?;
+    b.excel_abandon(&project, &group);
+    Ok(b.snapshot())
+}
+
+#[tauri::command]
+fn open_xlsx_book(
+    state: tauri::State<'_, AppState>,
+    project: String,
+    group: String,
+) -> Result<(), String> {
+    lock(&state)?.open_xlsx_book(&project, &group)
+}
+
+// ── Univer 编辑窗口 ─────────────────────────────────────────
+/// 一个组一个独立窗口（类似 Excel 多开），可并排查看 / 比对多个组。
+#[tauri::command]
+async fn open_univer_editor(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+    project: String,
+    group: String,
+) -> Result<(), String> {
+    if env!("TABLET_UNIVER_ASSETS") != "1" {
+        return Err(
+            "Univer 编辑器资源未构建：cd crates/app-tauri/univer-editor && npm ci && npm run build"
+                .to_string(),
+        );
+    }
+    let label = Backend::univer_window_label(&project, &group);
+    if let Some(w) = app.get_webview_window(&label) {
+        let _ = w.unminimize();
+        let _ = w.show();
+        let _ = w.set_focus();
+        return Ok(());
+    }
+    {
+        let mut b = lock(&state)?;
+        b.prepare_univer_window(&label, &project, &group)?;
+    }
+    let built = tauri::WebviewWindowBuilder::new(
+        &app,
+        label.clone(),
+        tauri::WebviewUrl::App("univer/index.html".into()),
+    )
+    .title(format!("Univer 编辑 — {group}"))
+    .inner_size(1180.0, 760.0)
+    .min_inner_size(860.0, 520.0)
+    .build();
+    let win = match built {
+        Ok(w) => w,
+        Err(e) => {
+            if let Ok(mut b) = lock(&state) {
+                b.release_univer_window(&label);
+            }
+            return Err(format!("打开 Univer 窗口失败: {e}"));
+        }
+    };
+    // 窗口被关掉（含强制关闭）时释放这一组的锁。
+    let handle = app.clone();
+    let window_label = label.clone();
+    win.on_window_event(move |event| {
+        if matches!(event, tauri::WindowEvent::Destroyed) {
+            let state = handle.state::<AppState>();
+            if let Ok(mut b) = state.backend.lock() {
+                b.release_univer_window(&window_label);
+            }
+            let _ = handle.emit_to("main", "tablet://state-changed", ());
+        }
+    });
+    Ok(())
+}
+
+/// 窗口加载时凭自己的 label 取「这个窗口该打开哪个组」。
+#[tauri::command]
+fn univer_initial_context(
+    window: tauri::WebviewWindow,
+    state: tauri::State<'_, AppState>,
+) -> Result<Option<UniverOpenRequest>, String> {
+    let label = window.label().to_string();
+    Ok(lock(&state)?.univer_window_context(&label))
+}
+
+#[tauri::command]
+fn univer_load_group(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+    project: String,
+    group: String,
+) -> Result<UniverGroupPayload, String> {
+    let payload = lock(&state)?.univer_load_group(&project, &group)?;
+    // 组进入 Univer，主界面立刻切成只读并显示提示。
+    let _ = app.emit_to("main", "tablet://state-changed", ());
+    Ok(payload)
+}
+
+#[tauri::command]
+fn univer_apply_group(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+    project: String,
+    group: String,
+    data: String,
+) -> Result<UniverApplyResult, String> {
+    let mut b = lock(&state)?;
+    let result = b.univer_apply_group(&project, &group, &data)?;
+    // 主界面立刻刷新（脏标记 / 表格内容），但这里不落盘。
+    let _ = app.emit_to("main", "tablet://state-changed", ());
+    Ok(result)
+}
+
+#[tauri::command]
+fn univer_close_group(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+    project: String,
+    group: String,
+) -> Result<(), String> {
+    lock(&state)?.univer_close_group(&project, &group);
+    let _ = app.emit_to("main", "tablet://state-changed", ());
+    Ok(())
 }
 
 #[tauri::command]
@@ -688,6 +878,7 @@ fn import_tbl(
     paths: Vec<String>,
 ) -> Result<Snapshot, String> {
     let mut b = lock(&state)?;
+    b.ensure_group_unlocked(&project, &group)?;
     b.import_tbl(&project, &group, paths)?;
     Ok(b.snapshot())
 }
@@ -718,6 +909,7 @@ fn reload_group(
     group: String,
 ) -> Result<Snapshot, String> {
     let mut b = lock(&state)?;
+    b.ensure_group_unlocked(&project, &group)?;
     b.reload_group(&project, &group)?;
     Ok(b.snapshot())
 }
@@ -732,15 +924,25 @@ fn export_template(
 }
 
 #[tauri::command]
+fn clear_logs(state: tauri::State<'_, AppState>) -> Result<Snapshot, String> {
+    let mut b = lock(&state)?;
+    b.clear_logs();
+    Ok(b.snapshot())
+}
+
+#[tauri::command]
 fn save_workspace(state: tauri::State<'_, AppState>) -> Result<Snapshot, String> {
     let mut b = lock(&state)?;
-    b.save();
+    if !b.save() {
+        return Err("保存失败：校验未通过或文件写入失败，请查看下方日志".to_string());
+    }
     Ok(b.snapshot())
 }
 
 #[tauri::command]
 fn undo(state: tauri::State<'_, AppState>) -> Result<Snapshot, String> {
     let mut b = lock(&state)?;
+    b.ensure_active_project_unlocked()?;
     b.undo();
     Ok(b.snapshot())
 }
@@ -748,6 +950,7 @@ fn undo(state: tauri::State<'_, AppState>) -> Result<Snapshot, String> {
 #[tauri::command]
 fn redo(state: tauri::State<'_, AppState>) -> Result<Snapshot, String> {
     let mut b = lock(&state)?;
+    b.ensure_active_project_unlocked()?;
     b.redo();
     Ok(b.snapshot())
 }
@@ -755,6 +958,7 @@ fn redo(state: tauri::State<'_, AppState>) -> Result<Snapshot, String> {
 #[tauri::command]
 fn reload_workspace(state: tauri::State<'_, AppState>) -> Result<Snapshot, String> {
     let mut b = lock(&state)?;
+    b.ensure_no_univer_windows()?;
     b.reload();
     Ok(b.snapshot())
 }
@@ -776,6 +980,7 @@ fn open_project(state: tauri::State<'_, AppState>, project: String) -> Result<Sn
 #[tauri::command]
 fn close_project(state: tauri::State<'_, AppState>, project: String) -> Result<Snapshot, String> {
     let mut b = lock(&state)?;
+    b.ensure_project_unlocked(&project)?;
     b.close_project(&project);
     Ok(b.snapshot())
 }
@@ -783,6 +988,7 @@ fn close_project(state: tauri::State<'_, AppState>, project: String) -> Result<S
 #[tauri::command]
 fn delete_project(state: tauri::State<'_, AppState>, project: String) -> Result<Snapshot, String> {
     let mut b = lock(&state)?;
+    b.ensure_project_unlocked(&project)?;
     b.delete_project(&project)?;
     Ok(b.snapshot())
 }
@@ -878,6 +1084,10 @@ fn run_gui(workdir_arg: Option<std::path::PathBuf>) -> anyhow::Result<()> {
             rules_save,
             set_show_ref_name,
             set_display_field,
+            save_grid_view,
+            xlsx_poll,
+            reload_xlsx_external,
+            set_project_sort,
             global_settings,
             save_global_settings,
             export_project,
@@ -891,6 +1101,13 @@ fn run_gui(workdir_arg: Option<std::path::PathBuf>) -> anyhow::Result<()> {
             excel_poll,
             excel_sync_group,
             excel_end_edit,
+            excel_abandon,
+            open_xlsx_book,
+            open_univer_editor,
+            univer_initial_context,
+            univer_load_group,
+            univer_apply_group,
+            univer_close_group,
             excel_files,
             excel_delete,
             excel_sync_plan,
@@ -909,6 +1126,7 @@ fn run_gui(workdir_arg: Option<std::path::PathBuf>) -> anyhow::Result<()> {
             pick_folder,
             set_title,
             save_workspace,
+            clear_logs,
             undo,
             redo,
             reload_workspace,

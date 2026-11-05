@@ -276,6 +276,35 @@ pub struct GroupPatch {
     pub patches: Vec<NodePatch>,
 }
 
+/// 把 [`GroupPatch`] 应用到内存 group：替换 records / entries 并重算 dirty。
+///
+/// 只改内存，不落盘；是否保存由调用方（GUI 的「保存」/ CLI 的 save）决定。
+/// 节点按名字匹配；patch 里不存在的节点保持不变。
+pub fn apply_group_patch(group: &mut Group, patch: &GroupPatch) {
+    for np in &patch.patches {
+        match np {
+            NodePatch::Table { name, records } => {
+                if let Some(t) = group.tables.iter_mut().find(|t| &t.name == name) {
+                    t.records = records.clone();
+                    t.update_dirty();
+                }
+            }
+            NodePatch::Constant { name, entries } => {
+                if let Some(c) = group.constants.iter_mut().find(|c| &c.name == name) {
+                    c.entries = entries.clone();
+                    c.update_dirty();
+                }
+            }
+            NodePatch::Enum { name, entries } => {
+                if let Some(e) = group.enums.iter_mut().find(|e| &e.name == name) {
+                    e.entries = entries.clone();
+                    e.update_dirty();
+                }
+            }
+        }
+    }
+}
+
 /// 解析 xlsx → GroupPatch。
 ///
 /// 严格结构校验失败 → `Err`，**不返回部分 patch**（整次回写要么全成要么全拒）。

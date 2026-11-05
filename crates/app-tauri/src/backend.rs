@@ -9,8 +9,10 @@
 //!   数据量在配置表场景下可控，换来的是没有增量同步的一致性问题；
 //! - 表格的行模型包含 5 行占位行（EXTRA_ROWS），编辑占位行等价于新增记录。
 
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
+use base64::Engine as _;
 use serde::{Deserialize, Serialize};
 use tablet_core::enums::{LogLevel, PickerTrigger};
 use tablet_core::model::{
@@ -30,9 +32,7 @@ use tablet_core::schema_projection::apply_schema_to_project;
 use tablet_core::tblschema::parse_tblschema;
 use tablet_core::template::{BuiltinTemplates, LocalTemplates, TemplateSource};
 use tablet_core::types::{SepKey, SeparatorsSection};
-use tablet_cli::actions::export::{run_export, ExportFormats, FormatOutcome};
-use tablet_cli::actions::excel::{run_excel_export, run_excel_import, ExcelTarget};
-use tablet_cli::actions::schema::{run_schema_export, SchemaExportOptions};
+use tablet_core::excel::{apply_group_patch, export_group_book, import_xlsx_into_group};
 
 /// 与 Slint 版一致：表格尾部留 5 行占位，方便直接输入新记录。
 const EXTRA_ROWS: usize = 5;
@@ -60,8 +60,19 @@ pub struct Backend {
     pub selected: Option<Selected>,
     /// 引用列是否显示目标节点的展示值（@10 的总闸，会话内状态）。
     pub show_ref_name: bool,
+    /// 本机视图偏好（列宽等），独立于项目数据；不参与 dirty / 保存闸门。
+    pub user_data: tablet_core::local_state::UserData,
+    pub user_data_path: PathBuf,
+    /// 启动时打不开的 Project（首次快照后弹一次提示，与 Slint 版一致）。
+    pub load_alerts: Vec<String>,
     /// Excel 编辑会话：导出到临时工作簿 → 用 Excel 打开 → 轮询 mtime 自动回写。
     pub excel_sessions: Vec<ExcelSession>,
+    /// Univer 窗口 label → (project, group)。一个窗口只装一个组，可同时开多个窗口。
+    pub univer_windows: HashMap<String, (String, String)>,
+    /// 每个已加载 Univer 标签的 Group 指纹：回写时检测主界面是否改过同一组。
+    pub univer_fingerprints: HashMap<(String, String), u64>,
+    /// 正在 Univer 窗口中打开的组：主界面这些组只读，避免两边同时改。
+    pub univer_open_groups: HashSet<(String, String)>,
 }
 
 pub struct ExcelSession {
@@ -78,6 +89,36 @@ pub struct ExcelPollItem {
     pub path: String,
 }
 
+/// Univer 窗口的「打开某组」请求。
+#[derive(Serialize, Clone)]
+pub struct UniverOpenRequest {
+    pub project: String,
+    pub group: String,
+}
+
+/// 载入一个 Group 工作簿给 Univer 窗口。
+#[derive(Serialize)]
+pub struct UniverGroupPayload {
+    pub project: String,
+    pub group: String,
+    pub title: String,
+    /// `export_group_book` 的字节（base64），窗口侧用 SheetJS 解析。
+    pub xlsx_b64: String,
+}
+
+#[derive(Serialize)]
+pub struct UniverApplyResult {
+    pub group: String,
+    pub nodes_patched: usize,
+}
+
+#[derive(Serialize)]
+pub struct XlsxExternalChangeUi {
+    pub project: String,
+    pub group: String,
+    pub dirty: bool,
+}
+
 // ── 快照结构（前端直接消费）────────────────────────────────
 #[derive(Serialize)]
 pub struct Snapshot {
@@ -90,6 +131,8 @@ pub struct Snapshot {
     pub status: Status,
     pub logs: Vec<LogRow>,
     pub issues: Vec<IssueRow>,
+    /// 启动时失败的项目提示（前端首次快照后弹一次）。
+    pub startup_alerts: Vec<String>,
 }
 
 #[derive(Serialize)]
@@ -126,7 +169,13 @@ pub struct Status {
     pub error_count: usize,
     pub warning_count: usize,
     pub show_ref_name: bool,
+    /// 失焦自动提交（全局设置）。
+    pub auto_commit_on_blur: bool,
     pub excel_editing: Vec<String>,
+    /// 项目排序方式（tablet.toml，跨启动保留）。
+    pub project_sort: String,
+    /// 正在 Univer 窗口中打开、主界面因此只读的组（当前项目）。
+    pub univer_editing: Vec<String>,
     pub has_node_clipboard: bool,
     pub has_group_clipboard: bool,
     pub node_clipboard_is_table: bool,
@@ -468,6 +517,8 @@ pub struct GridPayload {
     /// 数据列类型：text / readonly / ref / export / type
     pub kinds: Vec<String>,
     pub rows: Vec<Vec<String>>,
+    /// 引用列展示值（show_ref_name 打开时）；为空表示与 rows 相同。
+    pub display_rows: Vec<Vec<String>>,
     /// 有错误的单元格 [row, col]
     pub errors: Vec<[usize; 2]>,
     pub data_count: usize,
@@ -486,6 +537,10 @@ pub struct GridPayload {
     pub ref_cols: Vec<Option<String>>,
     /// 每列是否是列表引用（`List<@X>` / `Set<@X>`）。
     pub ref_list: Vec<bool>,
+    /// 该节点上次的列宽模式（`.data/user-data.json`，按节点记忆）。
+    pub auto_width: bool,
+    /// 该节点的手动列宽（列名 → px）；自动模式下也保留。
+    pub column_widths: std::collections::BTreeMap<String, f32>,
 }
 
 #[derive(Serialize)]
@@ -629,6 +684,22 @@ fn parse_group_storage(storage: Option<String>) -> Option<GroupStorage> {
 fn sync_summary(s: &tablet_core::excel_sync::SheetSummary) -> String {    format!("{}行 {}列", s.rows, s.cols)
 }
 
+/// 单格式导出结果 → 对话框文本（GUI 直接调 core，不经过 CLI action 层）。
+fn push_export(
+    lines: &mut Vec<String>,
+    ok: &mut bool,
+    name: &str,
+    result: anyhow::Result<tablet_core::export::ExportResult>,
+) {
+    match result {
+        Ok(_) => lines.push(format!("{name}: 导出完成")),
+        Err(e) => {
+            *ok = false;
+            lines.push(format!("{name}: 失败 - {e}"));
+        }
+    }
+}
+
 fn sync_op_code(op: &tablet_core::excel_sync::SyncOp) -> u32 {
     use tablet_core::excel_sync::{PushScope, SyncOp};
     match op {
@@ -656,10 +727,22 @@ fn sync_op_from_code(code: u32) -> Option<tablet_core::excel_sync::SyncOp> {
 
 impl Backend {
     pub fn load(workdir: &Path) -> anyhow::Result<Self> {
-        let (mut engine, _fixed, _failures) = load_workspace(workdir)?;
+        let (mut engine, config_fixed, failures) = load_workspace(workdir)?;
+        if config_fixed {
+            engine.ui_log("启动时检测到配置文件无效值，已自动修复并保存".to_string());
+        }
+        let load_alerts: Vec<String> = failures
+            .iter()
+            .map(|f| format!("Project {} 已跳过：\n{}", f.id, f.message))
+            .collect();
+        for alert in &load_alerts {
+            engine.ui_log(format!("[项目打不开] {alert}"));
+        }
         // 上次 Excel 快速编辑的临时副本在这里清（正常结束会话时已删，这里兜底崩溃/强杀）。
         cleanup_excel_cache(&mut engine);
         engine.revalidate_all_projects();
+        let user_data_path = tablet_core::local_state::user_data_path(workdir);
+        let user_data = tablet_core::local_state::UserData::load(&user_data_path);
         let selected = engine.active().map(|p| Selected {
             project: p.schema.meta.id.clone(),
             group: String::new(),
@@ -671,7 +754,13 @@ impl Backend {
             engine,
             selected,
             show_ref_name: false,
+            user_data,
+            user_data_path,
+            load_alerts,
             excel_sessions: Vec::new(),
+            univer_windows: HashMap::new(),
+            univer_fingerprints: HashMap::new(),
+            univer_open_groups: HashSet::new(),
         })
     }
 
@@ -687,6 +776,7 @@ impl Backend {
             status: self.status(),
             logs: self.logs(),
             issues: self.issues(),
+            startup_alerts: self.load_alerts.clone(),
         }
     }
 
@@ -738,8 +828,16 @@ impl Backend {
                 kind: "project".into(),
                 group: None,
                 name: None,
-                label: pname.clone(),
-                search_key: tablet_core::search::search_key(&pname),
+                label: if self.engine.global_config.ui.as_ref().is_some_and(|u| u.show_meta_id) {
+                    pid.clone()
+                } else {
+                    pname.clone()
+                },
+                search_key: format!(
+                    "{}\u{0}{}",
+                    tablet_core::search::search_key(&pname),
+                    tablet_core::search::search_key(&pid)
+                ),
                 mark: pm,
                 mark_color: pc,
                 closed: false,
@@ -795,8 +893,16 @@ impl Backend {
                 kind: "project".into(),
                 group: None,
                 name: None,
-                label: ap.name.clone(),
-                search_key: tablet_core::search::search_key(&ap.name),
+                label: if self.engine.global_config.ui.as_ref().is_some_and(|u| u.show_meta_id) {
+                    ap.id.clone()
+                } else {
+                    ap.name.clone()
+                },
+                search_key: format!(
+                    "{}\u{0}{}",
+                    tablet_core::search::search_key(&ap.name),
+                    tablet_core::search::search_key(&ap.id)
+                ),
                 mark: String::new(),
                 mark_color: String::new(),
                 closed: true,
@@ -882,7 +988,8 @@ impl Backend {
             active_project: self.engine.active_project_id().map(str::to_string),
             active_project_name: active.map(|p| p.schema.meta.name.clone()),
             selected_label,
-            dirty: self.engine.is_dirty_any(),
+            // 保存只作用于 active project，脏标记也必须只反映它（与 Slint 一致）。
+            dirty: self.engine.active().is_some_and(|p| p.is_dirty()),
             can_undo: self.engine.can_undo(),
             can_redo: self.engine.can_redo(),
             can_revert,
@@ -891,11 +998,25 @@ impl Backend {
             error_count: self.engine.validation_errors.len(),
             warning_count: self.engine.validation_warnings.len(),
             show_ref_name: self.show_ref_name,
+            auto_commit_on_blur: self.engine.global_config.ui.as_ref().map(|u| u.auto_commit_on_blur).unwrap_or(true),
+            project_sort: self
+                .engine
+                .global_config
+                .project_management
+                .project_sort
+                .as_str()
+                .to_string(),
             excel_editing: self
                 .excel_sessions
                 .iter()
                 .filter(|s| Some(s.project.as_str()) == self.engine.active_project_id())
                 .map(|s| s.group.clone())
+                .collect(),
+            univer_editing: self
+                .univer_open_groups
+                .iter()
+                .filter(|(p, _)| Some(p.as_str()) == self.engine.active_project_id())
+                .map(|(_, g)| g.clone())
                 .collect(),
             has_node_clipboard,
             has_group_clipboard,
@@ -957,6 +1078,95 @@ impl Backend {
         };
     }
 
+    pub fn set_project_sort(&mut self, sort: &str) -> Result<(), String> {
+        use tablet_core::enums::ProjectSort;
+        let value = match sort {
+            "id" => ProjectSort::Id,
+            "name" => ProjectSort::Name,
+            "open" => ProjectSort::Open,
+            "created" => ProjectSort::Created,
+            "manual" => ProjectSort::Manual,
+            other => return Err(format!("未知排序方式: {other}")),
+        };
+        self.engine.global_config.project_management.project_sort = value;
+        let pm = self.engine.global_config.project_management.clone();
+        self.engine
+            .persist_global_config(pm.project_sort, &pm.project_order)
+            .map_err(|e| e.to_string())
+    }
+
+    // ── 视图偏好（列宽）─────────────────────────────────────
+    fn view_state(
+        &self,
+        group: &str,
+        kind: &str,
+        name: &str,
+    ) -> (bool, std::collections::BTreeMap<String, f32>) {
+        let Some(project) = self.engine.active_project_id() else {
+            return (true, std::collections::BTreeMap::new());
+        };
+        let kind = match kind {
+            "constant" => tablet_core::local_state::NodeKind::Constant,
+            "enum" => tablet_core::local_state::NodeKind::Enum,
+            _ => tablet_core::local_state::NodeKind::Table,
+        };
+        let key = tablet_core::local_state::NodeKey {
+            project: project.to_string(),
+            group: group.to_string(),
+            kind,
+            node: name.to_string(),
+        };
+        self.user_data
+            .ui
+            .grid
+            .nodes
+            .get(&key)
+            .map(|v| (v.auto, v.widths.clone()))
+            .unwrap_or((true, std::collections::BTreeMap::new()))
+    }
+
+    /// 主界面列宽变化：写入 `.data/user-data.json`，不参与项目 dirty。
+    pub fn save_grid_view(
+        &mut self,
+        project: &str,
+        group: &str,
+        kind: &str,
+        name: &str,
+        auto: bool,
+        widths: std::collections::BTreeMap<String, f32>,
+    ) -> Result<(), String> {
+        let kind = match kind {
+            "constant" => tablet_core::local_state::NodeKind::Constant,
+            "enum" => tablet_core::local_state::NodeKind::Enum,
+            "table" => tablet_core::local_state::NodeKind::Table,
+            other => return Err(format!("未知节点类型: {other}")),
+        };
+        let widths = widths
+            .into_iter()
+            .map(|(k, w)| {
+                (
+                    k,
+                    w.clamp(
+                        tablet_core::local_state::MIN_MANUAL_WIDTH,
+                        tablet_core::local_state::MAX_MANUAL_WIDTH,
+                    ),
+                )
+            })
+            .collect();
+        let key = tablet_core::local_state::NodeKey {
+            project: project.to_string(),
+            group: group.to_string(),
+            kind,
+            node: name.to_string(),
+        };
+        let node = self.user_data.node_mut(key);
+        node.auto = auto;
+        node.widths = widths;
+        self.user_data
+            .save(&self.user_data_path)
+            .map_err(|e| format!("保存列宽失败: {e}"))
+    }
+
     // ── 表格投影 ────────────────────────────────────────────
     fn grid(&self) -> Option<GridPayload> {
         let sel = self.selected.as_ref()?;
@@ -1009,23 +1219,31 @@ impl Backend {
         ];
 
         let mut rows = Vec::with_capacity(valid_count + EXTRA_ROWS);
+        let mut display_rows = Vec::new();
         let mut errors = Vec::new();
         let mut ref_cache = std::collections::HashMap::new();
         for r in 0..valid_count + EXTRA_ROWS {
             let mut row = Vec::with_capacity(fields.len());
+            let mut display_row = Vec::with_capacity(fields.len());
             for c in 0..fields.len() {
                 let text = table.records.get(r).and_then(|rec| rec.get(c)).cloned().unwrap_or_default();
                 if self.engine.has_active_cell_error(group, name, r, c) {
                     errors.push([r, c]);
                 }
+                // rows 始终是磁盘原值（引用写 id）；展示值单独给前端渲染。
+                // 复制/粘贴/公式栏必须用原值，否则会把显示名写回引用格。
                 let display = if self.show_ref_name {
                     self.display_ref_value(&fields[c].tbl_type, &text, &mut ref_cache)
                 } else {
-                    text
+                    text.clone()
                 };
-                row.push(display);
+                row.push(text);
+                display_row.push(display);
             }
             rows.push(row);
+            if self.show_ref_name {
+                display_rows.push(display_row);
+            }
         }
 
         let display_options = fields
@@ -1049,6 +1267,7 @@ impl Backend {
             }
         }
 
+        let (auto_width, column_widths) = self.view_state(group, "table", name);
         Some(GridPayload {
             mode: "table".into(),
             title: format!("📊 {group} / {name}"),
@@ -1057,6 +1276,7 @@ impl Backend {
             header_kinds,
             kinds,
             rows,
+            display_rows,
             errors,
             data_count: valid_count,
             editable_headers: true,
@@ -1067,6 +1287,8 @@ impl Backend {
             picker_data_single: self.picker_flags().1,
             ref_cols,
             ref_list,
+            auto_width,
+            column_widths,
         })
     }
 
@@ -1074,6 +1296,7 @@ impl Backend {
         let constant = self.engine.find_constant(group, name)?;
         let valid_count = valid_constant_rows(constant);
         let mut rows = Vec::with_capacity(valid_count + EXTRA_ROWS);
+        let mut display_rows = Vec::new();
         let mut errors = Vec::new();
         let mut ref_cache = std::collections::HashMap::new();
         for r in 0..valid_count + EXTRA_ROWS {
@@ -1082,23 +1305,29 @@ impl Backend {
                 errors.push([r, 2]);
             }
             rows.push(match entry {
-                Some(e) => {
-                    let value_display = if self.show_ref_name {
-                        self.display_ref_value(&e.tbl_type, &e.value, &mut ref_cache)
-                    } else {
-                        e.value.clone()
-                    };
-                    vec![
-                        e.name.clone(),
-                        e.tbl_type.clone(),
-                        value_display,
-                        e.export.display().to_string(),
-                        e.desc.clone(),
-                    ]
-                }
+                Some(e) => vec![
+                    e.name.clone(),
+                    e.tbl_type.clone(),
+                    e.value.clone(),
+                    e.export.display().to_string(),
+                    e.desc.clone(),
+                ],
                 None => vec![String::new(); 5],
             });
+            if self.show_ref_name {
+                display_rows.push(match entry {
+                    Some(e) => vec![
+                        e.name.clone(),
+                        e.tbl_type.clone(),
+                        self.display_ref_value(&e.tbl_type, &e.value, &mut ref_cache),
+                        e.export.display().to_string(),
+                        e.desc.clone(),
+                    ],
+                    None => vec![String::new(); 5],
+                });
+            }
         }
+        let (auto_width, column_widths) = self.view_state(group, "constant", name);
         Some(GridPayload {
             mode: "constant".into(),
             title: format!("📋 {group} / {name}"),
@@ -1109,6 +1338,7 @@ impl Backend {
             header_kinds: vec![vec!["readonly".to_string(); 5]],
             kinds: vec!["text".into(), "type".into(), "text".into(), "export".into(), "text".into()],
             rows,
+            display_rows,
             errors,
             data_count: valid_count,
             editable_headers: false,
@@ -1119,6 +1349,8 @@ impl Backend {
             picker_data_single: self.picker_flags().1,
             ref_cols: Vec::new(),
             ref_list: Vec::new(),
+            auto_width,
+            column_widths,
         })
     }
 
@@ -1126,6 +1358,7 @@ impl Backend {
         let e = self.engine.find_enum(group, name)?;
         let valid_count = e.entries.iter().filter(|x| !x.id.is_empty() || !x.name.is_empty()).count();
         let mut rows = Vec::with_capacity(valid_count + EXTRA_ROWS);
+        let display_rows = Vec::new();
         let mut errors = Vec::new();
         for r in 0..valid_count + EXTRA_ROWS {
             let entry = e.entries.get(r);
@@ -1137,6 +1370,7 @@ impl Backend {
                 None => vec![String::new(); 3],
             });
         }
+        let (auto_width, column_widths) = self.view_state(group, "enum", name);
         Some(GridPayload {
             mode: "enum".into(),
             title: format!("🔢 {group} / {name}"),
@@ -1145,6 +1379,7 @@ impl Backend {
             header_kinds: vec![vec!["readonly".to_string(); 3]],
             kinds: vec!["text".into(), "text".into(), "text".into()],
             rows,
+            display_rows,
             errors,
             data_count: valid_count,
             editable_headers: false,
@@ -1155,6 +1390,8 @@ impl Backend {
             picker_data_single: self.picker_flags().1,
             ref_cols: Vec::new(),
             ref_list: Vec::new(),
+            auto_width,
+            column_widths,
         })
     }
 
@@ -1167,6 +1404,13 @@ impl Backend {
         Some((s.group.as_str(), s.name.as_str(), s.kind))
     }
 
+    /// 编辑后是否立即重算校验，跟全局设置 `[ui] realtime_validate` 走。
+    fn revalidate_live(&mut self, group: &str, name: &str) {
+        if self.engine.global_config.ui.as_ref().is_some_and(|u| u.realtime_validate) {
+            self.engine.revalidate(group, name);
+        }
+    }
+
     pub fn commit_cell(&mut self, row: usize, col: usize, value: String) {
         let Some((group, name, kind)) = self.selected_node() else { return };
         let (group, name) = (group.to_string(), name.to_string());
@@ -1176,14 +1420,14 @@ impl Backend {
             SelKind::Enum => self.engine.commit_enum_cell(&group, &name, row, col, value),
             _ => {}
         }
-        self.engine.revalidate(&group, &name);
+        self.revalidate_live(&group, &name);
     }
 
     pub fn commit_header(&mut self, header_row: usize, col: usize, value: String) {
         let Some((group, name, SelKind::Table)) = self.selected_node() else { return };
         let (group, name) = (group.to_string(), name.to_string());
         self.engine.commit_header_edit(&group, &name, header_row, col, value);
-        self.engine.revalidate(&group, &name);
+        self.revalidate_live(&group, &name);
     }
 
     pub fn clear_cells(&mut self, cells: Vec<(usize, usize)>) {
@@ -1195,7 +1439,7 @@ impl Backend {
             SelKind::Enum => self.engine.clear_enum_cells(&group, &name, &cells),
             _ => {}
         }
-        self.engine.revalidate(&group, &name);
+        self.revalidate_live(&group, &name);
     }
 
     pub fn paste_cells(&mut self, row: usize, col: usize, grid: Vec<Vec<String>>) {
@@ -1207,7 +1451,7 @@ impl Backend {
             SelKind::Enum => self.engine.paste_enum_data(&group, &name, row, col, &grid),
             _ => {}
         }
-        self.engine.revalidate(&group, &name);
+        self.revalidate_live(&group, &name);
     }
 
     pub fn insert_row(&mut self, at: usize) {
@@ -1219,7 +1463,7 @@ impl Backend {
             SelKind::Enum => self.engine.insert_enum_row(&group, &name, at),
             _ => {}
         }
-        self.engine.revalidate(&group, &name);
+        self.revalidate_live(&group, &name);
     }
 
     pub fn delete_rows(&mut self, start: usize, end: usize) {
@@ -1235,21 +1479,21 @@ impl Backend {
             SelKind::Enum => self.engine.delete_enum_rows(&group, &name, start, end + 1),
             _ => {}
         }
-        self.engine.revalidate(&group, &name);
+        self.revalidate_live(&group, &name);
     }
 
     pub fn insert_column(&mut self, at: usize) {
         let Some((group, name, SelKind::Table)) = self.selected_node() else { return };
         let (group, name) = (group.to_string(), name.to_string());
         self.engine.insert_column(&group, &name, at);
-        self.engine.revalidate(&group, &name);
+        self.revalidate_live(&group, &name);
     }
 
     pub fn delete_column(&mut self, at: usize) {
         let Some((group, name, SelKind::Table)) = self.selected_node() else { return };
         let (group, name) = (group.to_string(), name.to_string());
         self.engine.delete_column(&group, &name, at);
-        self.engine.revalidate(&group, &name);
+        self.revalidate_live(&group, &name);
     }
 
     // ── 全局设置 / 导出执行 ─────────────────────────────────
@@ -1318,33 +1562,56 @@ impl Backend {
     }
 
     pub fn export_project(&mut self, f: ExportFormatsUi) -> ExportReport {
-        let formats = ExportFormats {
-            json: f.json,
-            xml: f.xml,
-            java: f.java,
-            go: f.go,
-            cpp: f.cpp,
-            csharp_dotnet: f.csharp_dotnet,
-            csharp_unity: f.csharp_unity,
-            csharp_godot: f.csharp_godot,
-            lua: f.lua,
-            gdscript: f.gdscript,
-            typescript_client: f.typescript_client,
-            typescript_server: f.typescript_server,
-        };
-        let summary = run_export(&mut self.engine, formats);
         let mut lines = Vec::new();
         let mut ok = true;
-        for (name, outcome) in summary.per_format {
-            match outcome {
-                FormatOutcome::Ok(_) => lines.push(format!("{name}: 导出完成")),
-                FormatOutcome::Err(e) => {
-                    ok = false;
-                    lines.push(format!("{name}: 失败 - {e}"));
-                }
-            }
+        if f.json {
+            push_export(&mut lines, &mut ok, "JSON", self.engine.export_json());
+        }
+        if f.xml {
+            push_export(&mut lines, &mut ok, "XML", self.engine.export_xml());
+        }
+        if f.java {
+            push_export(&mut lines, &mut ok, "Java", self.engine.export_java());
+        }
+        if f.go {
+            push_export(&mut lines, &mut ok, "Go", self.engine.export_go());
+        }
+        if f.cpp {
+            push_export(&mut lines, &mut ok, "C++", self.engine.export_cpp());
+        }
+        if f.csharp_dotnet {
+            push_export(&mut lines, &mut ok, "C# (.NET)", self.engine.export_csharp_dotnet());
+        }
+        if f.typescript_server {
+            push_export(
+                &mut lines,
+                &mut ok,
+                "TypeScript (Node.js)",
+                self.engine.export_typescript_server(),
+            );
+        }
+        if f.lua {
+            push_export(&mut lines, &mut ok, "Lua", self.engine.export_lua());
+        }
+        if f.gdscript {
+            push_export(&mut lines, &mut ok, "GDScript", self.engine.export_gdscript());
+        }
+        if f.typescript_client {
+            push_export(
+                &mut lines,
+                &mut ok,
+                "TypeScript (前端)",
+                self.engine.export_typescript_client(),
+            );
+        }
+        if f.csharp_unity {
+            push_export(&mut lines, &mut ok, "C# (Unity)", self.engine.export_csharp_unity());
+        }
+        if f.csharp_godot {
+            push_export(&mut lines, &mut ok, "C# (Godot)", self.engine.export_csharp_godot());
         }
         if lines.is_empty() {
+            ok = false;
             lines.push("没有选中任何导出格式".to_string());
         }
         ExportReport { ok, lines }
@@ -1364,28 +1631,99 @@ impl Backend {
         as_template: bool,
     ) -> Result<String, String> {
         let project = self.engine.active().ok_or("没有活跃的 Project")?;
-        let out = if as_template {
-            None
+        let groups: Vec<String> = groups
+            .into_iter()
+            .filter(|g| !g.trim().is_empty())
+            .collect();
+        let nodes: Vec<String> = nodes
+            .into_iter()
+            .filter(|n| !n.trim().is_empty())
+            .collect();
+
+        let full = tablet_core::schema_projection::schema_from_project(&project.groups, with_preset);
+        for g in &groups {
+            if !full.sections.iter().any(|s| &s.group == g) {
+                return Err(format!("分组不存在或没有可导出的节点: {g}"));
+            }
+        }
+        let mut wanted: Vec<(String, String)> = Vec::new();
+        for spec in &nodes {
+            let Some((g, name)) = spec.split_once('/') else {
+                return Err(format!("节点参数需要 Group/Name，收到 {spec:?}"));
+            };
+            if !full
+                .sections
+                .iter()
+                .any(|s| s.group == g && s.name == name)
+            {
+                return Err(format!("节点不存在: {spec}"));
+            }
+            wanted.push((g.to_string(), name.to_string()));
+        }
+        let all = groups.is_empty() && wanted.is_empty();
+        let sections: Vec<_> = full
+            .sections
+            .into_iter()
+            .filter(|s| {
+                all
+                    || groups.iter().any(|g| g == &s.group)
+                    || wanted.iter().any(|(g, n)| g == &s.group && n == &s.name)
+            })
+            .collect();
+        if sections.is_empty() {
+            return Err("没有匹配的节点可导出".to_string());
+        }
+
+        let mut meta = project.schema.meta.clone();
+        if let Some(v) = meta_id {
+            meta.id = v.trim().to_string();
+        }
+        if let Some(v) = meta_name {
+            meta.name = v.trim().to_string();
+        }
+        if let Some(v) = meta_category {
+            meta.category = v.trim().to_string();
+        }
+        if let Some(v) = meta_version {
+            meta.version = v.trim().to_string();
+        }
+        if !meta.id.is_empty()
+            && !tablet_core::schema_model::is_valid_metadata_id(&meta.id)
+        {
+            return Err(format!("非法 meta id: {}", meta.id));
+        }
+        if meta.name.is_empty() && !meta.id.is_empty() {
+            meta.name = meta.id.clone();
+        }
+        let schema = tablet_core::schema_model::TblSchema {
+            meta,
+            separators: Default::default(),
+            sections,
+        };
+        let content = tablet_core::tblschema::serialize_tblschema(&schema);
+
+        let (target, template) = if as_template {
+            let id = schema.meta.id.clone();
+            if id.is_empty() {
+                return Err("保存为模板需要 meta id".to_string());
+            }
+            let dir = tablet_core::template::default_local_dir();
+            std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+            (dir.join(format!("{id}.tblschema")), true)
         } else {
-            Some(resolve_in_project(&project.project_root, &path))
+            (resolve_in_project(&project.project_root, &path), false)
         };
-        let opts = SchemaExportOptions {
-            out,
-            as_template,
-            groups: groups.into_iter().filter(|g| !g.trim().is_empty()).collect(),
-            nodes: nodes.into_iter().filter(|n| !n.trim().is_empty()).collect(),
-            with_preset,
-            meta_id,
-            meta_name,
-            meta_category,
-            meta_version,
-        };
-        let outcome = run_schema_export(&self.engine, &opts).map_err(|e| e.to_string())?;
+        if let Some(parent) = target.parent() {
+            if !parent.as_os_str().is_empty() {
+                std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+            }
+        }
+        std::fs::write(&target, content).map_err(|e| e.to_string())?;
         Ok(format!(
             "已{} {} 个段 → {}",
-            if outcome.template { "保存为本地模板" } else { "导出" },
-            outcome.sections,
-            outcome.path
+            if template { "保存为本地模板" } else { "导出" },
+            schema.sections.len(),
+            target.to_string_lossy().replace('\\', "/")
         ))
     }
 
@@ -1509,30 +1847,75 @@ impl Backend {
         }
     }
 
-    // ── Excel 导出 / 导入 ───────────────────────────────────
+    // ── Excel 导出 / 导入（GUI 直接走 core，不依赖 CLI action 层）────
+    fn group_book_bytes(&self, project: &str, group: &str) -> Result<Vec<u8>, String> {
+        let g = self
+            .engine
+            .find_project(project)
+            .and_then(|p| p.groups.iter().find(|g| g.name == group))
+            .ok_or_else(|| format!("找不到分组: {project}::{group}"))?;
+        export_group_book(g, None).map_err(|e| e.to_string())
+    }
+
+    /// 把 xlsx 解析成 GroupPatch 并只应用到内存；返回修补的节点数。
+    fn apply_workbook_in_memory(
+        &mut self,
+        project: &str,
+        group: &str,
+        file: &Path,
+        label: &str,
+    ) -> Result<usize, String> {
+        let patch = {
+            let g = self
+                .engine
+                .find_project(project)
+                .and_then(|p| p.groups.iter().find(|g| g.name == group))
+                .ok_or_else(|| format!("找不到分组: {project}::{group}"))?;
+            import_xlsx_into_group(file, g).map_err(|e| e.to_string())?
+        };
+        let nodes = patch.patches.len();
+        let applied = self.engine.edit_project(project, label, |p| {
+            let Some(g) = p.groups.iter_mut().find(|g| g.name == group) else {
+                return false;
+            };
+            apply_group_patch(g, &patch);
+            p.resync_schema();
+            true
+        });
+        if applied != Some(true) {
+            return Err("回写失败：Project 或分组已不存在".to_string());
+        }
+        self.engine.revalidate_all_projects();
+        Ok(nodes)
+    }
+
     pub fn excel_export(&self, group: &str, path: String) -> Result<String, String> {
         let project = self.engine.active().ok_or("没有活跃的 Project")?;
+        let pid = project.schema.meta.id.clone();
         let out = resolve_in_project(&project.project_root, &path);
-        let target = ExcelTarget::Group {
-            name: group.to_string(),
-            include: Vec::new(),
-        };
-        let summary = run_excel_export(&self.engine, target, Some(&out)).map_err(|e| e.to_string())?;
-        Ok(format!(
-            "已导出 {}（{} 字节）",
-            summary.output.display(),
-            summary.bytes
-        ))
+        let bytes = self.group_book_bytes(&pid, group)?;
+        if let Some(parent) = out.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+        }
+        std::fs::write(&out, &bytes).map_err(|e| e.to_string())?;
+        Ok(format!("已导出 {}（{} 字节）", out.display(), bytes.len()))
     }
 
     pub fn excel_import(&mut self, group: &str, path: String) -> Result<String, String> {
         let project = self.engine.active().ok_or("没有活跃的 Project")?;
+        let project_id = project.schema.meta.id.clone();
+        if self
+            .univer_open_groups
+            .contains(&(project_id.clone(), group.to_string()))
+        {
+            return Err(format!(
+                "分组「{group}」正在 Univer 窗口中编辑，主界面暂时只读"
+            ));
+        }
         let file = resolve_in_project(&project.project_root, &path);
-        let summary =
-            run_excel_import(&mut self.engine, group, &file).map_err(|e| e.to_string())?;
+        let nodes = self.apply_workbook_in_memory(&project_id, group, &file, "Excel 回写")?;
         Ok(format!(
-            "导入完成：{}，修补 {} 个节点",
-            summary.group, summary.nodes_patched
+            "已导入内存：{group}（{nodes} 个节点），保存后落盘"
         ))
     }
 
@@ -1705,6 +2088,15 @@ impl Backend {
     pub fn excel_import_mapped(&mut self, req: ExcelMapRequest) -> Result<String, String> {
         let project = self.engine.active().ok_or("没有活跃的 Project")?;
         let pid = project.schema.meta.id.clone();
+        if self
+            .univer_open_groups
+            .contains(&(pid.clone(), req.group_name.clone()))
+        {
+            return Err(format!(
+                "分组「{}」正在 Univer 窗口中编辑，主界面暂时只读",
+                req.group_name
+            ));
+        }
         let file = resolve_in_project(&project.project_root, &req.path);
         let fields = req
             .fields
@@ -1757,11 +2149,11 @@ impl Backend {
             .map(|p| p.project_root.clone())
             .ok_or_else(|| format!("项目不存在: {project}"))?;
         let out = unique_excel_cache(&root, group);
-        let target = ExcelTarget::Group {
-            name: group.to_string(),
-            include: Vec::new(),
-        };
-        run_excel_export(&self.engine, target, Some(&out)).map_err(|e| e.to_string())?;
+        let bytes = self.group_book_bytes(project, group)?;
+        if let Some(parent) = out.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+        }
+        std::fs::write(&out, &bytes).map_err(|e| e.to_string())?;
         let mtime = std::fs::metadata(&out).and_then(|m| m.modified()).ok();
 
         if open {
@@ -1810,6 +2202,14 @@ impl Backend {
 
     /// 把 Excel 的改动导入回来，并更新 mtime（失败则保持旧 mtime，下一轮重试）。
     pub fn excel_sync(&mut self, project: &str, group: &str) -> Result<String, String> {
+        if self
+            .univer_open_groups
+            .contains(&(project.to_string(), group.to_string()))
+        {
+            return Err(format!(
+                "分组「{group}」正在 Univer 窗口中编辑，暂不回写 Excel"
+            ));
+        }
         let Some(idx) = self
             .excel_sessions
             .iter()
@@ -1818,24 +2218,23 @@ impl Backend {
             return Err("没有该 Group 的 Excel 会话".to_string());
         };
         let path = self.excel_sessions[idx].path.clone();
-        let summary =
-            run_excel_import(&mut self.engine, group, &path).map_err(|e| e.to_string())?;
+        let nodes = self.apply_workbook_in_memory(project, group, &path, "Excel 回写")?;
         self.excel_sessions[idx].mtime =
             std::fs::metadata(&path).and_then(|m| m.modified()).ok();
         Ok(format!(
-            "Excel 已回写：{}（{} 个节点）",
-            summary.group, summary.nodes_patched
+            "Excel 已回写内存：{group}（{nodes} 个节点），保存后落盘"
         ))
     }
 
-    pub fn excel_end_edit(&mut self, project: &str, group: &str) {
+    /// 结束 Excel 会话：有改动则先回写内存；回写失败时**保留会话**，让用户可重试。
+    pub fn excel_end_edit(&mut self, project: &str, group: &str) -> Result<(), String> {
         let changed = self.excel_sessions.iter().any(|s| {
             s.project == project
                 && s.group == group
                 && std::fs::metadata(&s.path).and_then(|m| m.modified()).ok() != s.mtime
         });
         if changed {
-            let _ = self.excel_sync(project, group);
+            self.excel_sync(project, group)?;
         }
         let ended: Vec<PathBuf> = self
             .excel_sessions
@@ -1849,9 +2248,331 @@ impl Backend {
         for p in ended {
             let _ = std::fs::remove_file(p);
         }
+        Ok(())
+    }
+
+    // ── Univer 编辑窗口 ─────────────────────────────────────
+    /// 窗口 label：同一个组固定同一个 label，重复点按钮只会聚焦已有窗口。
+    pub fn univer_window_label(project: &str, group: &str) -> String {
+        use std::hash::{Hash, Hasher};
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        project.hash(&mut h);
+        group.hash(&mut h);
+        format!("univer-{:016x}", h.finish())
+    }
+
+    /// 建窗口前登记「这个 label 对应哪个组」；窗口加载后凭自己的 label 取。
+    pub fn prepare_univer_window(
+        &mut self,
+        label: &str,
+        project: &str,
+        group: &str,
+    ) -> Result<(), String> {
+        let exists = self
+            .engine
+            .find_project(project)
+            .is_some_and(|p| p.groups.iter().any(|g| g.name == group));
+        if !exists {
+            return Err(format!("找不到分组: {project}::{group}"));
+        }
+        if self
+            .excel_sessions
+            .iter()
+            .any(|s| s.project == project && s.group == group)
+        {
+            return Err(format!(
+                "分组「{group}」正在 Excel 编辑中，先结束 Excel 编辑再打开 Univer"
+            ));
+        }
+        self.univer_windows.insert(
+            label.to_string(),
+            (project.to_string(), group.to_string()),
+        );
+        self.univer_open_groups
+            .insert((project.to_string(), group.to_string()));
+        Ok(())
+    }
+
+    pub fn univer_window_context(&self, label: &str) -> Option<UniverOpenRequest> {
+        self.univer_windows
+            .get(label)
+            .map(|(project, group)| UniverOpenRequest {
+                project: project.clone(),
+                group: group.clone(),
+            })
+    }
+
+    pub fn release_univer_window(&mut self, label: &str) {
+        if let Some((project, group)) = self.univer_windows.remove(label) {
+            self.univer_fingerprints.remove(&(project.clone(), group.clone()));
+            self.univer_open_groups.remove(&(project, group));
+        }
+    }
+
+    /// 导出 Group 工作簿（与「Excel 编辑」同一布局）交给 Univer 窗口。
+    /// 同时记录 Group 指纹：回写时用它检测主界面是否在编辑期间改过同一组。
+    pub fn univer_load_group(
+        &mut self,
+        project: &str,
+        group: &str,
+    ) -> Result<UniverGroupPayload, String> {
+        let xlsx_b64 = {
+            let p = self
+                .engine
+                .find_project(project)
+                .ok_or_else(|| format!("项目不存在: {project}"))?;
+            let g = p
+                .groups
+                .iter()
+                .find(|g| g.name == group)
+                .ok_or_else(|| format!("找不到分组: {group}"))?;
+            let bytes = tablet_core::excel::export_group_book(g, None)
+                .map_err(|e| format!("导出工作簿失败: {e}"))?;
+            let fp = group_fingerprint(g);
+            self.univer_fingerprints
+                .insert((project.to_string(), group.to_string()), fp);
+            self.univer_open_groups
+                .insert((project.to_string(), group.to_string()));
+            base64::engine::general_purpose::STANDARD.encode(bytes)
+        };
+        Ok(UniverGroupPayload {
+            project: project.to_string(),
+            group: group.to_string(),
+            title: format!("{project} / {group}"),
+            xlsx_b64,
+        })
+    }
+
+    /// 接收 Univer 写回的 xlsx，**只回写到内存**；主界面保存后才落盘。
+    ///
+    /// 先比对 Group 指纹：加载之后主界面改过同一组，直接拒绝，避免静默覆盖。
+    pub fn univer_apply_group(
+        &mut self,
+        project: &str,
+        group: &str,
+        xlsx_b64: &str,
+    ) -> Result<UniverApplyResult, String> {
+        let Some(&baseline) = self
+            .univer_fingerprints
+            .get(&(project.to_string(), group.to_string()))
+        else {
+            return Err("该标签没有加载记录，请重新加载".to_string());
+        };
+        let current = self
+            .engine
+            .find_project(project)
+            .ok_or_else(|| format!("项目不存在: {project}"))?
+            .groups
+            .iter()
+            .find(|g| g.name == group)
+            .ok_or_else(|| format!("找不到分组: {group}"))?;
+        if group_fingerprint(current) != baseline {
+            return Err("主界面已修改该组，Univer 标签数据已过期；请重新加载后再回写".to_string());
+        }
+
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(xlsx_b64)
+            .map_err(|e| format!("回写数据损坏: {e}"))?;
+        let root = self
+            .engine
+            .find_project(project)
+            .map(|p| p.project_root.clone())
+            .ok_or_else(|| format!("项目不存在: {project}"))?;
+        let path = root.join(".tbl-cache").join(format!(
+            "univer-{group}-{}.xlsx",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_millis())
+                .unwrap_or(0)
+        ));
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+        }
+        std::fs::write(&path, &bytes).map_err(|e| e.to_string())?;
+
+        let summary = self.apply_workbook_in_memory(project, group, &path, "Univer 回写");
+        let _ = std::fs::remove_file(&path);
+        let nodes_patched = summary?;
+
+        // 回写后的内存状态是新基线：下一次回写应相对它做冲突检测。
+        if let Some(g) = self
+            .engine
+            .find_project(project)
+            .and_then(|p| p.groups.iter().find(|g| g.name == group))
+        {
+            let fp = group_fingerprint(g);
+            self.univer_fingerprints
+                .insert((project.to_string(), group.to_string()), fp);
+        }
+        Ok(UniverApplyResult {
+            group: group.to_string(),
+            nodes_patched,
+        })
+    }
+
+    pub fn univer_close_group(&mut self, project: &str, group: &str) {
+        self.univer_fingerprints
+            .remove(&(project.to_string(), group.to_string()));
+        self.univer_open_groups
+            .remove(&(project.to_string(), group.to_string()));
+    }
+
+    // ── xlsx 组外部修改轮询（与 Slint 版一致）──────────────
+    pub fn xlsx_poll(&self) -> Vec<XlsxExternalChangeUi> {
+        self.engine
+            .xlsx_external_changes()
+            .into_iter()
+            .filter(|c| {
+                // Univer/Excel 正在编辑的组不自动重载，避免覆盖外部编辑器里的内容。
+                !self
+                    .univer_open_groups
+                    .contains(&(c.project_id.clone(), c.group.clone()))
+                    && !self
+                        .excel_sessions
+                        .iter()
+                        .any(|s| s.project == c.project_id && s.group == c.group)
+            })
+            .map(|c| XlsxExternalChangeUi {
+                project: c.project_id,
+                group: c.group,
+                dirty: c.dirty,
+            })
+            .collect()
+    }
+
+    /// 重新从磁盘读干净的 xlsx 组（外部修改检测用）。
+    pub fn reload_xlsx_external(&mut self, project: &str, group: &str) -> Result<(), String> {
+        self.engine
+            .reload_xlsx_group(project, group)
+            .map_err(|e| e.to_string())?;
+        self.engine.revalidate_all_projects();
+        Ok(())
+    }
+
+    /// 主界面当前选中的组是否被 Univer 窗口占用（用于拦截编辑命令）。
+    fn locked_group(&self) -> Option<(String, String)> {
+        let sel = self.selected.as_ref()?;
+        let project = sel.project.clone();
+        let group = sel.group.clone();
+        let locked = self
+            .univer_open_groups
+            .contains(&(project.clone(), group.clone()))
+            || self
+                .excel_sessions
+                .iter()
+                .any(|s| s.project == project && s.group == group);
+        locked.then_some((project, group))
+    }
+
+    pub fn ensure_unlocked(&self) -> Result<(), String> {
+        if let Some((_, group)) = self.locked_group() {
+            Err(format!(
+                "分组「{group}」正在 Excel / Univer 中编辑，主界面暂时只读"
+            ))
+        } else {
+            Ok(())
+        }
+    }
+
+    pub fn ensure_group_unlocked(&self, project: &str, group: &str) -> Result<(), String> {
+        if self
+            .univer_open_groups
+            .contains(&(project.to_string(), group.to_string()))
+        {
+            Err(format!(
+                "分组「{group}」正在 Univer 窗口中编辑，主界面暂时只读"
+            ))
+        } else if self
+            .excel_sessions
+            .iter()
+            .any(|s| s.project == project && s.group == group)
+        {
+            Err(format!(
+                "分组「{group}」正在 Excel 编辑中，先结束 Excel 编辑再操作"
+            ))
+        } else {
+            Ok(())
+        }
+    }
+
+    fn project_locked(&self, project: &str) -> Option<String> {
+        self.univer_open_groups
+            .iter()
+            .find(|(p, _)| p == project)
+            .map(|(_, g)| g.clone())
+    }
+
+    pub fn ensure_project_unlocked(&self, project: &str) -> Result<(), String> {
+        if let Some(group) = self.project_locked(project) {
+            Err(format!(
+                "分组「{group}」正在 Univer 窗口中编辑，暂不能执行项目级操作"
+            ))
+        } else {
+            Ok(())
+        }
+    }
+
+    pub fn ensure_active_project_unlocked(&self) -> Result<(), String> {
+        match self.engine.active_project_id() {
+            Some(pid) => self.ensure_project_unlocked(pid),
+            None => Ok(()),
+        }
+    }
+
+    /// 会丢弃/重建整个工作区的操作：只要有 Univer 窗口开着就拒绝。
+    pub fn ensure_no_univer_windows(&self) -> Result<(), String> {
+        if let Some((_, group)) = self.univer_open_groups.iter().next() {
+            Err(format!(
+                "分组「{group}」正在 Univer 窗口中编辑，先关闭 Univer 窗口再重新加载"
+            ))
+        } else {
+            Ok(())
+        }
+    }
+
+
+    /// 放弃 Excel 改动：结束会话但不把工作簿合并回内存（Slint 的「强制放弃」）。
+    pub fn excel_abandon(&mut self, project: &str, group: &str) {
+        let ended: Vec<PathBuf> = self
+            .excel_sessions
+            .iter()
+            .filter(|s| s.project == project && s.group == group)
+            .map(|s| s.path.clone())
+            .collect();
+        self.excel_sessions
+            .retain(|s| !(s.project == project && s.group == group));
+        for p in ended {
+            let _ = std::fs::remove_file(p);
+        }
+    }
+
+    /// xlsx 组「用 Excel 打开（原文件）」：先保存该项目，再打开工作簿本体。
+    pub fn open_xlsx_book(&mut self, project: &str, group: &str) -> Result<(), String> {
+        let is_xlsx = self
+            .engine
+            .find_project(project)
+            .and_then(|p| p.groups.iter().find(|g| g.name == group))
+            .is_some_and(|g| g.is_xlsx());
+        if !is_xlsx {
+            return Err(format!("分组「{group}」不是 xlsx 组"));
+        }
+        if !self.engine.save_project(project) {
+            return Err("保存失败，未打开工作簿（原因见日志）".to_string());
+        }
+        let path = self
+            .engine
+            .find_project(project)
+            .and_then(|p| p.groups.iter().find(|g| g.name == group))
+            .map(|g| g.book_path())
+            .ok_or_else(|| format!("找不到分组: {group}"))?;
+        if !path.is_file() {
+            return Err("工作簿不存在，先给这个组加一个节点".to_string());
+        }
+        launch(&shell_path(&path))
     }
 
     pub fn open_folder(&self, path: Option<String>) -> Result<(), String> {
+        let has_path = path.is_some();
         let target = match path {
             Some(p) => {
                 let root = self
@@ -1863,7 +2584,16 @@ impl Backend {
             }
             None => self.excel_dir().ok_or("没有活跃的 Project")?,
         };
-        let _ = std::fs::create_dir_all(&target);
+        if target.is_file() {
+            return launch(&shell_path(&target));
+        }
+        if !target.exists() {
+            // 文件路径（带扩展名）不存在时不要 create_dir_all，否则会造出一个同名目录。
+            if has_path && target.extension().is_some() {
+                return Err(format!("文件不存在: {}", target.display()));
+            }
+            std::fs::create_dir_all(&target).map_err(|e| e.to_string())?;
+        }
         launch(&shell_path(&target))
     }
 
@@ -2477,6 +3207,8 @@ impl Backend {
         name: String,
     ) -> Result<String, String> {
         schema.meta.id = id;
+        // 新建项目继承全局分隔符模板（与 Slint 版一致）。
+        schema.separators = self.engine.global_config.separators.clone();
         if !name.trim().is_empty() {
             schema.meta.name = name;
         } else if schema.meta.name.is_empty() {
@@ -2536,16 +3268,22 @@ impl Backend {
 
     pub fn project_settings(&self, project: &str) -> Option<ProjectSettings> {
         let p = self.engine.find_project(project)?;
-        let def = SeparatorsSection::default();
+        let template = &self.engine.global_config.separators;
         let separators = SepKey::ALL
             .iter()
             .map(|k| SepItem {
                 key: k.as_directive_key().to_string(),
                 value: k.get(&p.schema.separators).to_string(),
-                default: k.get(&def).to_string(),
+                default: k.get(template).to_string(),
                 original: k.get(&p.original_separators).to_string(),
             })
             .collect();
+        let template_export = self
+            .engine
+            .global_config
+            .export
+            .clone()
+            .unwrap_or_default();
         Some(ProjectSettings {
             id: p.schema.meta.id.clone(),
             name: p.schema.meta.name.clone(),
@@ -2557,7 +3295,7 @@ impl Backend {
             separators,
             export_settings: export_ui(&p.config.export),
             original_export: export_ui(&p.original_export),
-            default_export: export_ui(&ExportConfig::default()),
+            default_export: export_ui(&template_export),
             validate: ValidateUi {
                 error: p.config.validate.error.as_str().to_string(),
                 warning: p.config.validate.warning.as_str().to_string(),
@@ -2683,6 +3421,11 @@ impl Backend {
         self.engine.save_all()
     }
 
+    /// 清空引擎日志（否则下一次快照会把旧日志重新合并回来）。
+    pub fn clear_logs(&mut self) {
+        self.engine.logs.clear();
+    }
+
     pub fn undo(&mut self) {
         let _ = self.engine.undo();
         self.refresh_selected_validation();
@@ -2727,7 +3470,8 @@ impl Backend {
     }
 
     pub fn delete_project(&mut self, project: &str) -> Result<(), String> {
-        if self.engine.projects.len() <= 1 {
+        // 只限制「删除最后一个已打开的项目」；删除关闭项目不受影响。
+        if self.engine.find_project(project).is_some() && self.engine.projects.len() <= 1 {
             return Err("至少要保留一个打开的项目".to_string());
         }
         self.engine.execute_action(&ProjectAction::DeleteProject {
@@ -2898,19 +3642,18 @@ impl Backend {
     }
 
     pub fn export_template(&self, id: String, name: String) -> Result<String, String> {
-        let opts = SchemaExportOptions {
-            out: None,
-            as_template: true,
-            groups: Vec::new(),
-            nodes: Vec::new(),
-            with_preset: false,
-            meta_id: Some(id),
-            meta_name: Some(name),
-            meta_category: None,
-            meta_version: None,
-        };
-        let outcome = run_schema_export(&self.engine, &opts).map_err(|e| e.to_string())?;
-        Ok(format!("已保存模板 → {}", outcome.path))
+        self.schema_export(
+            String::new(),
+            false,
+            Vec::new(),
+            Vec::new(),
+            Some(id),
+            Some(name),
+            None,
+            None,
+            true,
+        )?;
+        Ok("已保存模板".to_string())
     }
 }
 
@@ -3103,6 +3846,46 @@ fn preview_schema(schema: &TblSchema) -> SchemaPreview {
             || schema.sections.iter().any(|s| !s.preset.is_empty()),
         sections,
     }
+}
+
+/// Group 的内容指纹（结构 + 数据，不含规则 / 展示列等不影响工作簿的设置）。
+///
+/// 用于 Univer 回写前的并发检测：值不同 = 主界面在标签加载后改过这组。
+fn group_fingerprint(group: &tablet_core::model::Group) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    group.name.hash(&mut h);
+    for t in &group.tables {
+        t.name.hash(&mut h);
+        for f in &t.schema.fields {
+            f.name.hash(&mut h);
+            f.desc.hash(&mut h);
+            f.tbl_type.hash(&mut h);
+            f.export.code().hash(&mut h);
+        }
+        for row in &t.records {
+            row.hash(&mut h);
+        }
+    }
+    for c in &group.constants {
+        c.name.hash(&mut h);
+        for e in &c.entries {
+            e.name.hash(&mut h);
+            e.tbl_type.hash(&mut h);
+            e.value.hash(&mut h);
+            e.export.code().hash(&mut h);
+            e.desc.hash(&mut h);
+        }
+    }
+    for e in &group.enums {
+        e.name.hash(&mut h);
+        for x in &e.entries {
+            x.id.hash(&mut h);
+            x.name.hash(&mut h);
+            x.desc.hash(&mut h);
+        }
+    }
+    h.finish()
 }
 
 /// Excel 快速编辑的临时工作簿路径：`<project>/.tbl-cache/<group>-<millis>.xlsx`。
@@ -3320,14 +4103,15 @@ fn one_line(s: &str) -> String {
 
 /// 单个节点的状态标记：删除 / 新增 / 修改 / 错误，同一时刻只显示一个。
 fn marker(deleted: bool, new: bool, dirty: bool, error: bool) -> (String, String) {
-    if deleted {
+    // 与 Slint 一致：校验错误优先展示（`!`），不被 * / + / - 盖住。
+    if error {
+        ("!".into(), "#dc3232".into())
+    } else if deleted {
         ("-".into(), "#dc3232".into())
     } else if new {
         ("+".into(), "#50a050".into())
     } else if dirty {
         ("*".into(), "#d8a020".into())
-    } else if error {
-        ("!".into(), "#dc3232".into())
     } else {
         (String::new(), String::new())
     }

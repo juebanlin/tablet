@@ -180,8 +180,10 @@ await evalJs(`(async () => {
   await __tt.runOp('set_show_ref_name', { on: true });
   return true;
 })()`);
-const refValues = await evalJs(`__tt.state.snapshot.grid.rows.slice(0, 3).map(r => r[2])`);
+const refValues = await evalJs(`__tt.state.snapshot.grid.display_rows.slice(0, 3).map(r => r[2])`);
 check("引用显示展示值", JSON.stringify(refValues) === JSON.stringify(["资源", "军事", "特殊"]), refValues);
+const refRaw = await evalJs(`__tt.state.snapshot.grid.rows.slice(0, 3).map(r => r[2])`);
+check("引用列仍保留原始 id", JSON.stringify(refRaw) === JSON.stringify(["1", "2", "3"]), refRaw);
 
 await evalJs(`__tt.runOp('set_show_ref_name', { on: false })`);
 const rawValues = await evalJs(`__tt.state.snapshot.grid.rows.slice(0, 3).map(r => r[2])`);

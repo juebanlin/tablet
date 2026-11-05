@@ -17,6 +17,13 @@ const state = {
   logFilter: 0,
   bottomTab: 0,
   initialized: false,
+  // 正在 Univer 窗口中打开的组（主界面只读，防止两边同时改）。
+  univerEditing: new Set(),
+  // 已提示过「外部 xlsx 修改但有本地脏改动」的组，避免每 2s 重复 toast。
+  xlsxWarned: new Set(),
+  // 启动时打不开的项目只提示一次。
+  startupAlertsShown: false,
+  repairingSelection: false,
 };
 
 let grid;
@@ -29,13 +36,19 @@ async function invoke(cmd, args) {
   return api(cmd, args);
 }
 
-/** 串行执行后端操作，避免连续编辑时快照乱序。 */
+/** 串行执行后端操作，避免连续编辑时快照乱序。
+ * 注意：失败必须让本次调用 reject（调用方不再弹“成功”toast），但队列不能断，
+ * 所以 opChain 吞掉错误，只有返回给调用方的 promise 带失败。 */
 function runOp(cmd, args) {
-  opChain = opChain
+  const op = opChain
     .then(() => invoke(cmd, args))
-    .then((snap) => applySnapshot(snap))
-    .catch((e) => { addLocalLog(2, String(e)); toast(String(e), "error"); });
-  return opChain;
+    .then((snap) => applySnapshot(snap));
+  opChain = op.catch(() => {});
+  op.catch((e) => {
+    addLocalLog(2, String(e));
+    toast(String(e), "error");
+  });
+  return op;
 }
 
 // ── 日志 ────────────────────────────────────────────────────
@@ -90,6 +103,42 @@ function renderLog() {
 function applySnapshot(s) {
   if (!s) return;
   state.snapshot = s;
+  if (!state.startupAlertsShown && (s.startup_alerts || []).length) {
+    state.startupAlertsShown = true;
+    openModal({
+      title: "部分项目打不开",
+      message: s.startup_alerts.join("\n\n"),
+      input: false,
+    });
+  }
+  // 撤销 / 删除 / 重新加载后，选中的节点可能已不存在：退回项目根。
+  if (state.selected?.name) {
+    const sel = state.selected;
+    const exists = (s.tree || []).some(
+      (r) =>
+        r.kind === sel.kind &&
+        r.project === sel.project &&
+        r.group === sel.group &&
+        r.name === sel.name,
+    );
+    if (!exists) {
+      const project = sel.project || s.status.active_project;
+      state.selected = project
+        ? { project, kind: "project", group: null, name: null }
+        : null;
+      if (project && !state.repairingSelection) {
+        state.repairingSelection = true;
+        invoke("select_node", { project, kind: "project", group: null, name: null })
+          .then((snap) => {
+            state.repairingSelection = false;
+            applySnapshot(snap);
+          })
+          .catch(() => {
+            state.repairingSelection = false;
+          });
+      }
+    }
+  }
 
   if (!state.initialized) {
     state.initialized = true;
@@ -111,16 +160,49 @@ function applySnapshot(s) {
   }
 
   const st = s.status;
+  const sortIdx = ["id", "name", "open", "created", "manual"].indexOf(st.project_sort || "id");
+  if (sortIdx >= 0) {
+    state.treeSort = sortIdx;
+    if (document.activeElement !== $("sort-select")) $("sort-select").selectedIndex = sortIdx;
+  }
   $("project-label").textContent = `当前项目：${st.active_project_name || "—"}`;
   $("dirty-dot").hidden = !st.dirty;
   $("btn-save").disabled = !st.dirty;
   $("btn-undo").disabled = !st.can_undo;
-  $("btn-redo").disabled = !st.can_redo;
-  $("btn-undo").title = st.undo_label || "";
+  $("btn-redo").disabled = !st.can_redo;  $("btn-undo").title = st.undo_label || "";
   $("btn-redo").title = st.redo_label || "";
   $("excel-session").textContent = (st.excel_editing || []).length
     ? `Excel 编辑中：${st.excel_editing.join("、")}`
     : "";
+  state.univerEditing = new Set(st.univer_editing || []);
+  const selectedGroup = state.selected?.group;
+  const sameProject = state.selected?.project === st.active_project;
+  const lockedByUniver = !!selectedGroup && sameProject && state.univerEditing.has(selectedGroup);
+  const lockedByExcel =
+    !!selectedGroup &&
+    sameProject &&
+    (st.excel_editing || []).includes(selectedGroup);
+  const lockedGroup = lockedByUniver || lockedByExcel ? selectedGroup : null;
+  $("univer-session").textContent = (st.univer_editing || []).length
+    ? `Univer 编辑中（主界面只读）：${st.univer_editing.join("、")}`
+    : "";
+  grid.setLocked(!!lockedGroup);
+  grid.setAutoCommitOnBlur(st.auto_commit_on_blur !== false);
+  $("grid-lock-overlay").hidden = !lockedGroup;
+  if (lockedGroup) {
+    document.querySelector(".grid-lock-title").textContent = lockedByExcel
+      ? "该组正在 Excel 中编辑"
+      : "该组正在 Univer 窗口中编辑";
+    document.querySelector(".grid-lock-sub").textContent = lockedByExcel
+      ? "Excel 改动会自动回写内存；主界面此时只读"
+      : "主界面此时只读，避免两边同时修改数据";
+    $("grid-lock-open").textContent = lockedByExcel ? "结束 Excel 编辑" : "聚焦 Univer 窗口";
+  }
+  if (lockedGroup || (st.univer_editing || []).length || (st.excel_editing || []).length) {
+    // 撤销/重做是项目级的，可能改到任何被外部编辑器占用的组；锁定期先禁用。
+    $("btn-undo").disabled = true;
+    $("btn-redo").disabled = true;
+  }
 
   document.title = `tablet v${s.version} — ${s.vcs}`;
   invoke("set_title", { title: `tablet v${s.version} — ${s.vcs}` }).catch(() => {});
@@ -134,12 +216,19 @@ function applySnapshot(s) {
   $("grid-subtitle").textContent = g ? g.subtitle : "";
   $("grid-empty").hidden = !!g;
   $("grid-scroll").hidden = !g;
-  $("btn-rules").disabled = !g;
-  $("btn-excel").disabled = !g;
-  $("btn-revert").disabled = !st.can_revert;
+  $("btn-rules").disabled = !g || g.mode === "constant" || !!lockedGroup;
+  $("btn-excel").disabled = !g || !!lockedGroup;
+  $("btn-univer").disabled = !g;
+  $("btn-univer").title = lockedGroup
+    ? "该组已在 Univer 窗口中打开（点击聚焦窗口）"
+    : "用内置 Univer 打开当前组（一个组一个窗口，可多开）";
+  $("btn-revert").disabled = !st.can_revert || !!lockedGroup;
+  $("show-ref-name").disabled = !g || g.mode === "enum" || !!lockedGroup;
+  $("display-field").disabled = !g || !!lockedGroup || !(g.display_options || []).length;
 
   const showRef = $("show-ref-name");
   if (document.activeElement !== showRef) showRef.checked = !!st.show_ref_name;
+  $("auto-width").checked = g ? g.auto_width !== false : true;
   const df = $("display-field");
   const options = g?.display_options || [];
   const current = g?.display_field || "";
@@ -152,7 +241,7 @@ function applySnapshot(s) {
       )
       .join("");
   df.value = current;
-  df.disabled = !g || options.length === 0;
+  df.disabled = !g || !!lockedGroup || options.length === 0;
   if (!g) {
     grid.setData(null);
     $("formula-bar").hidden = true;
@@ -170,6 +259,7 @@ function toGridNode(g) {
     headerKinds: g.header_kinds,
     kinds: g.kinds,
     rows: g.rows,
+    displayRows: g.display_rows || [],
     errors: g.errors,
     dataCount: g.data_count,
     editableHeaders: g.editable_headers,
@@ -178,7 +268,30 @@ function toGridNode(g) {
     refList: g.ref_list || [],
     pickerHeaderSingle: g.picker_header_single !== false,
     pickerDataSingle: !!g.picker_data_single,
+    autoWidth: g.auto_width !== false,
+    columnWidths: g.column_widths || {},
   };
+}
+
+// 列宽 / 自动列宽变化 → 防抖写入 `.data/user-data.json`（不进项目 dirty）。
+let gridViewTimer = 0;
+function saveGridView(view) {
+  const sel = state.selected;
+  if (!sel?.project || !sel.group || !sel.name) return;
+  // 手动拖列宽会自动关闭自动列宽，勾选框同步。
+  $("auto-width").checked = view.auto !== false;
+  const target = { ...sel };
+  clearTimeout(gridViewTimer);
+  gridViewTimer = setTimeout(() => {
+    invoke("save_grid_view", {
+      project: target.project,
+      group: target.group,
+      kind: target.kind,
+      name: target.name,
+      auto: view.auto,
+      widths: view.widths,
+    }).catch((e) => addLocalLog(2, String(e)));
+  }, 400);
 }
 
 // ── 树 ──────────────────────────────────────────────────────
@@ -303,12 +416,14 @@ function renderTree() {
           key: gKey,
           indent: 1,
           caret: gExpanded ? "▼" : "▶",
-          icon: "📁",
+          // 与 Slint 一致：xlsx 组（节点 = 工作簿 sheet）用 📗，tbl 组用目录 📁。
+          icon: g.xlsx ? "📗" : "📁",
           label: g.label,
           mark: g.mark,
           markColor: g.mark_color,
           selected: isSelected("group", p.project, g.group, null),
           closed: false,
+          extra: groupLocked(p.project, g.group) ? " 🔒" : "",
         }),
       );
       if (!gExpanded) continue;
@@ -464,8 +579,9 @@ function currentSelection() {
     kind: grid.kind,
     info: grid.selectionInfo(),
     coord: grid.kind === "none" ? "" : `${c(grid.focus.c)}${grid.focus.r + 1}`,
-    value: grid.kind === "cell" || grid.kind === "range" ? grid.cellText(grid.focus.r, grid.focus.c) : "",
-    editable: (grid.kind === "cell" || grid.kind === "range") && !grid.isReadonlyCol(grid.focus.c),
+    value: grid.kind === "cell" ? grid.cellText(grid.focus.r, grid.focus.c) : "",
+    editable:
+      grid.kind === "cell" && !grid.isReadonlyCol(grid.focus.c) && !grid.isPickerCol(grid.focus.c),
     hover: grid.hover ? `${c(grid.hover.c)}${grid.hover.r + 1}` : "",
   };
 }
@@ -500,6 +616,15 @@ function initToolbar() {
     });
   });
   $("btn-rules").addEventListener("click", () => openRulesEditor());
+  $("btn-univer").addEventListener("click", () =>
+    univerEdit(state.selected?.project, state.selected?.group),
+  );
+  $("grid-lock-open").addEventListener("click", () => {
+    const sel = state.selected;
+    if (!sel?.group) return;
+    if (state.univerEditing.has(sel.group)) univerEdit(sel.project, sel.group);
+    else runOp("excel_end_edit", { project: sel.project, group: sel.group });
+  });
   $("btn-new-project").addEventListener("click", () => openCreateProject());
   $("btn-revert").addEventListener("click", () => {
     const sel = state.selected;
@@ -517,16 +642,23 @@ function initToolbar() {
   document.addEventListener("keydown", (e) => {
     const mod = e.ctrlKey || e.metaKey;
     if (!mod) return;
+    // 设置 / 对话框里的 Ctrl+Z 应作用于输入框，不要触发工作区撤销。
+    const tag = e.target?.tagName;
+    if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || e.target?.isContentEditable) {
+      return;
+    }
     const k = e.key.toLowerCase();
     if (k === "s") {
       e.preventDefault();
       $("btn-save").click();
-    } else if (k === "z") {
+    } else if (k === "z" || k === "y") {
       e.preventDefault();
-      runOp(e.shiftKey ? "redo" : "undo", {});
-    } else if (k === "y") {
-      e.preventDefault();
-      runOp("redo", {});
+      const anyLocked =
+        (status().univer_editing || []).length || (status().excel_editing || []).length;
+      if (anyLocked) {
+        return toast("有组正在 Excel / Univer 中编辑，暂不能撤销/重做", "error");
+      }
+      runOp(k === "y" || (k === "z" && e.shiftKey) ? "redo" : "undo", {});
     }
   });
 }
@@ -548,6 +680,7 @@ function initBottomPanel() {
     state.logs = [];
     state.seenLogs.clear();
     renderLog();
+    runOp("clear_logs", {}).catch(() => {});
   });
   document.querySelectorAll(".chip[data-filter]").forEach((chip) => {
     chip.addEventListener("click", () => {
@@ -679,10 +812,23 @@ function initModals() {
     }
     e.stopPropagation();
   });
+  // 确认型弹窗（input:false，焦点不在输入框）也要能用 Esc 取消。
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && !$("modal").hidden) {
+      e.preventDefault();
+      $("modal-cancel").click();
+    }
+  });
 }
 
 function status() {
   return state.snapshot?.status || {};
+}
+
+/** 该组是否正在 Univer 窗口中编辑（主界面只读，防止数据打架）。 */
+function groupLocked(project, group) {
+  const st = status();
+  return project === st.active_project && (st.univer_editing || []).includes(group);
 }
 
 async function pickPath(title, ext) {
@@ -799,12 +945,22 @@ async function importXlsxFlow(project) {
   toast("已导入 Excel Group", "ok");
 }
 
-async function excelEdit(group) {
-  const project = status().active_project;
+async function excelEdit(project, group) {
   if (!project) return toast("没有活跃项目", "error");
   try {
     await invoke("excel_begin_edit", { project, group });
-    toast(`已用 Excel 打开 ${group}（保存后自动回写）`, "ok");
+    toast(`已用 Excel 打开 ${group}（编辑后自动回写内存，保存后落盘）`, "ok");
+  } catch (e) {
+    toast(String(e), "error");
+  }
+}
+
+/** 打开内置 Univer 编辑窗口；一个窗口 = 一个组，可同时开多个。 */
+async function univerEdit(project, group) {
+  if (!project) return toast("没有活跃项目", "error");
+  if (!group) return toast("先选择一个分组", "error");
+  try {
+    await invoke("open_univer_editor", { project, group });
   } catch (e) {
     toast(String(e), "error");
   }
@@ -820,7 +976,13 @@ function projectMenu(t) {
         action: () =>
           invoke("open_project_dir", { project: t.project }).catch((e) => toast(String(e), "error")),
       },
-      { label: "项目设置…", action: () => openProjectSettings(t.project) },
+      {
+        label: "项目设置…",
+        action: async () => {
+          await runOp("open_project", { project: t.project });
+          await openProjectSettings(t.project);
+        },
+      },
       { sep: true },
       { label: "删除", danger: true, action: () => deleteProject(t.project) },
     ];
@@ -857,32 +1019,45 @@ function projectMenu(t) {
 
 function groupMenu(t) {
   const st = status();
+  const locked = groupLocked(t.project, t.group);
   const row = state.snapshot?.tree.find(
     (r) => r.kind === "group" && r.project === t.project && r.group === t.group,
   );
   const xlsx = !!row?.xlsx;
   const items = [
-    { label: "新建 Table（v3）", action: () => newNode(t.project, t.group, "table", "v3") },
-    { label: "新建 Table（v2）", action: () => newNode(t.project, t.group, "table", "v2") },
-    { label: "新建 Constant", action: () => newNode(t.project, t.group, "constant") },
-    { label: "新建 Enum", action: () => newNode(t.project, t.group, "enum") },
+    { label: "新建 Table（v3）", disabled: locked, action: () => newNode(t.project, t.group, "table", "v3") },
+    { label: "新建 Table（v2）", disabled: locked, action: () => newNode(t.project, t.group, "table", "v2") },
+    { label: "新建 Constant", disabled: locked, action: () => newNode(t.project, t.group, "constant") },
+    { label: "新建 Enum", disabled: locked, action: () => newNode(t.project, t.group, "enum") },
     { sep: true },
     {
+      label: "Univer 编辑",
+      // 已经在这个组的 Univer 窗口里打开时不重复打开（主界面只读，点也只会聚焦）。
+      disabled: locked,
+      action: () => univerEdit(t.project, t.group),
+    },
+    {
       label: xlsx ? "用 Excel 打开（原文件）" : "用 Excel 打开（整组）",
-      action: () => excelEdit(t.group),
+      disabled: locked,
+      action: () =>
+        xlsx
+          ? invoke("open_xlsx_book", { project: t.project, group: t.group }).catch((e) =>
+              toast(String(e), "error"),
+            )
+          : excelEdit(t.project, t.group),
     },
     { label: "导出 Excel…", action: () => openExcelDialog("export", t.group) },
-    { label: "导入 Excel…", action: () => openExcelDialog("import", t.group) },
+    { label: "导入 Excel…", disabled: locked, action: () => openExcelDialog("import", t.group) },
     { sep: true },
     { label: "复制 Group", action: () => runOp("copy_group", { project: t.project, group: t.group }) },
-    { label: "粘贴节点", disabled: !st.has_node_clipboard, action: () => pasteNodeFmt(t.project, t.group) },
-    { label: "粘贴为 v3", disabled: !st.node_clipboard_is_table, action: () => pasteNodeFmt(t.project, t.group, "v3") },
-    { label: "粘贴为 v2", disabled: !st.node_clipboard_is_table, action: () => pasteNodeFmt(t.project, t.group, "v2") },
-    { label: "粘贴为 .tbl Group", disabled: !st.has_group_clipboard, action: () => pasteGroupFmt(t.project, "tbl") },
-    { label: "粘贴为 Excel Group", disabled: !st.has_group_clipboard, action: () => pasteGroupFmt(t.project, "xlsx") },
+    { label: "粘贴节点", disabled: locked || !st.has_node_clipboard, action: () => pasteNodeFmt(t.project, t.group) },
+    { label: "粘贴为 v3", disabled: locked || !st.node_clipboard_is_table, action: () => pasteNodeFmt(t.project, t.group, "v3") },
+    { label: "粘贴为 v2", disabled: locked || !st.node_clipboard_is_table, action: () => pasteNodeFmt(t.project, t.group, "v2") },
+    { label: "粘贴为 .tbl Group", disabled: locked || !st.has_group_clipboard, action: () => pasteGroupFmt(t.project, "tbl") },
+    { label: "粘贴为 Excel Group", disabled: locked || !st.has_group_clipboard, action: () => pasteGroupFmt(t.project, "xlsx") },
     { sep: true },
-    { label: "重命名", action: () => renameGroup(t.project, t.group) },
-    { label: "删除", danger: true, action: () => deleteGroup(t.project, t.group) },
+    { label: "重命名", disabled: locked, action: () => renameGroup(t.project, t.group) },
+    { label: "删除", danger: true, disabled: locked, action: () => deleteGroup(t.project, t.group) },
   ];
   if (xlsx) {
     items.push({
@@ -895,25 +1070,38 @@ function groupMenu(t) {
       label: "结束 Excel 编辑",
       action: () => runOp("excel_end_edit", { project: t.project, group: t.group }),
     });
+    items.push({
+      label: "放弃 Excel 改动",
+      danger: true,
+      action: async () => {
+        const ok = await openModal({
+          title: "放弃 Excel 改动",
+          message: `结束 ${t.group} 的 Excel 会话，且不把工作簿改动合并回内存？`,
+          input: false,
+        });
+        if (ok) await runOp("excel_abandon", { project: t.project, group: t.group });
+      },
+    });
   }
   return items;
 }
 
 function nodeMenu(t) {
   const st = status();
+  const locked = groupLocked(t.project, t.group);
   const items = [];
   if (t.kind !== "constant") {
-    items.push({ label: "校验规则…", action: () => openRulesEditor() });
+    items.push({ label: "校验规则…", disabled: locked, action: () => openRulesEditor() });
     items.push({ sep: true });
   }
   items.push(
     { label: "复制", action: () => runOp("copy_node", { project: t.project, group: t.group, name: t.name, kind: t.kind }) },
-    { label: "粘贴节点", disabled: !st.has_node_clipboard, action: () => pasteNodeFmt(t.project, t.group) },
-    { label: "粘贴为 v3", disabled: !st.node_clipboard_is_table, action: () => pasteNodeFmt(t.project, t.group, "v3") },
-    { label: "粘贴为 v2", disabled: !st.node_clipboard_is_table, action: () => pasteNodeFmt(t.project, t.group, "v2") },
+    { label: "粘贴节点", disabled: locked || !st.has_node_clipboard, action: () => pasteNodeFmt(t.project, t.group) },
+    { label: "粘贴为 v3", disabled: locked || !st.node_clipboard_is_table, action: () => pasteNodeFmt(t.project, t.group, "v3") },
+    { label: "粘贴为 v2", disabled: locked || !st.node_clipboard_is_table, action: () => pasteNodeFmt(t.project, t.group, "v2") },
     { sep: true },
-    { label: "重命名", action: () => renameNode(t) },
-    { label: "删除", danger: true, action: () => deleteNode(t) },
+    { label: "重命名", disabled: locked, action: () => renameNode(t) },
+    { label: "删除", danger: true, disabled: locked, action: () => deleteNode(t) },
   );
   return items;
 }
@@ -958,6 +1146,15 @@ async function cloneProject(source) {
 }
 
 async function closeProject(project) {
+  const row = state.snapshot?.tree.find((r) => r.kind === "project" && r.project === project);
+  if (row?.mark) {
+    const ok = await openModal({
+      title: "关闭项目",
+      message: `项目 ${project} 有未保存的改动，关闭会丢弃这些改动。确定关闭？`,
+      input: false,
+    });
+    if (!ok) return;
+  }
   await runOp("close_project", { project });
   state.expandedProjects.delete(project);
   renderTree();
@@ -965,12 +1162,12 @@ async function closeProject(project) {
 }
 
 async function deleteProject(project) {
-  const ok = await openModal({
+  const r = await openModal({
     title: "删除项目",
-    message: `确定删除项目 ${project}？磁盘目录会被移除。`,
-    input: false,
+    message: `删除会移除磁盘目录 projects/${project}/，不可恢复。输入项目 ID「${project}」确认：`,
+    placeholder: project,
   });
-  if (!ok) return;
+  if (!r || r.value !== project) return;
   await runOp("delete_project", { project });
   state.expandedProjects.delete(project);
   renderTree();
@@ -1086,6 +1283,11 @@ function gridMenu(ctx) {
     items.push({ label: "删除列", danger: true, action: () => runOp("delete_column", { at: c }) });
   }
   if (ctx.shape === "blank") items.push({ label: "粘贴", action: () => grid.pasteClipboard() });
+  if (grid.locked) {
+    for (const it of items) {
+      if (!it.sep && it.label !== "复制" && it.label !== "剪切") it.disabled = true;
+    }
+  }
   return items;
 }
 
@@ -1332,6 +1534,7 @@ async function submitCreateProject() {
   const err = $("cp-error");
   err.hidden = true;
   if (!id) return showFormError(err, "项目 ID 不能为空");
+  if (!$("cp-name").value.trim()) return showFormError(err, "项目名称不能为空");
   if (cpState.tab !== "empty" && !cpState.preview) {
     return showFormError(err, "请先选择文件 / 模板");
   }
@@ -1572,6 +1775,7 @@ async function openProjectSettings(project) {
     $("ps-name").focus();
   } catch (e) {
     addLocalLog(2, String(e));
+    toast(String(e), "error");
   }
 }
 
@@ -3590,6 +3794,22 @@ function initExportDialog() {
   $("ex-none").addEventListener("click", () =>
     document.querySelectorAll("#ex-formats input[data-fmt]").forEach((i) => (i.checked = false)),
   );
+  // 与 Slint 版一致的四个快捷预设。
+  const presets = {
+    all: ["json", "xml", "java", "go", "cpp", "csharp_dotnet", "typescript_server",
+      "lua", "gdscript", "typescript_client", "csharp_unity", "csharp_godot"],
+    data: ["json", "xml"],
+    server: ["json", "xml", "java", "go", "cpp", "csharp_dotnet", "typescript_server"],
+    client: ["lua", "gdscript", "typescript_client", "csharp_unity", "csharp_godot"],
+  };
+  document.querySelectorAll("#export-dialog [data-expre]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const want = new Set(presets[btn.dataset.expre] || []);
+      document.querySelectorAll("#ex-formats input[data-fmt]").forEach((i) => {
+        i.checked = want.has(i.dataset.fmt);
+      });
+    });
+  });
 }
 
 // ── Toast ───────────────────────────────────────────────────
@@ -3998,7 +4218,9 @@ async function refreshExcelSync() {
                 (o) =>
                   `<button class="mini-btn" data-es-op="${o.code}" data-es-group="${escapeHtml(
                     r.group,
-                  )}" data-es-node="${escapeHtml(r.node)}">${escapeHtml(o.label)}</button>`,
+                  )}" data-es-node="${escapeHtml(r.node)}" ${
+                    o.code === 8 ? 'disabled title="该操作尚未实现"' : ""
+                  }>${escapeHtml(o.label)}</button>`,
               )
               .join("") || "";
           const notes = [r.header_edited ? "表头 type/export 被改过" : "", r.outside ? "区域外有内容" : ""]
@@ -4097,7 +4319,7 @@ function initExcelDialog() {
   $("btn-excel").addEventListener("click", () => {
     const sel = state.selected;
     if (!sel || !sel.group) return addLocalLog(1, "请先选择一个分组或节点");
-    excelEdit(sel.group);
+    excelEdit(sel.project, sel.group);
   });
 }
 
@@ -4112,6 +4334,7 @@ function openExcelMap() {
   $("em-group").value = "";
   $("em-node").value = "";
   $("em-fields").innerHTML = "";
+  $("em-preview").innerHTML = "";
   $("em-result").hidden = true;
   $("em-error").hidden = true;
   $("excel-map").hidden = false;
@@ -4143,17 +4366,143 @@ async function loadExcelPreview() {
       $("em-group").value = (p.sheet || "imported").toLowerCase().replace(/[^a-z0-9_]/g, "_");
     }
     if (!$("em-node").value) $("em-node").value = pascalName(p.sheet);
-    $("em-fields").innerHTML = p.fields
-      .map(
-        (f) =>
-          `<div class="em-field"><span class="col">#${f.source_col}</span><span>${escapeHtml(
-            f.target_name,
-          )}</span><span>${escapeHtml(f.tbl_type)}</span><span>${escapeHtml(f.export)}</span></div>`,
-      )
-      .join("");
+    renderEmPreview();
+    renderEmFields();
   } catch (e) {
     showFormError($("em-error"), String(e));
   }
+}
+
+/** 原始 Excel 预览（表头 + 前几行），对应 Slint 映射对话框的「原始数据」页。 */
+function renderEmPreview() {
+  if (!emPreview) return;
+  const cols = emPreview.columns || [];
+  const rows = emPreview.sample_rows || [];
+  $("em-preview").innerHTML =
+    `<table><thead><tr><th>#</th>${cols
+      .map((c) => `<th>${escapeHtml(c)}</th>`)
+      .join("")}</tr></thead><tbody>` +
+    rows
+      .map(
+        (r, i) =>
+          `<tr><th>${i + 1}</th>${cols
+            .map((_, c) => `<td>${escapeHtml(r[c] ?? "")}</td>`)
+            .join("")}</tr>`,
+      )
+      .join("") +
+    "</tbody></table>";
+  renderEmFinal();
+}
+
+/** 按当前映射生成最终 4 行表头 + 数据预览。 */
+function renderEmFinal() {
+  if (!emPreview) return;
+  const fields = emPreview.fields || [];
+  const rows = emPreview.sample_rows || [];
+  const head = [
+    fields.map((f) => f.desc),
+    fields.map((f) => f.export),
+    fields.map((f) => f.tbl_type),
+    fields.map((f) => f.target_name),
+  ];
+  $("em-final").innerHTML =
+    `<table><thead>${head
+      .map(
+        (r, i) =>
+          `<tr>${r.map((v) => `<th class="${i === 3 ? "em-fin-name" : ""}">${escapeHtml(v)}</th>`).join("")}</tr>`,
+      )
+      .join("")}</thead><tbody>` +
+    rows
+      .map(
+        (r) =>
+          `<tr>${fields
+            .map((f) => `<td>${escapeHtml(r[f.source_col - 1] ?? "")}</td>`)
+            .join("")}</tr>`,
+      )
+      .join("") +
+    "</tbody></table>";
+}
+
+const EM_TYPES = ["int", "long", "float", "double", "bool", "str", "txt"];
+const EM_EXPORTS = ["前后端", "客户端", "服务器", "不导出"];
+
+/** 映射字段可编辑（目标名 / 源列 / 类型 / 导出 / 说明），不再只是只读建议。 */
+function renderEmFields() {
+  if (!emPreview) return;
+  const cols = emPreview.columns || [];
+  $("em-fields").innerHTML = emPreview.fields
+    .map((f, i) => {
+      const src = cols
+        .map(
+          (c, j) =>
+            `<option value="${j + 1}"${j + 1 === f.source_col ? " selected" : ""}>${escapeHtml(
+              `${j + 1}. ${c}`,
+            )}</option>`,
+        )
+        .join("");
+      const types = EM_TYPES.includes(f.tbl_type) ? EM_TYPES : [f.tbl_type, ...EM_TYPES];
+      return (
+        `<div class="em-field" data-em-row="${i}">` +
+        `<span class="col">${i + 1}</span>` +
+        `<input class="input em-name" data-em-key="target_name" value="${escapeHtml(f.target_name)}" />` +
+        `<select class="combo em-src" data-em-key="source_col">${src}</select>` +
+        `<select class="combo em-type" data-em-key="tbl_type">${types
+          .map((t) => `<option${t === f.tbl_type ? " selected" : ""}>${escapeHtml(t)}</option>`)
+          .join("")}</select>` +
+        `<select class="combo em-export" data-em-key="export">${EM_EXPORTS.map(
+          (x) => `<option${x === f.export ? " selected" : ""}>${x}</option>`,
+        ).join("")}</select>` +
+        `<input class="input em-desc" data-em-key="desc" value="${escapeHtml(f.desc)}" placeholder="说明" />` +
+        `<button class="mini-btn" data-em-remove="${i}" title="删除该字段">×</button>` +
+        "</div>"
+      );
+    })
+    .join("");
+}
+
+function emFieldRow(el) {
+  const row = el.closest("[data-em-row]");
+  if (!row || !emPreview) return null;
+  const f = emPreview.fields[+row.dataset.emRow];
+  return f ? { row, f } : null;
+}
+
+async function importAllExcelSheets() {
+  if (!emPreview) return showFormError($("em-error"), "请先读取预览");
+  const path = $("em-path").value.trim();
+  const group = $("em-group").value.trim();
+  if (!path || !group) return showFormError($("em-error"), "请填写文件和 Group");
+  $("em-error").hidden = true;
+  let snap = null;
+  const failed = [];
+  for (const sheet of emPreview.sheets) {
+    try {
+      const p = await invoke("excel_preview", {
+        path,
+        sheet,
+        headerRow: Number($("em-header").value) || null,
+      });
+      snap = await invoke("excel_import_mapped", {
+        request: {
+          path,
+          sheet,
+          header_row: p.header_row,
+          data_start: p.data_start,
+          group_name: group,
+          node_name: pascalName(sheet),
+          fields: p.fields,
+        },
+      });
+    } catch (e) {
+      failed.push(`${sheet}: ${e}`);
+    }
+  }
+  if (snap) applySnapshot(snap);
+  $("em-result").hidden = false;
+  $("em-result").textContent =
+    `导入全部完成（${emPreview.sheets.length - failed.length}/${emPreview.sheets.length}）` +
+    (failed.length ? `\n失败：\n${failed.join("\n")}` : "");
+  toast(`已导入 ${emPreview.sheets.length - failed.length} 个 Sheet`, failed.length ? "error" : "ok");
 }
 
 async function runExcelMap() {
@@ -4191,7 +4540,44 @@ function initExcelMap() {
   $("em-close").addEventListener("click", () => ($("excel-map").hidden = true));
   $("em-load").addEventListener("click", loadExcelPreview);
   $("em-run").addEventListener("click", runExcelMap);
+  $("em-import-all").addEventListener("click", importAllExcelSheets);
   $("em-sheet").addEventListener("change", loadExcelPreview);
+  $("em-header").addEventListener("change", loadExcelPreview);
+  $("em-start").addEventListener("change", loadExcelPreview);
+  $("em-fields").addEventListener("input", (e) => {
+    const hit = emFieldRow(e.target);
+    if (!hit) return;
+    const key = e.target.dataset.emKey;
+    hit.f[key] = key === "source_col" ? Number(e.target.value) : e.target.value;
+    renderEmFinal();
+  });
+  $("em-fields").addEventListener("change", (e) => {
+    const hit = emFieldRow(e.target);
+    if (!hit) return;
+    const key = e.target.dataset.emKey;
+    hit.f[key] = key === "source_col" ? Number(e.target.value) : e.target.value;
+    renderEmFinal();
+  });
+  $("em-fields").addEventListener("click", (e) => {
+    const del = e.target.closest("[data-em-remove]");
+    if (!del || !emPreview) return;
+    emPreview.fields.splice(Number(del.dataset.emRemove), 1);
+    renderEmFields();
+    renderEmFinal();
+  });
+  $("em-add-field").addEventListener("click", () => {
+    if (!emPreview) return;
+    const n = emPreview.fields.length + 1;
+    emPreview.fields.push({
+      target_name: `field_${n}`,
+      source_col: Math.min(n, emPreview.columns.length || n),
+      tbl_type: "str",
+      export: "前后端",
+      desc: "",
+    });
+    renderEmFields();
+    renderEmFinal();
+  });
 }
 
 // ── 校验问题（可跳转）───────────────────────────────────────
@@ -4290,6 +4676,7 @@ function boot() {
     onContextMenu: (ctx) => showContextMenu(ctx.x, ctx.y, gridMenu(ctx)),
     onRefPicker: (target, strategy) => invoke("ref_picker", { target, strategy: strategy || null }),
     onTypeSelector: (target) => openTypeSelector(target),
+    onViewChange: (view) => saveGridView(view),
   });
 
   initToolbar();
@@ -4311,6 +4698,21 @@ function boot() {
   initContextMenus();
 
   $("tree-list").addEventListener("click", onTreeClick);
+  // 双击项目 / 组行展开收起（与 Slint 版一致）。
+  $("tree-list").addEventListener("dblclick", (e) => {
+    const item = e.target.closest(".tree-item");
+    if (!item) return;
+    const t = decodeTreeKey(item.dataset.key);
+    if (t.kind === "project") {
+      if (!state.expandedProjects.has(t.project)) state.expandedProjects.add(t.project);
+      else state.expandedProjects.delete(t.project);
+    } else if (t.kind === "group") {
+      const key = `${t.project}|${t.group}`;
+      if (!state.expandedGroups.has(key)) state.expandedGroups.add(key);
+      else state.expandedGroups.delete(key);
+    } else return;
+    renderTree();
+  });
   $("tree-search").addEventListener("input", (e) => {
     state.treeSearch = e.target.value;
     renderTree();
@@ -4322,6 +4724,8 @@ function boot() {
   $("sort-select").addEventListener("change", (e) => {
     state.treeSort = e.target.selectedIndex;
     renderTree();
+    const sort = ["id", "name", "open", "created", "manual"][state.treeSort] || "id";
+    invoke("set_project_sort", { sort }).catch((err) => toast(String(err), "error"));
   });
   $("full-group").addEventListener("change", (e) => {
     state.fullGroup = e.target.checked;
@@ -4335,6 +4739,28 @@ function boot() {
 
   runOp("snapshot", {}).then(() => {
     addLocalLog(0, "工作区已加载");
+  });
+
+  // 主窗口关闭：有未保存改动先确认（Slint 版的同款保护）。
+  try {
+    const mainWin = window.__TAURI__?.webviewWindow?.getCurrentWebviewWindow?.();
+    mainWin?.onCloseRequested?.((event) => {
+      if (!status().dirty) return;
+      event.preventDefault();
+      if (confirm("工作区有未保存的改动，关闭将丢弃。确定关闭？")) {
+        mainWin.destroy();
+      }
+    });
+  } catch {}
+
+  // Univer 窗口回写内存后通知主界面刷新；窗口重新获得焦点也补一次（事件不可用时的兜底）。
+  try {
+    window.__TAURI__?.event?.listen("tablet://state-changed", () => {
+      invoke("snapshot").then(applySnapshot).catch(() => {});
+    });
+  } catch {}
+  window.addEventListener("focus", () => {
+    invoke("snapshot").then(applySnapshot).catch(() => {});
   });
 
   // Excel 编辑会话轮询：Excel 保存后 mtime 变化 → 自动导入回内存。
@@ -4351,6 +4777,33 @@ function boot() {
           toast(`Excel 已回写：${it.group}`, "ok");
         } catch {
           // Excel 可能正在写盘，下一轮重试。
+        }
+      }
+    } catch {}
+    // xlsx 组外部修改：干净就自动重载；本地有脏改动则提示一次并跳过。
+    try {
+      const changes = await invoke("xlsx_poll");
+      for (const it of changes) {
+        const key = `${it.project}|${it.group}`;
+        if (it.dirty) {
+          if (!state.xlsxWarned.has(key)) {
+            state.xlsxWarned.add(key);
+            addLocalLog(2, `[${it.group}] 外部工作簿已修改，本地有未保存改动，已跳过重载`);
+            toast(`${it.group} 的外部工作簿已修改；本地有未保存改动，请先保存或还原`, "error");
+          }
+          continue;
+        }
+        if (grid.editing) continue; // 正在输入单元格，下一轮再重载
+        state.xlsxWarned.delete(key);
+        try {
+          const snap = await invoke("reload_xlsx_external", {
+            project: it.project,
+            group: it.group,
+          });
+          applySnapshot(snap);
+          toast(`已重新加载外部工作簿：${it.group}`, "ok");
+        } catch {
+          // 外部可能正在写盘，下一轮重试。
         }
       }
     } catch {}

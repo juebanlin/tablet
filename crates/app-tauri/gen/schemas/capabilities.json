@@ -1,1 +1,1 @@
-{}
+{"default":{"identifier":"default","description":"主窗口与 Univer 编辑窗口：事件监听 + 窗口关闭确认。","local":true,"windows":["main","univer-*"],"permissions":["core:default","core:window:allow-close","core:window:allow-destroy"]}}

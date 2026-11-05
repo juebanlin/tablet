@@ -67,6 +67,7 @@
         <div class="grid-ribbon">
           <button class="btn" id="btn-revert" disabled>还原</button>
           <button class="btn" id="btn-excel" disabled>Excel 编辑</button>
+          <button class="btn" id="btn-univer" disabled title="用内置 Univer 打开当前组（支持多标签）">Univer 编辑</button>
           <button class="btn" id="btn-rules" disabled>校验规则</button>
           <label class="check"><input type="checkbox" id="show-ref-name" /> 显示引用名称</label>
           <span class="ribbon-label">被引用展示列:</span>
@@ -90,9 +91,19 @@
 
         <div class="status-bar">
           <span class="status-item" id="excel-session"></span>
+          <span class="status-item" id="univer-session"></span>
           <span class="status-item" id="selection-info"></span>
           <span class="spacer"></span>
           <span class="status-item" id="hover-info"></span>
+        </div>
+
+        <!-- Univer 窗口正在编辑当前组：整块区域禁用并置灰，避免逐个组件禁用。 -->
+        <div class="grid-lock-overlay" id="grid-lock-overlay" hidden>
+          <div class="grid-lock-card">
+            <div class="grid-lock-title">该组正在 Univer 窗口中编辑</div>
+            <div class="grid-lock-sub">主界面此时只读，避免两边同时修改数据</div>
+            <button class="btn" id="grid-lock-open">聚焦 Univer 窗口</button>
+          </div>
         </div>
       </section>
     </div>
@@ -250,6 +261,11 @@
       <div class="modal-actions">
         <button class="btn" id="ex-all">全选</button>
         <button class="btn" id="ex-none">清空</button>
+        <span class="sep-v"></span>
+        <button class="btn" data-expre="all">全部</button>
+        <button class="btn" data-expre="data">数据</button>
+        <button class="btn" data-expre="server">后端</button>
+        <button class="btn" data-expre="client">前端</button>
         <span class="spacer"></span>
         <button class="btn" id="ex-cancel">关闭</button>
         <button class="btn primary" id="ex-run">开始导出</button>
@@ -419,13 +435,17 @@
         <div class="form-row"><label>数据起始行</label><input class="input" id="em-start" type="number" min="2" value="2" /></div>
         <div class="form-row"><label>Group</label><input class="input" id="em-group" /></div>
         <div class="form-row"><label>节点名</label><input class="input" id="em-node" /></div>
+        <div class="em-preview" id="em-preview"></div>
         <div class="em-fields" id="em-fields"></div>
+        <button class="btn" id="em-add-field">+ 添加字段</button>
+        <div class="em-preview" id="em-final"></div>
       </div>
       <pre class="export-result" id="em-result" hidden></pre>
       <div class="modal-message error" id="em-error" hidden></div>
       <div class="modal-actions">
         <button class="btn" id="em-close">关闭</button>
-        <button class="btn primary" id="em-run">导入</button>
+        <button class="btn" id="em-import-all">导入全部 Sheet</button>
+        <button class="btn primary" id="em-run">导入当前</button>
       </div>
     </div>
   </div>
