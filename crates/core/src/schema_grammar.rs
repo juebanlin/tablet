@@ -148,7 +148,7 @@ fn is_numeric_token(s: &str) -> bool {
     chars_ok && s.parse::<f64>().is_ok()
 }
 
-pub(crate) fn parse_rule_body(body: &str) -> Result<Rule, String> {
+pub fn parse_rule_body(body: &str) -> Result<Rule, String> {
     let (head, level) = split_rule_level(body)?;
     let (target, expr_text) = parse_rule_target(head)?;
     if expr_text.trim().is_empty() {

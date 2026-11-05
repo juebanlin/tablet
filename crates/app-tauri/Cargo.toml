@@ -1,0 +1,32 @@
+[package]
+name = "tablet-tauri"
+version.workspace = true
+edition = "2021"
+# 只依赖 tablet-core（Apache-2.0）+ tablet-cli（Apache-2.0）+ Tauri（MIT/Apache-2.0），
+# 不含 Slint，因此可以对外分发、不传染 GPL（@docs/17 §2.3）。
+license = "Apache-2.0"
+build = "build.rs"
+
+[[bin]]
+name = "tablet-tauri"
+path = "src/main.rs"
+
+[dependencies]
+tablet-core = { path = "../core" }
+tablet-cli = { path = "../app-cli" }
+tauri = { version = "2", features = [] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+clap = "4"
+log = "0.4"
+simplelog = "0.12"
+time = { version = "0.3", features = ["macros", "formatting"] }
+anyhow = "1"
+# 原生文件/目录选择（GUI 的「浏览…」），与 Slint 版使用同一套 rfd。
+rfd = "0.17"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_System_Console"] }
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }

@@ -11,6 +11,10 @@ toml = "0.8"
 anyhow = "1"
 log = "0.4"
 chrono = "0.4"
+# 崩溃日志：时间戳与 tablet.log 用同一套格式 / 本地时区偏移（@docs/17 §5.3）。
+time = { version = "0.3", features = ["macros", "formatting"] }
+# 崩溃日志里的系统版本（例如 Windows 10.0.22631）：只读不写，跨平台。
+os_info = "3"
 encoding_rs = "0.8"
 pinyin = "0.10"
 # 节点级规则的正则验证器（matches(..)）
@@ -31,3 +35,7 @@ umya-spreadsheet = "3.1"
 # 只给测试用：直接读 xlsx 的 zip 条目，钉住「没被同步的 sheet 是原始字节直通」这条
 # 保真契约（lazy_read 的核心，见 excel_sync.rs 模块注释）。umya 自己用的就是它。
 zip = "8"
+
+[build-dependencies]
+# build.rs 格式化 BUILD_TIME（ISO8601 UTC）。
+time = { version = "0.3", features = ["macros", "formatting"] }

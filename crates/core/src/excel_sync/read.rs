@@ -17,6 +17,20 @@ use super::vo::*;
 
 // ── tbl 侧 ──
 
+/// 单元格比较用的规范化：浮点列去掉数值等价的尾零（`120.0` ↔ Excel 回读的 `120`）。
+///
+/// 只影响 VO 的比较 / 展示；推送仍写存储原文。没有这一步时，浮点列只要带 `.0`
+/// 就会永远被判成「有差异」，同步面板上的 `数据→` 点多少次都消不掉。
+fn normalize_cell(value: &str, ty: &str) -> String {
+    let t = ty.trim();
+    if t == "float" || t == "double" {
+        if let Ok(n) = value.trim().parse::<f64>() {
+            return format!("{n}");
+        }
+    }
+    value.to_string()
+}
+
 /// `Table` → VO。tbl 侧永远是「四样都有」，没有布局之说。
 pub fn tbl_sheet_vo(table: &Table) -> SheetVo {
     let fields = &table.schema.fields;
@@ -33,7 +47,9 @@ pub fn tbl_sheet_vo(table: &Table) -> SheetVo {
     let rows: Vec<RowVo> = table.records.iter().enumerate().map(|(i, r)| {
         let mut cells = vec![String::new(); fields.len()];
         for (c, v) in r.iter().enumerate() {
-            if c < cells.len() { cells[c] = v.clone(); }
+            if c < cells.len() {
+                cells[c] = normalize_cell(v, &fields[c].tbl_type);
+            }
         }
         RowVo { index: DATA_START + i as u32, cells }
     }).collect();

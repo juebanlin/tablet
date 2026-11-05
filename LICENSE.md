@@ -1,12 +1,13 @@
 # Licensing
 
-`tablet` 由三个 crate 组成，授权按 crate 分别落地：
+`tablet` 由四个 crate 组成，授权按 crate 分别落地：
 
 | Crate | 产物 | License | 备注 |
 |---|---|---|---|
 | `tablet-core` | rlib | Apache-2.0 | 纯库，可被任意复用 |
 | `tablet-cli` | `tablet-cli[.exe]` + lib | Apache-2.0 | 不依赖 Slint，Jenkins / 自动化无障碍 |
 | `tablet-slint` | `tablet[.exe]` (GUI) | GPL-3.0-only | 静态链 [Slint](https://slint.dev/) GPL 版，整体被 GPLv3 覆盖 |
+| `tablet-tauri` | `tablet-tauri[.exe]` (GUI) | Apache-2.0 | Tauri（MIT/Apache-2.0）+ WebView2，不传染 GPL（@17.2.3） |
 
 ## 选择理由
 

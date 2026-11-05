@@ -1,0 +1,737 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>tablet</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="app">
+    <!-- 1. Toolbar：撤销/重做 | 保存/重新加载 + 当前项目 -->
+    <header class="toolbar">
+      <button class="btn" id="btn-undo" disabled>撤销</button>
+      <button class="btn" id="btn-redo" disabled>重做</button>
+      <div class="sep-v"></div>
+      <button class="btn" id="btn-save" disabled>保存</button>
+      <button class="btn" id="btn-reload">重新加载</button>
+      <button class="btn" id="btn-validate">验证</button>
+      <button class="btn" id="btn-export">导出</button>
+      <button class="btn" id="btn-global-settings">设置</button>
+      <span class="spacer"></span>
+      <button class="btn" id="btn-about">关于</button>
+      <div class="sp-6"></div>
+      <span class="project-label" id="project-label">当前项目：—</span>
+      <span class="dirty-dot" id="dirty-dot" hidden></span>
+    </header>
+
+    <div class="main">
+      <!-- 2. TreeSection：标题 / 顶部功能区 / 过滤功能区 / 节点列表 -->
+      <aside class="tree" id="tree-pane">
+        <div class="pane-title">项目列表</div>
+        <div class="tree-top">
+          <button class="btn" id="btn-new-project">新建项目</button>
+          <select class="combo" id="sort-select">
+            <option>ID</option><option>名称</option><option>已打开</option>
+            <option>创建时间</option><option>手动</option>
+          </select>
+        </div>
+        <div class="tree-filter">
+          <div class="field-row">
+            <label>搜索:</label>
+            <input class="input" id="tree-search" placeholder="名称 / 拼音首字母" />
+          </div>
+          <div class="field-row">
+            <label>过滤:</label>
+            <select class="combo" id="tree-filter-select">
+              <option>全部</option><option>改动</option><option>新增</option>
+              <option>修改</option><option>删除</option>
+            </select>
+          </div>
+          <label class="check"><input type="checkbox" id="full-group" /> 完整组</label>
+        </div>
+        <div class="tree-list" id="tree-list"></div>
+      </aside>
+
+      <div class="splitter-v" id="splitter-v"></div>
+
+      <!-- 3. GridSection：标题 / 功能 bar / 公式栏 / 表格 / 状态栏 -->
+      <section class="grid-section">
+        <div class="grid-header">
+          <span class="grid-title" id="grid-title">未选中</span>
+          <span class="grid-subtitle" id="grid-subtitle"></span>
+          <span class="spacer"></span>
+          <label class="check"><input type="checkbox" id="auto-width" checked /> 自动列宽</label>
+        </div>
+
+        <div class="grid-ribbon">
+          <button class="btn" id="btn-revert" disabled>还原</button>
+          <button class="btn" id="btn-excel" disabled>Excel 编辑</button>
+          <button class="btn" id="btn-rules" disabled>校验规则</button>
+          <label class="check"><input type="checkbox" id="show-ref-name" /> 显示引用名称</label>
+          <span class="ribbon-label">被引用展示列:</span>
+          <select class="combo" id="display-field" disabled><option>ID</option></select>
+        </div>
+
+        <div class="formula-bar" id="formula-bar" hidden>
+          <span class="coord" id="formula-coord">A1</span>
+          <div class="sep-v"></div>
+          <textarea class="formula-input" id="formula-input" rows="1"></textarea>
+          <span class="formula-lock" id="formula-lock" hidden>只读</span>
+          <button class="formula-toggle" id="formula-toggle" title="展开 / 收起">▼</button>
+        </div>
+
+        <div class="grid-area" id="grid-area">
+          <div class="grid-empty" id="grid-empty">选择左侧节点查看详情</div>
+          <div class="grid-scroll" id="grid-scroll" tabindex="0" hidden>
+            <table class="sheet" id="sheet"></table>
+          </div>
+        </div>
+
+        <div class="status-bar">
+          <span class="status-item" id="excel-session"></span>
+          <span class="status-item" id="selection-info"></span>
+          <span class="spacer"></span>
+          <span class="status-item" id="hover-info"></span>
+        </div>
+      </section>
+    </div>
+
+    <div class="splitter-h" id="splitter-h"></div>
+
+    <!-- 4. BottomPanel：日志 / Excel 文件 -->
+    <section class="bottom-panel" id="bottom-panel">
+      <div class="tabbar" id="bottom-tabs">
+        <button class="tab active" data-tab="0">日志</button>
+        <button class="tab" data-tab="1">Excel 文件</button>
+        <button class="tab" data-tab="2">问题</button>
+      </div>
+
+      <div class="bottom-body">
+        <div class="pane" data-pane="0">
+          <div class="log-bar">
+            <button class="chip-btn" id="btn-clear-log">清空</button>
+            <span class="gap"></span>
+            <button class="chip active" data-filter="0">全部</button>
+            <button class="chip" data-filter="1">Info</button>
+            <button class="chip" data-filter="2">Warn</button>
+            <button class="chip" data-filter="3">Error</button>
+            <span class="spacer"></span>
+            <span class="log-summary" id="log-summary"></span>
+          </div>
+          <div class="log-list" id="log-list"></div>
+        </div>
+
+        <div class="pane" data-pane="1" hidden>
+          <div class="excel-filebar">
+            <button class="btn" id="excel-sync">同步</button>
+            <button class="btn" id="excel-refresh">刷新</button>
+            <button class="btn" id="excel-delete" disabled>删除</button>
+            <button class="btn" id="excel-open-selected">打开</button>
+            <button class="btn" id="excel-open-folder">打开目录</button>
+            <span class="spacer"></span>
+            <span class="log-summary" id="excel-dir"></span>
+          </div>
+          <div class="excel-list" id="excel-list"></div>
+        </div>
+
+        <div class="pane" data-pane="2" hidden>
+          <div class="excel-filebar">
+            <button class="btn" id="issue-refresh">重新验证</button>
+            <span class="spacer"></span>
+            <span class="log-summary" id="issue-summary"></span>
+          </div>
+          <div class="issue-list" id="issue-list"></div>
+        </div>
+      </div>
+    </section>
+  </div>
+  <div class="modal" id="global-settings" hidden>
+    <div class="modal-box ps-box">
+      <div class="modal-title">全局设置</div>
+      <div class="ps-tabs">
+        <button class="ps-tab active" data-gstab="ui">UI 设置</button>
+        <button class="ps-tab" data-gstab="sep">分隔符模板</button>
+        <button class="ps-tab" data-gstab="export">导出模板</button>
+      </div>
+      <div class="ps-body">
+        <div class="ps-pane" data-gspane="ui">
+          <div class="export-section">
+            <div class="export-title">编辑行为</div>
+            <label class="check gs-check"><input type="checkbox" id="gs-auto-commit" /> 失焦自动提交编辑</label>
+            <label class="check gs-check"><input type="checkbox" id="gs-realtime" /> 实时校验</label>
+          </div>
+          <div class="export-section">
+            <div class="export-title">选择器触发</div>
+            <div class="form-row">
+              <label>表头触发方式</label>
+              <select class="combo" id="gs-header-trigger">
+                <option value="single">单击呼出</option>
+                <option value="double">双击呼出</option>
+              </select>
+            </div>
+            <div class="form-row">
+              <label>数据区触发方式</label>
+              <select class="combo" id="gs-data-trigger">
+                <option value="single">单击呼出</option>
+                <option value="double">双击呼出</option>
+              </select>
+            </div>
+          </div>
+          <div class="export-section">
+            <div class="export-title">显示选项</div>
+            <label class="check gs-check"><input type="checkbox" id="gs-show-id" /> 项目列表显示元数据 ID</label>
+            <label class="check gs-check"><input type="checkbox" id="gs-const-ref" /> 允许 Constant 使用 @Xxx 引用</label>
+          </div>
+          <div class="export-section">
+            <div class="export-title">引用选择器</div>
+            <div class="form-row">
+              <label>默认列展示</label>
+              <select class="combo" id="gs-ref-strategy">
+                <option value="auto">智能（id + 最多 2 个辅助列）</option>
+                <option value="full">全部列</option>
+              </select>
+            </div>
+          </div>
+          <div class="export-section">
+            <div class="export-title">日志</div>
+            <div class="form-row">
+              <label>日志级别</label>
+              <select class="combo" id="gs-log-level">
+                <option value="trace">trace</option>
+                <option value="debug">debug</option>
+                <option value="info">info</option>
+                <option value="warn">warn</option>
+                <option value="error">error</option>
+              </select>
+            </div>
+          </div>
+        </div>
+        <div class="ps-pane" data-gspane="sep" hidden>
+          <div class="ps-pane-head">
+            <span>新建项目时使用的默认分隔符（25 项）；「使用默认值」可一键恢复。</span>
+          </div>
+          <div class="sep-grid" id="gs-seps"></div>
+        </div>
+        <div class="ps-pane" data-gspane="export" hidden>
+          <div id="gs-export"></div>
+        </div>
+      </div>
+      <div class="modal-message error" id="gs-error" hidden></div>
+      <div class="modal-actions">
+        <button class="btn" id="gs-defaults">使用默认值</button>
+        <span class="spacer"></span>
+        <button class="btn" id="gs-cancel">取消</button>
+        <button class="btn primary" id="gs-ok">确定</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal" id="export-dialog" hidden>
+    <div class="modal-box">
+      <div class="modal-title">导出</div>
+      <div class="export-format-grid" id="ex-formats">
+        <label class="check"><input type="checkbox" data-fmt="json" checked /> JSON 数据</label>
+        <label class="check"><input type="checkbox" data-fmt="xml" checked /> XML 数据</label>
+        <label class="check"><input type="checkbox" data-fmt="java" checked /> Java</label>
+        <label class="check"><input type="checkbox" data-fmt="go" checked /> Go</label>
+        <label class="check"><input type="checkbox" data-fmt="cpp" checked /> C++</label>
+        <label class="check"><input type="checkbox" data-fmt="csharp_dotnet" checked /> C# (.NET)</label>
+        <label class="check"><input type="checkbox" data-fmt="csharp_unity" checked /> C# (Unity)</label>
+        <label class="check"><input type="checkbox" data-fmt="csharp_godot" checked /> C# (Godot)</label>
+        <label class="check"><input type="checkbox" data-fmt="lua" checked /> Lua</label>
+        <label class="check"><input type="checkbox" data-fmt="gdscript" checked /> GDScript</label>
+        <label class="check"><input type="checkbox" data-fmt="typescript_client" checked /> TS (客户端)</label>
+        <label class="check"><input type="checkbox" data-fmt="typescript_server" checked /> TS (服务端)</label>
+      </div>
+      <div class="ps-pane-head">输出路径取「项目设置 → 导出」。</div>
+      <pre class="export-result" id="ex-result" hidden></pre>
+      <div class="modal-message error" id="ex-error" hidden></div>
+      <div class="modal-actions">
+        <button class="btn" id="ex-all">全选</button>
+        <button class="btn" id="ex-none">清空</button>
+        <span class="spacer"></span>
+        <button class="btn" id="ex-cancel">关闭</button>
+        <button class="btn primary" id="ex-run">开始导出</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="rules-overlay" id="rules" hidden>
+    <div class="rules-dialog">
+      <header class="rules-head">
+        <span class="rules-title" id="rules-title">校验规则</span>
+        <span class="rules-error" id="rules-error"></span>
+        <span class="spacer"></span>
+        <button class="btn" id="rules-reset" title="丢弃未保存的修改，回到已保存的规则">还原</button>
+        <button class="btn" id="rules-cancel">取消</button>
+        <button class="btn primary" id="rules-save">保存规则</button>
+      </header>
+      <div class="rules-scope-bar">
+        <div class="scope-tabs" id="rules-scope">
+          <button class="scope-tab active" data-scope="column">列规则</button>
+          <button class="scope-tab" data-scope="table">表级规则</button>
+        </div>
+        <span class="rules-hint">同一作用域内从上到下执行；组内按 AND / OR（AND 优先）</span>
+      </div>
+      <div class="rules-discard" id="rules-discard" hidden>
+        <span id="rules-discard-msg"></span>
+        <span class="spacer"></span>
+        <button class="btn danger" id="rules-discard-ok">丢弃并切换</button>
+        <button class="btn" id="rules-discard-cancel">取消</button>
+      </div>
+      <div class="rules-body">
+        <aside class="rules-targets" id="rules-targets"></aside>
+        <section class="rules-editor">
+          <div class="rules-tabs">
+            <button class="rtab active" data-rtab="custom">自定义规则</button>
+            <button class="rtab" data-rtab="system">系统规则</button>
+          </div>
+          <div class="rules-pane" id="rules-custom-pane">
+            <div class="rule-cards" id="rules-custom"></div>
+            <button class="btn add-rule" id="rules-add">+ 新建规则</button>
+            <div class="rule-detail" id="rule-detail"></div>
+          </div>
+          <div class="rules-pane system-pane" id="rules-system" hidden></div>
+        </section>
+      </div>
+      <div class="rules-status" id="rules-status"></div>
+    </div>
+  </div>
+
+  <div class="modal" id="type-selector" hidden>
+    <div class="modal-box ts-box">
+      <div class="modal-title">选择类型</div>
+      <div class="ts-tabs">
+        <button class="ts-tab active" data-tstab="data">数据类型</button>
+        <button class="ts-tab" data-tstab="ref">引用类型</button>
+      </div>
+      <div class="ts-body">
+        <div class="ts-pane ts-data" data-tspane="data">
+          <aside class="ts-paradigms" id="ts-paradigms"></aside>
+          <section class="ts-params">
+            <div class="ts-slots" id="ts-slots"></div>
+            <div class="ts-preview">
+              <div class="ts-line"><label>结果</label><span id="ts-result">—</span></div>
+              <div class="ts-line"><label>示例</label><span id="ts-example">—</span></div>
+              <div class="ts-line"><label>Java</label><span id="ts-java">—</span></div>
+              <div class="ts-line"><label>Go</label><span id="ts-go">—</span></div>
+              <div class="ts-line"><label>Lua</label><span id="ts-lua">—</span></div>
+            </div>
+            <div class="ts-error" id="ts-error" hidden></div>
+          </section>
+        </div>
+        <div class="ts-pane ts-ref" data-tspane="ref" hidden>
+          <div class="ts-ref-bar">
+            <button class="chip active" data-tsfilter="all">全部</button>
+            <button class="chip" data-tsfilter="table">📊 表</button>
+            <button class="chip" data-tsfilter="enum">🔢 枚举</button>
+            <input class="input" id="ts-ref-search" placeholder="搜索名称" />
+          </div>
+          <div class="ts-ref-list" id="ts-ref-list"></div>
+          <div class="ts-ref-note" id="ts-ref-note" hidden>constant 表不允许引用类型</div>
+        </div>
+      </div>
+      <div class="ts-foot">
+        <span class="ts-current" id="ts-current"></span>
+        <span class="spacer"></span>
+        <button class="btn primary" id="ts-ok">确定</button>
+        <button class="btn" id="ts-cancel">取消</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal" id="schema-dialog" hidden>
+    <div class="modal-box schema-box">
+      <div class="modal-title" id="schema-title">导出 Schema</div>
+
+      <div class="ps-pane schema-pane" data-schem="export">
+        <div class="schema-meta">
+          <div class="form-row"><label id="schema-id-label">ID</label><input class="input" id="schema-meta-id" placeholder="留空则不写 # @meta" /></div>
+          <div class="form-row"><label>名称</label><input class="input" id="schema-meta-name" placeholder="显示名（可含中文），留空同 ID" /></div>
+          <div class="form-row"><label>分类</label><input class="input" id="schema-meta-category" placeholder="如 game / mmo / tool" /></div>
+          <div class="form-row"><label>版本</label><input class="input" id="schema-meta-version" placeholder="如 1.0.0" /></div>
+        </div>
+        <div class="schema-tools">
+          <label class="check"><input type="checkbox" id="schema-all-out" checked /> 全选</label>
+          <label class="check"><input type="checkbox" id="schema-preset-out" /> 同时导出当前数据作为预设</label>
+        </div>
+        <div class="schema-tree" id="schema-out-tree"></div>
+        <div class="form-row" id="schema-out-path-row">
+          <label>输出文件</label>
+          <input class="input" id="schema-out" value="schema.tblschema" />
+          <button class="btn" id="schema-out-browse">浏览…</button>
+        </div>
+        <div class="schema-stat" id="schema-out-stat">已选 0/0 项</div>
+      </div>
+
+      <div class="ps-pane schema-pane" data-schem="import" hidden>
+        <div class="form-row">
+          <label>文件</label>
+          <input class="input" id="schema-in" placeholder=".tblschema 路径" />
+          <button class="btn" id="schema-in-browse">浏览…</button>
+        </div>
+        <div class="schema-empty" id="schema-in-empty">请选择 .tblschema 文件</div>
+        <div id="schema-in-body" hidden>
+          <div class="schema-tools">
+            <label class="check"><input type="checkbox" id="schema-all-in" checked /> 全选</label>
+            <label class="check" id="schema-preset-in-wrap"><input type="checkbox" id="schema-preset-in" /> 导入时一并灌入预设数据</label>
+          </div>
+          <div class="schema-tree" id="schema-in-tree"></div>
+          <div class="schema-stat" id="schema-in-stat"></div>
+        </div>
+      </div>
+
+      <pre class="export-result" id="schema-result" hidden></pre>
+      <div class="modal-message error" id="schema-error" hidden></div>
+      <div class="modal-actions">
+        <button class="btn" id="schema-close">关闭</button>
+        <button class="btn primary" id="schema-run">导出…</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal" id="excel-dialog" hidden>
+    <div class="modal-box">
+      <div class="modal-title" id="excel-title">Excel</div>
+      <div class="form-row"><label>文件</label><input class="input" id="excel-path" /><button class="btn" id="excel-browse">浏览…</button></div>
+      <pre class="export-result" id="excel-result" hidden></pre>
+      <div class="modal-message error" id="excel-error" hidden></div>
+      <div class="modal-actions">
+        <button class="btn" id="excel-open" hidden>用 Excel 打开</button>
+        <button class="btn" id="excel-close">关闭</button>
+        <button class="btn primary" id="excel-run">执行</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal" id="excel-map" hidden>
+    <div class="modal-box ps-box">
+      <div class="modal-title">导入任意 Excel（映射）</div>
+      <div class="ps-body">
+        <div class="form-row"><label>文件</label><input class="input" id="em-path" placeholder=".xlsx 路径" /><button class="btn" id="em-browse">浏览…</button></div>
+        <div class="form-row">
+          <label>Sheet</label>
+          <select class="combo" id="em-sheet"></select>
+          <button class="btn" id="em-load">读取预览</button>
+        </div>
+        <div class="form-row"><label>表头行</label><input class="input" id="em-header" type="number" min="1" value="1" /></div>
+        <div class="form-row"><label>数据起始行</label><input class="input" id="em-start" type="number" min="2" value="2" /></div>
+        <div class="form-row"><label>Group</label><input class="input" id="em-group" /></div>
+        <div class="form-row"><label>节点名</label><input class="input" id="em-node" /></div>
+        <div class="em-fields" id="em-fields"></div>
+      </div>
+      <pre class="export-result" id="em-result" hidden></pre>
+      <div class="modal-message error" id="em-error" hidden></div>
+      <div class="modal-actions">
+        <button class="btn" id="em-close">关闭</button>
+        <button class="btn primary" id="em-run">导入</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal" id="excel-sync-dialog" hidden>
+    <div class="modal-box es-box">
+      <div class="modal-title">Excel 同步</div>
+      <div class="es-head">
+        <span class="es-col-g">组 / 节点</span>
+        <span class="es-col-size">tablet</span>
+        <span class="es-col-ops">操作</span>
+        <span class="es-col-size">Excel</span>
+      </div>
+      <div class="es-list" id="es-list"></div>
+      <div class="modal-actions">
+        <button class="btn" id="es-refresh">刷新</button>
+        <span class="spacer"></span>
+        <button class="btn primary" id="es-close">关闭</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal" id="paste-group-dialog" hidden>
+    <div class="modal-box pg-box">
+      <div class="modal-title">粘贴 Group</div>
+      <div class="pg-project">目标项目：<span id="pg-project"></span></div>
+      <div class="form-row"><label>组名</label><input class="input" id="pg-group" /></div>
+      <div class="pg-hint">子项（项目内唯一；冲突项已预填 _copy，可直接修改）:</div>
+      <div class="pg-list" id="pg-list"></div>
+      <div class="modal-message error" id="pg-error" hidden></div>
+      <div class="modal-actions">
+        <button class="btn" id="pg-cancel">取消</button>
+        <button class="btn primary" id="pg-ok">粘贴</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal" id="about-dialog" hidden>
+    <div class="modal-box">
+      <div class="modal-title">关于 tablet</div>
+      <div class="about-rows" id="about-rows"></div>
+      <div class="modal-actions">
+        <button class="btn" id="about-update">检查更新</button>
+        <button class="btn primary" id="about-close">关闭</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="toast-wrap" id="toast-wrap"></div>
+
+  <div class="ctx-menu" id="ctx-menu" hidden></div>
+  <div class="modal" id="modal" hidden>
+    <div class="modal-box">
+      <div class="modal-title" id="modal-title"></div>
+      <div class="modal-message" id="modal-message" hidden></div>
+      <input class="input modal-input" id="modal-input" hidden />
+      <label class="check" id="modal-xlsx-row" hidden>
+        <input type="checkbox" id="modal-xlsx" /> 使用 xlsx 存储（工作簿组）
+      </label>
+      <div class="modal-actions">
+        <button class="btn" id="modal-cancel">取消</button>
+        <button class="btn primary" id="modal-ok">确定</button>
+      </div>
+    </div>
+  </div>
+  <div class="modal" id="create-project" hidden>
+    <div class="modal-box ps-box">
+      <div class="modal-title">新建项目</div>
+      <div class="ps-tabs" id="cp-tabs">
+        <button class="ps-tab active" data-cptab="empty">空项目</button>
+        <button class="ps-tab" data-cptab="file">从文件…</button>
+        <button class="ps-tab" data-cptab="template">从模板</button>
+      </div>
+      <div class="ps-body">
+        <div class="ps-pane" data-cppane="empty">
+          <div class="ps-hint">空项目无需选择来源。填写下方项目身份后点「创建」。</div>
+        </div>
+        <div class="ps-pane" data-cppane="file" hidden>
+          <div class="form-row">
+            <label>文件</label>
+            <input class="input" id="cp-file" placeholder=".tblschema 路径" />
+            <button class="btn" id="cp-browse-file">浏览…</button>
+          </div>
+          <div class="cp-sections" id="cp-file-sections"></div>
+        </div>
+        <div class="ps-pane" data-cppane="template" hidden>
+          <div class="cp-sources" id="cp-sources">
+            <button class="chip active" data-cpsource="builtin">内置</button>
+            <button class="chip" data-cpsource="local">本地</button>
+            <button class="chip" disabled>网络 (-)</button>
+          </div>
+          <input class="input" id="cp-tpl-search" placeholder="名称 / id" />
+          <div class="cp-tpl-list" id="cp-tpl-list"></div>
+          <div class="cp-sections" id="cp-tpl-sections"></div>
+        </div>
+
+        <div class="cp-identity">
+          <div class="form-row"><label>项目 ID</label><input class="input" id="cp-id" placeholder="[a-z0-9_-]{1,32}" /></div>
+          <div class="form-row"><label>项目名</label><input class="input" id="cp-name" placeholder="可中文，仅用于显示" /></div>
+          <div class="form-row"><label>分类</label><input class="input" id="cp-category" placeholder="test / slg / rpg / ..." /></div>
+          <div class="form-row"><label>版本</label><input class="input" id="cp-version" placeholder="1.0.0" /></div>
+          <div class="cp-preview" id="cp-preview">目录预览：projects/</div>
+          <label class="check cp-check"><input type="checkbox" id="cp-open-now" checked /> 立即打开新项目</label>
+          <label class="check cp-check"><input type="checkbox" id="cp-preset" /> 灌入预设数据（来源含 # @preset 块）</label>
+        </div>
+      </div>
+      <div class="modal-message error" id="cp-error" hidden></div>
+      <div class="modal-actions">
+        <button class="btn" id="cp-cancel">取消</button>
+        <button class="btn primary" id="cp-ok">创建</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal" id="project-settings" hidden>
+    <div class="modal-box ps-box">
+      <div class="modal-title">项目设置</div>
+      <div class="ps-tabs">
+        <button class="ps-tab active" data-pstab="identity">身份</button>
+        <button class="ps-tab" data-pstab="sep">分隔符</button>
+        <button class="ps-tab" data-pstab="export">导出</button>
+        <button class="ps-tab" data-pstab="validate">校验</button>
+      </div>
+      <div class="ps-body">
+        <div class="ps-pane" data-pane="identity">
+          <div class="form-row"><label>项目 ID</label><input class="input" id="ps-id" disabled /></div>
+          <div class="form-row"><label>显示名称</label><input class="input" id="ps-name" /><button class="ps-rev" data-ps-rev="name" title="还原">↺</button></div>
+          <div class="form-row"><label>分类</label><input class="input" id="ps-category" /><button class="ps-rev" data-ps-rev="category" title="还原">↺</button></div>
+          <div class="form-row"><label>版本</label><input class="input" id="ps-version" /><button class="ps-rev" data-ps-rev="version" title="还原">↺</button></div>
+        </div>
+
+        <div class="ps-pane" data-pane="sep" hidden>
+          <div class="ps-pane-head">
+            <span>25 项分隔符；留空表示空串，占位符是默认值；「应用模板」可一键恢复默认。</span>
+          </div>
+          <div class="sep-grid" id="ps-seps"></div>
+        </div>
+
+        <div class="ps-pane" data-pane="export" hidden>
+          <div class="export-section">
+            <div class="export-title">通用</div>
+            <div class="form-row">
+              <label>编码</label>
+              <select class="combo" id="ps-enc">
+                <option value="utf-8">utf-8</option>
+                <option value="utf-8-bom">utf-8-bom</option>
+                <option value="utf-16le">utf-16le</option>
+                <option value="utf-16be">utf-16be</option>
+                <option value="gb2312">gb2312</option>
+                <option value="gbk">gbk</option>
+                <option value="big5">big5</option>
+              </select>
+            </div>
+            <div class="form-row">
+              <label>换行</label>
+              <select class="combo" id="ps-eol">
+                <option value="lf">LF</option>
+                <option value="crlf">CRLF</option>
+                <option value="cr">CR</option>
+              </select>
+            </div>
+            <div class="form-row">
+              <label>JSON 空值</label>
+              <select class="combo" id="ps-json-empty">
+                <option value="null">null</option>
+                <option value="omit">omit</option>
+              </select>
+            </div>
+            <div class="form-row">
+              <label>XML 空值</label>
+              <select class="combo" id="ps-xml-empty">
+                <option value="empty">empty</option>
+                <option value="omit">omit</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="export-section">
+            <div class="export-title">服务端数据</div>
+            <div class="form-row"><label>输出目录</label><input class="input" id="ps-server-data" /></div>
+          </div>
+
+          <div class="export-section">
+            <div class="export-title">服务端代码</div>
+            <div class="export-group">
+              <div class="export-group-title">Java</div>
+              <div class="form-row"><label>包名</label><input class="input" id="ps-java-pkg" /></div>
+              <div class="form-row"><label>输出目录</label><input class="input" id="ps-java-out" /></div>
+              <div class="export-checks">
+                <label class="check"><input type="checkbox" id="ps-java-lombok" /> Lombok</label>
+                <label class="check"><input type="checkbox" id="ps-java-regions" /> 自定义区间</label>
+              </div>
+            </div>
+            <div class="export-group">
+              <div class="export-group-title">Go</div>
+              <div class="form-row"><label>包名</label><input class="input" id="ps-go-pkg" /></div>
+              <div class="form-row"><label>输出目录</label><input class="input" id="ps-go-out" /></div>
+              <div class="export-checks">
+                <label class="check"><input type="checkbox" id="ps-go-regions" /> 自定义区间</label>
+              </div>
+            </div>
+            <div class="export-group">
+              <div class="export-group-title">C++</div>
+              <div class="form-row"><label>命名空间</label><input class="input" id="ps-cpp-ns" /></div>
+              <div class="form-row"><label>输出目录</label><input class="input" id="ps-cpp-out" /></div>
+              <div class="export-checks">
+                <label class="check"><input type="checkbox" id="ps-cpp-regions" /> 自定义区间</label>
+              </div>
+            </div>
+            <div class="export-group">
+              <div class="export-group-title">C# (.NET)</div>
+              <div class="form-row"><label>命名空间</label><input class="input" id="ps-dotnet-ns" /></div>
+              <div class="form-row"><label>输出目录</label><input class="input" id="ps-dotnet-out" /></div>
+              <div class="export-checks">
+                <label class="check"><input type="checkbox" id="ps-dotnet-regions" /> 自定义区间</label>
+              </div>
+            </div>
+            <div class="export-group">
+              <div class="export-group-title">TypeScript</div>
+              <div class="form-row"><label>输出目录</label><input class="input" id="ps-ts-server-out" /></div>
+            </div>
+          </div>
+
+          <div class="export-section">
+            <div class="export-title">客户端代码</div>
+            <div class="export-group">
+              <div class="export-group-title">Lua</div>
+              <div class="form-row"><label>输出目录</label><input class="input" id="ps-lua-out" /></div>
+            </div>
+            <div class="export-group">
+              <div class="export-group-title">GDScript</div>
+              <div class="form-row"><label>输出目录</label><input class="input" id="ps-gdscript-out" /></div>
+            </div>
+            <div class="export-group">
+              <div class="export-group-title">TypeScript</div>
+              <div class="form-row"><label>输出目录</label><input class="input" id="ps-ts-client-out" /></div>
+            </div>
+            <div class="export-group">
+              <div class="export-group-title">C# (Unity)</div>
+              <div class="form-row"><label>命名空间</label><input class="input" id="ps-unity-ns" /></div>
+              <div class="form-row"><label>输出目录</label><input class="input" id="ps-unity-out" /></div>
+              <div class="export-checks">
+                <label class="check"><input type="checkbox" id="ps-unity-regions" /> 自定义区间</label>
+              </div>
+            </div>
+            <div class="export-group">
+              <div class="export-group-title">C# (Godot)</div>
+              <div class="form-row"><label>命名空间</label><input class="input" id="ps-godot-ns" /></div>
+              <div class="form-row"><label>输出目录</label><input class="input" id="ps-godot-out" /></div>
+              <div class="export-checks">
+                <label class="check"><input type="checkbox" id="ps-godot-regions" /> 自定义区间</label>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="ps-pane" data-pane="validate" hidden>
+          <div class="export-section">
+            <div class="export-title">校验策略</div>
+            <div class="form-row">
+              <label>错误</label>
+              <select class="combo" id="ps-val-error">
+                <option value="block">阻断保存</option>
+                <option value="report">仅提示</option>
+                <option value="ignore">忽略</option>
+              </select>
+            </div>
+            <div class="form-row">
+              <label>警告</label>
+              <select class="combo" id="ps-val-warning">
+                <option value="block">阻断保存</option>
+                <option value="report">仅提示</option>
+                <option value="ignore">忽略</option>
+              </select>
+            </div>
+            <div class="form-row">
+              <label>信息</label>
+              <select class="combo" id="ps-val-info">
+                <option value="block">阻断保存</option>
+                <option value="report">仅提示</option>
+                <option value="ignore">忽略</option>
+              </select>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="modal-message error" id="ps-error" hidden></div>
+      <div class="modal-actions">
+        <button class="btn" id="ps-revert-all">全部还原</button>
+        <button class="btn" id="ps-apply-template">应用模板</button>
+        <span class="spacer"></span>
+        <button class="btn primary" id="ps-ok">确定</button>
+      </div>
+    </div>
+  </div>
+
+  <datalist id="type-options">
+    <option value="int"></option>
+    <option value="long"></option>
+    <option value="float"></option>
+    <option value="double"></option>
+    <option value="str"></option>
+    <option value="bool"></option>
+    <option value="txt"></option>
+  </datalist>
+  <script src="grid.js"></script>
+  <script src="main.js"></script>
+</body>
+</html>

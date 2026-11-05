@@ -102,3 +102,9 @@ mod tests {
         assert!(!name_matches("HeroBase", "hb"));
     }
 }
+
+/// UI 预计算用：`小写名字 \0 拼音首字母`。前端用 `contains(query)` 即可同时命中
+/// 字面与拼音首字母（与 [`name_matches`] 的规则一致）。
+pub fn search_key(name: &str) -> String {
+    format!("{}\u{0}{}", name.to_lowercase(), pinyin_initials(name))
+}
