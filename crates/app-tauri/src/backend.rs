@@ -657,6 +657,8 @@ fn sync_op_from_code(code: u32) -> Option<tablet_core::excel_sync::SyncOp> {
 impl Backend {
     pub fn load(workdir: &Path) -> anyhow::Result<Self> {
         let (mut engine, _fixed, _failures) = load_workspace(workdir)?;
+        // 上次 Excel 快速编辑的临时副本在这里清（正常结束会话时已删，这里兜底崩溃/强杀）。
+        cleanup_excel_cache(&mut engine);
         engine.revalidate_all_projects();
         let selected = engine.active().map(|p| Selected {
             project: p.schema.meta.id.clone(),
@@ -1737,6 +1739,12 @@ impl Backend {
     }
 
     /// 开始 Excel 编辑：导出临时工作簿 → 用 Excel 打开 → 记录 mtime 供轮询。
+    ///
+    /// 每次拉起都是**独立副本**（与 Slint 版一致）：文件落在
+    /// `<project>/.tbl-cache/<group>-<millis>.xlsx`。Excel 会一直持有上次副本的锁，
+    /// 若复用同名路径，第二次导出在 Windows 上会直接 `os error 32`（表现为“拉不起 Excel”）。
+    /// `.tbl-cache` 而不是 `.excel`：后者是用户导出的工作簿与同步面板的落点，
+    /// 临时副本不应该出现在文件列表里、也不该被同步计划当成「那一份」。
     pub fn excel_begin_edit(
         &mut self,
         project: &str,
@@ -1748,13 +1756,31 @@ impl Backend {
             .find_project(project)
             .map(|p| p.project_root.clone())
             .ok_or_else(|| format!("项目不存在: {project}"))?;
-        let out = root.join(".excel").join(format!("{group}.xlsx"));
+        let out = unique_excel_cache(&root, group);
         let target = ExcelTarget::Group {
             name: group.to_string(),
             include: Vec::new(),
         };
         run_excel_export(&self.engine, target, Some(&out)).map_err(|e| e.to_string())?;
         let mtime = std::fs::metadata(&out).and_then(|m| m.modified()).ok();
+
+        if open {
+            if let Err(e) = launch(&shell_path(&out)) {
+                let _ = std::fs::remove_file(&out);
+                return Err(e);
+            }
+        }
+
+        // 同组上一份副本可能还被 Excel 开着：能删就删，删不掉留给启动清理。
+        let stale: Vec<PathBuf> = self
+            .excel_sessions
+            .iter()
+            .filter(|s| s.project == project && s.group == group)
+            .map(|s| s.path.clone())
+            .collect();
+        for p in stale {
+            let _ = std::fs::remove_file(p);
+        }
         self.excel_sessions
             .retain(|s| !(s.project == project && s.group == group));
         self.excel_sessions.push(ExcelSession {
@@ -1763,9 +1789,6 @@ impl Backend {
             path: out.clone(),
             mtime,
         });
-        if open {
-            launch(&out.to_string_lossy())?;
-        }
         Ok(out.display().to_string())
     }
 
@@ -1814,8 +1837,18 @@ impl Backend {
         if changed {
             let _ = self.excel_sync(project, group);
         }
+        let ended: Vec<PathBuf> = self
+            .excel_sessions
+            .iter()
+            .filter(|s| s.project == project && s.group == group)
+            .map(|s| s.path.clone())
+            .collect();
         self.excel_sessions
             .retain(|s| !(s.project == project && s.group == group));
+        // 结束会话即丢弃临时副本；Excel 若还开着会删失败，留给下次启动清理。
+        for p in ended {
+            let _ = std::fs::remove_file(p);
+        }
     }
 
     pub fn open_folder(&self, path: Option<String>) -> Result<(), String> {
@@ -1831,7 +1864,7 @@ impl Backend {
             None => self.excel_dir().ok_or("没有活跃的 Project")?,
         };
         let _ = std::fs::create_dir_all(&target);
-        launch(&target.to_string_lossy())
+        launch(&shell_path(&target))
     }
 
     pub fn open_url(&self, url: &str) -> Result<(), String> {
@@ -3070,6 +3103,70 @@ fn preview_schema(schema: &TblSchema) -> SchemaPreview {
             || schema.sections.iter().any(|s| !s.preset.is_empty()),
         sections,
     }
+}
+
+/// Excel 快速编辑的临时工作簿路径：`<project>/.tbl-cache/<group>-<millis>.xlsx`。
+///
+/// 每次拉起都换一个新文件名，避免与 Excel 正持锁的上一份副本撞车；
+/// 毫秒后缀碰撞时再追加序号（同一毫秒内连点两次）。
+fn unique_excel_cache(project_root: &Path, group: &str) -> PathBuf {
+    let dir = project_root.join(".tbl-cache");
+    let millis = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0);
+    let mut path = dir.join(format!("{group}-{millis}.xlsx"));
+    let mut n = 1;
+    while path.exists() {
+        path = dir.join(format!("{group}-{millis}-{n}.xlsx"));
+        n += 1;
+    }
+    path
+}
+
+/// 启动时清掉上次 Excel 快速编辑留下的临时工作簿（`.tbl-cache/*.xlsx`）。
+///
+/// 删不掉的（Excel 还开着旧副本）静默跳过：新会话用新文件名，不受影响；
+/// 下次启动再清。
+fn cleanup_excel_cache(engine: &mut ProjectEngine) {
+    let (mut removed, mut locked) = (0usize, 0usize);
+    for project in &engine.projects {
+        let Ok(entries) = std::fs::read_dir(project.cache_dir()) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let p = entry.path();
+            // `~$xxx.xlsx` 是 Excel 的锁文件，Excel 关掉后自己会消失，不算清理目标。
+            let is_lock_file = p
+                .file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(|n| n.starts_with("~$"));
+            if !is_lock_file
+                && p.extension()
+                    .is_some_and(|e| e.eq_ignore_ascii_case("xlsx"))
+            {
+                match std::fs::remove_file(&p) {
+                    Ok(_) => removed += 1,
+                    Err(_) => locked += 1,
+                }
+            }
+        }
+    }
+    if removed > 0 {
+        engine.ui_log(format!("[Excel] 已清理 {removed} 个上次编辑残留的临时工作簿"));
+    }
+    if locked > 0 {
+        engine.ui_log(format!(
+            "[Excel] {locked} 个临时工作簿仍被占用（Excel 未关闭），留待下次启动清理"
+        ));
+    }
+}
+
+/// `cmd /C start` / `open` 对 `\\?\C:\...` 这种 verbatim 前缀不稳定，交给 shell 前
+/// 转成普通绝对路径（canonicalize 在 Windows 上会加上该前缀）。
+fn shell_path(path: &std::path::Path) -> String {
+    let s = path.to_string_lossy().to_string();
+    s.strip_prefix(r"\\?\").unwrap_or(&s).to_string()
 }
 
 fn launch(target: &str) -> Result<(), String> {
