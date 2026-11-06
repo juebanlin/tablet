@@ -810,6 +810,19 @@ impl Table {
         self.dirty = self.records != self.original_records || self.schema_changed();
     }
 
+    /// 单元格级别的 dirty 快速路径：绝大多数编辑只是把某格改成新值，
+    /// 直接 O(1) 置脏；只有「改回盘上原值」时才退回全表比较。
+    /// 10 万行 × 20 列时，每次 keystroke 做 200 万字符串比较会明显拖慢编辑。
+    pub fn update_dirty_after_cell(&mut self, row: usize, col: usize) {
+        let cur = self.records.get(row).and_then(|r| r.get(col));
+        let orig = self.original_records.get(row).and_then(|r| r.get(col));
+        if cur != orig {
+            self.dirty = true;
+        } else {
+            self.update_dirty();
+        }
+    }
+
     /// 把盘上的样子写回来（内容 + 结构 + 身份四样）。
     ///
     /// **不含「存在性」**：新建未保存的节点压根没有盘上的样子（见 [`revertable`]），

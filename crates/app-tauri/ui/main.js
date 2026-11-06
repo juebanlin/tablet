@@ -51,6 +51,42 @@ function runOp(cmd, args) {
   return op;
 }
 
+/** 单元格提交的轻量路径：不回整份 Snapshot，只更新状态 / 树 / 错误标记。 */
+function fastCommitCell(row, col, value) {
+  const op = opChain.then(() =>
+    invoke("commit_cell_fast", { row, col, value }),
+  );
+  opChain = op.catch(() => {});
+  op.then((res) => applyEditResult(res)).catch((e) => {
+    addLocalLog(2, String(e));
+    toast(String(e), "error");
+    // 后端拒绝时本地单元格已被乐观改掉，拉一次完整快照恢复。
+    invoke("snapshot").then(applySnapshot).catch(() => {});
+  });
+  return op;
+}
+
+/** 用轻量编辑结果更新 chrome；不碰 grid.rows（本地已经改过）。 */
+function applyEditResult(res) {
+  const s = state.snapshot;
+  if (!s || !res) return;
+  s.status = res.status;
+  s.tree = res.tree;
+  s.issues = res.issues;
+  const st = res.status;
+  $("dirty-dot").hidden = !st.dirty;
+  $("btn-save").disabled = !st.dirty;
+  $("btn-undo").disabled = !st.can_undo;
+  $("btn-redo").disabled = !st.can_redo;
+  $("btn-undo").title = st.undo_label || "";
+  $("btn-redo").title = st.redo_label || "";
+  $("btn-revert").disabled = !st.can_revert || grid.locked;
+  renderTree();
+  renderIssues();
+  grid.setErrors(res.errors || []);
+  onGridSelection(currentSelection());
+}
+
 // ── 日志 ────────────────────────────────────────────────────
 function nowStamp() {
   const d = new Date();
@@ -166,6 +202,9 @@ function applySnapshot(s) {
     if (document.activeElement !== $("sort-select")) $("sort-select").selectedIndex = sortIdx;
   }
   $("project-label").textContent = `当前项目：${st.active_project_name || "—"}`;
+  if (document.activeElement !== $("tree-show-id")) {
+    $("tree-show-id").checked = !!st.show_meta_id;
+  }
   $("dirty-dot").hidden = !st.dirty;
   $("btn-save").disabled = !st.dirty;
   $("btn-undo").disabled = !st.can_undo;
@@ -769,9 +808,35 @@ function showContextMenu(x, y, items) {
 
 let modalResolve = null;
 
-function openModal({ title, message, input = true, value = "", placeholder = "", xlsx = false }) {
+let modalValidator = null;
+let modalValidateSeq = 0;
+
+/** 输入校验结果写回弹窗：有错误时禁用「确定」（与 Slint 的实时校验一致）。 */
+async function runModalValidation() {
+  if (!modalValidator) return;
+  const seq = ++modalValidateSeq;
+  const value = $("modal-input").value.trim();
+  let err = null;
+  try {
+    err = await modalValidator(value);
+  } catch (e) {
+    err = String(e);
+  }
+  if (seq !== modalValidateSeq) return;
+  $("modal-error").textContent = err || "";
+  $("modal-error").hidden = !err;
+  $("modal-ok").disabled = !!err;
+}
+
+function openModal({ title, message, input = true, value = "", placeholder = "", xlsx = false, validate = null }) {
   return new Promise((resolve) => {
     modalResolve = resolve;
+    modalValidator = validate;
+    $("modal-error").hidden = true;
+    $("modal-error").textContent = "";
+    $("modal-ok").disabled = false;
+    $("modal-input").value = value;
+    if (validate) runModalValidation();
     $("modal-title").textContent = title;
     $("modal-message").textContent = message || "";
     $("modal-message").hidden = !message;
@@ -793,6 +858,9 @@ function openModal({ title, message, input = true, value = "", placeholder = "",
 
 function closeModal(result) {
   $("modal").hidden = true;
+  modalValidator = null;
+  modalValidateSeq++;
+  $("modal-ok").disabled = false;
   const r = modalResolve;
   modalResolve = null;
   if (r) r(result);
@@ -803,6 +871,9 @@ function initModals() {
     closeModal({ value: $("modal-input").value.trim(), xlsx: $("modal-xlsx").checked }),
   );
   $("modal-cancel").addEventListener("click", () => closeModal(null));
+  $("modal-input").addEventListener("input", () => {
+    if (modalValidator) runModalValidation();
+  });
   $("modal-input").addEventListener("keydown", (e) => {
     if (e.key === "Enter") {
       e.preventDefault();
@@ -1110,7 +1181,12 @@ async function newGroup(project, xlsx) {
   let name = "";
   let useXlsx = !!xlsx;
   if (xlsx === undefined) {
-    const r = await openModal({ title: "新建 Group", placeholder: "例如 hero", xlsx: true });
+    const r = await openModal({
+      title: "新建 Group",
+      placeholder: "例如 hero",
+      xlsx: true,
+      validate: (v) => invoke("validate_name", { project, group: null, kind: "group", name: v, oldName: null }),
+    });
     if (!r || !r.value) return;
     name = r.value;
     useXlsx = r.xlsx;
@@ -1118,6 +1194,7 @@ async function newGroup(project, xlsx) {
     const r = await openModal({
       title: useXlsx ? "新建 Excel Group" : "新建 Group",
       placeholder: "例如 hero",
+      validate: (v) => invoke("validate_name", { project, group: null, kind: "group", name: v, oldName: null }),
     });
     if (!r || !r.value) return;
     name = r.value;
@@ -1183,7 +1260,11 @@ async function newNode(project, group, kind, fmt) {
       : kind === "constant"
         ? "Constant"
         : "Enum";
-  const r = await openModal({ title: `新建 ${label}`, placeholder: "PascalCase 名称" });
+  const r = await openModal({
+    title: `新建 ${label}`,
+    placeholder: "PascalCase 名称",
+    validate: (v) => invoke("validate_name", { project, group, kind, name: v, oldName: null }),
+  });
   if (!r || !r.value) return;
   await runOp("new_node", {
     project,
@@ -1198,7 +1279,11 @@ async function newNode(project, group, kind, fmt) {
 }
 
 async function renameGroup(project, oldName) {
-  const r = await openModal({ title: "重命名 Group", value: oldName });
+  const r = await openModal({
+    title: "重命名 Group",
+    value: oldName,
+    validate: (v) => invoke("validate_name", { project, group: null, kind: "group", name: v, oldName }),
+  });
   if (!r || !r.value || r.value === oldName) return;
   await runOp("rename_group", { project, oldName, newName: r.value });
   state.expandedGroups.delete(`${project}|${oldName}`);
@@ -1207,7 +1292,11 @@ async function renameGroup(project, oldName) {
 }
 
 async function renameNode(t) {
-  const r = await openModal({ title: "重命名节点", value: t.name });
+  const r = await openModal({
+    title: "重命名节点",
+    value: t.name,
+    validate: (v) => invoke("validate_name", { project: t.project, group: t.group, kind: t.kind, name: v, oldName: t.name }),
+  });
   if (!r || !r.value || r.value === t.name) return;
   await runOp("rename_node", { project: t.project, group: t.group, oldName: t.name, newName: r.value });
   if (state.selected && state.selected.name === t.name && state.selected.group === t.group) {
@@ -4667,7 +4756,7 @@ function boot() {
     table: $("sheet"),
     onSelection: onGridSelection,
     onCommit: (ed, value) => {
-      if (ed.type === "cell") runOp("commit_cell", { row: ed.r, col: ed.c, value });
+      if (ed.type === "cell") fastCommitCell(ed.r, ed.c, value);
       else if (ed.type === "header") runOp("commit_header", { headerRow: ed.hi, col: ed.ci, value });
       else if (ed.type === "clear") runOp("clear_cells", { cells: ed.cells });
       else if (ed.type === "paste") runOp("paste_cells", { row: ed.r, col: ed.c, cells: ed.grid });
@@ -4730,6 +4819,10 @@ function boot() {
   $("full-group").addEventListener("change", (e) => {
     state.fullGroup = e.target.checked;
     renderTree();
+  });
+  $("tree-show-id").addEventListener("change", (e) => {
+    // 与「全局设置 → 项目列表显示元数据 ID」是同一项设置；共用 core/后端持久化。
+    runOp("set_show_meta_id", { on: e.target.checked }).catch(() => {});
   });
 
   window.__tt = { grid, state, runOp, applySnapshot, selectTree };

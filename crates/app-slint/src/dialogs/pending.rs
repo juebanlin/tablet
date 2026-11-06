@@ -146,7 +146,7 @@ pub(crate) fn execute(state: &Rc<RefCell<AppState>>) {
         st.tree_expanded.insert((project_id.clone(), buf.clone()));
     }
     let track_delete = matches!(action, PendingAction::DeleteProject { .. });
-    st.engine.execute_action(&core_action);
+    let _ = st.engine.execute_action(&core_action);
     if track_delete {
         if let ProjectAction::DeleteProject { project_id } = &core_action {
             if matches!(&st.selected, Some(s) if s.project_id() == project_id) {

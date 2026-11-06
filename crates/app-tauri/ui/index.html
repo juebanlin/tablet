@@ -48,7 +48,8 @@
               <option>修改</option><option>删除</option>
             </select>
           </div>
-          <label class="check"><input type="checkbox" id="full-group" /> 完整组</label>
+          <label class="check" title="忽略搜索/过滤，展示所有组和节点（只隐藏已删除）"><input type="checkbox" id="full-group" /> 完整组</label>
+          <label class="check" title="项目行显示元数据 ID，而不是显示名称"><input type="checkbox" id="tree-show-id" /> 显示 ID</label>
         </div>
         <div class="tree-list" id="tree-list"></div>
       </aside>
@@ -502,6 +503,7 @@
       <div class="modal-title" id="modal-title"></div>
       <div class="modal-message" id="modal-message" hidden></div>
       <input class="input modal-input" id="modal-input" hidden />
+      <div class="modal-error" id="modal-error" hidden></div>
       <label class="check" id="modal-xlsx-row" hidden>
         <input type="checkbox" id="modal-xlsx" /> 使用 xlsx 存储（工作簿组）
       </label>

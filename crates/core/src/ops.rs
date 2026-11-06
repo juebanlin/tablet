@@ -2549,7 +2549,7 @@ impl ProjectEngine {
                         while record.len() <= col { record.push(String::new()); }
                         record[col] = val.to_string();
                     }
-                    t.update_dirty();
+                    t.update_dirty_after_cell(row, col);
                 }
             }
         });
@@ -4068,13 +4068,100 @@ impl ProjectEngine {
 
     // --- PLACEHOLDER_ACTIONS ---
 
+    /// 结构动作的 core 级校验。任何 UI（Slint / Tauri）和脚本都必须经过这里，
+    /// 不能各自实现或绕过：
+    /// - 组名只能是中英文 / 数字 / 下划线，项目内忽略大小写唯一；
+    /// - 节点名（Table / Constant / Enum）必须是 PascalCase，项目内跨组唯一（忽略大小写）；
+    /// - 重命名排除自身。
+    pub fn validate_action(&self, action: &ProjectAction) -> Result<(), String> {
+        let project_of = |id: &str| {
+            self.find_project(id)
+                .ok_or_else(|| format!("Project 不存在: {}", id))
+        };
+        match action {
+            ProjectAction::DeleteProject { .. } => Ok(()),
+            ProjectAction::NewGroup { project_id, name, .. } => {
+                let project = project_of(project_id)?;
+                if name.is_empty() {
+                    return Err("名称不能为空".to_string());
+                }
+                if !is_valid_group_name(name) {
+                    return Err("组名只能包含中英文数字下划线".to_string());
+                }
+                if project.groups.iter().any(|g| g.name.eq_ignore_ascii_case(name)) {
+                    return Err(format!("组名重复（忽略大小写）: {}", name));
+                }
+                Ok(())
+            }
+            ProjectAction::NewTable { project_id, group, name, .. }
+            | ProjectAction::NewConstant { project_id, group, name }
+            | ProjectAction::NewEnum { project_id, group, name } => {
+                let project = project_of(project_id)?;
+                if name.is_empty() {
+                    return Err("名称不能为空".to_string());
+                }
+                if !is_valid_node_name(name) {
+                    return Err("配置项名必须符合Java类名规则(大写开头,英文数字下划线)".to_string());
+                }
+                if !project.groups.iter().any(|g| g.name == *group) {
+                    return Err(format!("Group 不存在: {}", group));
+                }
+                if node_name_taken(&all_project_node_names(project), name) {
+                    return Err(format!("配置项名重复（忽略大小写）: {}", name));
+                }
+                Ok(())
+            }
+            ProjectAction::RenameGroup { project_id, old_name, new_name } => {
+                let project = project_of(project_id)?;
+                if new_name.is_empty() {
+                    return Err("名称不能为空".to_string());
+                }
+                if !is_valid_group_name(new_name) {
+                    return Err("组名只能包含中英文数字下划线".to_string());
+                }
+                if project
+                    .groups
+                    .iter()
+                    .any(|g| g.name != *old_name && g.name.eq_ignore_ascii_case(new_name))
+                {
+                    return Err(format!("组名重复（忽略大小写）: {}", new_name));
+                }
+                Ok(())
+            }
+            ProjectAction::RenameNode { project_id, group, old_name, new_name } => {
+                let project = project_of(project_id)?;
+                if new_name.is_empty() {
+                    return Err("名称不能为空".to_string());
+                }
+                if !is_valid_node_name(new_name) {
+                    return Err("配置项名必须符合Java类名规则(大写开头,英文数字下划线)".to_string());
+                }
+                let is_self = |g: &Group, node: &str| g.name == *group && node == *old_name;
+                let taken = project.groups.iter().any(|g| {
+                    g.tables.iter().any(|t| !t.deleted && t.name.eq_ignore_ascii_case(new_name) && !is_self(g, &t.name))
+                        || g.constants.iter().any(|c| !c.deleted && c.name.eq_ignore_ascii_case(new_name) && !is_self(g, &c.name))
+                        || g.enums.iter().any(|e| !e.deleted && e.name.eq_ignore_ascii_case(new_name) && !is_self(g, &e.name))
+                });
+                if taken {
+                    return Err(format!("配置项名重复（忽略大小写）: {}", new_name));
+                }
+                Ok(())
+            }
+        }
+    }
+
     /// 树面板的结构动作入口。除「删除 Project」外都记一条 Project 快照事务；
     /// DeleteProject 是项目管理动作，不进撤销栈。
-    pub fn execute_action(&mut self, action: &ProjectAction) {
+    /// 校验失败不落地、不记撤销：返回错误由 UI 展示。
+    pub fn execute_action(&mut self, action: &ProjectAction) -> Result<(), String> {
+        if let Err(err) = self.validate_action(action) {
+            self.ui_log(format!("[拒绝] {}", err));
+            return Err(err);
+        }
         if let ProjectAction::DeleteProject { project_id } = action {
             self.execute_action_inner(action);
             self.histories.remove(project_id);
-            return;
+            return Ok(());
         }
         let (project_id, label) = match action {
             ProjectAction::NewGroup { project_id, .. } => (project_id, "新建 Group"),
@@ -4089,6 +4176,7 @@ impl ProjectEngine {
         self.with_project_tx(&pid, label, |engine| {
             engine.execute_action_inner(action);
         });
+        Ok(())
     }
 
     fn execute_action_inner(&mut self, action: &ProjectAction) {
@@ -5147,7 +5235,7 @@ package = \"com.user.kept\"
     fn rename_node_is_one_undoable_transaction() {
         let (dir, mut engine) = engine_with_saved_node("undo_rename", "g", "T");
         let pid = engine.active_project_id().unwrap().to_string();
-        engine.execute_action(&ProjectAction::RenameNode {
+        let _ = engine.execute_action(&ProjectAction::RenameNode {
             project_id: pid,
             group: "g".into(),
             old_name: "T".into(),
@@ -5463,7 +5551,7 @@ package = \"com.user.kept\"
         let pid = engine.active_project_id().unwrap().to_string();
         let gdir = config_dir(&dir).join("hero");
 
-        engine.execute_action(&ProjectAction::RenameNode {
+        let _ = engine.execute_action(&ProjectAction::RenameNode {
             project_id: pid, group: "hero".into(),
             old_name: "HeroBase".into(), new_name: "HeroMain".into(),
         });
@@ -5529,7 +5617,7 @@ package = \"com.user.kept\"
     fn a_new_empty_group_survives_save() {
         let (dir, mut engine) = engine_with_saved_node("empty_group", "hero", "A");
         let pid = engine.active_project_id().unwrap().to_string();
-        engine.execute_action(&ProjectAction::NewGroup {
+        let _ = engine.execute_action(&ProjectAction::NewGroup {
             project_id: pid, name: "fresh".into(),
             storage: crate::model::GroupStorage::Tbl,
         });
@@ -5562,10 +5650,10 @@ package = \"com.user.kept\"
         use crate::model::GroupStorage;
         let (dir, mut engine) = engine_with_saved_node(label, "hero", "A");
         let pid = engine.active_project_id().unwrap().to_string();
-        engine.execute_action(&ProjectAction::NewGroup {
+        let _ = engine.execute_action(&ProjectAction::NewGroup {
             project_id: pid.clone(), name: "xg".into(), storage: GroupStorage::Xlsx,
         });
-        engine.execute_action(&ProjectAction::NewTable {
+        let _ = engine.execute_action(&ProjectAction::NewTable {
             project_id: pid, group: "xg".into(), name: "Hot".into(),
             fmt_ver: crate::tbl::DEFAULT_TBL_VERSION,
         });
@@ -5616,7 +5704,7 @@ package = \"com.user.kept\"
         let (dir, mut engine) = engine_with_xlsx_group("xlsx_rename");
         assert!(engine.save_all());
         let pid = engine.active_project_id().unwrap().to_string();
-        engine.execute_action(&ProjectAction::RenameGroup {
+        let _ = engine.execute_action(&ProjectAction::RenameGroup {
             project_id: pid,
             old_name: "xg".into(),
             new_name: "yg".into(),
@@ -5700,7 +5788,7 @@ package = \"com.user.kept\"
         assert!(engine.save_all());
         // 加第二张表，让 schema 里有两张（Hot 是 sheet1、Cold 是 sheet2）
         let pid = engine.active_project_id().unwrap().to_string();
-        engine.execute_action(&ProjectAction::NewTable {
+        let _ = engine.execute_action(&ProjectAction::NewTable {
             project_id: pid, group: "xg".into(), name: "Cold".into(),
             fmt_ver: crate::tbl::DEFAULT_TBL_VERSION,
         });
@@ -5876,7 +5964,7 @@ package = \"com.user.kept\"
         use crate::model::GroupStorage;
         let (dir, mut engine) = engine_with_saved_node("paste_child_dedupe", "hero", "A");
         let pid = engine.active_project_id().unwrap().to_string();
-        engine.execute_action(&ProjectAction::NewTable {
+        let _ = engine.execute_action(&ProjectAction::NewTable {
             project_id: pid.clone(), group: "hero".into(), name: "B".into(),
             fmt_ver: crate::tbl::DEFAULT_TBL_VERSION,
         });
@@ -5920,7 +6008,7 @@ package = \"com.user.kept\"
 
         let (dir, mut engine) = engine_with_saved_node("paste_named_preview", "hero", "A");
         let pid = engine.active_project_id().unwrap().to_string();
-        engine.execute_action(&ProjectAction::NewTable {
+        let _ = engine.execute_action(&ProjectAction::NewTable {
             project_id: pid.clone(), group: "hero".into(), name: "B".into(),
             fmt_ver: crate::tbl::DEFAULT_TBL_VERSION,
         });
@@ -5982,6 +6070,26 @@ package = \"com.user.kept\"
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+
+    /// 绕过结构动作直接塞一个重名节点：模拟"盘上/外部数据本来就有重名"的场景，
+    /// 用来验证校验与保存仍然是最后一道防线。
+    fn push_duplicate_table(engine: &mut ProjectEngine, config_dir: &Path, group: &str, name: &str) {
+        let mut dup = engine.find_table("hero", name).expect("源表").clone();
+        dup.path = config_dir.join(group).join(format!("{}.tbl", name));
+        dup.dirty = true;
+        dup.saved = false;
+        let pid = engine.active_project_id().unwrap().to_string();
+        engine
+            .find_project_mut(&pid)
+            .unwrap()
+            .groups
+            .iter_mut()
+            .find(|g| g.name == group)
+            .unwrap()
+            .tables
+            .push(dup);
+    }
+
     fn project_groups(engine: &ProjectEngine, project_id: &str) -> Vec<String> {
         engine
             .find_project(project_id)
@@ -5994,7 +6102,7 @@ package = \"com.user.kept\"
         use crate::model::GroupStorage;
         let (dir, mut engine) = engine_with_saved_node("paste_node_dedupe", "hero", "A");
         let pid = engine.active_project_id().unwrap().to_string();
-        engine.execute_action(&ProjectAction::NewGroup {
+        let _ = engine.execute_action(&ProjectAction::NewGroup {
             project_id: pid.clone(), name: "other".into(), storage: GroupStorage::Tbl,
         });
         engine.clipboard_copy_node(&pid, "hero", "A", NodeKind::Table);
@@ -6008,15 +6116,10 @@ package = \"com.user.kept\"
         use crate::model::GroupStorage;
         let (dir, mut engine) = engine_with_saved_node("dup_node_export", "hero", "A");
         let pid = engine.active_project_id().unwrap().to_string();
-        engine.execute_action(&ProjectAction::NewGroup {
+        let _ = engine.execute_action(&ProjectAction::NewGroup {
             project_id: pid, name: "other".into(), storage: GroupStorage::Tbl,
         });
-        engine.execute_action(&ProjectAction::NewTable {
-            project_id: engine.active_project_id().unwrap().to_string(),
-            group: "other".into(),
-            name: "A".into(),
-            fmt_ver: crate::tbl::DEFAULT_TBL_VERSION,
-        });
+        push_duplicate_table(&mut engine, &config_dir(&dir), "other", "A");
         let err = engine.export_json().expect_err("重名必须阻断导出").to_string();
         assert!(err.contains("节点名") && err.contains("重复"), "{err}");
         let _ = std::fs::remove_dir_all(&dir);
@@ -6027,15 +6130,10 @@ package = \"com.user.kept\"
         use crate::model::GroupStorage;
         let (dir, mut engine) = engine_with_saved_node("dup_node_name", "hero", "A");
         let pid = engine.active_project_id().unwrap().to_string();
-        engine.execute_action(&ProjectAction::NewGroup {
+        let _ = engine.execute_action(&ProjectAction::NewGroup {
             project_id: pid, name: "other".into(), storage: GroupStorage::Tbl,
         });
-        engine.execute_action(&ProjectAction::NewTable {
-            project_id: engine.active_project_id().unwrap().to_string(),
-            group: "other".into(),
-            name: "A".into(),
-            fmt_ver: crate::tbl::DEFAULT_TBL_VERSION,
-        });
+        push_duplicate_table(&mut engine, &config_dir(&dir), "other", "A");
         engine.revalidate_all();
         assert!(engine.validate().iter().any(|e| e.contains("节点名")), "应报节点名重复");
         assert!(!engine.save_all(), "节点名重复必须阻断保存");
@@ -6083,7 +6181,7 @@ package = \"com.user.kept\"
         std::fs::write(book_dir.join("~$xg.xlsx"), b"lock").unwrap();
 
         let pid = engine.active_project_id().unwrap().to_string();
-        engine.execute_action(&ProjectAction::NewTable {
+        let _ = engine.execute_action(&ProjectAction::NewTable {
             project_id: pid, group: "xg".into(), name: "Extra".into(),
             fmt_ver: crate::tbl::DEFAULT_TBL_VERSION,
         });
@@ -6127,7 +6225,7 @@ package = \"com.user.kept\"
         let pid = engine.active_project_id().unwrap().to_string();
         let gdir = config_dir(&dir).join("hero");
         for (old, new) in [("A", "B"), ("B", "C")] {
-            engine.execute_action(&ProjectAction::RenameNode {
+            let _ = engine.execute_action(&ProjectAction::RenameNode {
                 project_id: pid.clone(), group: "hero".into(),
                 old_name: old.into(), new_name: new.into(),
             });
@@ -6148,10 +6246,10 @@ package = \"com.user.kept\"
         // 父子同时改名：组记组的原名、节点记节点的原名，两级各推各的。
         let (dir, mut engine) = engine_with_saved_node("rename_both", "hero", "HeroBase");
         let pid = engine.active_project_id().unwrap().to_string();
-        engine.execute_action(&ProjectAction::RenameGroup {
+        let _ = engine.execute_action(&ProjectAction::RenameGroup {
             project_id: pid.clone(), old_name: "hero".into(), new_name: "character".into(),
         });
-        engine.execute_action(&ProjectAction::RenameNode {
+        let _ = engine.execute_action(&ProjectAction::RenameNode {
             project_id: pid, group: "character".into(),
             old_name: "HeroBase".into(), new_name: "HeroMain".into(),
         });
@@ -6192,7 +6290,7 @@ package = \"com.user.kept\"
         });
         let mut engine = ProjectEngine::new(project, GlobalConfig::default());
         let pid = engine.active_project_id().unwrap().to_string();
-        engine.execute_action(&ProjectAction::RenameNode {
+        let _ = engine.execute_action(&ProjectAction::RenameNode {
             project_id: pid, group: "hero".into(),
             old_name: "T".into(), new_name: "T2".into(),
         });
@@ -6214,7 +6312,7 @@ package = \"com.user.kept\"
         let gdir = config_dir(&dir).join("hero");
         std::fs::create_dir_all(gdir.join("HeroMain.tbl")).unwrap();
 
-        engine.execute_action(&ProjectAction::RenameNode {
+        let _ = engine.execute_action(&ProjectAction::RenameNode {
             project_id: pid, group: "hero".into(),
             old_name: "HeroBase".into(), new_name: "HeroMain".into(),
         });
@@ -6238,7 +6336,7 @@ package = \"com.user.kept\"
         let (dir, mut engine) = engine_with_saved_node("rename_roundtrip", "hero", "HeroBase");
         let pid = engine.active_project_id().unwrap().to_string();
         let rename = |engine: &mut ProjectEngine, old: &str, new: &str| {
-            engine.execute_action(&ProjectAction::RenameNode {
+            let _ = engine.execute_action(&ProjectAction::RenameNode {
                 project_id: pid.clone(), group: "hero".into(),
                 old_name: old.into(), new_name: new.into(),
             });
@@ -6326,7 +6424,7 @@ package = \"com.user.kept\"
         let pid = engine.active_project_id().unwrap().to_string();
         assert!(engine.validate().is_empty(), "起点应当是合法的: {:?}", engine.validate());
 
-        engine.execute_action(&ProjectAction::RenameNode {
+        let _ = engine.execute_action(&ProjectAction::RenameNode {
             project_id: pid.clone(), group: "hero".into(),
             old_name: "HeroBase".into(), new_name: "HeroMain".into(),
         });
@@ -6462,7 +6560,7 @@ package = \"com.user.kept\"
         // `Hero` 改成 `Unit` 不能碰到 `HeroBase` 的引用——词边界要挡住。
         let (dir, mut engine) = engine_with_refs("rename_refs_boundary");
         let pid = engine.active_project_id().unwrap().to_string();
-        engine.execute_action(&ProjectAction::RenameNode {
+        let _ = engine.execute_action(&ProjectAction::RenameNode {
             project_id: pid, group: "hero".into(),
             old_name: "Hero".into(), new_name: "Unit".into(),
         });
@@ -6518,7 +6616,7 @@ package = \"com.user.kept\"
             .map(|e| e.unwrap().file_name().to_string_lossy().to_string())
             .collect();
 
-        engine.execute_action(&ProjectAction::RenameNode {
+        let _ = engine.execute_action(&ProjectAction::RenameNode {
             project_id: pid, group: "hero".into(),
             old_name: "HeroBase".into(), new_name: "Renamed".into(),
         });
@@ -6545,7 +6643,7 @@ package = \"com.user.kept\"
         // 存在性归右键的新建/删除管。
         let (dir, mut engine) = engine_with_saved_node("revert_never_saved", "hero", "HeroBase");
         let pid = engine.active_project_id().unwrap().to_string();
-        engine.execute_action(&ProjectAction::NewTable {
+        let _ = engine.execute_action(&ProjectAction::NewTable {
             project_id: pid, group: "hero".into(), name: "Fresh".into(),
             fmt_ver: crate::tbl::DEFAULT_TBL_VERSION,
         });
@@ -6709,5 +6807,70 @@ package = \"com.user.kept\"
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-}
+    /// core 级命名规则：组名项目内唯一、节点名跨组唯一（忽略大小写）。
+    /// UI（Slint / Tauri）不能绕过 `execute_action` 直接 push。
+    #[test]
+    fn tree_actions_reject_duplicate_names() {
+        let (dir, mut engine) = engine_with_saved_node("dup_names", "hero", "HeroBase");
+        let pid = "p1".to_string();
 
+        // 组名重复（忽略大小写）
+        let err = engine
+            .execute_action(&ProjectAction::NewGroup {
+                project_id: pid.clone(),
+                name: "HERO".into(),
+                storage: GroupStorage::Tbl,
+            })
+            .unwrap_err();
+        assert!(err.contains("组名重复"), "{err}");
+
+        // 正常建一个新组
+        engine
+            .execute_action(&ProjectAction::NewGroup {
+                project_id: pid.clone(),
+                name: "other".into(),
+                storage: GroupStorage::Tbl,
+            })
+            .unwrap();
+        assert!(engine.find_project(&pid).unwrap().groups.iter().any(|g| g.name == "other"));
+
+        // 跨组同名节点（忽略大小写）→ 拒绝
+        let err = engine
+            .execute_action(&ProjectAction::NewTable {
+                project_id: pid.clone(),
+                group: "other".into(),
+                name: "HEROBASE".into(),
+                fmt_ver: crate::tbl::DEFAULT_TBL_VERSION,
+            })
+            .unwrap_err();
+        assert!(err.contains("配置项名重复"), "{err}");
+        // 拒绝时不能留下半截节点
+        assert!(!engine.find_project(&pid).unwrap().groups.iter()
+            .any(|g| g.tables.iter().any(|t| t.name == "HEROBASE")));
+
+        // 小写名不符合 PascalCase → 拒绝
+        let err = engine
+            .execute_action(&ProjectAction::NewTable {
+                project_id: pid.clone(),
+                group: "other".into(),
+                name: "lowercase".into(),
+                fmt_ver: crate::tbl::DEFAULT_TBL_VERSION,
+            })
+            .unwrap_err();
+        assert!(err.contains("Java类名规则"), "{err}");
+
+        // 重命名同样受 core 规则约束
+        let err = engine
+            .execute_action(&ProjectAction::RenameNode {
+                project_id: pid.clone(),
+                group: "other".into(),
+                old_name: "NoSuch".into(),
+                new_name: "HeroBase".into(),
+            })
+            .unwrap_err();
+        assert!(err.contains("配置项名重复"), "{err}");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+}

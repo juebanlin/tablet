@@ -32,7 +32,7 @@ Slint 和 Web 是两套完全不同的 UI 机制。Slint 源码里大量写法�
 | 区域 | 需求 | Tauri 实现 |
 |---|---|---|
 | Toolbar | 撤销/重做、保存/重新加载、当前项目 + 脏标记 | 固定 32px 横条，按钮禁用态跟随状态 |
-| TreeSection | 项目 → 组 → 节点三层；展开/收起、搜索、过滤、完整组、新建项目、排序 | 宽 240px（可拖，最小 220），节点列表独立滚动 |
+| TreeSection | 项目 → 组 → 节点三层；展开/收起、搜索、过滤、完整组、显示 ID、新建项目、排序 | 宽 240px（可拖，最小 220），节点列表独立滚动；“完整组”忽略搜索/过滤展示全部组和节点（只隐藏已删除）；“显示 ID”切换项目行显示元数据 ID / 显示名称，与全局设置里的同一项共用 |
 | GridSection | 表名/行列数、表级动作、公式栏、表格、选区状态 | 纵向五段：Header 24 / Ribbon 24 / Formula 26 / Grid 自适应 / Status 20 |
 | BottomPanel | 日志（级别过滤、清空）与 Excel 文件两个 tab | 默认 120px（可拖，最小 40），两个 pane 切换 |
 | 分隔线 | 左右、上下两处可拖 | 4px，`pointerdown + pointermove`，不持久化 |
@@ -47,6 +47,11 @@ Slint 和 Web 是两套完全不同的 UI 机制。Slint 源码里大量写法�
 | 需求 | Web 实现 | 备注 |
 |---|---|---|
 | 表头、列字母、行号固定；数据区双向滚动 | `<table>` + `position: sticky`（表头 `top`、行号 `left`） | 不手写滚动同步 |
+| 大表（>500 行） | 只渲染可视窗口 ±10 行，上下用 spacer 撑滚动高度；滚动时 rAF 换窗口 | 10 万行 × 20 列：DOM 约 800 个 td，不再生成 200 万个 |
+| 纵向滚动对齐整行 | `snapScrollToRow()`：滚动位置取整到行高，虚拟窗口从第一整行开始（起点留 1px 容差，吸收 DPI 带来的小数 `scrollTop`）；末尾补不足一行的空白 | 像素滚动会在 sticky 表头下露出半行（数字被切一半）或留空白带，看起来像表头重叠；`ceil` 不带容差时会对齐位置多算一整行 |
+| 同节点快照刷新不跳视口 | `setData` 保存并恢复 `scrollTop/scrollLeft`；`render()` 不再用 `getBoundingClientRect()` 量表头高（按 `--row-h` 行数计算） | 粘贴 / 插入删除行 / 撤销走完整 Snapshot 时，清空 tbody 的瞬间布局会把 `scrollTop` 钳到 0，视口弹回第一行 |
+| 双击编辑 | 点选时 `scrollIntoView` 只在滚动位置变化或目标行不在窗口内才重建 tbody | 每次点选都重建会把 mouseup 的 `td` 换掉，浏览器不再派发 `click`/`dblclick`，双击编辑失效 |
+| 行号宽度 | 按最大行号的位数自适应（如 10 万行 → 6 位数字，62px） | 不再固定 32px |
 | 单格选中 / Shift 扩选 / 拖拽框选 | `anchor + focus` 选择模型；拖拽用 `pointerdown/move/up` | 拖到边缘自动滚动（rAF） |
 | 整行 / 整列 / 全选 | 点行号、列字母、左上角 | |
 | 键盘导航 | 方向键、Shift+方向、Tab、Home/End、Ctrl+Home/End、PageUp/Down | 选中后自动 `scrollIntoView` |
@@ -61,6 +66,19 @@ Slint 和 Web 是两套完全不同的 UI 机制。Slint 源码里大量写法�
 | 只读列 | `id` 等列灰底、不可编辑 | 与 @04 的 ReadOnly 语义一致 |
 
 数值列按类型行右对齐（`int/long/float/double`），文本列左对齐；这是 Web 表格的常规做法，Slint 版没有，属于实现层改进。
+
+### 3.1 命名规则由 core 强制
+
+`NewGroup` / `NewTable` / `NewConstant` / `NewEnum` / `RenameGroup` / `RenameNode` 统一走
+`ProjectEngine::validate_action()`：
+
+- 组名：中英文 / 数字 / 下划线，**项目内忽略大小写唯一**；
+- 节点名：PascalCase，**项目内跨组、跨 Table/Constant/Enum 忽略大小写唯一**；
+- 重命名排除自身。
+
+校验失败不落地、不记撤销，`execute_action` 返回错误由 UI 展示。Tauri 的输入弹窗通过
+`validate_name` 调同一个校验做实时提示（确定按钮禁用），但真正的拦截在 core——UI 只负责显示，
+不能绕过或另写一套规则。组名/节点名重复的旧协作场景（外部文件、旧数据）由保存前的校验兜底拒绝。
 
 ## 4. 当前进度
 
@@ -98,7 +116,7 @@ Slint 和 Web 是两套完全不同的 UI 机制。Slint 源码里大量写法�
 | Slint 界面 / 组件 | Tauri 版状态 |
 |---|---|
 | Toolbar（撤销/重做/保存/重新加载/当前项目+脏标记） | 已对齐；额外增加 验证 / 导出 / 设置 / 关于 |
-| TreeSection（标题 / 新建+排序 / 搜索+过滤+完整组 / 节点列表） | 已对齐；搜索支持拼音首字母；排序下拉已接通 |
+| TreeSection（标题 / 新建+排序 / 搜索+过滤+完整组+显示 ID / 节点列表） | 已对齐；搜索支持拼音首字母；排序下拉已接通 |
 | GridHeaderBar（标题、行列数、自动列宽） | 已对齐 |
 | GridRibbon（还原 / Excel / 校验规则 / 显示引用名称 / 被引用展示列） | 已对齐；额外增加「Univer 编辑」 |
 | FormulaBar（折叠单行 / 展开多行 / 只读标记） | 已对齐（textarea 多行，只读显示「只读」） |
@@ -134,6 +152,25 @@ Slint 和 Web 是两套完全不同的 UI 机制。Slint 源码里大量写法�
 - **Univer 编辑**：只用 Apache-2.0 的 `@univerjs/presets` / `preset-sheets-core`，xlsx 依赖通过 SheetJS + 现有 xlsx 桥接往返，不接 Univer Pro；样式 / 批注 / 合并等布局不持久化。一个窗口只放一个 Group（多开窗口 = 多组并排比对）；Univer 自带 sheet bar 关闭，窗口顶部的 sheet 条只允许切换，不提供增删 / 重命名。表头与 sheet 名由 `import_xlsx_into_group` 严格校验，改坏会整次拒绝。回写前比对 Group 指纹，主界面若已改过同组会要求重新加载。
 - **Univer 前端资源**：首次引入 Node/Vite 工具链，产物 `ui/univer/` 不提交；`tauri build` 由 `beforeBuildCommand` 自动构建，日常 `cargo build` 前需手动执行
   `cd crates/app-tauri/univer-editor && npm ci && npm run build`（未构建时按钮会提示）。
+
+## 4.3 性能实测（100k 行 × 20 列）
+
+环境：Windows 11，release（`x86_64-pc-windows-msvc`，fat LTO），20 列混合类型（int/str/float/txt/bool/`@Enum`/`List<int>`/`Map<str,int>`），100,000 行。
+
+| 项目 | 优化前 | 优化后 |
+|---|---|---|
+| 打开表格（选节点 → 首屏可交互） | 36.3 s | **1.21 s**（10k 143 ms / 50k 575 ms） |
+| DOM 单元格数 | 2,000,100 | **约 780**（40 个 tr：可视行 + 上下 spacer） |
+| JS heap | 128 MB | 46 MB |
+| 进程 RSS | ~290 MB | ~290 MB（数据本身在 Rust/JS 内存里） |
+| 滚动换窗口 | — | 21–28 ms |
+| 单元格编辑提交 | — | **285 ms 后端 + 1 ms 前端**（轻量 EditResult，不含 grid.rows；UI 端到端约 0.5 s） |
+| 保存工作区 / 全量校验 | — | 1.58 s / 1.19 s |
+| CLI `validate` / `export data --json` | — | 约 1.0 s / 1.2 s |
+
+- 行数 >500 自动进入虚拟滚动；行号栏宽度按位数计算（100k 行显示 6 位数字，62px）。
+- 单元格提交走 `commit_cell_fast`：只回状态 / 树 / 错误定位，前端本地已改过单元格，不再重建 10 万行 grid；仅结构操作 / 撤销 / 保存仍走完整 Snapshot。
+- 单元格 dirty 计算改成 O(1)（只有改回原值时才退回全表比较），避免每次编辑扫 200 万字符串。
 
 ## 5. 开发 / 调试 / AI 驱动
 

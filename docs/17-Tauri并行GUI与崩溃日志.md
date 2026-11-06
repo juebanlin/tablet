@@ -40,7 +40,7 @@ crates/
 
 要求：
 
-- 两个 GUI 的 exe **文件名必须不同**，允许同机共存；`dist/` 分目录：`dist/windows-slint/`、`dist/windows-tauri/`。
+- 两个 GUI 的 exe **文件名必须不同**，允许同机共存；发布包统一输出到 `dist/windows/`：`tablet.exe` / `tablet-tauri.exe` / `tablet-cli.exe`。
 - 工作区锁（`<workdir>/.data/tablet.lock`，`tablet_core::workspace_lock`）由 core 独占，两个 GUI 走同一把锁：同项目互斥、不同项目可并行。**不要加 `tauri-plugin-single-instance`**，那会把"多项目并行"锁死。
 - 两套 GUI 写出的 `.tbl` / `.xlsx` 必须完全一致——它们共用 core，这点天然成立。
 

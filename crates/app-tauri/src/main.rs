@@ -15,7 +15,7 @@ use tauri::{Emitter, Manager};
 
 use backend::{
     Backend, CreateProjectRequest, ExcelMapRequest, ExcelPollItem, ExcelPreview, ExportFormatsUi,
-    CellIssue, ExcelSyncRowUi, ExportReport, ExportUi, GlobalSettingsUi, PasteGroupPreviewUi,
+    CellIssue, EditResult, ExcelSyncRowUi, ExportReport, ExportUi, GlobalSettingsUi, PasteGroupPreviewUi,
     PasteGroupRowUi,
     ProjectSettings, RefPickerData, RuleItem, RulesPayload,
     SchemaImportPreview, SchemaOutlineGroup, SchemaPreview, SepInput, Snapshot, TemplateItem,
@@ -60,6 +60,19 @@ fn commit_cell(
     b.ensure_unlocked()?;
     b.commit_cell(row, col, value);
     Ok(b.snapshot())
+}
+
+#[tauri::command]
+fn commit_cell_fast(
+    state: tauri::State<'_, AppState>,
+    row: usize,
+    col: usize,
+    value: String,
+) -> Result<EditResult, String> {
+    let mut b = lock(&state)?;
+    b.ensure_unlocked()?;
+    b.commit_cell(row, col, value);
+    Ok(b.edit_result())
 }
 
 #[tauri::command]
@@ -144,7 +157,7 @@ fn new_group(
     xlsx: bool,
 ) -> Result<Snapshot, String> {
     let mut b = lock(&state)?;
-    b.new_group(&project, name, xlsx);
+    b.new_group(&project, name, xlsx)?;
     Ok(b.snapshot())
 }
 
@@ -159,7 +172,7 @@ fn new_node(
 ) -> Result<Snapshot, String> {
     let mut b = lock(&state)?;
     b.ensure_group_unlocked(&project, &group)?;
-    b.new_node(&project, &group, &kind, name, fmt);
+    b.new_node(&project, &group, &kind, name, fmt)?;
     Ok(b.snapshot())
 }
 
@@ -172,7 +185,7 @@ fn rename_group(
 ) -> Result<Snapshot, String> {
     let mut b = lock(&state)?;
     b.ensure_group_unlocked(&project, &old_name)?;
-    b.rename_group(&project, old_name, new_name);
+    b.rename_group(&project, old_name, new_name)?;
     Ok(b.snapshot())
 }
 
@@ -186,7 +199,7 @@ fn rename_node(
 ) -> Result<Snapshot, String> {
     let mut b = lock(&state)?;
     b.ensure_group_unlocked(&project, &group)?;
-    b.rename_node(&project, &group, old_name, new_name);
+    b.rename_node(&project, &group, old_name, new_name)?;
     Ok(b.snapshot())
 }
 
@@ -452,6 +465,29 @@ fn set_project_sort(state: tauri::State<'_, AppState>, sort: String) -> Result<S
 #[tauri::command]
 fn global_settings(state: tauri::State<'_, AppState>) -> Result<GlobalSettingsUi, String> {
     Ok(lock(&state)?.global_settings())
+}
+
+#[tauri::command]
+fn validate_name(
+    state: tauri::State<'_, AppState>,
+    project: String,
+    group: Option<String>,
+    kind: String,
+    name: String,
+    old_name: Option<String>,
+) -> Result<Option<String>, String> {
+    let b = lock(&state)?;
+    Ok(b.validate_name(&project, group.as_deref(), &kind, &name, old_name.as_deref()))
+}
+
+#[tauri::command]
+fn set_show_meta_id(
+    state: tauri::State<'_, AppState>,
+    on: bool,
+) -> Result<Snapshot, String> {
+    let mut b = lock(&state)?;
+    b.set_show_meta_id(on)?;
+    Ok(b.snapshot())
 }
 
 #[tauri::command]
@@ -1054,6 +1090,7 @@ fn run_gui(workdir_arg: Option<std::path::PathBuf>) -> anyhow::Result<()> {
             snapshot,
             select_node,
             commit_cell,
+            commit_cell_fast,
             commit_header,
             clear_cells,
             paste_cells,
@@ -1090,6 +1127,8 @@ fn run_gui(workdir_arg: Option<std::path::PathBuf>) -> anyhow::Result<()> {
             set_project_sort,
             global_settings,
             save_global_settings,
+            set_show_meta_id,
+            validate_name,
             export_project,
             schema_export,
             schema_outline,

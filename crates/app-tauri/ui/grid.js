@@ -94,6 +94,14 @@ class SheetGrid {
     this.rownums = [];
     this.colheads = [];
     this.headerCells = [];
+    // 大表虚拟滚动：只把可视区附近的行放进 DOM，其余用上下 spacer 撑高度。
+    this.virtual = false;
+    this.visibleStart = 0;
+    this.visibleEnd = 0;
+    this.virtualBuffer = 10;
+    this._vraf = 0;
+    this.tbody = null;
+    this.headerH = 0;
 
     this.anchor = { r: 0, c: 0 };
     this.focus = { r: 0, c: 0 };
@@ -134,6 +142,9 @@ class SheetGrid {
       opts.keepSelection && sameNode
         ? { anchor: { ...this.anchor }, focus: { ...this.focus }, kind: this.kind }
         : null;
+    // 同一节点的快照刷新（粘贴 / 插入 / 删除 / 撤销等走完整 Snapshot）不能把视口弹回顶部：
+    // render() 重建前会清空表格，布局会把 scrollTop 钳到 0，所以先存后恢复。
+    const keepScroll = sameNode ? { top: this.scroll.scrollTop, left: this.scroll.scrollLeft } : null;
     this.node = node;
     this.hover = null;
     const cols = node ? (node.widths?.length || node.headers?.[0]?.length || 0) : 0;
@@ -157,6 +168,13 @@ class SheetGrid {
       if (cached && !this.autoWidth) this.colWidths = cached.slice();
     }
     this.render();
+
+    // 恢复同一节点的滚动位置；render() 是从顶部重新建窗口的，需要按恢复后的位置再换一次窗口。
+    if (keepScroll) {
+      this.scroll.scrollTop = keepScroll.top;
+      this.scroll.scrollLeft = keepScroll.left;
+      if (this.virtual) this.renderVirtualRows(true);
+    }
 
     // 切节点：清空选区并回到左上角（与 Slint 版一致）。
     if (!sameNode) {
@@ -218,7 +236,8 @@ class SheetGrid {
 
   setCellValue(r, c, value) {
     if (this.setCellText(r, c, value)) {
-      this.paintCell(this.tds[r][c], r, c);
+      const td = this.tds[r]?.[c];
+      if (td) this.paintCell(td, r, c);
       this.onCommit({ type: "cell", r, c }, value);
       this.notify();
     }
@@ -524,6 +543,10 @@ class SheetGrid {
     this.rownums = [];
     this.colheads = [];
     this.headerCells = [];
+    this.tbody = null;
+    this.virtual = false;
+    this.visibleStart = 0;
+    this.visibleEnd = 0;
     if (!this.node) {
       this.table.hidden = true;
       return;
@@ -535,8 +558,12 @@ class SheetGrid {
 
     // 列宽
     const colgroup = document.createElement("colgroup");
+    // 行号宽度按最大行号的位数自适应（10 万行需要 6 位数字）。
+    const gutterW = Math.max(32, 14 + String(this.rows).length * 8);
+    this.gutterW = gutterW;
+    this.table.style.setProperty("--gutter-w", `${gutterW}px`);
     const gutter = document.createElement("col");
-    gutter.style.width = "32px";
+    gutter.style.width = `${gutterW}px`;
     colgroup.appendChild(gutter);
     const colEls = [];
     for (let c = 0; c < cols; c++) {
@@ -579,7 +606,6 @@ class SheetGrid {
       const tr = document.createElement("tr");
       const cornerCell = document.createElement("th");
       cornerCell.className = "corner";
-      cornerCell.style.top = `${(hi + 1) * topOffset}px`;
       tr.appendChild(cornerCell);
       const cells = [];
       row.forEach((text, ci) => {
@@ -590,45 +616,158 @@ class SheetGrid {
         if (hi === 1 && !this.isReadonlyCol(ci)) th.classList.add("export");
         if (hi === 2 && !this.isReadonlyCol(ci)) th.classList.add("type");
         th.textContent = text;
-        th.style.top = `${(hi + 1) * topOffset}px`;
         cells.push(th);
         tr.appendChild(th);
       });
       this.headerCells.push(cells);
       thead.appendChild(tr);
     });
-    if (n.headers[0]) this.colheads.forEach((th, c) => (th.style.top = "0px"));
     this.table.appendChild(thead);
+    // 表头行高固定（CSS `--row-h`，nowrap），直接按行数算。
+    // 不能在这里 getBoundingClientRect()：那会在 tbody 还空着时强制布局，
+    // 浏览器随即把 scrollTop 钳到 0，同节点刷新（粘贴/撤销等）就会跳回第一行。
+    this.headerH = rowH * (1 + n.headers.length);
 
     // 数据
     const tbody = document.createElement("tbody");
-    for (let r = 0; r < this.rows; r++) {
-      const tr = document.createElement("tr");
-      const rowHead = document.createElement("th");
-      rowHead.className = "rownum";
-      rowHead.dataset.row = r;
-      rowHead.textContent = r + 1;
-      this.rownums.push(rowHead);
-      tr.appendChild(rowHead);
-
-      const rowCells = [];
-      for (let c = 0; c < cols; c++) {
-        const td = document.createElement("td");
-        td.dataset.cell = `${r}:${c}`;
-        if (this.isReadonlyCol(c)) td.classList.add("readonly");
-        if (this.isNumericCol(c)) td.classList.add("num");
-        this.paintCell(td, r, c);
-        rowCells.push(td);
-        tr.appendChild(td);
-      }
-      this.tds.push(rowCells);
-      tbody.appendChild(tr);
+    this.tbody = tbody;
+    if (this.rows > 500) {
+      // 大表：只渲染可视窗口；滚动时换窗口。
+      this.virtual = true;
+      this.tds = new Array(this.rows);
+      this.rownums = new Array(this.rows);
+      this.table.appendChild(tbody);
+      this.renderVirtualRows(true);
+      return;
     }
+    for (let r = 0; r < this.rows; r++) tbody.appendChild(this.makeRow(r));
+    // 与虚拟模式同理：末尾补不足一行的空白，滚到底时第一行仍能贴住表头。
+    const pad = (((this.scroll.clientHeight - this.headerH) % rowH) + rowH) % rowH;
+    if (pad > 0) tbody.appendChild(this.virtualGapRow(pad));
     this.table.appendChild(tbody);
   }
 
-  paintCell(td, r, c) {
-    const text = this.displayCellText(r, c);
+  /** 建一行（绝对行号 r），并把 td/行号登记到 this.tds / this.rownums。 */
+  makeRow(r) {
+    const tr = document.createElement("tr");
+    // 斑马纹按绝对行号，否则虚拟滚动后条纹会跟着窗口漂移。
+    if (r % 2 === 1) tr.classList.add("alt");
+    const rowHead = document.createElement("th");
+    rowHead.className = "rownum";
+    rowHead.dataset.row = r;
+    rowHead.textContent = r + 1;
+    this.rownums[r] = rowHead;
+    tr.appendChild(rowHead);
+
+    const rowCells = [];
+    const cols = this.cols;
+    for (let c = 0; c < cols; c++) {
+      const td = document.createElement("td");
+      td.dataset.cell = `${r}:${c}`;
+      if (this.isReadonlyCol(c)) td.classList.add("readonly");
+      if (this.isNumericCol(c)) td.classList.add("num");
+      this.paintCell(td, r, c);
+      rowCells.push(td);
+      tr.appendChild(td);
+    }
+    this.tds[r] = rowCells;
+    return tr;
+  }
+
+  virtualGapRow(height) {
+    const tr = document.createElement("tr");
+    tr.className = "virtual-gap";
+    const td = document.createElement("td");
+    td.colSpan = this.cols + 1;
+    td.style.height = `${height}px`;
+    td.style.padding = "0";
+    td.style.border = "0";
+    td.style.lineHeight = "0";
+    tr.appendChild(td);
+    return tr;
+  }
+
+  /** 重算虚拟窗口并重建 tbody（只在窗口变化时）。 */
+  renderVirtualRows(force = false) {
+    if (!this.virtual || !this.node || !this.tbody) return;
+    const view = this.scroll;
+    const rowH = this.rowH || 24;
+    // 表头 sticky 在滚动容器顶部（高 headerH），会盖住下方内容；tbody 用等高
+    // spacer 代替未渲染的行。行 s 的视口顶 = headerH + s*rowH - scrollTop，
+    // 「第一整行」从 scrollTop / rowH 起算。若从 scrollTop-headerH 起算，
+    // 最上面会露出半行（数字被切掉一半），看起来像和表头重叠。
+    // 留 1px 容差：浏览器会按 DPI 把 scrollTop 存成小数（如 345686.28），
+    // 直接 ceil 会在刚好对齐整行时多算一行，露出整整一行空白。
+    const start = clamp(
+      Math.floor((view.scrollTop + 1) / rowH),
+      0,
+      Math.max(0, this.rows - 1),
+    );
+    const end = clamp(
+      Math.ceil((view.scrollTop + view.clientHeight) / rowH) + this.virtualBuffer,
+      start,
+      this.rows,
+    );
+    if (!force && start === this.visibleStart && end === this.visibleEnd) return;
+    if (this.editing) this.cancelEdit();
+
+    for (let r = this.visibleStart; r < this.visibleEnd; r++) {
+      if (this.tds[r]) this.tds[r] = undefined;
+      if (this.rownums[r]) this.rownums[r] = undefined;
+    }
+
+    const frag = document.createDocumentFragment();
+    const topH = start * rowH;
+    if (topH > 0) frag.appendChild(this.virtualGapRow(topH));
+    for (let r = start; r < end; r++) frag.appendChild(this.makeRow(r));
+    // 末尾补一点空白，让「内容高度 - 视口高度」正好是行高的整数倍；
+    // 否则滚到最底部时 max scrollTop 不在行边界上，表头下又会露出半行。
+    const pad = (((view.clientHeight - (this.headerH || 0)) % rowH) + rowH) % rowH;
+    const bottomH = (this.rows - end) * rowH + pad;
+    if (bottomH > 0) frag.appendChild(this.virtualGapRow(bottomH));
+    this.tbody.replaceChildren(frag);
+    this.visibleStart = start;
+    this.visibleEnd = end;
+    this.applySelection();
+  }
+
+  /**
+   * 把纵向滚动位置对齐到整行。
+   * 行高固定，sticky 表头会盖住滚动容器顶部；滚动位置不在行边界上时，
+   * 表头下沿会露出被切掉一半的行（数字/文字只剩半截），或留下一条空白带。
+   * 对齐后第一行正好贴在表头下沿，滚动以整行为步长（和 Excel 一致）。
+   * 触底时不强行对齐，否则最后一行会被挡在视口外。
+   */
+  snapScrollToRow() {
+    if (!this.node || this._snapping) return;
+    const view = this.scroll;
+    const rowH = this.rowH || 24;
+    const max = view.scrollHeight - view.clientHeight;
+    if (view.scrollTop >= max - 1) return;
+    const snapped = Math.round(view.scrollTop / rowH) * rowH;
+    if (Math.abs(snapped - view.scrollTop) < 0.5) return;
+    this._snapping = true;
+    view.scrollTop = snapped;
+    this._snapping = false;
+  }
+
+  /** 轻量编辑结果只更新错误 class，不重建 DOM。 */
+  setErrors(errors) {
+    this.errorSet = new Set((errors || []).map(([r, c]) => `${r}:${c}`));
+    if (!this.node) return;
+    const r0 = this.virtual ? this.visibleStart : 0;
+    const r1 = this.virtual ? this.visibleEnd : this.rows;
+    for (let r = r0; r < r1; r++) {
+      const row = this.tds[r];
+      if (!row) continue;
+      for (let c = 0; c < row.length; c++) {
+        if (!row[c]) continue;
+        row[c].classList.toggle("has-error", this.errorSet.has(`${r}:${c}`));
+      }
+    }
+  }
+
+  paintCell(td, r, c) {    const text = this.displayCellText(r, c);
     const kind = this.node.kinds[c] || "text";
     const arrow = ["ref", "export", "type"].includes(kind) && text !== "";
     td.innerHTML = "";
@@ -676,7 +815,12 @@ class SheetGrid {
   autoFitWidth(c) {
     let max = 4;
     for (const row of this.node.headers) max = Math.max(max, (row[c] || "").length);
-    for (const row of this.node.rows) max = Math.max(max, (row[c] || "").length);
+    const rows = this.node.rows;
+    // 大表不扫全量：前 1000 行足以代表列宽，避免 10 万行 × 20 列逐格量长度。
+    const limit = rows.length > 5000 ? Math.min(rows.length, 1000) : rows.length;
+    for (let i = 0; i < limit; i++) {
+      max = Math.max(max, (rows[i]?.[c] || "").length);
+    }
     return clamp(Math.round(max * 7.5 + 28), 60, 320);
   }
 
@@ -772,7 +916,9 @@ class SheetGrid {
     const prev = this._lastBounds;
     const paint = (b) => {
       if (!b) return;
-      for (let r = b.r0; r <= b.r1; r++) {
+      const r0 = this.virtual ? Math.max(b.r0, this.visibleStart) : b.r0;
+      const r1 = this.virtual ? Math.min(b.r1, this.visibleEnd - 1) : b.r1;
+      for (let r = r0; r <= r1; r++) {
         for (let c = b.c0; c <= b.c1; c++) this.paintSelectionCell(r, c);
       }
     };
@@ -780,13 +926,20 @@ class SheetGrid {
     paint(next);
     if (!prev && !next) {
       // 首次或清空：整表刷一遍，保证没有残留
-      for (let r = 0; r < this.rows; r++) for (let c = 0; c < this.cols; c++) this.paintSelectionCell(r, c);
+      if (this.virtual) {
+        for (let r = this.visibleStart; r < this.visibleEnd; r++) {
+          for (let c = 0; c < this.cols; c++) this.paintSelectionCell(r, c);
+        }
+      } else {
+        for (let r = 0; r < this.rows; r++) for (let c = 0; c < this.cols; c++) this.paintSelectionCell(r, c);
+      }
     }
     this._lastBounds = next;
 
     const rowIn = (r) => next && r >= next.r0 && r <= next.r1;
     const colIn = (c) => next && c >= next.c0 && c <= next.c1;
     this.rownums.forEach((th, r) => {
+      if (!th) return;
       th.classList.toggle("selected", this.kind === "row" && this.focus.r === r);
       th.classList.toggle("in-range", this.kind !== "row" && !!next && rowIn(r));
     });
@@ -857,16 +1010,45 @@ class SheetGrid {
   }
 
   scrollIntoView() {
-    const td = this.tds[this.focus.r]?.[this.focus.c];
-    if (!td) return;
     const view = this.scroll;
+    const rowH = this.rowH || 24;
+    const headerH = this.headerH || rowH * (1 + (this.node?.headers?.length || 1));
+    if (this.virtual) {
+      const top = headerH + this.focus.r * rowH;
+      const bottom = top + rowH;
+      // 目标位置按整行对齐（与 snapScrollToRow 一致）：向下取整行保证格子底边露全，
+      // 向上取整行保证格子顶边不被表头盖住。
+      const before = view.scrollTop;
+      if (bottom > view.scrollTop + view.clientHeight) {
+        view.scrollTop = Math.ceil((bottom - view.clientHeight) / rowH) * rowH;
+      } else if (top < view.scrollTop + headerH) {
+        view.scrollTop = Math.floor((top - headerH) / rowH) * rowH;
+      }
+      // 只有滚动位置变化或目标行不在当前窗口里才重建 tbody。
+      // 每次点选都重建会把 mouseup 时的 td 换掉，浏览器就不派发 click/dblclick，
+      // 双击编辑因此失效。
+      const inWindow = this.focus.r >= this.visibleStart && this.focus.r < this.visibleEnd;
+      if (view.scrollTop !== before || !inWindow) this.renderVirtualRows(true);
+    }
+    const td = this.tds[this.focus.r]?.[this.focus.c];
+    if (!td) {
+      // 大表行被虚拟化时，用列头做水平定位。
+      const th = this.colheads[this.focus.c];
+      if (!th) return;
+      const cell = th.getBoundingClientRect();
+      const box = view.getBoundingClientRect();
+      if (cell.right > box.right) view.scrollLeft += cell.right - box.right;
+      else if (cell.left < box.left + (this.gutterW || 32))
+        view.scrollLeft -= box.left + (this.gutterW || 32) - cell.left;
+      return;
+    }
     const cell = td.getBoundingClientRect();
     const box = view.getBoundingClientRect();
-    const headH = 24 * (1 + (this.node?.headers.length || 1));
     if (cell.bottom > box.bottom) view.scrollTop += cell.bottom - box.bottom;
-    else if (cell.top < box.top + headH) view.scrollTop -= box.top + headH - cell.top;
+    else if (cell.top < box.top + headerH) view.scrollTop -= box.top + headerH - cell.top;
     if (cell.right > box.right) view.scrollLeft += cell.right - box.right;
-    else if (cell.left < box.left + 32) view.scrollLeft -= box.left + 32 - cell.left;
+    else if (cell.left < box.left + (this.gutterW || 32))
+      view.scrollLeft -= box.left + (this.gutterW || 32) - cell.left;
   }
 
   /** 把某一列滚进可视区。插入列后调用，否则新列会在右边界外、看起来像没插进去。 */
@@ -877,7 +1059,8 @@ class SheetGrid {
     const cell = th.getBoundingClientRect();
     const box = view.getBoundingClientRect();
     if (cell.right > box.right) view.scrollLeft += cell.right - box.right + 8;
-    else if (cell.left < box.left + 32) view.scrollLeft -= box.left + 32 - cell.left;
+    else if (cell.left < box.left + (this.gutterW || 32))
+      view.scrollLeft -= box.left + (this.gutterW || 32) - cell.left;
   }
 
   // ── 编辑 ────────────────────────────────────────────────
@@ -930,8 +1113,8 @@ class SheetGrid {
     this.commitEdit(true);
     const el =
       target.type === "cell"
-        ? this.tds[target.r][target.c]
-        : this.headerCells[target.hi][target.ci];
+        ? this.tds[target.r]?.[target.c]
+        : this.headerCells[target.hi]?.[target.ci];
     if (!el) return;
     const value =
       target.type === "cell" ? this.cellText(target.r, target.c) : this.node.headers[target.hi][target.ci];
@@ -1011,8 +1194,10 @@ class SheetGrid {
       this.onCommit(ed, value);
     }
 
-    if (ed.type === "cell") this.paintCell(this.tds[ed.r][ed.c], ed.r, ed.c);
-    else this.paintHeader(this.headerCells[ed.hi][ed.ci], ed.hi, ed.ci);
+    if (ed.type === "cell") {
+      const td = this.tds[ed.r]?.[ed.c];
+      if (td) this.paintCell(td, ed.r, ed.c);
+    } else this.paintHeader(this.headerCells[ed.hi][ed.ci], ed.hi, ed.ci);
 
     if (move && ed.type === "cell") {
       const dr = move === "down" ? 1 : move === "up" ? -1 : 0;
@@ -1026,8 +1211,10 @@ class SheetGrid {
     if (!this.editing) return;
     const ed = this.editing;
     this.editing = null;
-    if (ed.type === "cell") this.paintCell(this.tds[ed.r][ed.c], ed.r, ed.c);
-    else this.paintHeader(this.headerCells[ed.hi][ed.ci], ed.hi, ed.ci);
+    if (ed.type === "cell") {
+      const td = this.tds[ed.r]?.[ed.c];
+      if (td) this.paintCell(td, ed.r, ed.c);
+    } else this.paintHeader(this.headerCells[ed.hi][ed.ci], ed.hi, ed.ci);
     this.applySelection();
   }
 
@@ -1045,7 +1232,8 @@ class SheetGrid {
   setActiveValue(value) {
     if (this.kind !== "cell" && this.kind !== "range") return;
     if (this.setCellText(this.focus.r, this.focus.c, value)) {
-      this.paintCell(this.tds[this.focus.r][this.focus.c], this.focus.r, this.focus.c);
+      const td = this.tds[this.focus.r]?.[this.focus.c];
+      if (td) this.paintCell(td, this.focus.r, this.focus.c);
       this.onCommit({ type: "cell", r: this.focus.r, c: this.focus.c }, value);
       this.notify();
     }
@@ -1074,7 +1262,8 @@ class SheetGrid {
         cells.push([r, c]);
         if (this.setCellText(r, c, "")) {
           changed = true;
-          this.paintCell(this.tds[r][c], r, c);
+          const td = this.tds[r]?.[c];
+          if (td) this.paintCell(td, r, c);
         }
       }
     }
@@ -1096,7 +1285,8 @@ class SheetGrid {
         if (c >= this.cols) return;
         if (this.setCellText(r, c, value)) {
           changed = true;
-          this.paintCell(this.tds[r][c], r, c);
+          const td = this.tds[r]?.[c];
+          if (td) this.paintCell(td, r, c);
         }
       });
     });
@@ -1107,8 +1297,19 @@ class SheetGrid {
   _bind() {
     const scroll = this.scroll;
 
+    scroll.addEventListener("scroll", () => {
+      this.snapScrollToRow();
+      if (!this.virtual || this._vraf) return;
+      this._vraf = requestAnimationFrame(() => {
+        this._vraf = 0;
+        this.renderVirtualRows();
+      });
+    });
+
     scroll.addEventListener("pointerdown", (e) => {
       if (e.button !== 0) return;
+      // 阻止原生文本选择 / 拖拽。双击编辑依赖 dblclick，不能因为这里的 preventDefault
+      // 或 tbody 重建而丢事件：点选时只有窗口真的换了才重建（见 scrollIntoView）。
       e.preventDefault();
       scroll.focus({ preventScroll: true });
 

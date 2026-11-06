@@ -42,6 +42,8 @@
   --selection: rgba(37, 99, 235, 0.16);
   --selection-soft: #eaf2ff;
   --selection-focus: rgba(37, 99, 235, 0.26);
+  /* 表头/行号是 sticky 的，选中色必须不透明，否则纵向滚动时下方单元格会透出来。 */
+  --selection-header: #dbe7ff;
 
   /* 语义色 */
   --danger: #dc2626;
@@ -94,6 +96,7 @@
     --selection: rgba(91, 156, 255, 0.22);
     --selection-soft: #17283f;
     --selection-focus: rgba(91, 156, 255, 0.32);
+    --selection-header: #243b5e;
 
     --danger: #f87171;
     --danger-soft: #2a1a1c;
@@ -392,9 +395,17 @@ button { cursor: default; }
   background: var(--surface);
 }
 
-.sheet thead th {
+.sheet thead {
+  /* 整个 thead 一起 sticky，而不是让每个 th 各自 sticky；
+     后者在虚拟滚动（tbody 频繁替换）下 WebView2 会出现表头层叠/内容透出。 */
   position: sticky;
-  z-index: 2;
+  top: 0;
+  z-index: 5;
+  background: var(--header-bg);
+}
+
+.sheet thead th {
+  position: static;
   background: var(--header-bg);
   font-size: var(--fs-xs);
   text-align: center;
@@ -410,9 +421,9 @@ button { cursor: default; }
 .sheet .rownum {
   position: sticky;
   left: 0;
-  width: 32px;
-  min-width: 32px;
-  max-width: 32px;
+  width: var(--gutter-w, 32px);
+  min-width: var(--gutter-w, 32px);
+  max-width: var(--gutter-w, 32px);
   z-index: 3;
   background: var(--header-bg);
   color: var(--muted);
@@ -420,13 +431,13 @@ button { cursor: default; }
   font-size: var(--fs-xs);
   text-align: center;
 }
-.sheet .corner { z-index: 4; }
+.sheet .corner { z-index: 6; }
 
 .sheet thead th.col-selected,
-.sheet thead th.in-range { background: var(--selection); color: var(--text); }
+.sheet thead th.in-range { background: var(--selection-header); color: var(--text); }
 
 .sheet tbody td { position: relative; user-select: none; }
-.sheet tbody tr:nth-child(even) td { background: var(--row-alt); }
+.sheet tbody tr.alt td { background: var(--row-alt); }
 .sheet tbody tr.row-selected td { background: var(--selection); }
 .sheet tbody tr td.col-selected { background: var(--selection); }
 .sheet tbody tr td.in-range { background: var(--selection); }
@@ -439,7 +450,7 @@ button { cursor: default; }
 .sheet tbody tr:hover td:not(.cell-selected):not(.in-range) { background: var(--surface-3); }
 
 .sheet th.rownum.selected,
-.sheet th.rownum.in-range { background: var(--selection); color: var(--text); }
+.sheet th.rownum.in-range { background: var(--selection-header); color: var(--text); }
 
 .sheet .arrow {
   position: absolute;
@@ -627,6 +638,7 @@ button { cursor: default; }
 .modal-title { font-size: var(--fs-lg); font-weight: 600; margin-bottom: 14px; }
 .modal-message { color: var(--text-2); font-size: var(--fs-sm); margin-bottom: 12px; }
 .modal-input { width: 100%; margin-bottom: 10px; }
+.modal-error { color: var(--danger); font-size: var(--fs-sm); margin: 6px 0 0; }
 .modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
 .modal-message.error { color: var(--danger); }
 

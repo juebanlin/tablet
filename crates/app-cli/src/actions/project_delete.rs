@@ -15,7 +15,7 @@ pub fn run_project_delete(engine: &mut ProjectEngine, id: &str) -> Result<()> {
     let action = tablet_core::ops::ProjectAction::DeleteProject {
         project_id: id.to_string(),
     };
-    engine.execute_action(&action);
+    let _ = engine.execute_action(&action);
 
     // 目录删不掉时 `execute_action` 也只打日志（权限 / 文件占用），别替它宣布成功。
     let root = engine.workdir.join(tablet_core::project::PROJECTS_DIR).join(id);

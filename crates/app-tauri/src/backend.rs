@@ -119,6 +119,15 @@ pub struct XlsxExternalChangeUi {
     pub dirty: bool,
 }
 
+/// 单元格快速提交的轻量响应：不回 10 万行 grid，只回状态 / 树 / 错误定位。
+#[derive(Serialize)]
+pub struct EditResult {
+    pub status: Status,
+    pub tree: Vec<TreeRow>,
+    pub issues: Vec<IssueRow>,
+    pub errors: Vec<[usize; 2]>,
+}
+
 // ── 快照结构（前端直接消费）────────────────────────────────
 #[derive(Serialize)]
 pub struct Snapshot {
@@ -171,6 +180,8 @@ pub struct Status {
     pub show_ref_name: bool,
     /// 失焦自动提交（全局设置）。
     pub auto_commit_on_blur: bool,
+    /// 项目树显示元数据 ID（全局设置；树面板勾选框与设置页共用）。
+    pub show_meta_id: bool,
     pub excel_editing: Vec<String>,
     /// 项目排序方式（tablet.toml，跨启动保留）。
     pub project_sort: String,
@@ -780,6 +791,28 @@ impl Backend {
         }
     }
 
+    /// 单元格提交后的轻量结果（不构建 grid.rows，避免 10 万行全量 IPC）。
+    pub fn edit_result(&self) -> EditResult {
+        let errors = match (&self.selected, self.engine.active_project_id()) {
+            (Some(sel), Some(pid)) if !sel.name.is_empty() => self
+                .engine
+                .validation_errors
+                .iter()
+                .filter(|(p, g, n, _, _)| {
+                    p == pid && g == &sel.group && n == &sel.name
+                })
+                .map(|(_, _, _, r, c)| [*r, *c])
+                .collect(),
+            _ => Vec::new(),
+        };
+        EditResult {
+            status: self.status(),
+            tree: self.tree(),
+            issues: self.issues(),
+            errors,
+        }
+    }
+
     fn issues(&self) -> Vec<IssueRow> {
         if self.engine.active().is_none() {
             return Vec::new();
@@ -999,6 +1032,13 @@ impl Backend {
             warning_count: self.engine.validation_warnings.len(),
             show_ref_name: self.show_ref_name,
             auto_commit_on_blur: self.engine.global_config.ui.as_ref().map(|u| u.auto_commit_on_blur).unwrap_or(true),
+            show_meta_id: self
+                .engine
+                .global_config
+                .ui
+                .as_ref()
+                .map(|u| u.show_meta_id)
+                .unwrap_or(false),
             project_sort: self
                 .engine
                 .global_config
@@ -1528,6 +1568,16 @@ impl Backend {
             ),
             default_export: export_ui(&ExportConfig::default()),
         }
+    }
+
+    /// 树面板「显示 ID」勾选框：与全局设置里的同一项同步，立即写回 tablet.toml。
+    pub fn set_show_meta_id(&mut self, on: bool) -> Result<(), String> {
+        let ui = self.engine.global_config.ui.get_or_insert_with(UiConfig::default);
+        ui.show_meta_id = on;
+        let pm = self.engine.global_config.project_management.clone();
+        self.engine
+            .persist_global_config(pm.project_sort, &pm.project_order)
+            .map_err(|e| e.to_string())
     }
 
     pub fn save_global_settings(&mut self, s: GlobalSettingsUi) -> Result<(), String> {
@@ -3336,15 +3386,63 @@ impl Backend {
     }
 
     // ── 节点增删改 ──────────────────────────────────────────
-    pub fn new_group(&mut self, project: &str, name: String, xlsx: bool) {
+    /// 树面板输入框的实时命名校验（新建 / 重命名）。规则完全来自 core 的 `validate_action`，
+    /// UI 只负责显示错误，不自己实现命名规则。
+    pub fn validate_name(
+        &self,
+        project: &str,
+        group: Option<&str>,
+        kind: &str,
+        name: &str,
+        old_name: Option<&str>,
+    ) -> Option<String> {
+        let group = group.unwrap_or("").to_string();
+        let action = match (kind, old_name) {
+            ("group", Some(old)) => ProjectAction::RenameGroup {
+                project_id: project.to_string(),
+                old_name: old.to_string(),
+                new_name: name.to_string(),
+            },
+            ("group", None) => ProjectAction::NewGroup {
+                project_id: project.to_string(),
+                name: name.to_string(),
+                storage: GroupStorage::Tbl,
+            },
+            (_, Some(old)) => ProjectAction::RenameNode {
+                project_id: project.to_string(),
+                group,
+                old_name: old.to_string(),
+                new_name: name.to_string(),
+            },
+            ("constant", None) => ProjectAction::NewConstant {
+                project_id: project.to_string(),
+                group,
+                name: name.to_string(),
+            },
+            ("enum", None) => ProjectAction::NewEnum {
+                project_id: project.to_string(),
+                group,
+                name: name.to_string(),
+            },
+            _ => ProjectAction::NewTable {
+                project_id: project.to_string(),
+                group,
+                name: name.to_string(),
+                fmt_ver: tablet_core::tbl::DEFAULT_TBL_VERSION,
+            },
+        };
+        self.engine.validate_action(&action).err()
+    }
+
+    pub fn new_group(&mut self, project: &str, name: String, xlsx: bool) -> Result<(), String> {
         self.engine.execute_action(&ProjectAction::NewGroup {
             project_id: project.to_string(),
             name,
             storage: if xlsx { GroupStorage::Xlsx } else { GroupStorage::Tbl },
-        });
+        })
     }
 
-    pub fn new_node(&mut self, project: &str, group: &str, kind: &str, name: String, fmt: Option<String>) {
+    pub fn new_node(&mut self, project: &str, group: &str, kind: &str, name: String, fmt: Option<String>) -> Result<(), String> {
         let pid = project.to_string();
         let g = group.to_string();
         let fmt_ver = fmt
@@ -3361,24 +3459,24 @@ impl Backend {
                 fmt_ver,
             },
         };
-        self.engine.execute_action(&action);
+        self.engine.execute_action(&action)
     }
 
-    pub fn rename_group(&mut self, project: &str, old_name: String, new_name: String) {
+    pub fn rename_group(&mut self, project: &str, old_name: String, new_name: String) -> Result<(), String> {
         self.engine.execute_action(&ProjectAction::RenameGroup {
             project_id: project.to_string(),
             old_name,
             new_name,
-        });
+        })
     }
 
-    pub fn rename_node(&mut self, project: &str, group: &str, old_name: String, new_name: String) {
+    pub fn rename_node(&mut self, project: &str, group: &str, old_name: String, new_name: String) -> Result<(), String> {
         self.engine.execute_action(&ProjectAction::RenameNode {
             project_id: project.to_string(),
             group: group.to_string(),
             old_name,
             new_name,
-        });
+        })
     }
 
     pub fn delete_group(&mut self, project: &str, group: &str) {
@@ -3474,7 +3572,7 @@ impl Backend {
         if self.engine.find_project(project).is_some() && self.engine.projects.len() <= 1 {
             return Err("至少要保留一个打开的项目".to_string());
         }
-        self.engine.execute_action(&ProjectAction::DeleteProject {
+        let _ = self.engine.execute_action(&ProjectAction::DeleteProject {
             project_id: project.to_string(),
         });
         if self.selected.as_ref().is_some_and(|s| s.project == project) {

@@ -89,9 +89,12 @@ async function modalInput(value) {
     const i = document.getElementById('modal-input');
     if (!i || document.getElementById('modal').hidden) return false;
     i.value = ${JSON.stringify(value)};
-    document.getElementById('modal-ok').click();
+    // 命名校验是实时的（core 规则）：「确定」在错误清除前是禁用的，像真人一样先触发 input。
+    i.dispatchEvent(new Event('input', { bubbles: true }));
     return true;
   })()`);
+  await sleep(250);
+  await evalJs(`document.getElementById('modal-ok').click()`);
 }
 
 async function modalOk() {

@@ -210,11 +210,13 @@ pub fn run_schema_add_group(
         "xlsx" => tablet_core::model::GroupStorage::Xlsx,
         other => bail!("--storage 只接受 tbl / xlsx，收到 {:?}", other),
     };
-    engine.execute_action(&ProjectAction::NewGroup {
-        project_id: pid.clone(),
-        name: name.to_string(),
-        storage,
-    });
+    engine
+        .execute_action(&ProjectAction::NewGroup {
+            project_id: pid.clone(),
+            name: name.to_string(),
+            storage,
+        })
+        .map_err(anyhow::Error::msg)?;
     save_or_err(engine, "新建 Group")
 }
 
@@ -246,11 +248,13 @@ pub fn run_schema_add_enum(
     if let Some(err) = engine.validate_node_name(name) {
         bail!("{}", err);
     }
-    engine.execute_action(&ProjectAction::NewEnum {
-        project_id: pid,
-        group: group.to_string(),
-        name: name.to_string(),
-    });
+    engine
+        .execute_action(&ProjectAction::NewEnum {
+            project_id: pid,
+            group: group.to_string(),
+            name: name.to_string(),
+        })
+        .map_err(anyhow::Error::msg)?;
     let node = engine
         .find_enum_mut(group, name)
         .ok_or_else(|| anyhow::anyhow!("新建 Enum 后找不到节点: {}/{}", group, name))?;
@@ -300,11 +304,13 @@ pub fn run_schema_rename_group(engine: &mut ProjectEngine, old: &str, new: &str)
     if let Some(err) = engine.validate_group_name_rename(new, old) {
         bail!("{}", err);
     }
-    engine.execute_action(&ProjectAction::RenameGroup {
-        project_id: pid.clone(),
-        old_name: old.to_string(),
-        new_name: new.to_string(),
-    });
+    engine
+        .execute_action(&ProjectAction::RenameGroup {
+            project_id: pid.clone(),
+            old_name: old.to_string(),
+            new_name: new.to_string(),
+        })
+        .map_err(anyhow::Error::msg)?;
     // 改名现在只在 save 时搬文件（见 ops::apply_pending_renames）。save 因验证错误
     // 中止时盘上什么都没动，这里就不能对外声称"已重命名"。
     save_or_err(engine, "重命名")
@@ -324,12 +330,14 @@ pub fn run_schema_rename_node(
     if let Some(err) = engine.validate_node_name_rename(new, old) {
         bail!("{}", err);
     }
-    engine.execute_action(&ProjectAction::RenameNode {
-        project_id: pid.clone(),
-        group: group.to_string(),
-        old_name: old.to_string(),
-        new_name: new.to_string(),
-    });
+    engine
+        .execute_action(&ProjectAction::RenameNode {
+            project_id: pid.clone(),
+            group: group.to_string(),
+            old_name: old.to_string(),
+            new_name: new.to_string(),
+        })
+        .map_err(anyhow::Error::msg)?;
     save_or_err(engine, "重命名")
 }
 
@@ -398,7 +406,7 @@ fn add_node(
             name: name.to_string(),
         },
     };
-    engine.execute_action(&action);
+    engine.execute_action(&action).map_err(anyhow::Error::msg)?;
     save_or_err(engine, &format!("新建 {}", kind))
 }
 
