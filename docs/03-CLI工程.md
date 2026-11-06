@@ -229,7 +229,7 @@ Project 列表由启动扫描 `projects/` 目录得出，**不需要**在 `table
 
 | 字段 | 说明 | 默认值 |
 |------|------|--------|
-| data_output | 后端数据文件目录（JSON/XML 共用） | — |
+| data_output | 后端数据文件目录（JSON/XML/BIN 共用；BIN 落在其下 `bin/`） | — |
 
 ### 4.6 [export.server.java]
 
@@ -801,7 +801,7 @@ tablet-cli schema delete-node --group hero --name HeroOld
 
 | 子命令 | 职责 | 粒度控制 |
 |--------|------|---------|
-| `export data` | 导出数据文件（JSON/XML） | 支持 --group/--node 过滤 |
+| `export data` | 导出数据文件（JSON/XML/二进制） | 支持 --group/--node 过滤 |
 | `export code` | 导出代码文件（Java/Go/Lua/...） | 全项目，选语言 |
 | `export all` | 全量导出（data + code） | CI 一把梭 |
 
@@ -810,17 +810,19 @@ tablet-cli schema delete-node --group hero --name HeroOld
 
 #### `export data`
 
-导出数据文件（JSON/XML），支持按组/节点过滤。
+导出数据文件（JSON/XML/二进制），支持按组/节点过滤。
 
 | 参数 | 说明 | 默认 |
 |------|------|------|
 | `--json` | 导出 JSON 数据 | — |
 | `--xml` | 导出 XML 数据 | — |
+| `--bin` | 导出二进制整包 `bin/config.bytes`（C#/Unity，@20） | — |
+| `--bin-split` | 导出二进制多文件 `bin/parts/<Node>.bytes` | — |
 | `--group <g>` | 仅导出指定组 | 全部 |
 | `--node <n>` | 仅导出指定节点（依赖 --group） | 全部 |
 | `-o, --output <path>` | 覆盖数据输出目录 | config 中的 data_output |
 
-不指定 `--json`/`--xml` 则两者都导出。
+不指定任何格式时默认导出 JSON。`--bin` 与 `--bin-split` 可以同时使用，互不覆盖。
 
 ```bash
 # 全项目 JSON 数据
@@ -831,6 +833,9 @@ tablet-cli --project slg-test export data --json --group hero
 
 # 仅一张表的 JSON 数据
 tablet-cli --project slg-test export data --json --group hero --node HeroBase
+
+# 二进制（整包 + 多文件）
+tablet-cli --project slg-test export data --bin --bin-split
 
 # XML 数据 + 自定义输出目录
 tablet-cli --project slg-test export data --xml --group item -o ./tmp/data/

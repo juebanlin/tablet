@@ -192,8 +192,11 @@ namespace {{NAMESPACE}}
     {
         public delegate void TableLoader(List<Dictionary<string, string>> rows, SepConfig sep);
         public delegate void ConstantLoader(Dictionary<string, string> row, SepConfig sep);
+        public delegate void BinTableLoader(TblBinTable table);
 
         public static readonly Dictionary<string, TableLoader> Tables = new();
         public static readonly Dictionary<string, ConstantLoader> Constants = new();
+        /// <summary>二进制加载入口；由各 Table 的静态构造器注册。</summary>
+        public static readonly Dictionary<string, BinTableLoader> BinTables = new();
     }
 }

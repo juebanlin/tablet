@@ -245,6 +245,8 @@
       <div class="export-format-grid" id="ex-formats">
         <label class="check"><input type="checkbox" data-fmt="json" checked /> JSON 数据</label>
         <label class="check"><input type="checkbox" data-fmt="xml" checked /> XML 数据</label>
+        <label class="check"><input type="checkbox" data-fmt="bin" /> BIN 数据（整包）</label>
+        <label class="check"><input type="checkbox" data-fmt="bin_split" /> BIN 数据（按节点拆分）</label>
         <label class="check"><input type="checkbox" data-fmt="java" checked /> Java</label>
         <label class="check"><input type="checkbox" data-fmt="go" checked /> Go</label>
         <label class="check"><input type="checkbox" data-fmt="cpp" checked /> C++</label>
@@ -265,6 +267,7 @@
         <span class="sep-v"></span>
         <button class="btn" data-expre="all">全部</button>
         <button class="btn" data-expre="data">数据</button>
+        <button class="btn" data-expre="bin">二进制</button>
         <button class="btn" data-expre="server">后端</button>
         <button class="btn" data-expre="client">前端</button>
         <span class="spacer"></span>

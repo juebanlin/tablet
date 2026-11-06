@@ -98,6 +98,25 @@ tablet-cli -w <config仓库根> --project game export code --csharp-unity
 - tablet GUI 开着同一工作区时，CLI 会被 `.data/tablet.lock` 拒绝（`workspace info` 除外）。
 - 退出码：`0` 成功；`1` 验证 / 导出失败；`2` 用法错误。错误在 stderr。
 
+### 3.1 二进制数据（可选，仅 C#/Unity）
+
+JSON 启动解析慢、分配大时，改导二进制（格式与 reader 细节见 @20）：
+
+```bash
+# 整项目一个包 → <data_output>/bin/config.bytes
+tablet-cli -w <config> --project game export data --bin
+# 每表一个文件 → <data_output>/bin/parts/<Node>.bytes
+tablet-cli -w <config> --project game export data --bin-split
+```
+
+- 二进制与 JSON 可同时导出（`export data --json --bin`），产物目录互不覆盖；
+- `.bytes` 放进 `Assets/Resources/...` 会被 Unity 导入为 `TextAsset`；
+- 生成代码里的入口是 `Loader.LoadAllBin(...)`（`LoadBin` 为别名）：
+  整包 / 单文件 / 目录 / 多个来源都可以，多个来源按顺序聚合（同表同 id 后者覆盖，常量后者覆盖）；
+- 老 Unity（不支持 `Span` / `BinaryPrimitives`）在 Scripting Define Symbols 加
+  `TBLBIN_NO_SPAN`，reader 退化为 `BitConverter`，格式与 API 不变；
+- 只有 C#/Unity 有二进制 reader；其它语言继续用 JSON/XML。
+
 ---
 
 ## 4. 显示当前配置分支

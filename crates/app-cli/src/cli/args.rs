@@ -180,7 +180,7 @@ pub struct ExportArgs {
 
 #[derive(Subcommand, Debug)]
 pub enum ExportAction {
-    /// 导出数据文件（JSON/XML），支持 group/node 粒度
+    /// 导出数据文件（JSON/XML/BIN），支持 group/node 粒度
     Data {
         /// 导出 JSON 数据
         #[arg(long)]
@@ -188,6 +188,12 @@ pub enum ExportAction {
         /// 导出 XML 数据
         #[arg(long)]
         xml: bool,
+        /// 导出二进制数据（Table/Constant；默认全项目一个 config.bytes）
+        #[arg(long)]
+        bin: bool,
+        /// 二进制按节点拆成多个 .bytes（与单文件模式内容格式相同，可同时使用）
+        #[arg(long)]
+        bin_split: bool,
         /// 仅导出指定组
         #[arg(long)]
         group: Option<String>,

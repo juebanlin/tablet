@@ -1,4 +1,5 @@
 mod json;
+mod bin;
 mod java;
 mod xml;
 mod lua;
@@ -10,6 +11,7 @@ mod csharp;
 pub(crate) mod sep_meta;
 
 pub use json::export_all_json;
+pub use bin::{export_all_bin, export_all_bin_parts, encode_table, schema_hash_table, tag_of, MAGIC as BIN_MAGIC, VERSION as BIN_VERSION};
 pub use json::export_json_filtered;
 pub use java::export_all_java;
 pub use xml::export_all_xml;
@@ -347,7 +349,7 @@ pub fn sync_export_dir(
     Ok(ExportResult { files, warnings })
 }
 
-fn normalize_path(path: &std::path::Path) -> String {
+pub(crate) fn normalize_path(path: &std::path::Path) -> String {
     path.to_string_lossy().replace('\\', "/")
 }
 

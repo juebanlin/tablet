@@ -4696,6 +4696,20 @@ impl ProjectEngine {
         None
     }
 
+    /// 二进制导出（v1，仅 Table）：每节点一个 `.bin`，放在 `<data_output>/bin/`。
+    pub fn export_bin_filtered(&mut self, filter: &crate::export::DataFilter, bundle: bool) -> anyhow::Result<crate::export::ExportResult> {
+        let result = if bundle {
+            crate::export::export_all_bin(self.project(), filter)?
+        } else {
+            crate::export::export_all_bin_parts(self.project(), filter)?
+        };
+        self.ui_log(format!(
+            "二进制导出：新增 {}、修改 {}、删除 {}、不变 {}",
+            result.added(), result.modified(), result.deleted(), result.unchanged()
+        ));
+        Ok(result)
+    }
+
     pub fn export_json(&mut self) -> anyhow::Result<crate::export::ExportResult> {
         let result = crate::export::export_all_json(self.project())?;
         self.log_export("JSON", &result);

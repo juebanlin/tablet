@@ -133,6 +133,8 @@ pub fn run_export_data(
     engine: &mut ProjectEngine,
     json: bool,
     xml: bool,
+    bin: bool,
+    bin_split: bool,
     group: Option<&str>,
     node: Option<&str>,
 ) -> ExportSummary {
@@ -141,8 +143,11 @@ pub fn run_export_data(
         group: group.map(|s| s.to_string()),
         node: node.map(|s| s.to_string()),
     };
-    let do_json = json || (!json && !xml);
-    let do_xml = xml || (!json && !xml);
+    let bin_any = bin || bin_split;
+    let do_json = json || (!json && !xml && !bin_any);
+    let do_xml = xml || (!json && !xml && !bin_any);
+    let do_bin_bundle = bin;
+    let do_bin_parts = bin_split;
     let mut summary = ExportSummary::default();
 
     if do_json {
@@ -150,6 +155,12 @@ pub fn run_export_data(
     }
     if do_xml {
         summary.per_format.push(("XML", outcome(engine.export_xml_filtered(&filter))));
+    }
+    if do_bin_bundle {
+        summary.per_format.push(("BIN", outcome(engine.export_bin_filtered(&filter, true))));
+    }
+    if do_bin_parts {
+        summary.per_format.push(("BIN (split)", outcome(engine.export_bin_filtered(&filter, false))));
     }
     summary
 }

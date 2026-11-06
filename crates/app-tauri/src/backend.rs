@@ -294,6 +294,12 @@ pub struct ExportFormatsUi {
     pub json: bool,
     #[serde(default)]
     pub xml: bool,
+    /// 二进制整包 `bin/config.bytes`（@20）。
+    #[serde(default)]
+    pub bin: bool,
+    /// 二进制多文件 `bin/parts/<Node>.bytes`。
+    #[serde(default)]
+    pub bin_split: bool,
     #[serde(default)]
     pub java: bool,
     #[serde(default)]
@@ -1619,6 +1625,14 @@ impl Backend {
         }
         if f.xml {
             push_export(&mut lines, &mut ok, "XML", self.engine.export_xml());
+        }
+        if f.bin {
+            let filter = tablet_core::export::DataFilter::default();
+            push_export(&mut lines, &mut ok, "BIN", self.engine.export_bin_filtered(&filter, true));
+        }
+        if f.bin_split {
+            let filter = tablet_core::export::DataFilter::default();
+            push_export(&mut lines, &mut ok, "BIN (split)", self.engine.export_bin_filtered(&filter, false));
         }
         if f.java {
             push_export(&mut lines, &mut ok, "Java", self.engine.export_java());

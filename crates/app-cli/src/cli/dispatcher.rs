@@ -216,7 +216,7 @@ fn run(cli: Cli) -> Result<i32> {
                     // `export all || exit 1` 这种写法在 CI 里全靠它。
                     Ok(if summary.has_error() { 1 } else { 0 })
                 }
-                ExportAction::Data { json, xml, group, node, output } => {
+                ExportAction::Data { json, xml, bin, bin_split, group, node, output } => {
                     // 过滤目标不存在 = 用错命令，不是"没数据"。否则脚本会把
                     // "组名写错"当成"这个组导出成功且为空"。
                     crate::actions::validate::ensure_filter_targets(
@@ -229,6 +229,8 @@ fn run(cli: Cli) -> Result<i32> {
                         &mut engine,
                         *json,
                         *xml,
+                        *bin,
+                        *bin_split,
                         group.as_deref(),
                         node.as_deref(),
                     );

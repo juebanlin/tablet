@@ -124,12 +124,12 @@ tablet-cli validate --fmt json        # errors / warnings 两个数组
 
 | 子命令 | 范围 |
 |---|---|
-| `export data` | JSON / XML 数据，可按组、节点过滤 |
+| `export data` | JSON / XML / 二进制（C#，`--bin` 单包、`--bin-split` 多文件）数据，可按组、节点过滤 |
 | `export code` | 全项目代码，按语言选 |
 | `export all` | 数据 + 全部代码 |
 
 ```bash
-tablet-cli export data [--json] [--xml] [--group G] [--node N] [-o DIR]
+tablet-cli export data [--json] [--xml] [--bin|--bin-split] [--group G] [--node N] [-o DIR]
 tablet-cli export code --java|--go|--cpp|--lua|--gdscript \
                        [--typescript|--typescript-client|--typescript-server] \
                        [--csharp|--csharp-dotnet|--csharp-unity|--csharp-godot] \
@@ -139,7 +139,7 @@ tablet-cli export all [-o DIR]
 
 - 默认输出根：`projects/<id>/gen/`；`-o` 改根目录。
 - **`-o` 的相对路径相对项目根 `projects/<id>/`，不是当前目录**；拿不准就写绝对路径。
-- `export data` 不给 `--json/--xml` 时两个都导。
+- `export data` 不给任何格式时默认 JSON；`--bin` 与 `--bin-split` 可同时用，分别生成 `bin/config.bytes` 与 `bin/parts/<Node>.bytes`（详见 @20）。
 - 单个格式失败**不打断**其它格式，但**只要有一个失败，退出码就是 1**。
 - `--package` 同时覆盖 Java 与 Go；`--namespace` 同时覆盖 C++ 与 C#。
 - `--fmt json` 输出逐格式的 `added/modified/deleted/unchanged/warnings` 统计。

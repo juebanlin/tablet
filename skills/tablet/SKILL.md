@@ -13,7 +13,7 @@ allowed-tools:
 
 # tablet —— 配置表格式 + CLI 流水线
 
-`tablet-cli` 把若干 `.tbl` / `.tblschema` 编译成 JSON/XML 数据和 7 种语言的代码。
+`tablet-cli` 把若干 `.tbl` / `.tblschema` 编译成 JSON/XML/二进制数据和 7 种语言的代码。
 **AI 只做两件事：写文件、跑命令。** 写错了解析器会带行号报错，跑错了退出码非零——不要绕过它们。
 
 - 格式细节 → `references/format.md`
@@ -60,6 +60,8 @@ tablet-cli -w <workdir> --project demo export all -o artifacts/demo
 
 `export all` = 数据（JSON+XML）+ Java/Go/Lua/GDScript/TypeScript/C++/C#。
 只要数据：`export data --json`；只要某种代码：`export code --java`。
+C#/Unity 需要二进制数据时：`export data --bin`（整项目 `bin/config.bytes`）或
+`export data --bin-split`（`bin/parts/<Node>.bytes`），两者可同时用；读取器和实测见 docs/20。
 
 ## 三、硬规则（写错就一定失败）
 
@@ -369,7 +371,7 @@ tablet-cli [-w <workdir>] [--project <id>] [--fmt json] <命令>
 | 导出结构 | `schema export --out <file> [--group G] [--node G/N] [--with-preset]`；`schema export --as-template --meta-id ID` |
 | 改名 / 删除 | `schema rename-group --old A --new B`；`schema rename-node --group G --old A --new B`；`schema delete-group --name G`；`schema delete-node --group G --name N` |
 | 验证 | `validate [--group G] [--node N] [--strict]` |
-| 导出 | `export data [--json\|--xml] [--group G] [--node N] [-o DIR]`；`export code --java\|--go\|--cpp\|--lua\|--gdscript\|--typescript[-client\|-server]\|--csharp[-dotnet\|-unity\|-godot]\|--all [-o DIR]`；`export all [-o DIR]` |
+| 导出 | `export data [--json\|--xml\|--bin\|--bin-split] [--group G] [--node N] [-o DIR]`；`export code --java\|--go\|--cpp\|--lua\|--gdscript\|--typescript[-client\|-server]\|--csharp[-dotnet\|-unity\|-godot]\|--all [-o DIR]`；`export all [-o DIR]` |
 | Excel | `excel export --group G [-o f.xlsx]`；`excel import --group G --file f.xlsx` |
 | 工作区 | `workspace info`（分支 / 修订 / 项目列表）；`workspace save`（同时刷新 `project.tblmanifest` 索引） |
 

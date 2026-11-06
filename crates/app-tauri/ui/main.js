@@ -3885,9 +3885,10 @@ function initExportDialog() {
   );
   // 与 Slint 版一致的四个快捷预设。
   const presets = {
-    all: ["json", "xml", "java", "go", "cpp", "csharp_dotnet", "typescript_server",
+    all: ["json", "xml", "bin", "java", "go", "cpp", "csharp_dotnet", "typescript_server",
       "lua", "gdscript", "typescript_client", "csharp_unity", "csharp_godot"],
-    data: ["json", "xml"],
+    data: ["json", "xml", "bin"],
+    bin: ["bin"],
     server: ["json", "xml", "java", "go", "cpp", "csharp_dotnet", "typescript_server"],
     client: ["lua", "gdscript", "typescript_client", "csharp_unity", "csharp_godot"],
   };

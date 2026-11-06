@@ -31,6 +31,51 @@ namespace {{NAMESPACE}}
         }
 
         /// <summary>
+        /// 二进制数据入口：可以传任意多个 bundle / 单节点文件 / 目录，按参数顺序聚合进内存。
+        /// 同一张表在多个来源里出现时，后读到的行覆盖同 id，新增 id 追加；常量整体后者覆盖前者。
+        /// </summary>
+        public static void LoadAllBin(params string[] paths)
+        {
+            EnsureTablesRegistered();
+            if (paths == null) return;
+            foreach (var pathOrDir in paths)
+            {
+                if (Directory.Exists(pathOrDir))
+                {
+                    var bundle = Path.Combine(pathOrDir, "config.bytes");
+                    if (File.Exists(bundle))
+                    {
+                        LoadBundle(File.ReadAllBytes(bundle));
+                        continue;
+                    }
+                    foreach (var path in Directory.EnumerateFiles(pathOrDir, "*.bytes", SearchOption.AllDirectories))
+                        LoadPart(Path.GetFileNameWithoutExtension(path), File.ReadAllBytes(path));
+                    continue;
+                }
+                var data = File.ReadAllBytes(pathOrDir);
+                if (TblBinTable.IsBundle(data)) LoadBundle(data);
+                else LoadPart(Path.GetFileNameWithoutExtension(pathOrDir), data);
+            }
+        }
+
+        /// <summary>等价入口：Loader.LoadBin(a, b, ...) === LoadAllBin(a, b, ...)。</summary>
+        public static void LoadBin(params string[] paths) => LoadAllBin(paths);
+
+        static void LoadBundle(byte[] data)
+        {
+            var bundle = TblBinBundle.LoadFromBytes(data);
+            foreach (var name in bundle.Names)
+                if (TblRegistry.BinTables.TryGetValue(name, out var load) && bundle.TryGetTable(name, out var t))
+                    load(t);
+        }
+
+        static void LoadPart(string key, byte[] data)
+        {
+            var table = TblBinTable.LoadFromBytes(data);
+            if (TblRegistry.BinTables.TryGetValue(key, out var load)) load(table);
+        }
+
+        /// <summary>
         /// 强制触发各 *Tpl 的静态构造器，把 TblRegistry 填好。
         ///
         /// C# 的静态构造器是惰性的——不碰类型就不会跑。而注册代码写在各 *Tpl 的静态构造器里，

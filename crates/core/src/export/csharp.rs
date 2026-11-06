@@ -22,6 +22,8 @@ use crate::types::*;
 use super::{to_pascal_case, LineEnding};
 
 const TPL_TBL: &str = include_str!("../../templates/csharp/Tbl.cs");
+const TPL_TBL_BIN: &str = include_str!("../../templates/csharp/TblBin.cs");
+const TPL_BIN_EXAMPLE_UNITY: &str = include_str!("../../templates/csharp/BinExample.unity.cs");
 const TPL_LOADER_DOTNET: &str = include_str!("../../templates/csharp/Loader.dotnet.cs");
 const TPL_LOADER_UNITY: &str = include_str!("../../templates/csharp/Loader.unity.cs");
 const TPL_LOADER_GODOT: &str = include_str!("../../templates/csharp/Loader.godot.cs");
@@ -310,6 +312,7 @@ fn gen_table_class(table: &Table, ns: &str, runtime: CSharpRuntime, enum_names: 
     writeln!(s, "        public static IReadOnlyDictionary<int, {}> All => _data;", cls).unwrap();
     writeln!(s).unwrap();
     writeln!(s, "        static {}() {{", cls).unwrap();
+    writeln!(s, "            TblRegistry.BinTables[\"{}\"] = LoadBin;", table.name).unwrap();
     writeln!(s, "            TblRegistry.Tables[\"{}\"] = (rows, sep) => {{", table.name).unwrap();
     writeln!(s, "                _data.Clear();").unwrap();
     writeln!(s, "                foreach (var r in rows) {{").unwrap();
@@ -338,6 +341,7 @@ fn gen_table_class(table: &Table, ns: &str, runtime: CSharpRuntime, enum_names: 
     }
     writeln!(s, "            return obj;").unwrap();
     writeln!(s, "        }}").unwrap();
+    gen_table_load_bin(&mut s, table, &cls, runtime, enum_names);
     if custom_regions {
         writeln!(s).unwrap();
         writeln!(s, "{}", super::custom_region("        ")).unwrap();
@@ -345,6 +349,58 @@ fn gen_table_class(table: &Table, ns: &str, runtime: CSharpRuntime, enum_names: 
     writeln!(s, "    }}").unwrap();
     writeln!(s, "}}").unwrap();
     s
+}
+
+/// 生成 `LoadBin`：标量列直接读，复合列仍用原有 `TblParse` 表达式解析原文本。
+fn gen_table_load_bin(
+    s: &mut String,
+    table: &Table,
+    cls: &str,
+    runtime: CSharpRuntime,
+    enum_names: &HashSet<String>,
+) {
+    use crate::types::{BaseType, Paradigm, TypeParam};
+    let hash = crate::export::bin::schema_hash_table(table);
+    writeln!(s).unwrap();
+    writeln!(s, "        /// <summary>从二进制包加载（标量零文本解析；复合类型按原文本解析）。</summary>").unwrap();
+    writeln!(s, "        public static void LoadBin(TblBinTable t) {{").unwrap();
+    writeln!(s, "            t.Validate(\"{}\", 0x{:016x}UL);", table.name, hash).unwrap();
+    writeln!(s, "            // 多 bin 聚合：同 id 后读到的覆盖先读到的，不清空已有数据。").unwrap();
+    writeln!(s, "            for (int i = 0; i < t.RowCount; i++) {{").unwrap();
+    writeln!(s, "                var obj = new {}();", cls).unwrap();
+    for (ci, f) in table.schema.fields.iter().enumerate() {
+        if !export_visible(&f.export, runtime) { continue; }
+        let pascal = to_pascal_case(&f.name);
+        match TblType::parse(&f.tbl_type) {
+            Some(t) => match &t.paradigm {
+                Paradigm::Base => {
+                    let getter = match t.params.first() {
+                        Some(TypeParam::Base(BaseType::Int)) => "GetInt32",
+                        Some(TypeParam::Base(BaseType::Long)) => "GetInt64",
+                        Some(TypeParam::Base(BaseType::Float)) => "GetFloat32",
+                        Some(TypeParam::Base(BaseType::Double)) => "GetFloat64",
+                        Some(TypeParam::Base(BaseType::Bool)) => "GetBool",
+                        _ => "GetString",
+                    };
+                    writeln!(s, "                obj.{} = t.{}({}, i);", pascal, getter, ci).unwrap();
+                }
+                Paradigm::Ref => {
+                    let typ = cs_field_type(&f.tbl_type, enum_names);
+                    writeln!(s, "                obj.{} = ({})t.GetInt32({}, i);", pascal, typ, ci).unwrap();
+                }
+                _ => {
+                    writeln!(s, "                {{ var raw = t.GetString({}, i); if (!string.IsNullOrEmpty(raw)) obj.{} = {}; }}",
+                        ci, pascal, cs_parse_expr("raw", &t, "t.Sep", enum_names)).unwrap();
+                }
+            },
+            None => {
+                writeln!(s, "                obj.{} = t.GetString({}, i);", pascal, ci).unwrap();
+            }
+        }
+    }
+    writeln!(s, "                _data[obj.Id] = obj;").unwrap();
+    writeln!(s, "            }}").unwrap();
+    writeln!(s, "        }}").unwrap();
 }
 
 fn gen_constant_class(constant: &Constant, ns: &str, runtime: CSharpRuntime, enum_names: &HashSet<String>, custom_regions: bool) -> String {
@@ -376,6 +432,7 @@ fn gen_constant_class(constant: &Constant, ns: &str, runtime: CSharpRuntime, enu
     writeln!(s, "        public static {} Get() => _data;", cls).unwrap();
     writeln!(s).unwrap();
     writeln!(s, "        static {}() {{", cls).unwrap();
+    writeln!(s, "            TblRegistry.BinTables[\"{}\"] = LoadBin;", constant.name).unwrap();
     writeln!(s, "            TblRegistry.Constants[\"{}\"] = (row, sep) => {{ _data = Parse(row, sep); }};", constant.name).unwrap();
     writeln!(s, "        }}").unwrap();
     writeln!(s).unwrap();
@@ -397,6 +454,7 @@ fn gen_constant_class(constant: &Constant, ns: &str, runtime: CSharpRuntime, enu
     }
     writeln!(s, "            return obj;").unwrap();
     writeln!(s, "        }}").unwrap();
+    gen_constant_load_bin(&mut s, constant, &cls, runtime, enum_names, &entries);
     if custom_regions {
         writeln!(s).unwrap();
         writeln!(s, "{}", super::custom_region("        ")).unwrap();
@@ -404,6 +462,41 @@ fn gen_constant_class(constant: &Constant, ns: &str, runtime: CSharpRuntime, enu
     writeln!(s, "    }}").unwrap();
     writeln!(s, "}}").unwrap();
     s
+}
+
+/// 生成常量的 `LoadBin`：二进制里是 name/type/value/export/desc 五列字符串。
+fn gen_constant_load_bin(
+    s: &mut String,
+    constant: &Constant,
+    cls: &str,
+    runtime: CSharpRuntime,
+    enum_names: &HashSet<String>,
+    entries: &[&ConstEntry],
+) {
+    let _ = runtime;
+    let hash = crate::export::bin::schema_hash_constant(constant);
+    writeln!(s, "        public static void LoadBin(TblBinTable t) {{").unwrap();
+    writeln!(s, "            t.Validate(\"{}\", 0x{:016x}UL);", constant.name, hash).unwrap();
+    writeln!(s, "            var obj = new {}();", cls).unwrap();
+    writeln!(s, "            for (int i = 0; i < t.RowCount; i++) {{").unwrap();
+    writeln!(s, "                switch (t.GetString(0, i)) {{").unwrap();
+    for e in entries {
+        let pascal = to_pascal_case(&e.name);
+        match TblType::parse(&e.tbl_type) {
+            Some(t) => {
+                writeln!(s, "                    case \"{}\": {{ var raw = t.GetString(2, i); if (!string.IsNullOrEmpty(raw)) obj.{} = {}; break; }}",
+                    e.name, pascal, cs_parse_expr("raw", &t, "t.Sep", enum_names)).unwrap();
+            }
+            None => {
+                writeln!(s, "                    case \"{}\": obj.{} = t.GetString(2, i); break;", e.name, pascal).unwrap();
+            }
+        }
+    }
+    writeln!(s, "                    default: break;").unwrap();
+    writeln!(s, "                }}").unwrap();
+    writeln!(s, "            }}").unwrap();
+    writeln!(s, "            _data = obj;").unwrap();
+    writeln!(s, "        }}").unwrap();
 }
 
 fn gen_enum_file(enum_def: &EnumDef, ns: &str, custom_regions: bool) -> String {
@@ -517,6 +610,24 @@ pub fn export_all_csharp(project: &Project, runtime: CSharpRuntime) -> Result<su
     };
 
     collect(&output_dir, "Tbl.cs", &render(TPL_TBL));
+    collect(&output_dir, "TblBin.cs", &render(TPL_TBL_BIN));
+
+    // Unity 侧给一个可直接抄的二进制加载示例（dotnet/godot 用现有 Loader 即可）。
+    if matches!(runtime, CSharpRuntime::Unity) {
+        if let Some(table) = project.groups.iter().flat_map(|g| g.tables.iter()).find(|t| !t.deleted) {
+            let sample_id = table
+                .records
+                .first()
+                .and_then(|r| r.first())
+                .and_then(|v| v.trim().parse::<i64>().ok())
+                .unwrap_or(1);
+            let example = TPL_BIN_EXAMPLE_UNITY
+                .replace("{{NAMESPACE}}", ns)
+                .replace("{{SAMPLE_TABLE}}", &table.name)
+                .replace("{{SAMPLE_ID}}", &sample_id.to_string());
+            collect(&output_dir, "BinExample.cs", &example);
+        }
+    }
     collect(&output_dir, "Loader.cs", &render(runtime.loader_tpl()));
     collect(&output_dir, "Example.cs", &render(TPL_EXAMPLE_CS));
 

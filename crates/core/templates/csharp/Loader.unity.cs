@@ -27,6 +27,42 @@ namespace {{NAMESPACE}}
 {{TOUCH_LIST}}
         }
 
+        /// <summary>从 Resources 子目录加载所有二进制资源（bundle 或单节点 .bytes）。</summary>
+        public static void LoadAllBin(string resourcesSubdir)
+            => LoadAllBin(Resources.LoadAll<TextAsset>(resourcesSubdir));
+
+        /// <summary>
+        /// 二进制数据入口：可以传任意多个 TextAsset（bundle 或单节点），按参数顺序聚合进内存。
+        /// 同一张表在多个来源里出现时，后读到的行覆盖同 id，新增 id 追加。
+        /// </summary>
+        public static void LoadAllBin(params TextAsset[] assets)
+        {
+            EnsureTablesRegistered();
+            if (assets == null) return;
+            foreach (var ta in assets)
+            {
+                if (ta == null) continue;
+                var bytes = ta.bytes;
+                if (!TblBinTable.LooksLikeBin(bytes)) continue;
+                if (TblBinTable.IsBundle(bytes))
+                {
+                    var bundle = TblBinBundle.LoadFromBytes(bytes);
+                    foreach (var name in bundle.Names)
+                        if (TblRegistry.BinTables.TryGetValue(name, out var load) && bundle.TryGetTable(name, out var t))
+                            load(t);
+                    continue;
+                }
+                var key = ta.name.EndsWith(".bytes", StringComparison.OrdinalIgnoreCase)
+                    ? ta.name.Substring(0, ta.name.Length - 6)
+                    : ta.name;
+                var table = TblBinTable.LoadFromBytes(bytes);
+                if (TblRegistry.BinTables.TryGetValue(key, out var load2)) load2(table);
+            }
+        }
+
+        /// <summary>等价入口：Loader.LoadBin(a, b, ...) === LoadAllBin(a, b, ...)。</summary>
+        public static void LoadBin(params TextAsset[] assets) => LoadAllBin(assets);
+
         public static void LoadAll(string resourcesSubdir)
         {
             EnsureTablesRegistered();
