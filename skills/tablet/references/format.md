@@ -51,7 +51,7 @@ max_level | int | 100 | cs | 等级上限
 ### `# @sep`
 
 格式 `# @sep <key> = <value>`（**等号**分隔，`Map.kv` 里本来就有冒号，所以不能用冒号）。
-只写与默认不同的项；未知 key 忽略。25 个 key：
+只写与默认不同的项；未知 key 忽略。34 个 key：
 
 ```text
 List  Set  Tuple2  Tuple3  Tuple4  Map.kv  Map.entry
@@ -61,10 +61,14 @@ Map_Tuple2.kv  Map_Tuple2.tuple  Map_Tuple2.entry
 Map_Tuple3.kv  Map_Tuple3.tuple  Map_Tuple3.entry
 Map_Tuple4.kv  Map_Tuple4.tuple  Map_Tuple4.entry
 Map_List.kv  Map_List.item  Map_List.entry
+List_List.list  List_List.item
+List_Map.list  List_Map.entry  List_Map.kv
+Map_Map.kv  Map_Map.entry  Map_Map.inner_kv  Map_Map.inner_entry
 ```
 
-默认值：`Tuple*` 与各类 `.tuple` = `,`；`List` / `Set` 与各类 `.list` / `.entry` = `;`；
-`.kv` = `:`；`Map_List.item` = `,`。
+默认值：`Tuple*` / 各类 `.tuple` / `List_List.item` / `List_Map.entry` / `Map_Map.inner_entry` = `,`；
+`List` / `Set` / `List_List.list` / `List_Map.list` / 其余各类 `.entry` = `;`；
+`.kv` / `List_Map.kv` / `Map_Map.kv` = `:`；`Map_Map.inner_kv` = `=`。
 运行时还有另一层来源：工作区 `tablet.toml` 的 `[separators]`（schema 的 `# @sep` 优先）。
 团队协作时**推荐保持默认**，少一处分歧。
 
@@ -208,7 +212,7 @@ start_pos   | Tuple2<int,int> | 5,10 | cs | 出生坐标
 
 ### `.tblschema` 里的合法类型字符串
 
-见 `types.md`。类型字符串本身也参与校验：`List<List<int>>`、`Tuple5<...>`、`Set<Tuple2<...>>` 都会报错。
+见 `types.md`。类型字符串本身也参与校验：`List<List<List<int>>>`、`Tuple5<...>`、`Set<Tuple2<...>>` 都会报错。
 
 ---
 

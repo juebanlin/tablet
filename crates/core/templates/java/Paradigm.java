@@ -10,6 +10,9 @@ public enum Paradigm {
     TUPLE2, TUPLE3, TUPLE4,
     LIST_TUPLE2, LIST_TUPLE3, LIST_TUPLE4,
     MAP_TUPLE2, MAP_TUPLE3, MAP_TUPLE4, MAP_LIST,
+    LIST_LIST,
+    LIST_MAP,
+    MAP_MAP,
     ;
 
     /**
@@ -43,6 +46,8 @@ public enum Paradigm {
                     if ("Tuple2".equals(inner)) return LIST_TUPLE2;
                     if ("Tuple3".equals(inner)) return LIST_TUPLE3;
                     if ("Tuple4".equals(inner)) return LIST_TUPLE4;
+                    if ("List".equals(inner)) return LIST_LIST;
+                    if ("Map".equals(inner) && t.args.get(0).args.size() == 2) return LIST_MAP;
                 }
                 return LIST;
             case "Map":
@@ -52,6 +57,7 @@ public enum Paradigm {
                     if ("Tuple3".equals(val)) return MAP_TUPLE3;
                     if ("Tuple4".equals(val)) return MAP_TUPLE4;
                     if ("List".equals(val)) return MAP_LIST;
+                    if ("Map".equals(val) && t.args.get(1).args.size() == 2) return MAP_MAP;
                 }
                 return MAP;
             case "Tuple2": return TUPLE2;
@@ -114,10 +120,12 @@ public enum Paradigm {
             case BOOL: return false;
             case STR: return "";
             case LIST: case LIST_TUPLE2: case LIST_TUPLE3: case LIST_TUPLE4:
+            case LIST_LIST: case LIST_MAP:
                 return new ArrayList<>();
             case SET: return new HashSet<>();
             case MAP: case MAP_TUPLE2: case MAP_TUPLE3: case MAP_TUPLE4: case MAP_LIST:
-                return new HashMap<>();
+            case MAP_MAP:
+                return new LinkedHashMap<>();
             case TUPLE2: return new {{PACKAGE}}.types.Tuple2<>(0, 0);
             case TUPLE3: return new {{PACKAGE}}.types.Tuple3<>(0, 0, 0);
             case TUPLE4: return new {{PACKAGE}}.types.Tuple4<>(0, 0, 0, 0);
@@ -147,6 +155,9 @@ public enum Paradigm {
             case MAP_TUPLE3: return parseMapTuple(raw, innerTypes, sep.mapTuple3Kv, sep.mapTuple3Tuple, sep.mapTuple3Entry, 3);
             case MAP_TUPLE4: return parseMapTuple(raw, innerTypes, sep.mapTuple4Kv, sep.mapTuple4Tuple, sep.mapTuple4Entry, 4);
             case MAP_LIST: return parseMapList(raw, innerTypes, sep.mapListKv, sep.mapListItem, sep.mapListEntry);
+            case LIST_LIST: return parseListList(raw, innerTypes, sep.listListList, sep.listListItem);
+            case LIST_MAP: return parseListMap(raw, innerTypes, sep.listMapList, sep.listMapEntry, sep.listMapKv);
+            case MAP_MAP: return parseMapMap(raw, innerTypes, sep.mapMapKv, sep.mapMapEntry, sep.mapMapInnerKv, sep.mapMapInnerEntry);
             default: return raw;
         }
     }
@@ -234,6 +245,49 @@ public enum Paradigm {
             }
         }
         return map;
+    }
+
+    /** List<List<T>>：外层 listListList，内层 listListItem；types 里是叶子类型。 */
+    private static List<Object> parseListList(String raw, String[] types, String outerSep, String innerSep) {
+        List<Object> outer = new ArrayList<>();
+        if (raw == null || raw.isEmpty()) return outer;
+        String leaf = types.length > 0 ? types[0] : "str";
+        for (String row : raw.split(Pattern.quote(outerSep))) {
+            String r = row.trim();
+            if (r.isEmpty()) continue;
+            outer.add(splitPrimitives(r, innerSep, leaf));
+        }
+        return outer;
+    }
+
+    /** List<Map<K,V>>：外层 listMapList，条目 listMapEntry，kv listMapKv。 */
+    private static List<Object> parseListMap(String raw, String[] types, String listSep, String entrySep, String kvSep) {
+        List<Object> out = new ArrayList<>();
+        if (raw == null || raw.isEmpty()) return out;
+        for (String item : raw.split(Pattern.quote(listSep))) {
+            String t = item.trim();
+            if (!t.isEmpty()) out.add(parseMap(t, types, kvSep, entrySep));
+        }
+        return out;
+    }
+
+    /** Map<K,Map<K2,V>>：外层 mapMapKv/Entry，内层 mapMapInnerKv/Entry。 */
+    private static Map<Object, Object> parseMapMap(String raw, String[] types, String kvSep, String entrySep,
+                                                   String innerKvSep, String innerEntrySep) {
+        Map<Object, Object> out = new LinkedHashMap<>();
+        if (raw == null || raw.isEmpty()) return out;
+        String[] innerTypes = types.length >= 3 ? new String[]{types[1], types[2]} : new String[]{"str", "str"};
+        for (String entry : raw.split(Pattern.quote(entrySep))) {
+            String e = entry.trim();
+            if (e.isEmpty()) continue;
+            int idx = e.indexOf(kvSep);
+            if (idx > 0) {
+                Object key = parsePrimitive(e.substring(0, idx).trim(), types[0]);
+                Object val = parseMap(e.substring(idx + kvSep.length()).trim(), innerTypes, innerKvSep, innerEntrySep);
+                out.put(key, val);
+            }
+        }
+        return out;
     }
 
     private static Map<Object, Object> parseMapList(String raw, String[] types, String kvSep, String itemSep, String entrySep) {

@@ -153,7 +153,7 @@ await until(`!document.getElementById('type-selector').hidden`, "第三次打开
 await evalJs(`document.querySelector('[data-tstab=data]').click()`);
 await sleep(150);
 await evalJs(`(() => {
-  [...document.querySelectorAll('.ts-paradigm')].find(e => e.textContent.includes('Map<_,_>')).click();
+  [...document.querySelectorAll('.ts-paradigm')].find(e => e.textContent === 'Map<_,_>').click();
   return true;
 })()`);
 await sleep(250);

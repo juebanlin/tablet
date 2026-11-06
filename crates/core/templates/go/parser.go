@@ -164,6 +164,14 @@ func parseSetFloat64(raw, sep string) map[float64]struct{} {
 	return out
 }
 
+func parseSetBool(raw, sep string) map[bool]struct{} {
+	out := map[bool]struct{}{}
+	for _, v := range parseListBool(raw, sep) {
+		out[v] = struct{}{}
+	}
+	return out
+}
+
 func parseSetString(raw, sep string) map[string]struct{} {
 	out := map[string]struct{}{}
 	for _, v := range parseListString(raw, sep) {

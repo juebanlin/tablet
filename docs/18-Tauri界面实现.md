@@ -93,11 +93,11 @@ Slint 和 Web 是两套完全不同的 UI 机制。Slint 源码里大量写法�
 - **节点增删改**：新建 Group（tbl / xlsx）、新建 Table·Constant·Enum、重命名、复制/粘贴、软删除、还原到已保存
 - **表格行列操作**：右键插入/删除行、插入/删除列
 - **新建项目**：空项目 / 内置·本地模板 / `.tblschema` 文件三种来源；新建后进入内存态（Pending），保存时落盘
-- **项目设置**：身份（项目 ID 只读、名称、分类、版本）、分隔符（25 项 + 恢复默认）、导出（编码/换行/JSON·XML 空值、服务端数据目录与各语言包名·输出目录·自定义区间、客户端 Lua/GDScript/TS/Unity/Godot 输出）、校验策略（error/warn/info → block/report/ignore）；保存后自动重算校验
+- **项目设置**：身份（项目 ID 只读、名称、分类、版本）、分隔符（34 项 + 恢复默认）、导出（编码/换行/JSON·XML 空值、服务端数据目录与各语言包名·输出目录·自定义区间、客户端 Lua/GDScript/TS/Unity/Godot 输出）、校验策略（error/warn/info → block/report/ignore）；保存后自动重算校验
 - **校验规则编辑器**（按 rule-builder-v2 / Slint 版重做）：列规则 / 表级规则；左侧列清单（规则条数）；规则卡片树（每一行是一个函数——验证器或条件函数；组；行尾 and·or；+行 / +组 / 分散 / 合并）；参数与说明/示例在底部 inspector（选中行后编辑，函数下拉同时含验证器与条件函数）；还原 / 保存；有未保存改动时切换列 / 作用域先显示「丢弃并切换 / 取消」确认条（同 Slint）；切到系统规则只是切视图、不动草稿；未保存关闭时丢弃确认
 - **表头选择器**：`export` 单击弹出自定义下拉；`type` 单击弹出分组菜单（基础 / 容器 / 引用目标 / 自定义输入），不再依赖原生 `<select>`
 - **引用显示**：显示引用名称总闸；被引用展示列（表默认原始 id，枚举默认 name）；列表引用按元素翻译
-- **全局设置**：界面（表头/数据选择器单击·双击、失焦提交、实时校验、项目列表显示 ID、Constant 允许 @Xxx）、日志级别、默认分隔符（25 项）；写入 `tablet.toml`
+- **全局设置**：界面（表头/数据选择器单击·双击、失焦提交、实时校验、项目列表显示 ID、Constant 允许 @Xxx）、日志级别、默认分隔符（34 项）；写入 `tablet.toml`
 - **导出执行**：JSON/XML + Java/Go/C++/C#(.NET·Unity·Godot)/Lua/GDScript/TS(客户端·服务端) 勾选导出，输出路径取项目导出配置
 - **Schema 导入导出**：导出整项目 / 按分组·节点过滤 / 可选预设；导入 `.tblschema` 并合并（新增 / 覆盖统计）
 - **Excel**：分组导出 `.xlsx`、导入回写、`.excel/` 文件列表与打开目录、「用 Excel 打开」、任意 Excel 映射导入（sheet / 表头行 / 数据起始行 / 自动字段建议）；快速编辑会话可「结束」（自动回写内存）或「放弃改动」；xlsx 组每 2s 检测外部修改，干净时自动重载，本地有脏改动时提示并跳过。
@@ -221,7 +221,7 @@ node crates/app-tauri/scripts/dev.mjs eval "<js 表达式>"          # 任意页
 - `verify-crud.mjs`：右键菜单 / 新建 Group·Table / 重命名 / 复制粘贴 / 删除 / 删除行
 - `verify-project.mjs`：模板列表 / 新建空项目 / 模板项目 / 项目设置 / 保存
 - `verify-rules.mjs`：规则编辑器打开 / 列规则 / 表级规则 / 系统规则只读 / 丢弃确认
-- `verify-settings.mjs`：分隔符 25 项 / 导出设置 / 校验策略 / 回填 / 保存落盘
+- `verify-settings.mjs`：分隔符 34 项 / 导出设置 / 校验策略 / 回填 / 保存落盘
 - `verify-header-ref.mjs`：表头 export·type 下拉 / 自定义类型 / 引用显示开关
 - `verify-global-export.mjs`：全局设置默认值·回填 / 数据选择器单击 / JSON 导出
 - `verify-io.mjs`：Schema 导出·导入 / Excel 导出·文件列表 / 映射导入 / 问题跳转 / 关于 / 条件构建器

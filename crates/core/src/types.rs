@@ -208,6 +208,12 @@ pub enum Paradigm {
     MapTuple3,
     MapTuple4,
     MapList,
+    /// 二维列表 `List<List<T>>`：外层用 List_List.list，内层用 List_List.item。
+    ListList,
+    /// 数组对象 `List<Map<K,V>>`：List_Map.list / entry / kv。
+    ListMap,
+    /// 嵌套字典 `Map<K,Map<K2,V>>`：Map_Map.kv / entry / inner_kv / inner_entry。
+    MapMap,
     /// 引用类型 @TableName / @EnumName，可独立一档，也可作为「特殊 int」进入复合类型参数位（@S24），存储为 int(id)
     Ref,
 }
@@ -215,18 +221,21 @@ pub enum Paradigm {
 impl Paradigm {
     pub fn all() -> &'static [Paradigm] {
         use Paradigm::*;
-        &[Base, Tuple2, Tuple3, Tuple4, List, Set, Map,
-          ListTuple2, ListTuple3, ListTuple4,
-          MapTuple2, MapTuple3, MapTuple4, MapList,
+        // 顺序即 UI 类型选择器的展示顺序：List 家族挨着放，Map 家族随后。
+        &[Base, Tuple2, Tuple3, Tuple4,
+          List, ListList, ListMap, ListTuple2, ListTuple3, ListTuple4,
+          Set, Map,
+          MapTuple2, MapTuple3, MapTuple4, MapList, MapMap,
           Ref]
     }
 
     /// 仅数据范式（不含 Ref），UI 类型选择器「数据类型」tab 用
     pub fn all_data() -> &'static [Paradigm] {
         use Paradigm::*;
-        &[Base, Tuple2, Tuple3, Tuple4, List, Set, Map,
-          ListTuple2, ListTuple3, ListTuple4,
-          MapTuple2, MapTuple3, MapTuple4, MapList]
+        &[Base, Tuple2, Tuple3, Tuple4,
+          List, ListList, ListMap, ListTuple2, ListTuple3, ListTuple4,
+          Set, Map,
+          MapTuple2, MapTuple3, MapTuple4, MapList, MapMap]
     }
 
     pub fn label(&self) -> &'static str {
@@ -245,6 +254,9 @@ impl Paradigm {
             Paradigm::MapTuple3 => "Map<_,Tuple3<_,_,_>>",
             Paradigm::MapTuple4 => "Map<_,Tuple4<_,_,_,_>>",
             Paradigm::MapList => "Map<_,List<_>>",
+            Paradigm::ListList => "List<List<_>>",
+            Paradigm::ListMap => "List<Map<_,_>>",
+            Paradigm::MapMap => "Map<_,Map<_,_>>",
             Paradigm::Ref => "引用 @Xxx",
         }
     }
@@ -264,6 +276,9 @@ impl Paradigm {
             Paradigm::MapTuple3 => vec![ParamSlot::new("K", true), ParamSlot::new("P1", false), ParamSlot::new("P2", false), ParamSlot::new("P3", false)],
             Paradigm::MapTuple4 => vec![ParamSlot::new("K", true), ParamSlot::new("P1", false), ParamSlot::new("P2", false), ParamSlot::new("P3", false), ParamSlot::new("P4", false)],
             Paradigm::MapList => vec![ParamSlot::new("K", true), ParamSlot::new("元素", false)],
+            Paradigm::ListList => vec![ParamSlot::new("元素", false)],
+            Paradigm::ListMap => vec![ParamSlot::new("K", true), ParamSlot::new("V", false)],
+            Paradigm::MapMap => vec![ParamSlot::new("K", true), ParamSlot::new("K2", true), ParamSlot::new("V", false)],
             Paradigm::Ref => vec![],
         }
     }
@@ -345,6 +360,21 @@ impl TblType {
             let params = parse_type_params(inner)?;
             if params.len() == 4 { return Some(TblType { paradigm: Paradigm::ListTuple4, params, ref_name: None }); }
         }
+        // 二维列表必须放在 List<...> 之前：List<List<int>> 也会命中通用 List<>。
+        if let Some(inner) = strip_wrapper(s, "List<List<", ">>") {
+            let param = parse_type_param(inner)?;
+            return Some(TblType { paradigm: Paradigm::ListList, params: vec![param], ref_name: None });
+        }
+        // 数组对象：List<Map<K,V>>；也必须排在通用 List<> 之前。
+        if let Some(inner) = strip_wrapper(s, "List<Map<", ">>") {
+            let parts = split_params(inner);
+            if parts.len() == 2 {
+                let key = parse_type_param(&parts[0])?;
+                let val = parse_type_param(&parts[1])?;
+                return Some(TblType { paradigm: Paradigm::ListMap, params: vec![key, val], ref_name: None });
+            }
+            return None;
+        }
         if let Some(inner) = strip_wrapper(s, "List<", ">") {
             let param = parse_type_param(inner)?;
             return Some(TblType { paradigm: Paradigm::List, params: vec![param], ref_name: None });
@@ -372,6 +402,16 @@ impl TblType {
                 if let Some(l_inner) = strip_wrapper(&val_str, "List<", ">") {
                     let elem = parse_type_param(l_inner)?;
                     return Some(TblType { paradigm: Paradigm::MapList, params: vec![key.clone(), elem], ref_name: None });
+                }
+                // 嵌套字典：Map<K,Map<K2,V>>（只允许两层）。
+                if let Some(m_inner) = strip_wrapper(&val_str, "Map<", ">") {
+                    let parts = split_params(m_inner);
+                    if parts.len() == 2 {
+                        let inner_key = parse_type_param(&parts[0])?;
+                        let val = parse_type_param(&parts[1])?;
+                        return Some(TblType { paradigm: Paradigm::MapMap, params: vec![key.clone(), inner_key, val], ref_name: None });
+                    }
+                    return None;
                 }
                 if raw_parts.len() == 2 {
                     let val = parse_type_param(&raw_parts[1])?;
@@ -409,6 +449,9 @@ impl TblType {
             Paradigm::MapTuple3 => format!("Map<{},Tuple3<{},{},{}>>", p[0], p[1], p[2], p[3]),
             Paradigm::MapTuple4 => format!("Map<{},Tuple4<{},{},{},{}>>", p[0], p[1], p[2], p[3], p[4]),
             Paradigm::MapList => format!("Map<{},List<{}>>", p[0], p[1]),
+            Paradigm::ListList => format!("List<List<{}>>", p[0]),
+            Paradigm::ListMap => format!("List<Map<{},{}>>", p[0], p[1]),
+            Paradigm::MapMap => format!("Map<{},Map<{},{}>>", p[0], p[1], p[2]),
             Paradigm::Ref => format!("@{}", self.ref_name.as_deref().unwrap_or("")),
         }
     }
@@ -439,6 +482,9 @@ impl TblType {
             Paradigm::MapTuple3 => format!("Map<{},Tuple3<{},{},{}>>", j(&p[0]), j(&p[1]), j(&p[2]), j(&p[3])),
             Paradigm::MapTuple4 => format!("Map<{},Tuple4<{},{},{},{}>>", j(&p[0]), j(&p[1]), j(&p[2]), j(&p[3]), j(&p[4])),
             Paradigm::MapList => format!("Map<{},List<{}>>", j(&p[0]), j(&p[1])),
+            Paradigm::ListList => format!("List<List<{}>>", j(&p[0])),
+            Paradigm::ListMap => format!("List<Map<{},{}>>", j(&p[0]), j(&p[1])),
+            Paradigm::MapMap => format!("Map<{},Map<{},{}>>", j(&p[0]), j(&p[1]), j(&p[2])),
             // 默认按 table ref 处理 → int；enum ref 由导出层根据被引用项 mode 改为 XxxEnum
             Paradigm::Ref => "int".to_string(),
         }
@@ -467,6 +513,9 @@ impl TblType {
             Paradigm::MapTuple3 => format!("map[{}][3]{}", g(&p[0]), g(&p[1])),
             Paradigm::MapTuple4 => format!("map[{}][4]{}", g(&p[0]), g(&p[1])),
             Paradigm::MapList => format!("map[{}][]{}", g(&p[0]), g(&p[1])),
+            Paradigm::ListList => format!("[][]{}", g(&p[0])),
+            Paradigm::ListMap => format!("[]map[{}]{}", g(&p[0]), g(&p[1])),
+            Paradigm::MapMap => format!("map[{}]map[{}]{}", g(&p[0]), g(&p[1]), g(&p[2])),
             Paradigm::Ref => "int32".to_string(),
         }
     }
@@ -488,6 +537,18 @@ impl TblType {
             Paradigm::ListTuple2 | Paradigm::ListTuple3 | Paradigm::ListTuple4 => "{{...}, {...}}".to_string(),
             Paradigm::MapTuple2 | Paradigm::MapTuple3 | Paradigm::MapTuple4 => "{k={...}, ...}".to_string(),
             Paradigm::MapList => format!("{{k={{{}, ...}}}}", lua(&p[1])),
+            Paradigm::ListList => {
+                let inner = format!("{{{}, ...}}", lua(&p[0]));
+                format!("{{{}, ...}}", inner)
+            }
+            Paradigm::ListMap => {
+                let map = format!("{{k={}, ...}}", lua(&p[1]));
+                format!("{{{}, ...}}", map)
+            }
+            Paradigm::MapMap => {
+                let inner = format!("{{k={}, ...}}", lua(&p[2]));
+                format!("{{k={}, ...}}", inner)
+            }
             Paradigm::Ref => "number".to_string(),
         }
     }
@@ -551,6 +612,19 @@ impl TblType {
             Paradigm::MapList => format!("{}{}{}{}{}{}{}{}{}{}{}",
                 k(&p[0], 0), sep.map_list.kv, v(&p[1], 0), sep.map_list.item, v(&p[1], 1), sep.map_list.item, v(&p[1], 2), sep.map_list.entry,
                 k(&p[0], 1), sep.map_list.kv, v(&p[1], 0)),
+            Paradigm::ListList => format!("{}{}{}{}{}{}{}",
+                v(&p[0], 0), sep.list_list.item, v(&p[0], 1), sep.list_list.list,
+                v(&p[0], 2), sep.list_list.item, v(&p[0], 3)),
+            Paradigm::ListMap => format!("{}{}{}{}{}{}{}{}{}{}{}",
+                k(&p[0], 0), sep.list_map.kv, v(&p[1], 0), sep.list_map.entry,
+                k(&p[0], 1), sep.list_map.kv, v(&p[1], 1), sep.list_map.list,
+                k(&p[0], 2), sep.list_map.kv, v(&p[1], 2)),
+            Paradigm::MapMap => format!("{}{}{}{}{}{}{}{}{}{}{}{}{}{}{}",
+                k(&p[0], 0), sep.map_map.kv,
+                k(&p[1], 0), sep.map_map.inner_kv, v(&p[2], 0), sep.map_map.inner_entry,
+                k(&p[1], 1), sep.map_map.inner_kv, v(&p[2], 1), sep.map_map.entry,
+                k(&p[0], 1), sep.map_map.kv,
+                k(&p[1], 0), sep.map_map.inner_kv, v(&p[2], 2)),
             // 引用类型示例值用 id 占位
             Paradigm::Ref => "1001".to_string(),
         }
@@ -582,6 +656,10 @@ impl TblType {
             Paradigm::MapTuple3 => validate_map_tuple(value, &p[0], &p[1..4], &sep.map_tuple3.entry, &sep.map_tuple3.kv, &sep.map_tuple3.tuple),
             Paradigm::MapTuple4 => validate_map_tuple(value, &p[0], &p[1..5], &sep.map_tuple4.entry, &sep.map_tuple4.kv, &sep.map_tuple4.tuple),
             Paradigm::MapList => validate_map_list(value, &p[0], &p[1], &sep.map_list.entry, &sep.map_list.kv, &sep.map_list.item),
+            Paradigm::ListList => validate_list_list(value, &p[0], &sep.list_list.list, &sep.list_list.item),
+            Paradigm::ListMap => validate_list_map(value, &p[0], &p[1], &sep.list_map.list, &sep.list_map.entry, &sep.list_map.kv),
+            Paradigm::MapMap => validate_map_map(value, &p[0], &p[1], &p[2],
+                &sep.map_map.entry, &sep.map_map.kv, &sep.map_map.inner_entry, &sep.map_map.inner_kv),
             // 引用值在数据层面永远是 int(id)；被引用对象是否存在/id 是否合法由 validate.rs 项目级别检查
             Paradigm::Ref => validate_base(value, BaseType::Int),
         };
@@ -641,6 +719,37 @@ impl TblType {
             Paradigm::MapTuple2 => ref_elements_map_tuple(value, &p[0], &p[1..3], &sep.map_tuple2.entry, &sep.map_tuple2.kv, &sep.map_tuple2.tuple, &mut out),
             Paradigm::MapTuple3 => ref_elements_map_tuple(value, &p[0], &p[1..4], &sep.map_tuple3.entry, &sep.map_tuple3.kv, &sep.map_tuple3.tuple, &mut out),
             Paradigm::MapTuple4 => ref_elements_map_tuple(value, &p[0], &p[1..5], &sep.map_tuple4.entry, &sep.map_tuple4.kv, &sep.map_tuple4.tuple, &mut out),
+            Paradigm::ListList => {
+                for outer in value.split(&sep.list_list.list) {
+                    for item in outer.split(&sep.list_list.item) { push_ref(&mut out, &p[0], item); }
+                }
+            }
+            Paradigm::ListMap => {
+                for item in value.split(&sep.list_map.list) {
+                    for entry in item.split(&sep.list_map.entry) {
+                        let kv: Vec<&str> = entry.splitn(2, &sep.list_map.kv).collect();
+                        if kv.len() == 2 {
+                            push_ref(&mut out, &p[0], kv[0]);
+                            push_ref(&mut out, &p[1], kv[1]);
+                        }
+                    }
+                }
+            }
+            Paradigm::MapMap => {
+                for entry in value.split(&sep.map_map.entry) {
+                    let kv: Vec<&str> = entry.splitn(2, &sep.map_map.kv).collect();
+                    if kv.len() == 2 {
+                        push_ref(&mut out, &p[0], kv[0]);
+                        for inner in kv[1].split(&sep.map_map.inner_entry) {
+                            let ikv: Vec<&str> = inner.splitn(2, &sep.map_map.inner_kv).collect();
+                            if ikv.len() == 2 {
+                                push_ref(&mut out, &p[1], ikv[0]);
+                                push_ref(&mut out, &p[2], ikv[1]);
+                            }
+                        }
+                    }
+                }
+            }
             Paradigm::MapList => {
                 for entry in value.split(&sep.map_list.entry) {
                     let kv: Vec<&str> = entry.splitn(2, &sep.map_list.kv).collect();
@@ -766,6 +875,68 @@ fn validate_map_tuple(value: &str, key: &TypeParam, val_types: &[TypeParam], ent
     None
 }
 
+/// `List<List<T>>`：外层按 `list_sep` 切分，内层按 `item_sep` 切分，元素不能为空。
+fn validate_list_list(value: &str, elem: &TypeParam, list_sep: &str, item_sep: &str) -> Option<&'static str> {
+    for outer in value.split(list_sep) {
+        let outer = outer.trim();
+        if outer.is_empty() { return Some("含有空列表"); }
+        for item in outer.split(item_sep) {
+            if let Some(err) = validate_elem(item, elem) { return Some(err); }
+        }
+    }
+    None
+}
+
+/// `List<Map<K,V>>`：外层 list_sep，条目 entry_sep，kv kv_sep；每段都不能为空。
+fn validate_list_map(value: &str, key: &TypeParam, val: &TypeParam, list_sep: &str, entry_sep: &str, kv_sep: &str) -> Option<&'static str> {
+    for item in value.split(list_sep) {
+        let item = item.trim();
+        if item.is_empty() { return Some("含有空 Map"); }
+        for entry in item.split(entry_sep) {
+            let entry = entry.trim();
+            if entry.is_empty() { return Some("含有空条目"); }
+            let kv: Vec<&str> = entry.splitn(2, kv_sep).collect();
+            if kv.len() != 2 { return Some("缺少kv分隔符"); }
+            let k = kv[0].trim();
+            let v = kv[1].trim();
+            if k.is_empty() { return Some("key为空"); }
+            if v.is_empty() { return Some("value为空"); }
+            if let Some(err) = validate_elem(k, key) { return Some(err); }
+            if let Some(err) = validate_elem(v, val) { return Some(err); }
+        }
+    }
+    None
+}
+
+/// `Map<K,Map<K2,V>>`：外层 entry/kv，内层 inner_entry/inner_kv。
+fn validate_map_map(value: &str, key: &TypeParam, inner_key: &TypeParam, val: &TypeParam,
+                    entry_sep: &str, kv_sep: &str, inner_entry_sep: &str, inner_kv_sep: &str) -> Option<&'static str> {
+    for entry in value.split(entry_sep) {
+        let entry = entry.trim();
+        if entry.is_empty() { return Some("含有空条目"); }
+        let kv: Vec<&str> = entry.splitn(2, kv_sep).collect();
+        if kv.len() != 2 { return Some("缺少kv分隔符"); }
+        let k = kv[0].trim();
+        if k.is_empty() { return Some("key为空"); }
+        if let Some(err) = validate_elem(k, key) { return Some(err); }
+        let inner = kv[1].trim();
+        if inner.is_empty() { return Some("value为空"); }
+        for sub in inner.split(inner_entry_sep) {
+            let sub = sub.trim();
+            if sub.is_empty() { return Some("含有空条目"); }
+            let ikv: Vec<&str> = sub.splitn(2, inner_kv_sep).collect();
+            if ikv.len() != 2 { return Some("缺少内层kv分隔符"); }
+            let ik = ikv[0].trim();
+            let iv = ikv[1].trim();
+            if ik.is_empty() { return Some("内层key为空"); }
+            if iv.is_empty() { return Some("内层value为空"); }
+            if let Some(err) = validate_elem(ik, inner_key) { return Some(err); }
+            if let Some(err) = validate_elem(iv, val) { return Some(err); }
+        }
+    }
+    None
+}
+
 fn validate_map_list(value: &str, key: &TypeParam, elem: &TypeParam, entry_sep: &str, kv_sep: &str, item_sep: &str) -> Option<&'static str> {
     for entry in value.split(entry_sep) {
         let entry = entry.trim();
@@ -850,6 +1021,12 @@ pub struct SeparatorsSection {
     pub map_tuple4: MapTupleSep,
     #[serde(default, rename = "Map_List")]
     pub map_list: MapListSep,
+    #[serde(default, rename = "List_List")]
+    pub list_list: ListListSep,
+    #[serde(default, rename = "List_Map")]
+    pub list_map: ListMapSep,
+    #[serde(default, rename = "Map_Map")]
+    pub map_map: MapMapSep,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -879,6 +1056,45 @@ pub struct MapTupleSep {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct ListListSep {
+    /// 外层列表元素之间的分隔符（如 `1,2;3,4` 的 `;`）
+    #[serde(default = "default_semicolon")]
+    pub list: String,
+    /// 内层列表元素之间的分隔符（如 `1,2;3,4` 的 `,`）
+    #[serde(default = "default_comma")]
+    pub item: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct ListMapSep {
+    /// 外层列表元素之间的分隔符（如 `atk:10,hp:50;def:5` 的 `;`）
+    #[serde(default = "default_semicolon")]
+    pub list: String,
+    /// 一个 Map 内条目的分隔符（`, `）
+    #[serde(default = "default_comma")]
+    pub entry: String,
+    /// Map 的 key / value 分隔符（`:`）
+    #[serde(default = "default_colon")]
+    pub kv: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct MapMapSep {
+    /// 外层 Map 的 key / value 分隔符（`:`）
+    #[serde(default = "default_colon")]
+    pub kv: String,
+    /// 外层 Map 的条目分隔符（`;`）
+    #[serde(default = "default_semicolon")]
+    pub entry: String,
+    /// 内层 Map 的条目分隔符（`,`）
+    #[serde(default = "default_comma")]
+    pub inner_entry: String,
+    /// 内层 Map 的 key / value 分隔符（`=`，避免与外层 `:` 冲突）
+    #[serde(default = "default_eq")]
+    pub inner_kv: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub struct MapListSep {
     #[serde(default = "default_colon")]
     pub kv: String,
@@ -891,11 +1107,15 @@ pub struct MapListSep {
 fn default_comma() -> String { ",".to_string() }
 fn default_semicolon() -> String { ";".to_string() }
 fn default_colon() -> String { ":".to_string() }
+fn default_eq() -> String { "=".to_string() }
 
 impl Default for MapSep { fn default() -> Self { Self { kv: default_colon(), entry: default_semicolon() } } }
 impl Default for ListTupleSep { fn default() -> Self { Self { tuple: default_comma(), list: default_semicolon() } } }
 impl Default for MapTupleSep { fn default() -> Self { Self { kv: default_colon(), tuple: default_comma(), entry: default_semicolon() } } }
 impl Default for MapListSep { fn default() -> Self { Self { kv: default_colon(), item: default_comma(), entry: default_semicolon() } } }
+impl Default for ListListSep { fn default() -> Self { Self { list: default_semicolon(), item: default_comma() } } }
+impl Default for ListMapSep { fn default() -> Self { Self { list: default_semicolon(), entry: default_comma(), kv: default_colon() } } }
+impl Default for MapMapSep { fn default() -> Self { Self { kv: default_colon(), entry: default_semicolon(), inner_entry: default_comma(), inner_kv: default_eq() } } }
 
 impl Default for SeparatorsSection {
     fn default() -> Self {
@@ -906,6 +1126,9 @@ impl Default for SeparatorsSection {
             list_tuple2: ListTupleSep::default(), list_tuple3: ListTupleSep::default(), list_tuple4: ListTupleSep::default(),
             map_tuple2: MapTupleSep::default(), map_tuple3: MapTupleSep::default(), map_tuple4: MapTupleSep::default(),
             map_list: MapListSep::default(),
+            list_list: ListListSep::default(),
+            list_map: ListMapSep::default(),
+            map_map: MapMapSep::default(),
         }
     }
 }
@@ -931,11 +1154,14 @@ pub enum SepKey {
     MapTuple3Kv, MapTuple3Tuple, MapTuple3Entry,
     MapTuple4Kv, MapTuple4Tuple, MapTuple4Entry,
     MapListKv, MapListItem, MapListEntry,
+    ListListList, ListListItem,
+    ListMapList, ListMapEntry, ListMapKv,
+    MapMapKv, MapMapEntry, MapMapInnerKv, MapMapInnerEntry,
 }
 
 impl SepKey {
     /// 全部 25 项；JSON / XML 输出按本顺序遍历。
-    pub const ALL: [SepKey; 25] = [
+    pub const ALL: [SepKey; 34] = [
         SepKey::List, SepKey::Set,
         SepKey::Tuple2, SepKey::Tuple3, SepKey::Tuple4,
         SepKey::MapKv, SepKey::MapEntry,
@@ -946,6 +1172,9 @@ impl SepKey {
         SepKey::MapTuple3Kv, SepKey::MapTuple3Tuple, SepKey::MapTuple3Entry,
         SepKey::MapTuple4Kv, SepKey::MapTuple4Tuple, SepKey::MapTuple4Entry,
         SepKey::MapListKv, SepKey::MapListItem, SepKey::MapListEntry,
+        SepKey::ListListList, SepKey::ListListItem,
+        SepKey::ListMapList, SepKey::ListMapEntry, SepKey::ListMapKv,
+        SepKey::MapMapKv, SepKey::MapMapEntry, SepKey::MapMapInnerKv, SepKey::MapMapInnerEntry,
     ];
 
     /// PascalCase 点路径，对应 `.tblschema` 的 `# @sep <key> = <value>` 行 key。
@@ -976,6 +1205,15 @@ impl SepKey {
             SepKey::MapListKv => "Map_List.kv",
             SepKey::MapListItem => "Map_List.item",
             SepKey::MapListEntry => "Map_List.entry",
+            SepKey::ListListList => "List_List.list",
+            SepKey::ListListItem => "List_List.item",
+            SepKey::ListMapList => "List_Map.list",
+            SepKey::ListMapEntry => "List_Map.entry",
+            SepKey::ListMapKv => "List_Map.kv",
+            SepKey::MapMapKv => "Map_Map.kv",
+            SepKey::MapMapEntry => "Map_Map.entry",
+            SepKey::MapMapInnerKv => "Map_Map.inner_kv",
+            SepKey::MapMapInnerEntry => "Map_Map.inner_entry",
         }
     }
 
@@ -1007,6 +1245,15 @@ impl SepKey {
             SepKey::MapListKv => "map_list_kv",
             SepKey::MapListItem => "map_list_item",
             SepKey::MapListEntry => "map_list_entry",
+            SepKey::ListListList => "list_list_list",
+            SepKey::ListListItem => "list_list_item",
+            SepKey::ListMapList => "list_map_list",
+            SepKey::ListMapEntry => "list_map_entry",
+            SepKey::ListMapKv => "list_map_kv",
+            SepKey::MapMapKv => "map_map_kv",
+            SepKey::MapMapEntry => "map_map_entry",
+            SepKey::MapMapInnerKv => "map_map_inner_kv",
+            SepKey::MapMapInnerEntry => "map_map_inner_entry",
         }
     }
 
@@ -1043,6 +1290,15 @@ impl SepKey {
             SepKey::MapListKv => &sep.map_list.kv,
             SepKey::MapListItem => &sep.map_list.item,
             SepKey::MapListEntry => &sep.map_list.entry,
+            SepKey::ListListList => &sep.list_list.list,
+            SepKey::ListListItem => &sep.list_list.item,
+            SepKey::ListMapList => &sep.list_map.list,
+            SepKey::ListMapEntry => &sep.list_map.entry,
+            SepKey::ListMapKv => &sep.list_map.kv,
+            SepKey::MapMapKv => &sep.map_map.kv,
+            SepKey::MapMapEntry => &sep.map_map.entry,
+            SepKey::MapMapInnerKv => &sep.map_map.inner_kv,
+            SepKey::MapMapInnerEntry => &sep.map_map.inner_entry,
         }
     }
 
@@ -1074,6 +1330,15 @@ impl SepKey {
             SepKey::MapListKv => sep.map_list.kv = v,
             SepKey::MapListItem => sep.map_list.item = v,
             SepKey::MapListEntry => sep.map_list.entry = v,
+            SepKey::ListListList => sep.list_list.list = v,
+            SepKey::ListListItem => sep.list_list.item = v,
+            SepKey::ListMapList => sep.list_map.list = v,
+            SepKey::ListMapEntry => sep.list_map.entry = v,
+            SepKey::ListMapKv => sep.list_map.kv = v,
+            SepKey::MapMapKv => sep.map_map.kv = v,
+            SepKey::MapMapEntry => sep.map_map.entry = v,
+            SepKey::MapMapInnerKv => sep.map_map.inner_kv = v,
+            SepKey::MapMapInnerEntry => sep.map_map.inner_entry = v,
         }
     }
 }
@@ -1097,6 +1362,9 @@ impl Paradigm {
             Paradigm::MapTuple3 => &[MapTuple3Kv, MapTuple3Tuple, MapTuple3Entry],
             Paradigm::MapTuple4 => &[MapTuple4Kv, MapTuple4Tuple, MapTuple4Entry],
             Paradigm::MapList => &[MapListKv, MapListItem, MapListEntry],
+            Paradigm::ListList => &[ListListList, ListListItem],
+            Paradigm::ListMap => &[ListMapList, ListMapEntry, ListMapKv],
+            Paradigm::MapMap => &[MapMapKv, MapMapEntry, MapMapInnerKv, MapMapInnerEntry],
         }
     }
 }
@@ -1323,5 +1591,171 @@ mod tests {
         let t = TblType::parse("int").unwrap();
         assert!(t.validate_value("100", &sep).is_none());
         assert!(t.validate_value("１００", &sep).is_some()); // 全角数字非法（含中文标点检查路径外，由 parse::<i64> 兜底）
+    }
+
+    // ---- List<List<T>> ----
+
+    #[test]
+    fn list_list_parses_and_roundtrips() {
+        let t = TblType::parse("List<List<int>>").unwrap();
+        assert_eq!(t.paradigm, Paradigm::ListList);
+        assert_eq!(t.params.len(), 1);
+        assert!(matches!(t.params[0], TypeParam::Base(BaseType::Int)));
+        assert_eq!(t.to_type_string(), "List<List<int>>");
+
+        let r = TblType::parse("List<List<@Hero>>").unwrap();
+        assert_eq!(r.paradigm, Paradigm::ListList);
+        assert!(matches!(r.params[0], TypeParam::Ref(ref n) if n == "Hero"));
+        assert_eq!(r.ref_targets(), vec!["Hero"]);
+        assert_eq!(r.to_type_string(), "List<List<@Hero>>");
+    }
+
+    #[test]
+    fn list_list_rejects_deeper_or_txt() {
+        let sep = SeparatorsSection::default();
+        assert!(TblType::parse("List<List<txt>>").is_none(), "txt 不能嵌套");
+        assert!(TblType::parse("List<List<List<int>>>").is_none(), "只支持两层");
+        assert!(TblType::parse("List<List<Tuple2<int,int>>>").is_none(), "暂不支持 List<List<Tuple>>");
+        // 单层 List 不能被误解析成 ListList
+        let one = TblType::parse("List<int>").unwrap();
+        assert_eq!(one.paradigm, Paradigm::List);
+        let _ = sep;
+    }
+
+    #[test]
+    fn list_list_value_validation() {
+        let sep = SeparatorsSection::default();
+        let t = TblType::parse("List<List<int>>").unwrap();
+        // 外层 ;，内层 ,
+        assert!(t.validate_value("1,2;3,4", &sep).is_none());
+        assert!(t.validate_value("1", &sep).is_none());
+        assert!(t.validate_value("1,2;", &sep).is_some(), "空列表");
+        assert!(t.validate_value("1,,2", &sep).is_some(), "空元素");
+        assert!(t.validate_value("a,b", &sep).is_some(), "元素类型不匹配");
+
+        // 自定义分隔符
+        let mut custom = SeparatorsSection::default();
+        custom.list_list.list = "|".into();
+        custom.list_list.item = ";".into();
+        assert!(t.validate_value("1;2|3;4", &custom).is_none());
+        assert!(t.validate_value("1,2;3,4", &custom).is_some(), "仍按 , 拆会得到非 int");
+    }
+
+    #[test]
+    fn list_list_ref_elements() {
+        let sep = SeparatorsSection::default();
+        let t = TblType::parse("List<List<@Hero>>").unwrap();
+        let got = t.ref_elements("1001,1002;2001", &sep);
+        assert_eq!(got.len(), 3);
+        assert_eq!(got[0], ("Hero".to_string(), "1001"));
+        assert_eq!(got[2], ("Hero".to_string(), "2001"));
+    }
+
+    #[test]
+    fn list_list_sep_keys_roundtrip() {
+        assert_eq!(SepKey::from_directive_key("List_List.list"), Some(SepKey::ListListList));
+        assert_eq!(SepKey::from_directive_key("List_List.item"), Some(SepKey::ListListItem));
+        assert_eq!(SepKey::ListListList.as_export_key(), "list_list_list");
+        assert_eq!(SepKey::ListListItem.as_export_key(), "list_list_item");
+        let mut sep = SeparatorsSection::default();
+        assert_eq!(SepKey::ListListList.get(&sep), ";");
+        assert_eq!(SepKey::ListListItem.get(&sep), ",");
+        SepKey::ListListItem.set(&mut sep, "|".into());
+        assert_eq!(sep.list_list.item, "|");
+    }
+
+    // ---- List<Map<K,V>> / Map<K,Map<K2,V>> ----
+
+    #[test]
+    fn list_map_parses_roundtrips_and_validates() {
+        let t = TblType::parse("List<Map<int,str>>").unwrap();
+        assert_eq!(t.paradigm, Paradigm::ListMap);
+        assert_eq!(t.to_type_string(), "List<Map<int,str>>");
+        let sep = SeparatorsSection::default();
+        assert!(t.validate_value("1:a,2:b;3:c", &sep).is_none());
+        assert!(t.validate_value("1:a;", &sep).is_some(), "空 Map");
+        assert!(t.validate_value("1;2", &sep).is_some(), "缺 kv");
+        assert!(t.validate_value("x:a", &sep).is_some(), "key 类型不匹配");
+        // 自定义分隔符
+        let mut custom = SeparatorsSection::default();
+        custom.list_map.list = "|".into();
+        custom.list_map.entry = ";".into();
+        assert!(t.validate_value("1:a;2:b|3:c", &custom).is_none());
+        // ref 元素
+        let r = TblType::parse("List<Map<@Hero,int>>").unwrap();
+        let refs = r.ref_elements("1001:1,1002:2;2001:3", &sep);
+        assert_eq!(refs.len(), 3);
+        assert_eq!(refs[2], ("Hero".to_string(), "2001"));
+    }
+
+    #[test]
+    fn map_map_parses_roundtrips_and_validates() {
+        let t = TblType::parse("Map<int,Map<str,int>>").unwrap();
+        assert_eq!(t.paradigm, Paradigm::MapMap);
+        assert_eq!(t.to_type_string(), "Map<int,Map<str,int>>");
+        let sep = SeparatorsSection::default();
+        assert!(t.validate_value("1:gold=100,exp=10;2:gold=200", &sep).is_none());
+        assert!(t.validate_value("1:gold=100;", &sep).is_some(), "空条目");
+        assert!(t.validate_value("1:gold", &sep).is_some(), "缺内层 kv");
+        assert!(t.validate_value("x:gold=1", &sep).is_some(), "外层 key 类型不匹配");
+        let r = TblType::parse("Map<int,Map<str,@Hero>>").unwrap();
+        let refs = r.ref_elements("1:a=1001,b=1002;2:c=2001", &sep);
+        assert_eq!(refs.len(), 3);
+    }
+
+    #[test]
+    fn list_map_and_map_map_reject_deeper_nesting() {
+        assert!(TblType::parse("List<Map<int,Map<int,int>>>").is_none());
+        assert!(TblType::parse("Map<int,Map<int,List<int>>>").is_none());
+        assert!(TblType::parse("List<Map<txt,int>>").is_none(), "txt 不能嵌套");
+    }
+
+    /// 穷举所有"参数位类型"组合：解析 → 规范化文本 → 示例值 → 值校验。
+    /// 覆盖 List/Set/List<List>/List<Tuple>/Map<List>/List<Map>/Map<Map> 的
+    /// 每个参数位（含基础类型与 @Ref、各种 Map key），防止新增范式时漏组合。
+    #[test]
+    fn all_container_combinations_roundtrip() {
+        let sep = SeparatorsSection::default();
+        let elems = ["int", "long", "float", "double", "str", "bool", "@E"];
+        let keys = ["int", "long", "float", "double", "str"];
+        let mut types: Vec<String> = Vec::new();
+        for e in elems {
+            types.push(format!("List<{e}>"));
+            types.push(format!("Set<{e}>"));
+            types.push(format!("List<List<{e}>>"));
+            types.push(format!("List<Tuple2<{e},{e}>>"));
+            types.push(format!("Map<str,List<{e}>>"));
+            types.push(format!("List<Map<str,{e}>>"));
+            types.push(format!("Map<int,Map<str,{e}>>"));
+        }
+        for k in keys {
+            for e in elems {
+                types.push(format!("List<Map<{k},{e}>>"));
+            }
+            for k2 in keys {
+                for e in elems {
+                    types.push(format!("Map<{k},Map<{k2},{e}>>"));
+                }
+            }
+        }
+        types.push("Tuple2<@E,int>".into());
+        types.push("Tuple3<int,@E,str>".into());
+        types.push("Tuple4<long,float,@E,bool>".into());
+        types.push("Map<@E,int>".into());
+        types.push("Map<int,List<@E>>".into());
+        types.push("Map<long,List<bool>>".into());
+
+        for ty in types {
+            let t = TblType::parse(&ty).unwrap_or_else(|| panic!("parse failed: {ty}"));
+            assert_eq!(t.to_type_string(), ty, "roundtrip mismatch");
+            let example = t.example_with_sep(&sep);
+            assert!(
+                t.validate_value(&example, &sep).is_none(),
+                "{} 的示例值 {:?} 校验失败: {:?}",
+                ty,
+                example,
+                t.validate_value(&example, &sep)
+            );
+        }
     }
 }

@@ -62,10 +62,12 @@ public class TplRegistry {
                     Class<?> clazz = Class.forName(className);
                     TblSource annotation = clazz.getAnnotation(TblSource.class);
                     if (annotation != null) {
-                        String key = annotation.group().isEmpty()
-                            ? annotation.name()
-                            : annotation.group() + "/" + annotation.name();
-                        result.put(key, clazz);
+                        // enum 是编译期类型（XxxEnum.fromId），没有独立数据文件；
+                        // 注册进来会让 TplHolder 去要一份不存在的 E.json。
+                        if ("enum".equalsIgnoreCase(annotation.mode())) continue;
+                        // 数据文件按节点名扁平存放（gen/server/data/json/<Name>.json）：
+                        // 节点名在项目内唯一，key 直接用 name，不带 group 前缀。
+                        result.put(annotation.name(), clazz);
                     }
                 } catch (ClassNotFoundException | NoClassDefFoundError e) {
                     // 跳过无法加载的类

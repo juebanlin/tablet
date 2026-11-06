@@ -60,6 +60,15 @@ namespace {{NAMESPACE}}
         public string MapListKv = ":";
         public string MapListItem = ",";
         public string MapListEntry = ";";
+        public string ListListList = ";";
+        public string ListListItem = ",";
+        public string ListMapList = ";";
+        public string ListMapEntry = ",";
+        public string ListMapKv = ":";
+        public string MapMapKv = ":";
+        public string MapMapEntry = ";";
+        public string MapMapInnerKv = "=";
+        public string MapMapInnerEntry = ",";
     }
 
     public static class TblParse

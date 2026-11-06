@@ -301,6 +301,9 @@ UI 类型选择器分 [数据类型] / [引用类型] 两个 tab，但只是用�
 | Tuple3\<P,P,P\> | int[]/Tuple3 类 | [3]P | {p1, p2, p3} |
 | Tuple4\<P,P,P,P\> | int[]/Tuple4 类 | [4]P | {p1, p2, p3, p4} |
 | List\<P\> | List\<P\> | []P | {v1, v2, ...} |
+| List\<List\<P\>\> | List\<List\<P\>\> | [][]P | {{v1, v2}, {v3, v4}} |
+| List\<Map\<K,V\>\> | List\<Map\<K,V\>\> | []map[K]V | {{k1=v1, k2=v2}, ...} |
+| Map\<K,Map\<K2,V\>\> | Map\<K,Map\<K2,V\>\> | map[K]map[K2]V | {k1={k2=v2, ...}, ...} |
 | Set\<P\> | Set\<P\> | map[P]struct{} | {[v]=true, ...} |
 | Map\<K,V\> | Map\<K,V\> | map[K]V | {k1=v1, k2=v2} |
 
@@ -310,7 +313,7 @@ UI 类型选择器分 [数据类型] / [引用类型] 两个 tab，但只是用�
 - Map 的 K 不能是 bool（仅 `int / long / float / double / str`）
 - Map 的 V 支持基础类型、元组、`List<P>`
 
-### 7.3 14 种合法范式（按嵌套层数）
+### 7.3 17 种合法范式（按嵌套层数）
 
 | 层级 | 范式 | 示例值 | 用到的分隔符 |
 |------|------|--------|-------------|
@@ -328,6 +331,9 @@ UI 类型选择器分 [数据类型] / [引用类型] 两个 tab，但只是用�
 | 2 | Map\<P,Tuple3\<P,P,P\>\> | `hp:1,2,3;mp:4,5,6` | kv + tuple + entry |
 | 2 | Map\<P,Tuple4\<P,P,P,P\>\> | `k:1,2,3,4;j:5,6,7,8` | kv + tuple + entry |
 | 2 | Map\<P,List\<P\>\> | `hp:1,2,3;mp:4,5,6` | kv + item + entry |
+| 2 | List\<List\<P\>\> | `1,2;3,4` | List_List.list + List_List.item |
+| 2 | List\<Map\<K,V\>\> | `atk:10,hp:50;def:5` | List_Map.list + entry + kv |
+| 2 | Map\<K,Map\<K2,V\>\> | `1:gold=100,exp=10;2:gold=200` | Map_Map.kv + entry + inner_kv + inner_entry |
 | — | Ref（@Xxx） | `1001`（id） | — |
 
 同一范式内每个 P 位置可独立选择基础类型（如 `Tuple2<int,str>` `Map<str,List<int>>`）。
@@ -343,7 +349,7 @@ UI 类型选择器分 [数据类型] / [引用类型] 两个 tab，但只是用�
 # @sep Map.entry = ;
 ```
 
-GUI 入口：项目右键 →「项目设置...」→「分隔符」tab（含 25 个 leaf）。修改后写回项目 `.tblschema` 并触发该项目全表重校验。
+GUI 入口：项目右键 →「项目设置...」→「分隔符」tab（含 34 个 leaf）。修改后写回项目 `.tblschema` 并触发该项目全表重校验。
 
 `tablet.toml [separators]` 段降级为「程序级默认值」：仅在「新建空项目」时把当前内存中的默认分隔符**拷贝**到新项目 schema 作为初值，之后该项目不再读取 toml；从模板/文件新建项目则继承 source schema 的 separators。
 
@@ -356,7 +362,7 @@ GUI 入口：项目右键 →「项目设置...」→「分隔符」tab（含 25
 
 序列化策略：`serialize_tblschema` **只输出与默认值不同的 leaf**——一个完全使用默认分隔符的项目，schema 里看不到任何 `# @sep` 行，保持文件干净。
 
-支持的 25 个 leaf 见 @03.4.9（`SeparatorsSection` 字段）。键名规则：
+支持的 34 个 leaf 见 @03.4.9（`SeparatorsSection` 字段）。键名规则：
 
 - 顶级键：`Tuple2 / Tuple3 / Tuple4 / List / Set`
 - 嵌套键：`Map.kv / Map.entry / List_Tuple2.tuple / List_Tuple2.list / Map_Tuple2.kv / ... / Map_List.entry`
@@ -386,9 +392,8 @@ GUI 入口：项目右键 →「项目设置...」→「分隔符」tab（含 25
 
 | 组合 | 原因 |
 |------|------|
-| `List<List<P>>` | 外层与内层分隔符冲突 |
-| `Map<P,Map<P,P>>` | 嵌套 Map 分隔符冲突 |
-| `List<Map<P,P>>` | 同理 |
+| `List<List<List<P>>>` / `List<Map<K,Map<..>>>` | 只支持两层 |
+| `Map<K,Map<K2,Map<..>>>` | 只支持两层 |
 | `Set<Tuple>` | Set 元素只能基础类型 |
 
 `txt` 不能进入复合类型（仅允许独立列）；`ref` 可以进入复合类型（@S24）。
@@ -407,8 +412,16 @@ GUI 入口：项目右键 →「项目设置...」→「分隔符」tab（含 25
 | List\<Tuple2\<int,int\>\> | `1,2;3,4` | List\<int[]\> | [][2]int32 | {{1,2},{3,4}} |
 | Map\<str,Tuple2\<int,int\>\> | `atk:5,10;def:3,8` | Map\<String,int[]\> | map[string][2]int32 | {atk={5,10},def={3,8}} |
 | Map\<str,List\<int\>\> | `hp:1,2,3;mp:4,5` | Map\<String,List\<Integer\>\> | map[string][]int32 | {hp={1,2,3},mp={4,5}} |
+| List\<Map\<str,int\>\> | `atk:10,hp:50;def:5` | List\<Map\<String,Integer\>\> | []map[string]int32 | {{atk=10,hp=50},{def=5}} |
+| Map\<int,Map\<str,int\>\> | `1:gold=100,exp=10;2:gold=200` | Map\<Integer,Map\<String,Integer\>\> | map[int32]map[string]int32 | {1={gold=100,exp=10},2={gold=200}} |
 
 Lua 端全部展开为 table 字面量，不降级为 string。
+
+**语言不兼容时的处理原则**：能补齐就补齐生成物（例如 Go 的 `Set<bool>` 用 `parseSetBool`，
+与 `map[bool]struct{}` 声明一致）；如果语言本身没有对应概念，就做**显式降级**并在文档里写清楚
+（GDScript 无 Set → 用 Array 表达；TS 数字 Map key 在 JS 对象里会转成字符串 key；
+复合类型里的 enum 引用退化为 int）。**解析期不支持的类型直接报错**（如三层容器），
+不做“猜一个近似类型”的静默兜底。
 
 ### 7.8 代码生成统一不用包装类型
 
@@ -762,7 +775,7 @@ UI 上是否展示 id 还是 name 由全局开关 `[ui] show_meta_id` 决定（@
 
 格式：`# @sep <key> = <value>`
 
-- key 取自 `SeparatorsSection` 的 25 个 leaf（@7.4）：`Tuple2 / Tuple3 / Tuple4 / List / Set / Map.kv / Map.entry / List_TupleN.tuple / List_TupleN.list / Map_TupleN.{kv,tuple,entry} / Map_List.{kv,item,entry}`
+- key 取自 `SeparatorsSection` 的 34 个 leaf（@7.4）：`Tuple2 / Tuple3 / Tuple4 / List / Set / Map.kv / Map.entry / List_TupleN.tuple / List_TupleN.list / Map_TupleN.{kv,tuple,entry} / Map_List.{kv,item,entry} / List_List.{list,item} / List_Map.{list,entry,kv} / Map_Map.{kv,entry,inner_kv,inner_entry}`
 - value 等号两侧 trim，**值本身不再 trim 内部空格**（保留原样以支持空白类分隔符）
 - 必须出现在第一个 `[group/Name]` 之前；之后的 `# @sep` 视作普通注释（与 `# @meta` 同等约束）
 - 未列出 / 未识别的 key 静默忽略，前向兼容

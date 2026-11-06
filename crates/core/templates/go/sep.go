@@ -33,6 +33,18 @@ type SepConfig struct {
 	MapListKv    string
 	MapListItem  string
 	MapListEntry string
+
+	ListListList string
+	ListListItem string
+
+	ListMapList  string
+	ListMapEntry string
+	ListMapKv    string
+
+	MapMapKv         string
+	MapMapEntry      string
+	MapMapInnerKv    string
+	MapMapInnerEntry string
 }
 
 // 缺失字段时回退到默认分隔符（与 Rust SeparatorsSection::default() 一致）
@@ -62,6 +74,15 @@ func (s *SepConfig) fillDefaults() {
 	defaultStr(&s.MapListKv, ":")
 	defaultStr(&s.MapListItem, ",")
 	defaultStr(&s.MapListEntry, ";")
+	defaultStr(&s.ListListList, ";")
+	defaultStr(&s.ListListItem, ",")
+	defaultStr(&s.ListMapList, ";")
+	defaultStr(&s.ListMapEntry, ",")
+	defaultStr(&s.ListMapKv, ":")
+	defaultStr(&s.MapMapKv, ":")
+	defaultStr(&s.MapMapEntry, ";")
+	defaultStr(&s.MapMapInnerKv, "=")
+	defaultStr(&s.MapMapInnerEntry, ",")
 }
 
 func defaultStr(target *string, fallback string) {
@@ -98,6 +119,15 @@ func sepFromJSONMap(m map[string]string) SepConfig {
 		MapListKv:       m["map_list_kv"],
 		MapListItem:     m["map_list_item"],
 		MapListEntry:    m["map_list_entry"],
+		ListListList:    m["list_list_list"],
+		ListListItem:    m["list_list_item"],
+		ListMapList:     m["list_map_list"],
+		ListMapEntry:    m["list_map_entry"],
+		ListMapKv:       m["list_map_kv"],
+		MapMapKv:        m["map_map_kv"],
+		MapMapEntry:     m["map_map_entry"],
+		MapMapInnerKv:   m["map_map_inner_kv"],
+		MapMapInnerEntry: m["map_map_inner_entry"],
 	}
 	cfg.fillDefaults()
 	return cfg

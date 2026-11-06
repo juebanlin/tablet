@@ -256,7 +256,7 @@ Project 列表由启动扫描 `projects/` 目录得出，**不需要**在 `table
 
 ### 4.9 [separators]
 
-**程序级默认分隔符**（25 项 leaf 完整清单见 @01.7.4）。运行期数据来源是各 Project 的 `.tblschema` `# @sep` 行（@01.10.3），与本段解耦——本段**仅**在「新建空项目」时被读取一次，作为新项目 `schema.separators` 的初值；之后该项目运行期不再回查 toml。
+**程序级默认分隔符**（34 项 leaf 完整清单见 @01.7.4）。运行期数据来源是各 Project 的 `.tblschema` `# @sep` 行（@01.10.3），与本段解耦——本段**仅**在「新建空项目」时被读取一次，作为新项目 `schema.separators` 的初值；之后该项目运行期不再回查 toml。
 
 | 场景 | 行为 |
 |------|-----|
@@ -266,10 +266,10 @@ Project 列表由启动扫描 `projects/` 目录得出，**不需要**在 `table
 | 已加载项目运行期校验/导出/示例值 | 用 `Project.config.separators`（来自该项目 schema） |
 | 项目设置对话框改分隔符 | 写回项目 `.tblschema`；**关闭对话框时**统一触发该项目 `revalidate_all`（不是每次按键，见 @04.6.7）；与 toml 无关 |
 
-`[separators]` 共 25 项 leaf（list / set / tuple2/3/4 / map.kv / map.entry / list_tuple{2,3,4}.{tuple,list} / map_tuple{2,3,4}.{kv,tuple,entry} / map_list.{kv,item,entry}）— 这套清单是**唯一真值源**，定义在 `crates/core/src/export/sep_meta.rs::sep_kv_pairs`，JSON `_sep` / XML `sep_*` attr / Go `SepConfig` / Java `SepConfig` 全部由此派生：
+`[separators]` 共 34 项 leaf（list / set / tuple2/3/4 / map.kv / map.entry / list_tuple{2,3,4}.{tuple,list} / map_tuple{2,3,4}.{kv,tuple,entry} / map_list.{kv,item,entry} / list_list.{list,item} / list_map.{list,entry,kv} / map_map.{kv,entry,inner_kv,inner_entry}）— 这套清单是**唯一真值源**，定义在 `crates/core/src/export/sep_meta.rs::sep_kv_pairs`，JSON `_sep` / XML `sep_*` attr / Go `SepConfig` / Java `SepConfig` 全部由此派生：
 
 - 数据文件（JSON `_sep` / XML `sep_*` attr）：**按需输出** —— `paradigm_sep_keys` 列出每个范式用到的 leaf，扫表/常量字段 union 得到该文件需要的 key 集合，集合外的 leaf 不出。全 base 表 / 全 base + Ref 表（如纯 int/str/bool）`_sep` 整个省略。
-- 生成代码（Go `templates/go/sep.go` / Java `templates/java/SepConfig.java`）：**保持 25 字段全量** —— 项目级共享一份 SepConfig 类，不同表用不同范式，按字段范式查 `SepConfig.listTuple2List` 等成员，不能裁剪。
+- 生成代码（Go `templates/go/sep.go` / Java `templates/java/SepConfig.java`）：**保持 34 字段全量** —— 项目级共享一份 SepConfig 类，不同表用不同范式，按字段范式查 `SepConfig.listTuple2List` 等成员，不能裁剪。
 - 消费端 `SepConfig.fillDefaults()`（Go）/ `getAny(..., default)`（Java）给缺失 key 兜底，所以数据文件省略 leaf 安全。
 
 加新分隔符时，需要同步：(1) `SeparatorsSection` + serde rename；(2) `types.rs::SepKey` 枚举（加 variant + 4 个 match：`as_directive_key` / `as_export_key` / `get` / `set`，加进 `SepKey::ALL`）；(3) `Paradigm::sep_keys` 把新 leaf 接到对应范式；(4) Go / Java 模板里的 SepConfig 字段及对应 fromMap / fromXMLAttrs 加载；(5) 项目设置对话框 `project_settings.slint` 的 `ps-sep-*` property（值 + `-modified` 成对）与 `SepRow`；后端 `push_sep()` 里的成对推送（@02.26.4）。`sep_meta.rs` 的 invariant 测试 + `match` 编译期穷尽性锁死 (1)(2)(3) 一致性——漏改会编译失败或测试失败。
@@ -1149,7 +1149,7 @@ tablet-cli util gen-test --lang java --format json \
 
 ### 8.8 sep — 分隔符查询
 
-展示全部 25 个分隔符键的生效值及来源。
+展示全部 34 个分隔符键的生效值及来源。
 
 | 参数 | 说明 |
 |------|------|
@@ -1161,7 +1161,7 @@ tablet-cli util gen-test --lang java --format json \
 给了 `--defaults` / `--config` / `--schema` 中任意一个就与项目无关；只有裸 `sep show` 需要项目上下文。
 「当前项目」跟其它命令同一套解析：`--project <id>` 优先，否则 last_project。
 
-**取值规则：每个 leaf 独立回退**——25 个键各自从高优先级往低找，取第一个「写过」该键的来源；都没写就回退到内置默认。
+**取值规则：每个 leaf 独立回退**——34 个键各自从高优先级往低找，取第一个「写过」该键的来源；都没写就回退到内置默认。
 优先级（高 → 低）：`--schema` 文件 > `--config` 文件 > 当前项目的 schema > 内置默认。
 
 `SeparatorsSection` 的 25 个字段**每个都带 serde 默认值**，所以「没写」在类型层面等价于「等于内置默认」——

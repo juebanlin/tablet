@@ -98,13 +98,14 @@ tablet-cli -w <workdir> --project demo export all -o artifacts/demo
 int long float double str bool txt
 Tuple2<..> Tuple3<..> Tuple4<..>      List<..>  Set<..>  Map<..,..>
 List<Tuple2<..>>  List<Tuple3<..>>  List<Tuple4<..>>
+List<List<..>>  List<Map<..,..>>  Map<..,Map<..,..>>
 Map<..,Tuple2<..>>  Map<..,Tuple3<..>>  Map<..,Tuple4<..>>  Map<..,List<..>>
 @SomeTable   @SomeEnum
 ```
 
 - `txt` 只能独立成列，不能嵌套；其余基础类型可嵌套，`@Ref` 也能出现在参数位。
 - `@Ref` 的目标必须是 table 或 enum，**不能是 constant**；数据里存的是 int id。
-- `List<List<..>>`、`Set<Tuple<..>>`、`Tuple2` 之外的两层嵌套都不合法。
+- `List<List<..>>` / `List<Map<..>>` / `Map<..,Map<..>>` 只允许两层且内层为基础类型 / 引用；`Set<Tuple<..>>`、三层以上嵌套都不合法。
 - `str` 不能含 `|` 换行 制表符——需要这些字符就用 `txt`。
 
 ### 值（`.tblschema` 的 preset / `.tbl` 的格子）

@@ -1,6 +1,6 @@
 # 类型系统参考
 
-类型字符串由 `TblType::parse` 解析，**只接受本文列出的形式**。写别的（`List<List<int>>`、`Tuple5<..>`、
+类型字符串由 `TblType::parse` 解析，**只接受本文列出的形式**。写别的（`List<List<List<int>>>`、`Tuple5<..>`、
 `Set<Tuple2<..>>`、`Integer`、`string`）一律报"类型不合法"。
 
 ## 基础类型（7）
@@ -28,7 +28,14 @@
 | `List<Tuple2<P,P>>`（Tuple3/4 同理） | `1,2;3,4` | `List_TupleN.tuple` + `.list` |
 | `Map<K,Tuple2<P,P>>`（Tuple3/4 同理） | `atk:5,10;def:3,8` | `Map_TupleN.kv/.tuple/.entry` |
 | `Map<K,List<P>>` | `hp:1,2,3;mp:4,5` | `Map_List.kv/.item/.entry` |
+| `List<List<P>>` | `1,2;3,4` | `List_List.list`（外层，默认 `;`）+ `.item`（内层，默认 `,`） |
+| `List<Map<K,V>>` | `atk:10,hp:50;def:5` | `List_Map.list`（`;`）+ `.entry`（`,`）+ `.kv`（`:`） |
+| `Map<K,Map<K2,V>>` | `1:gold=100,exp=10;2:gold=200` | `Map_Map.kv`（`:`）+ `.entry`（`;`）+ `.inner_kv`（`=`）+ `.inner_entry`（`,`） |
 | `@SomeTable` / `@SomeEnum` | `1001` | — |
+
+语言兼容策略：能补生成物就补（如 Go `Set<bool>` 有专属 `parseSetBool`）；语言没有对应概念时做
+显式降级（GDScript 无 Set → Array；TS 数字 Map key 在对象里变字符串 key；复合类型内 enum 引用退化为 int）。
+解析器不认识/不支持的嵌套直接报错，不做静默兜底。
 
 Map 的 key 用 `int` / `long` / `float` / `double` / `str`。`bool` key 解析器不拦，但 UI 类型选择器不提供、
 生成代码也没验证过——别用。
@@ -52,7 +59,7 @@ Map 的 key 用 `int` / `long` / `float` / `double` / `str`。`bool` key 解析�
 
 | 写法 | 原因 |
 |---|---|
-| `List<List<P>>` / `Set<List<P>>` / `List<Set<P>>` / `Map<K,Map<..>>` | 两层容器分隔符歧义 |
+| `List<List<List<P>>>` / `List<Map<K,Map<..>>>` / `Map<K,Map<K2,Map<..>>>` / `Set<List<P>>` / `List<Set<P>>` | 只允许两层，且内层只能是基础类型 / 引用 |
 | `Set<Tuple2<..>>` | Set 元素只能是基础类型 / 引用 |
 | `List<txt>` / `Map<str,txt>` | `txt` 不能嵌套 |
 | `Map<bool,P>` | 解析器不拦，但生成代码没验证过；改用 int / str key |

@@ -98,6 +98,9 @@ fn cpp_field_type(tbl_type_str: &str, enum_names: &HashSet<String>) -> String {
         Paradigm::MapTuple3 => format!("std::unordered_map<{}, Tuple3<{}, {}, {}>>", cpp_param_type(&p[0]), cpp_param_type(&p[1]), cpp_param_type(&p[2]), cpp_param_type(&p[3])),
         Paradigm::MapTuple4 => format!("std::unordered_map<{}, Tuple4<{}, {}, {}, {}>>", cpp_param_type(&p[0]), cpp_param_type(&p[1]), cpp_param_type(&p[2]), cpp_param_type(&p[3]), cpp_param_type(&p[4])),
         Paradigm::MapList => format!("std::unordered_map<{}, std::vector<{}>>", cpp_param_type(&p[0]), cpp_param_type(&p[1])),
+        Paradigm::ListList => format!("std::vector<std::vector<{}>>", cpp_param_type(&p[0])),
+        Paradigm::ListMap => format!("std::vector<std::unordered_map<{}, {}>>", cpp_param_type(&p[0]), cpp_param_type(&p[1])),
+        Paradigm::MapMap => format!("std::unordered_map<{}, std::unordered_map<{}, {}>>", cpp_param_type(&p[0]), cpp_param_type(&p[1]), cpp_param_type(&p[2])),
         Paradigm::Ref => {
             if let Some(name) = &t.ref_name {
                 if enum_names.contains(name) {
@@ -195,6 +198,21 @@ fn cpp_parse_expr(raw_var: &str, t: &TblType, sep: &str, enum_names: &HashSet<St
             fk=cpp_param_parse_fn(&p[0]), fa=cpp_param_parse_fn(&p[1]), fb=cpp_param_parse_fn(&p[2]), fc=cpp_param_parse_fn(&p[3]), fd=cpp_param_parse_fn(&p[4])
         ),
 
+        Paradigm::ListList => format!(
+            "parse_list<std::vector<{t}>>({raw}, {sep}.list_list_list, std::function<std::vector<{t}>(const std::string&)>([&](const std::string& s) {{ return parse_list<{t}>(s, {sep}.list_list_item, {f}); }}))",
+            t=cpp_param_type(&p[0]), raw=raw_var, sep=sep, f=cpp_param_parse_fn(&p[0])
+        ),
+        Paradigm::ListMap => format!(
+            "parse_list<std::unordered_map<{tk}, {tv}>>({raw}, {sep}.list_map_list, std::function<std::unordered_map<{tk}, {tv}>(const std::string&)>([&](const std::string& s) {{ return parse_map<{tk}, {tv}>(s, {sep}.list_map_kv, {sep}.list_map_entry, {fk}, {fv}); }}))",
+            tk=cpp_param_type(&p[0]), tv=cpp_param_type(&p[1]),
+            raw=raw_var, sep=sep, fk=cpp_param_parse_fn(&p[0]), fv=cpp_param_parse_fn(&p[1])
+        ),
+        Paradigm::MapMap => format!(
+            "parse_map<{tk}, std::unordered_map<{tik}, {tv}>>({raw}, {sep}.map_map_kv, {sep}.map_map_entry, {fk}, std::function<std::unordered_map<{tik}, {tv}>(const std::string&)>([&](const std::string& s) {{ return parse_map<{tik}, {tv}>(s, {sep}.map_map_inner_kv, {sep}.map_map_inner_entry, {fik}, {fv}); }}))",
+            tk=cpp_param_type(&p[0]), tik=cpp_param_type(&p[1]), tv=cpp_param_type(&p[2]),
+            raw=raw_var, sep=sep,
+            fk=cpp_param_parse_fn(&p[0]), fik=cpp_param_parse_fn(&p[1]), fv=cpp_param_parse_fn(&p[2])
+        ),
         Paradigm::MapList => format!(
             "parse_map<{tk}, std::vector<{tv}>>({raw}, {sep}.map_list_kv, {sep}.map_list_entry, {fk}, std::function<std::vector<{tv}>(const std::string&)>([&](const std::string& s) {{ return parse_list<{tv}>(s, {sep}.map_list_item, {fv}); }}))",
             tk=cpp_param_type(&p[0]), tv=cpp_param_type(&p[1]),

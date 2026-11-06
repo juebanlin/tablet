@@ -108,6 +108,15 @@ namespace {{NAMESPACE}}
             cfg.MapListKv = Get("map_list_kv") ?? cfg.MapListKv;
             cfg.MapListItem = Get("map_list_item") ?? cfg.MapListItem;
             cfg.MapListEntry = Get("map_list_entry") ?? cfg.MapListEntry;
+            cfg.ListListList = Get("list_list_list") ?? cfg.ListListList;
+            cfg.ListListItem = Get("list_list_item") ?? cfg.ListListItem;
+            cfg.ListMapList = Get("list_map_list") ?? cfg.ListMapList;
+            cfg.ListMapEntry = Get("list_map_entry") ?? cfg.ListMapEntry;
+            cfg.ListMapKv = Get("list_map_kv") ?? cfg.ListMapKv;
+            cfg.MapMapKv = Get("map_map_kv") ?? cfg.MapMapKv;
+            cfg.MapMapEntry = Get("map_map_entry") ?? cfg.MapMapEntry;
+            cfg.MapMapInnerKv = Get("map_map_inner_kv") ?? cfg.MapMapInnerKv;
+            cfg.MapMapInnerEntry = Get("map_map_inner_entry") ?? cfg.MapMapInnerEntry;
         }
     }
 }

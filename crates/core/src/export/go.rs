@@ -70,6 +70,9 @@ fn t_go_decl(t: &TblType) -> String {
         Paradigm::MapTuple3 => format!("map[{}]Tuple3[{},{},{}]", g(&p[0]), g(&p[1]), g(&p[2]), g(&p[3])),
         Paradigm::MapTuple4 => format!("map[{}]Tuple4[{},{},{},{}]", g(&p[0]), g(&p[1]), g(&p[2]), g(&p[3]), g(&p[4])),
         Paradigm::MapList => format!("map[{}][]{}", g(&p[0]), g(&p[1])),
+        Paradigm::ListList => format!("[][]{}", g(&p[0])),
+        Paradigm::ListMap => format!("[]map[{}]{}", g(&p[0]), g(&p[1])),
+        Paradigm::MapMap => format!("map[{}]map[{}]{}", g(&p[0]), g(&p[1]), g(&p[2])),
         // 引用类型默认按 table ref 处理，存储 id；enum ref 由调用方根据被引用项 mode 改写
         Paradigm::Ref => "int32".to_string(),
     }
@@ -142,8 +145,7 @@ fn parse_expr(raw_var: &str, t: &TblType, sep_var: &str) -> String {
             TypeParam::Base(BaseType::Float) => format!("parseSetFloat32({}, {}.Set)", raw_var, sep_var),
             TypeParam::Base(BaseType::Double) => format!("parseSetFloat64({}, {}.Set)", raw_var, sep_var),
             TypeParam::Base(BaseType::Str) => format!("parseSetString({}, {}.Set)", raw_var, sep_var),
-            // bool 集合在实际项目里几乎不会出现，但兜底
-            TypeParam::Base(BaseType::Bool) => format!("parseSetString({}, {}.Set)", raw_var, sep_var),
+            TypeParam::Base(BaseType::Bool) => format!("parseSetBool({}, {}.Set)", raw_var, sep_var),
             TypeParam::Base(BaseType::Txt) => unreachable!("txt not allowed in Set"),
         },
 
@@ -190,6 +192,44 @@ fn parse_expr(raw_var: &str, t: &TblType, sep_var: &str) -> String {
             fk=f(&p[0]), fb=f(&p[1]), fc=f(&p[2]), fd=f(&p[3]), fe=f(&p[4])
         ),
 
+        Paradigm::ListList => match &p[0] {
+            TypeParam::Base(BaseType::Int) | TypeParam::Ref(_) => format!(
+                "ParseListItems({raw}, {sep}.ListListList, func(s string) []int32 {{ return parseListInt32(s, {sep}.ListListItem) }})",
+                raw=raw_var, sep=sep_var
+            ),
+            TypeParam::Base(BaseType::Long) => format!(
+                "ParseListItems({raw}, {sep}.ListListList, func(s string) []int64 {{ return parseListInt64(s, {sep}.ListListItem) }})",
+                raw=raw_var, sep=sep_var
+            ),
+            TypeParam::Base(BaseType::Float) => format!(
+                "ParseListItems({raw}, {sep}.ListListList, func(s string) []float32 {{ return parseListFloat32(s, {sep}.ListListItem) }})",
+                raw=raw_var, sep=sep_var
+            ),
+            TypeParam::Base(BaseType::Double) => format!(
+                "ParseListItems({raw}, {sep}.ListListList, func(s string) []float64 {{ return parseListFloat64(s, {sep}.ListListItem) }})",
+                raw=raw_var, sep=sep_var
+            ),
+            TypeParam::Base(BaseType::Str) => format!(
+                "ParseListItems({raw}, {sep}.ListListList, func(s string) []string {{ return parseListString(s, {sep}.ListListItem) }})",
+                raw=raw_var, sep=sep_var
+            ),
+            TypeParam::Base(BaseType::Bool) => format!(
+                "ParseListItems({raw}, {sep}.ListListList, func(s string) []bool {{ return parseListBool(s, {sep}.ListListItem) }})",
+                raw=raw_var, sep=sep_var
+            ),
+            TypeParam::Base(BaseType::Txt) => unreachable!("txt not allowed in ListList"),
+        },
+
+        Paradigm::ListMap => format!(
+            "ParseListItems({raw}, {sep}.ListMapList, func(s string) map[{tk}]{tv} {{ return ParseMap(s, {sep}.ListMapKv, {sep}.ListMapEntry, {fk}, {fv}) }})",
+            tk=g(&p[0]), tv=g(&p[1]), raw=raw_var, sep=sep_var,
+            fk=f(&p[0]), fv=f(&p[1])
+        ),
+        Paradigm::MapMap => format!(
+            "ParseMap({raw}, {sep}.MapMapKv, {sep}.MapMapEntry, {fk}, func(s string) map[{tik}]{tv} {{ return ParseMap(s, {sep}.MapMapInnerKv, {sep}.MapMapInnerEntry, {fik}, {fv}) }})",
+            tik=g(&p[1]), tv=g(&p[2]), raw=raw_var, sep=sep_var,
+            fk=f(&p[0]), fik=f(&p[1]), fv=f(&p[2])
+        ),
         Paradigm::MapList => match &p[1] {
             TypeParam::Base(BaseType::Int) | TypeParam::Ref(_) => format!(
                 "ParseMap({raw}, {sep}.MapListKv, {sep}.MapListEntry, {fk}, func(s string) []int32 {{ return parseListInt32(s, {sep}.MapListItem) }})",

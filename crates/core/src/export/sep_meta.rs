@@ -47,7 +47,7 @@ mod tests {
 
     #[test]
     fn sepkey_all_count() {
-        assert_eq!(SepKey::ALL.len(), 25);
+        assert_eq!(SepKey::ALL.len(), 34);
     }
 
     #[test]
@@ -74,7 +74,7 @@ mod tests {
             Paradigm::List, Paradigm::Set, Paradigm::Map,
             Paradigm::ListTuple2, Paradigm::ListTuple3, Paradigm::ListTuple4,
             Paradigm::MapTuple2, Paradigm::MapTuple3, Paradigm::MapTuple4,
-            Paradigm::MapList,
+            Paradigm::MapList, Paradigm::ListList, Paradigm::ListMap, Paradigm::MapMap,
         ];
         let mut covered: BTreeSet<SepKey> = BTreeSet::new();
         for p in &paradigms {

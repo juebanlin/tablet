@@ -76,13 +76,13 @@ await sleep(200);
 await evalJs(`[...document.querySelectorAll('.ctx-item')].find(e => e.textContent.includes('项目设置')).click()`);
 await until(`!document.getElementById('project-settings').hidden`, "项目设置打开");
 
-// 分隔符 tab：应有 25 项
+// 分隔符 tab：应有 34 项
 await evalJs(`document.querySelector('[data-pstab=sep]').click()`);
 const seps = await evalJs(`({
   rows: document.querySelectorAll('#ps-seps .sep-row').length,
   def: document.querySelector('#ps-seps input[data-sep-key="List"]').placeholder
 })`);
-check("分隔符 25 项", seps.rows === 25 && seps.def === ";", seps);
+check("分隔符 34 项", seps.rows === 34 && seps.def === ";", seps);
 
 // 改一个不影响现有数据的项：Set → |
 await evalJs(`(() => {

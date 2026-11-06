@@ -137,6 +137,9 @@ fn cs_field_type(tbl_type_str: &str, enum_names: &HashSet<String>) -> String {
         Paradigm::MapTuple3 => format!("Dictionary<{}, Tuple3<{}, {}, {}>>", cs_param_type(&p[0]), cs_param_type(&p[1]), cs_param_type(&p[2]), cs_param_type(&p[3])),
         Paradigm::MapTuple4 => format!("Dictionary<{}, Tuple4<{}, {}, {}, {}>>", cs_param_type(&p[0]), cs_param_type(&p[1]), cs_param_type(&p[2]), cs_param_type(&p[3]), cs_param_type(&p[4])),
         Paradigm::MapList => format!("Dictionary<{}, List<{}>>", cs_param_type(&p[0]), cs_param_type(&p[1])),
+        Paradigm::ListList => format!("List<List<{}>>", cs_param_type(&p[0])),
+        Paradigm::ListMap => format!("List<Dictionary<{}, {}>>", cs_param_type(&p[0]), cs_param_type(&p[1])),
+        Paradigm::MapMap => format!("Dictionary<{}, Dictionary<{}, {}>>", cs_param_type(&p[0]), cs_param_type(&p[1]), cs_param_type(&p[2])),
         Paradigm::Ref => {
             if let Some(name) = &t.ref_name {
                 if enum_names.contains(name) {
@@ -244,6 +247,21 @@ fn cs_parse_expr(raw_var: &str, t: &TblType, sep: &str, enum_names: &HashSet<Str
             fk=cs_param_parse_fn(&p[0]), fa=cs_param_parse_fn(&p[1]), fb=cs_param_parse_fn(&p[2]), fc=cs_param_parse_fn(&p[3]), fd=cs_param_parse_fn(&p[4])
         ),
 
+        Paradigm::ListList => format!(
+            "TblParse.ParseList<List<{t}>>({raw}, {sep}.ListListList, s => TblParse.ParseList<{t}>(s, {sep}.ListListItem, {f}))",
+            t=cs_param_type(&p[0]), raw=raw_var, sep=sep, f=cs_param_parse_fn(&p[0])
+        ),
+        Paradigm::ListMap => format!(
+            "TblParse.ParseList<Dictionary<{tk}, {tv}>>({raw}, {sep}.ListMapList, s => TblParse.ParseMap<{tk}, {tv}>(s, {sep}.ListMapKv, {sep}.ListMapEntry, {fk}, {fv}))",
+            tk=cs_param_type(&p[0]), tv=cs_param_type(&p[1]),
+            raw=raw_var, sep=sep, fk=cs_param_parse_fn(&p[0]), fv=cs_param_parse_fn(&p[1])
+        ),
+        Paradigm::MapMap => format!(
+            "TblParse.ParseMap<{tk}, Dictionary<{tik}, {tv}>>({raw}, {sep}.MapMapKv, {sep}.MapMapEntry, {fk}, s => TblParse.ParseMap<{tik}, {tv}>(s, {sep}.MapMapInnerKv, {sep}.MapMapInnerEntry, {fik}, {fv}))",
+            tk=cs_param_type(&p[0]), tik=cs_param_type(&p[1]), tv=cs_param_type(&p[2]),
+            raw=raw_var, sep=sep,
+            fk=cs_param_parse_fn(&p[0]), fik=cs_param_parse_fn(&p[1]), fv=cs_param_parse_fn(&p[2])
+        ),
         Paradigm::MapList => format!(
             "TblParse.ParseMap<{tk}, List<{tv}>>({raw}, {sep}.MapListKv, {sep}.MapListEntry, {fk}, s => TblParse.ParseList<{tv}>(s, {sep}.MapListItem, {fv}))",
             tk=cs_param_type(&p[0]), tv=cs_param_type(&p[1]),

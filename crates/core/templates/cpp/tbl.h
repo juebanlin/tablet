@@ -50,6 +50,15 @@ struct SepConfig {
     std::string map_list_kv = ":";
     std::string map_list_item = ",";
     std::string map_list_entry = ";";
+    std::string list_list_list = ";";
+    std::string list_list_item = ",";
+    std::string list_map_list = ";";
+    std::string list_map_entry = ",";
+    std::string list_map_kv = ":";
+    std::string map_map_kv = ":";
+    std::string map_map_entry = ";";
+    std::string map_map_inner_kv = "=";
+    std::string map_map_inner_entry = ",";
 };
 
 inline std::vector<std::string> tbl_split(const std::string& s, const std::string& sep) {

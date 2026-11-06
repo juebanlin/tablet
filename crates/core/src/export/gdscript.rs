@@ -223,6 +223,39 @@ fn value_to_gd(raw: &str, tbl_type_str: &str, sep: &SeparatorsSection) -> String
             }).collect();
             format!("{{{}}}", entries.join(", "))
         }
+        Paradigm::ListList => {
+            let rows: Vec<String> = raw.split(&*sep.list_list.list).map(|row| {
+                let items: Vec<String> = row.split(&*sep.list_list.item).map(|v| gd_param(v, &p[0])).collect();
+                format!("[{}]", items.join(", "))
+            }).collect();
+            format!("[{}]", rows.join(", "))
+        }
+        Paradigm::ListMap => {
+            let rows: Vec<String> = raw.split(&*sep.list_map.list).map(|row| {
+                let entries: Vec<String> = row.split(&*sep.list_map.entry).filter_map(|entry| {
+                    let kv: Vec<&str> = entry.splitn(2, &*sep.list_map.kv).collect();
+                    if kv.len() == 2 {
+                        Some(fmt_kv(gd_param_key(kv[0], &p[0]), &gd_param(kv[1], &p[1])))
+                    } else { None }
+                }).collect();
+                format!("{{{}}}", entries.join(", "))
+            }).collect();
+            format!("[{}]", rows.join(", "))
+        }
+        Paradigm::MapMap => {
+            let entries: Vec<String> = raw.split(&*sep.map_map.entry).filter_map(|entry| {
+                let kv: Vec<&str> = entry.splitn(2, &*sep.map_map.kv).collect();
+                if kv.len() != 2 { return None; }
+                let inner: Vec<String> = kv[1].split(&*sep.map_map.inner_entry).filter_map(|sub| {
+                    let ikv: Vec<&str> = sub.splitn(2, &*sep.map_map.inner_kv).collect();
+                    if ikv.len() == 2 {
+                        Some(fmt_kv(gd_param_key(ikv[0], &p[1]), &gd_param(ikv[1], &p[2])))
+                    } else { None }
+                }).collect();
+                Some(fmt_kv(gd_param_key(kv[0], &p[0]), &format!("{{{}}}", inner.join(", "))))
+            }).collect();
+            format!("{{{}}}", entries.join(", "))
+        }
         Paradigm::MapList => {
             let entries: Vec<String> = raw.split(&*sep.map_list.entry).map(|entry| {
                 let kv: Vec<&str> = entry.splitn(2, &*sep.map_list.kv).collect();

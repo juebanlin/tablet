@@ -26,6 +26,15 @@ public class SepConfig {
     public String mapListKv = ":";
     public String mapListItem = ",";
     public String mapListEntry = ";";
+    public String listListList = ";";
+    public String listListItem = ",";
+    public String listMapList = ";";
+    public String listMapEntry = ",";
+    public String listMapKv = ":";
+    public String mapMapKv = ":";
+    public String mapMapEntry = ";";
+    public String mapMapInnerKv = "=";
+    public String mapMapInnerEntry = ",";
 
     public static SepConfig fromMap(java.util.Map<String, String> map) {
         SepConfig c = new SepConfig();
@@ -55,6 +64,15 @@ public class SepConfig {
         c.mapListKv = getAny(map, c.mapListKv, "map_list_kv", "sep_map_list_kv");
         c.mapListItem = getAny(map, c.mapListItem, "map_list_item", "sep_map_list_item");
         c.mapListEntry = getAny(map, c.mapListEntry, "map_list_entry", "sep_map_list_entry");
+        c.listListList = getAny(map, c.listListList, "list_list_list", "sep_list_list_list");
+        c.listListItem = getAny(map, c.listListItem, "list_list_item", "sep_list_list_item");
+        c.listMapList = getAny(map, c.listMapList, "list_map_list", "sep_list_map_list");
+        c.listMapEntry = getAny(map, c.listMapEntry, "list_map_entry", "sep_list_map_entry");
+        c.listMapKv = getAny(map, c.listMapKv, "list_map_kv", "sep_list_map_kv");
+        c.mapMapKv = getAny(map, c.mapMapKv, "map_map_kv", "sep_map_map_kv");
+        c.mapMapEntry = getAny(map, c.mapMapEntry, "map_map_entry", "sep_map_map_entry");
+        c.mapMapInnerKv = getAny(map, c.mapMapInnerKv, "map_map_inner_kv", "sep_map_map_inner_kv");
+        c.mapMapInnerEntry = getAny(map, c.mapMapInnerEntry, "map_map_inner_entry", "sep_map_map_inner_entry");
         return c;
     }
 

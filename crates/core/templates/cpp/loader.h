@@ -90,6 +90,15 @@ inline SepConfig sep_from_json(const nlohmann::json& sep_obj) {
     get("map_list_kv", cfg.map_list_kv);
     get("map_list_item", cfg.map_list_item);
     get("map_list_entry", cfg.map_list_entry);
+    get("list_list_list", cfg.list_list_list);
+    get("list_list_item", cfg.list_list_item);
+    get("list_map_list", cfg.list_map_list);
+    get("list_map_entry", cfg.list_map_entry);
+    get("list_map_kv", cfg.list_map_kv);
+    get("map_map_kv", cfg.map_map_kv);
+    get("map_map_entry", cfg.map_map_entry);
+    get("map_map_inner_kv", cfg.map_map_inner_kv);
+    get("map_map_inner_entry", cfg.map_map_inner_entry);
     return cfg;
 }
 
