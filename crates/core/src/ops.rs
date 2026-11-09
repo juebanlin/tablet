@@ -4006,6 +4006,137 @@ impl ProjectEngine {
         Ok(ImportOutcome { group: created_group, nodes: 1 })
     }
 
+    /// 任意 Excel → 常量 / 枚举节点（映射导入）。与表导入同一套命名 / 冲突规则。
+    pub fn import_mapped_entries(
+        &mut self,
+        project_id: &str,
+        plan: &crate::excel_mapping::EntryMappingPlan,
+    ) -> Result<ImportOutcome, String> {
+        if !self.is_opened(project_id) {
+            self.open_project(project_id).map_err(|e| e.to_string())?;
+        }
+        let entries = crate::excel_mapping::build_entries(plan)?;
+        let project = self.find_project(project_id)
+            .ok_or_else(|| format!("Project 不存在: {}", project_id))?;
+        let existing_group = project.groups.iter()
+            .find(|g| g.name.eq_ignore_ascii_case(&plan.group_name));
+        if let Some(g) = existing_group {
+            if g.is_xlsx() {
+                return Err(format!("组 {} 是 Excel Group；映射导入只生成 Tbl 组", g.name));
+            }
+        }
+        if node_name_taken(&all_project_node_names(project), &plan.node_name) {
+            return Err(format!("节点名已存在（项目内唯一，忽略大小写）: {}", plan.node_name));
+        }
+        let canonical_group = existing_group
+            .map(|g| g.name.clone())
+            .unwrap_or_else(|| plan.group_name.clone());
+        let data_dir = project.data_dir();
+        let group_dir = existing_group
+            .map(|g| g.dir.clone())
+            .unwrap_or_else(|| data_dir.join(&canonical_group));
+        let target = group_dir.join(format!("{}.tbl", plan.node_name));
+        if target.exists() {
+            return Err(format!("目标文件已存在: {}", target.display()));
+        }
+
+        let (constant, enum_def, content) = match entries {
+            crate::excel_mapping::MappedEntries::Constants(entries) => {
+                let node = crate::model::Constant {
+                    name: plan.node_name.clone(),
+                    original_name: plan.node_name.clone(),
+                    path: target.clone(),
+                    entries: entries.clone(),
+                    dirty: false,
+                    deleted: false,
+                    original_entries: entries,
+                    saved: true,
+                };
+                let text = crate::tbl::serialize_constant(&node);
+                (Some(node), None, text)
+            }
+            crate::excel_mapping::MappedEntries::Enums(entries) => {
+                let node = crate::model::EnumDef {
+                    name: plan.node_name.clone(),
+                    original_name: plan.node_name.clone(),
+                    path: target.clone(),
+                    entries: entries.clone(),
+                    dirty: false,
+                    deleted: false,
+                    original_entries: entries,
+                    saved: true,
+                    display_field: None,
+                    original_display_field: None,
+                    rules: Vec::new(),
+                    original_rules: Vec::new(),
+                };
+                let text = crate::tbl::serialize_enum(&node);
+                (None, Some(node), text)
+            }
+        };
+        if let Err(e) = std::fs::create_dir_all(&group_dir) {
+            return Err(format!("创建目录失败: {} ({})", group_dir.display(), e));
+        }
+        if let Err(e) = std::fs::write(&target, content) {
+            return Err(format!("写入失败: {} ({})", target.display(), e));
+        }
+
+        let (created_group, group_was_new) = {
+            let project = self.find_project_mut(project_id).expect("opened checked");
+            let group_was_new = !project.groups.iter().any(|g| g.name.eq_ignore_ascii_case(&canonical_group));
+            let group = match project.groups.iter_mut()
+                .find(|g| g.name.eq_ignore_ascii_case(&canonical_group))
+            {
+                Some(g) => g,
+                None => {
+                    project.groups.push(Group {
+                        name: canonical_group.clone(),
+                        original_name: canonical_group.clone(),
+                        dir: group_dir.clone(),
+                        tables: Vec::new(),
+                        constants: Vec::new(),
+                        enums: Vec::new(),
+                        is_new: true,
+                        storage: crate::model::GroupStorage::Tbl,
+                        book_stamp: None,
+                    });
+                    project.groups.last_mut().unwrap()
+                }
+            };
+            if let Some(c) = constant {
+                group.constants.push(c);
+            }
+            if let Some(e) = enum_def {
+                group.enums.push(e);
+            }
+            sync_schema_from_groups(project);
+            (canonical_group.clone(), group_was_new)
+        };
+
+        if !self.save_project(project_id) {
+            let _ = std::fs::remove_file(&target);
+            if let Some(project) = self.find_project_mut(project_id) {
+                if let Some(g) = project.groups.iter_mut().find(|g| g.name == created_group) {
+                    g.constants.retain(|c| c.path != target);
+                    g.enums.retain(|e| e.path != target);
+                }
+                project.groups.retain(|g| {
+                    g.name != created_group
+                        || !group_was_new
+                        || !g.tables.is_empty() || !g.constants.is_empty() || !g.enums.is_empty()
+                });
+                sync_schema_from_groups(project);
+            }
+            return Err("导入后保存失败，已回滚".to_string());
+        }
+
+        self.ui_log(format!(
+            "[映射导入] {}/{} ← {}（{}）",
+            project_id, created_group, plan.node_name, plan.kind.label()
+        ));
+        Ok(ImportOutcome { group: created_group, nodes: 1 })
+    }
+
     /// 原生导入一个 xlsx：文件 = 组，sheet = 节点。
     ///
     /// 工作簿原样复制，保留样式；结构与数据从 workbook 表头 / sheet 读取。

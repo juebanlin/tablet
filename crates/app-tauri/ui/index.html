@@ -426,31 +426,119 @@
   </div>
 
   <div class="modal" id="excel-map" hidden>
-    <div class="modal-box ps-box">
-      <div class="modal-title">导入任意 Excel（映射）</div>
-      <div class="ps-body">
-        <div class="form-row"><label>文件</label><input class="input" id="em-path" placeholder=".xlsx 路径" /><button class="btn" id="em-browse">浏览…</button></div>
-        <div class="form-row">
-          <label>Sheet</label>
-          <select class="combo" id="em-sheet"></select>
-          <button class="btn" id="em-load">读取预览</button>
+    <div class="modal-box em-box">
+      <div class="em-head">
+        <div class="em-title">导入任意 Excel（映射）</div>
+        <div class="em-head-right">
+          <span class="em-status" id="em-status">选择工作簿后开始</span>
+          <button class="btn" id="em-close">关闭</button>
         </div>
-        <div class="form-row"><label>表头行</label><input class="input" id="em-header" type="number" min="1" value="1" /></div>
-        <div class="form-row"><label>数据起始行</label><input class="input" id="em-start" type="number" min="2" value="2" /></div>
-        <div class="form-row"><label>Group</label><input class="input" id="em-group" /></div>
-        <div class="form-row"><label>节点名</label><input class="input" id="em-node" /></div>
-        <div class="em-preview" id="em-preview"></div>
-        <div class="em-fields" id="em-fields"></div>
-        <button class="btn" id="em-add-field">+ 添加字段</button>
-        <div class="em-preview" id="em-final"></div>
+      </div>
+      <div class="em-filebar">
+        <span class="em-file-icon">XLSX</span>
+        <div class="em-file-info">
+          <div class="em-file-name" id="em-file-name">未选择文件</div>
+          <div class="em-file-meta" id="em-file-meta">源文件不会被修改</div>
+        </div>
+        <button class="btn" id="em-browse">选择文件…</button>
+      </div>
+      <div class="em-body">
+        <aside class="em-rail">
+          <div class="em-rail-title">工作表 <span id="em-sheet-count">0</span></div>
+          <div class="em-sheet-list" id="em-sheet-list"></div>
+          <div class="em-rail-foot" id="em-rail-foot">选择文件后读取工作表。</div>
+        </aside>
+        <main class="em-main">
+          <div class="em-main-scroll">
+            <section class="em-settings">
+              <div class="em-field">
+                <label for="em-kind">节点类型</label>
+                <select class="combo" id="em-kind">
+                  <option value="table">表</option>
+                  <option value="constant">常量</option>
+                  <option value="enum">枚举</option>
+                </select>
+                <div class="em-hint">自动识别，可手动改</div>
+              </div>
+              <div class="em-field">
+                <label for="em-group">目标分组</label>
+                <input class="input" id="em-group" list="em-group-list" placeholder="如 hero" autocomplete="off" />
+                <datalist id="em-group-list"></datalist>
+                <div class="em-hint">组名可用中英文、数字、下划线</div>
+              </div>
+              <div class="em-field">
+                <label for="em-node">节点名</label>
+                <input class="input" id="em-node" autocomplete="off" />
+                <div class="em-hint" id="em-node-hint">PascalCase，项目内唯一</div>
+              </div>
+              <div class="em-field em-field-num">
+                <label for="em-header">字段行</label>
+                <input class="input" id="em-header" type="number" min="1" value="1" />
+                <div class="em-hint">字段 / 属性名所在行</div>
+              </div>
+              <div class="em-field em-field-num">
+                <label for="em-start">数据起始行</label>
+                <input class="input" id="em-start" type="number" min="2" value="2" />
+                <div class="em-hint" id="em-start-hint">必须大于字段行</div>
+              </div>
+              <div class="em-settings-right">
+                <span class="em-target" id="em-target-preview">目标 —</span>
+                <button class="btn" id="em-redetect">重新识别</button>
+              </div>
+              <div class="em-semantics" id="em-semantics">
+                <span class="em-sem-label">表头辅助行</span>
+                <label>说明 <input class="input" id="em-desc-row" type="number" min="0" value="0" /></label>
+                <label>类型 <input class="input" id="em-type-row" type="number" min="0" value="0" /></label>
+                <label>导出 <input class="input" id="em-export-row" type="number" min="0" value="0" /></label>
+                <span class="em-hint">0 = 不使用；设置后按这些行覆盖 desc / 类型 / 导出</span>
+                <button class="mini-btn" id="em-detect-rows">自动识别</button>
+              </div>
+            </section>
+            <section class="em-map">
+              <div class="em-map-head">
+                <div class="em-map-title">列映射 <span id="em-map-sub">未读取</span></div>
+                <div class="em-map-tools">
+                  <input class="input em-search" id="em-search" type="search" placeholder="搜索列或字段" />
+                  <button class="mini-btn" id="em-auto-map">自动映射</button>
+                  <button class="mini-btn" id="em-toggle-all">全部启用</button>
+                  <button class="mini-btn" id="em-skip">跳过此表</button>
+                </div>
+              </div>
+              <div id="em-map-banner"></div>
+              <div class="em-map-scroll">
+                <div class="em-grid" id="em-grid">
+                  <div class="em-cols" id="em-cols"></div>
+                  <div id="em-rows"></div>
+                </div>
+              </div>
+            </section>
+            <section class="em-preview">
+              <div class="em-tabs">
+                <button class="em-tab active" data-emtab="source">源表预览</button>
+                <button class="em-tab" data-emtab="result">导入结果</button>
+                <button class="em-tab" data-emtab="issues">检查 <span class="em-count" id="em-issue-count">0</span></button>
+                <span class="em-preview-tools" id="em-preview-tools"></span>
+              </div>
+              <div class="em-preview-body" id="em-preview-body"></div>
+            </section>
+          </div>
+        </main>
+      </div>
+      <div class="em-foot">
+        <div class="em-summary">
+          <span class="em-dot" id="em-foot-dot"></span>
+          <span id="em-foot-count">未选择文件</span>
+          <span class="em-foot-meta" id="em-foot-where"></span>
+          <span class="em-foot-meta" id="em-foot-issues"></span>
+        </div>
+        <div class="em-actions">
+          <button class="btn" id="em-cancel">取消</button>
+          <button class="btn" id="em-import-all" disabled>导入全部就绪 (0)</button>
+          <button class="btn primary" id="em-run" disabled>导入当前工作表</button>
+        </div>
       </div>
       <pre class="export-result" id="em-result" hidden></pre>
       <div class="modal-message error" id="em-error" hidden></div>
-      <div class="modal-actions">
-        <button class="btn" id="em-close">关闭</button>
-        <button class="btn" id="em-import-all">导入全部 Sheet</button>
-        <button class="btn primary" id="em-run">导入当前</button>
-      </div>
     </div>
   </div>
 

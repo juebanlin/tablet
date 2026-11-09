@@ -4415,260 +4415,1021 @@ function initExcelDialog() {
   });
 }
 
-let emPreview = null;
-
-function openExcelMap() {
-  emPreview = null;
-  $("em-path").value = "";
-  $("em-sheet").innerHTML = "";
-  $("em-header").value = 1;
-  $("em-start").value = 2;
-  $("em-group").value = "";
-  $("em-node").value = "";
-  $("em-fields").innerHTML = "";
-  $("em-preview").innerHTML = "";
-  $("em-result").hidden = true;
-  $("em-error").hidden = true;
-  $("excel-map").hidden = false;
-}
-
-function pascalName(raw) {
-  const s = (raw || "").replace(/[^A-Za-z0-9_]/g, "");
-  if (!s) return "Imported";
-  return s[0].toUpperCase() + s.slice(1);
-}
-
-async function loadExcelPreview() {
-  const path = $("em-path").value.trim();
-  if (!path) return showFormError($("em-error"), "请填写 .xlsx 路径");
-  $("em-error").hidden = true;
-  try {
-    const p = await invoke("excel_preview", {
-      path,
-      sheet: $("em-sheet").value || null,
-      headerRow: Number($("em-header").value) || null,
-    });
-    emPreview = p;
-    $("em-sheet").innerHTML = p.sheets
-      .map((s) => `<option${s === p.sheet ? " selected" : ""}>${escapeHtml(s)}</option>`)
-      .join("");
-    $("em-header").value = p.header_row;
-    $("em-start").value = p.data_start;
-    if (!$("em-group").value) {
-      $("em-group").value = (p.sheet || "imported").toLowerCase().replace(/[^a-z0-9_]/g, "_");
-    }
-    if (!$("em-node").value) $("em-node").value = pascalName(p.sheet);
-    renderEmPreview();
-    renderEmFields();
-  } catch (e) {
-    showFormError($("em-error"), String(e));
-  }
-}
-
-/** 原始 Excel 预览（表头 + 前几行），对应 Slint 映射对话框的「原始数据」页。 */
-function renderEmPreview() {
-  if (!emPreview) return;
-  const cols = emPreview.columns || [];
-  const rows = emPreview.sample_rows || [];
-  $("em-preview").innerHTML =
-    `<table><thead><tr><th>#</th>${cols
-      .map((c) => `<th>${escapeHtml(c)}</th>`)
-      .join("")}</tr></thead><tbody>` +
-    rows
-      .map(
-        (r, i) =>
-          `<tr><th>${i + 1}</th>${cols
-            .map((_, c) => `<td>${escapeHtml(r[c] ?? "")}</td>`)
-            .join("")}</tr>`,
-      )
-      .join("") +
-    "</tbody></table>";
-  renderEmFinal();
-}
-
-/** 按当前映射生成最终 4 行表头 + 数据预览。 */
-function renderEmFinal() {
-  if (!emPreview) return;
-  const fields = emPreview.fields || [];
-  const rows = emPreview.sample_rows || [];
-  const head = [
-    fields.map((f) => f.desc),
-    fields.map((f) => f.export),
-    fields.map((f) => f.tbl_type),
-    fields.map((f) => f.target_name),
-  ];
-  $("em-final").innerHTML =
-    `<table><thead>${head
-      .map(
-        (r, i) =>
-          `<tr>${r.map((v) => `<th class="${i === 3 ? "em-fin-name" : ""}">${escapeHtml(v)}</th>`).join("")}</tr>`,
-      )
-      .join("")}</thead><tbody>` +
-    rows
-      .map(
-        (r) =>
-          `<tr>${fields
-            .map((f) => `<td>${escapeHtml(r[f.source_col - 1] ?? "")}</td>`)
-            .join("")}</tr>`,
-      )
-      .join("") +
-    "</tbody></table>";
-}
+// ── 任意 Excel 映射导入 ─────────────────────────────────────
+// 左侧 = 工作簿里的 Sheet 概览；右侧 = 当前 Sheet 的列映射。
+// 字段校验走 core 的 field_issues（excel_check_mapping），界面只展示结果。
+let emState = null;
+let emTab = "source";
+let emSearch = "";
+let emCheckTimer = 0;
+let emCheckSeq = 0;
 
 const EM_TYPES = ["int", "long", "float", "double", "bool", "str", "txt"];
-const EM_EXPORTS = ["前后端", "客户端", "服务器", "不导出"];
+const EM_EXPORTS = [
+  { code: "cs", label: "前后端" },
+  { code: "c", label: "客户端" },
+  { code: "s", label: "服务器" },
+  { code: "-", label: "不导出" },
+];
 
-/** 映射字段可编辑（目标名 / 源列 / 类型 / 导出 / 说明），不再只是只读建议。 */
-function renderEmFields() {
-  if (!emPreview) return;
-  const cols = emPreview.columns || [];
-  $("em-fields").innerHTML = emPreview.fields
-    .map((f, i) => {
-      const src = cols
-        .map(
-          (c, j) =>
-            `<option value="${j + 1}"${j + 1 === f.source_col ? " selected" : ""}>${escapeHtml(
-              `${j + 1}. ${c}`,
-            )}</option>`,
-        )
-        .join("");
-      const types = EM_TYPES.includes(f.tbl_type) ? EM_TYPES : [f.tbl_type, ...EM_TYPES];
-      return (
-        `<div class="em-field" data-em-row="${i}">` +
-        `<span class="col">${i + 1}</span>` +
-        `<input class="input em-name" data-em-key="target_name" value="${escapeHtml(f.target_name)}" />` +
-        `<select class="combo em-src" data-em-key="source_col">${src}</select>` +
-        `<select class="combo em-type" data-em-key="tbl_type">${types
-          .map((t) => `<option${t === f.tbl_type ? " selected" : ""}>${escapeHtml(t)}</option>`)
-          .join("")}</select>` +
-        `<select class="combo em-export" data-em-key="export">${EM_EXPORTS.map(
-          (x) => `<option${x === f.export ? " selected" : ""}>${x}</option>`,
-        ).join("")}</select>` +
-        `<input class="input em-desc" data-em-key="desc" value="${escapeHtml(f.desc)}" placeholder="说明" />` +
-        `<button class="mini-btn" data-em-remove="${i}" title="删除该字段">×</button>` +
-        "</div>"
-      );
+function emPascal(raw, index) {
+  const s = String(raw || "").replace(/[^A-Za-z0-9_]/g, "");
+  if (s) return s[0].toUpperCase() + s.slice(1);
+  return `Sheet${index + 1}`;
+}
+
+function emGroupName(raw) {
+  const s = String(raw || "").trim()
+    .replace(/\s+/g, "_")
+    .replace(/[^A-Za-z0-9_一-鿿]/g, "_")
+    .toLowerCase();
+  return s || "imported";
+}
+
+function emGroupValid(name) {
+  return /^[A-Za-z0-9_一-鿿]+$/.test(String(name || "").trim());
+}
+
+function emNodeValid(name) {
+  return /^[A-Z][A-Za-z0-9_]*$/.test(String(name || "").trim());
+}
+
+function emExportCode(display) {
+  const hit = EM_EXPORTS.find((e) => e.code === display || e.label === display);
+  return hit ? hit.code : "cs";
+}
+
+function emExportLabel(code) {
+  return (EM_EXPORTS.find((e) => e.code === code) || EM_EXPORTS[0]).label;
+}
+
+function emFmt(n) {
+  return Number(n || 0).toLocaleString("zh-CN");
+}
+
+function emCol(index) {
+  let s = "";
+  for (let i = index; i > 0; i = Math.floor((i - 1) / 26)) {
+    s = String.fromCharCode(65 + ((i - 1) % 26)) + s;
+  }
+  return s;
+}
+
+function emSheet() {
+  return emState && emState.active ? emState.sheets[emState.active] || null : null;
+}
+
+function emSheetInfo(name) {
+  return (emState?.infos || []).find((s) => s.name === name);
+}
+
+function emFieldsFromPreview(preview) {
+  return (preview.fields || [])
+    .map((f) => ({
+      target_name: f.target_name,
+      source_col: f.source_col,
+      tbl_type: f.tbl_type,
+      export: emExportCode(f.export),
+      desc: f.desc || "",
+      include: true,
+      issue: "",
+    }))
+    .sort((a, b) => a.source_col - b.source_col);
+}
+
+function emKindOf(sheet) {
+  return sheet?.kind || "table";
+}
+
+function emKindLabel(kind) {
+  return kind === "constant" ? "常量" : kind === "enum" ? "枚举" : "表";
+}
+
+function emAllowedTargets(kind) {
+  if (kind === "constant") return ["name", "type", "value", "export", "desc"];
+  if (kind === "enum") return ["id", "name", "desc"];
+  return [];
+}
+
+function emSnake(raw) {
+  return String(raw || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+}
+
+/** 常量 / 枚举：源列 → 固定目标列（按表头名自动匹配，未匹配 = 不导入）。 */
+function emEntryFieldsFromPreview(preview, kind) {
+  const allowed = emAllowedTargets(kind);
+  const used = new Set();
+  return (preview.columns || [])
+    .map((raw, i) => {
+      let target = emSnake(raw);
+      if (!allowed.includes(target) || used.has(target)) target = "";
+      if (target) used.add(target);
+      return {
+        target_name: target,
+        source_col: i + 1,
+        tbl_type: "str",
+        export: "cs",
+        desc: "",
+        include: Boolean(target),
+        issue: "",
+      };
     })
-    .join("");
+    .sort((a, b) => a.source_col - b.source_col);
 }
 
-function emFieldRow(el) {
-  const row = el.closest("[data-em-row]");
-  if (!row || !emPreview) return null;
-  const f = emPreview.fields[+row.dataset.emRow];
-  return f ? { row, f } : null;
+function emFieldsForKind(preview, kind) {
+  return kind === "table"
+    ? emFieldsFromPreview(preview)
+    : emEntryFieldsFromPreview(preview, kind);
 }
 
-async function importAllExcelSheets() {
-  if (!emPreview) return showFormError($("em-error"), "请先读取预览");
-  const path = $("em-path").value.trim();
-  const group = $("em-group").value.trim();
-  if (!path || !group) return showFormError($("em-error"), "请填写文件和 Group");
-  $("em-error").hidden = true;
-  let snap = null;
-  const failed = [];
-  for (const sheet of emPreview.sheets) {
-    try {
-      const p = await invoke("excel_preview", {
-        path,
-        sheet,
-        headerRow: Number($("em-header").value) || null,
+function emHeaderOf(sheet, field) {
+  return sheet.preview?.columns?.[field.source_col - 1] || "";
+}
+
+function emSampleOf(sheet, field) {
+  for (const row of sheet.preview?.sample_rows || []) {
+    const v = row[field.source_col - 1];
+    if (v != null && String(v).trim() !== "") return String(v);
+  }
+  return "";
+}
+
+function emIncluded(sheet) {
+  return sheet ? sheet.fields.filter((f) => f.include) : [];
+}
+
+/** 真正写入时的字段顺序：id 永远是第一个（core validate_plan 的要求）。 */
+function emImportFields(sheet) {
+  const inc = emIncluded(sheet).slice();
+  if (emKindOf(sheet) !== "table") {
+    const order = emAllowedTargets(sheet.kind);
+    return inc.sort(
+      (a, b) => order.indexOf(a.target_name) - order.indexOf(b.target_name),
+    );
+  }
+  const idIdx = inc.findIndex((f) => f.target_name === "id");
+  if (idIdx > 0) inc.unshift(inc.splice(idIdx, 1)[0]);
+  return inc;
+}
+
+function emRequest(sheet, fields) {
+  return {
+    path: emState.path,
+    sheet: sheet.name,
+    header_row: sheet.headerRow,
+    data_start: sheet.dataStart,
+    node_kind: emKindOf(sheet),
+    desc_row: sheet.descRow || 0,
+    type_row: sheet.typeRow || 0,
+    export_row: sheet.exportRow || 0,
+    group_name: String(emState.group || "").trim(),
+    node_name: String(sheet.node || "").trim(),
+    fields: fields.map((f) => ({
+      target_name: f.target_name,
+      source_col: f.source_col,
+      tbl_type: f.tbl_type,
+      export: f.export,
+      desc: f.desc,
+    })),
+  };
+}
+
+/** 当前 Sheet 的阻断 / 提示。字段名等硬规则由后端 check 填进 f.issue。 */
+function emIssues(sheet) {
+  if (!sheet) return [];
+  const out = [];
+  if (sheet.error) out.push({ level: "error", text: sheet.error, row: null });
+  if (sheet.checkError) out.push({ level: "error", text: `映射校验失败：${sheet.checkError}`, row: null });
+  if (sheet.skipped) out.push({ level: "info", text: "此表已跳过，本轮不会导入", row: null });
+  if (sheet.imported) out.push({ level: "info", text: `已导入为 ${sheet.importedNode || sheet.node}`, row: null });
+  if (!emGroupValid(emState?.group)) {
+    out.push({ level: "error", text: "目标分组名不合法：只能用中英文、数字、下划线", row: null });
+  }
+  if (!emNodeValid(sheet.node)) {
+    out.push({ level: "error", text: "节点名不合法：需大写字母开头，只含英文、数字、下划线", row: null });
+  }
+  if (sheet.dataStart <= sheet.headerRow) {
+    out.push({ level: "error", text: "数据起始行必须大于字段行", row: null });
+  }
+  const inc = emIncluded(sheet);
+  const isTable = emKindOf(sheet) === "table";
+  if (!inc.length) out.push({ level: "error", text: "至少启用一列", row: null });
+  if (isTable && !inc.some((f) => f.target_name === "id")) {
+    out.push({ level: "error", text: "缺少 id 列：至少有一列的目标字段要命名为 id", row: null });
+  }
+  sheet.fields.forEach((f, i) => {
+    if (f.include && f.issue) out.push({ level: "error", text: f.issue, row: i });
+    const head = emHeaderOf(sheet, f);
+    if (isTable && f.include && !f.issue && /^field_\d+$/.test(f.target_name) && !/[A-Za-z0-9]/.test(head)) {
+      out.push({
+        level: "warn",
+        row: i,
+        text: `第 ${emCol(f.source_col)} 列「${head || "无表头"}」没有可用的英文表头，字段名 ${f.target_name} 是自动生成的，建议改名`,
       });
-      snap = await invoke("excel_import_mapped", {
-        request: {
-          path,
-          sheet,
-          header_row: p.header_row,
-          data_start: p.data_start,
-          group_name: group,
-          node_name: pascalName(sheet),
-          fields: p.fields,
-        },
+    }
+    if (!f.include) {
+      const head = emHeaderOf(sheet, f) || "未命名";
+      out.push({ level: "info", text: `第 ${emCol(f.source_col)} 列「${head}」未启用，不会写入`, row: i });
+    }
+  });
+  return out;
+}
+
+function emIssueCounts(sheet) {
+  const issues = emIssues(sheet);
+  return {
+    issues,
+    errors: issues.filter((i) => i.level === "error").length,
+    infos: issues.filter((i) => i.level !== "error").length,
+  };
+}
+
+/** 稳定排序：修改字段时不要把行顺序抖来抖去。 */
+function emActiveIssueRow(sheet) {
+  const first = emIssues(sheet).find((i) => i.level === "error" && i.row != null);
+  return first ? first.row : null;
+}
+
+async function emCheckSheet(sheet) {
+  if (!sheet || !sheet.loaded) return;
+  const seq = ++emCheckSeq;
+  sheet.checkError = null;
+  sheet.fields.forEach((f) => { f.issue = ""; });
+  const inc = emIncluded(sheet);
+  if (inc.length) {
+    try {
+      const issues = await invoke("excel_check_mapping", { request: emRequest(sheet, inc) });
+      if (seq !== emCheckSeq) return;
+      issues.forEach((it) => {
+        const f = inc[it.index];
+        if (f) f.issue = it.message;
       });
     } catch (e) {
-      failed.push(`${sheet}: ${e}`);
+      sheet.checkError = String(e);
     }
   }
-  if (snap) applySnapshot(snap);
-  $("em-result").hidden = false;
-  $("em-result").textContent =
-    `导入全部完成（${emPreview.sheets.length - failed.length}/${emPreview.sheets.length}）` +
-    (failed.length ? `\n失败：\n${failed.join("\n")}` : "");
-  toast(`已导入 ${emPreview.sheets.length - failed.length} 个 Sheet`, failed.length ? "error" : "ok");
+  if (seq !== emCheckSeq) return;
+  emRenderAll();
 }
 
-async function runExcelMap() {
-  if (!emPreview) return showFormError($("em-error"), "请先读取预览");
+function emScheduleCheck(sheet) {
+  clearTimeout(emCheckTimer);
+  emCheckTimer = setTimeout(() => emCheckSheet(sheet), 150);
+}
+
+async function emLoadSheet(name, headerRow, dataStart, descRow, typeRow, exportRow, kind) {
+  const index = (emState.infos || []).findIndex((s) => s.name === name);
+  const prev = emState.sheets[name];
+  const useKind = kind || prev?.kind || "table";
+  const isTable = useKind === "table";
+  const args = {
+    path: emState.path,
+    sheet: name,
+    headerRow: headerRow ?? null,
+    dataStart: dataStart ?? null,
+    descRow: isTable ? (descRow ?? null) : 0,
+    typeRow: isTable ? (typeRow ?? null) : 0,
+    exportRow: isTable ? (exportRow ?? null) : 0,
+  };
+  const preview = await invoke("excel_preview", args);
+  emState.sheets[name] = {
+    name,
+    kind: useKind,
+    preview,
+    headerRow: preview.header_row,
+    dataStart: preview.data_start,
+    descRow: preview.desc_row || 0,
+    typeRow: preview.type_row || 0,
+    exportRow: preview.export_row || 0,
+    fields: emFieldsForKind(preview, useKind),
+    node: prev?.node || emPascal(name, index < 0 ? 0 : index),
+    skipped: prev?.skipped || false,
+    imported: prev?.imported || false,
+    importedNode: prev?.importedNode || null,
+    loaded: true,
+    error: null,
+  };
+  return emState.sheets[name];
+}
+
+/** 自动识别：节点类型 + 字段行 + 数据行 + 可选的说明/类型/导出行。 */
+async function emDetectSheet(name) {
+  emSetStatus("正在识别表头…");
+  const d = await invoke("excel_detect_layout", { path: emState.path, sheet: name });
+  const next = await emLoadSheet(
+    name, d.header_row, d.data_start, d.desc_row, d.type_row, d.export_row, d.kind,
+  );
+  emSetStatus("");
+  emScheduleCheck(next);
+  return next;
+}
+
+/** 重新按表头 / 数据行读一次（会重置该表的映射）。 */
+async function emReloadSheet(name, headerRow, dataStart, descRow, typeRow, exportRow, kind) {
+  const sheet = emState?.sheets?.[name];
+  if (!sheet) return;
+  emSetStatus("正在读取工作表…");
+  try {
+    const next = await emLoadSheet(name, headerRow, dataStart, descRow, typeRow, exportRow, kind || sheet.kind);
+    emSetStatus("");
+    emScheduleCheck(next);
+  } catch (e) {
+    sheet.error = String(e);
+    emSetStatus("");
+    emRenderAll();
+  }
+}
+
+function emSetStatus(text) {
+  $("em-status").textContent = text || "";
+}
+
+async function emOpenWorkbook(path) {
+  emState = { path, group: "", infos: [], sheets: {}, active: null };
+  emTab = "source";
+  emSearch = "";
+  $("em-search").value = "";
+  $("em-error").hidden = true;
+  $("em-result").hidden = true;
+  $("em-file-name").textContent = path.split(/[\\/]/).pop() || path;
+  $("em-file-meta").textContent = "正在读取工作表…";
+  emSetStatus("正在读取工作簿…");
+  emRenderAll();
+  try {
+    const infos = await invoke("excel_sheet_info", { path });
+    emState.infos = infos;
+    emState.group = emGroupName(infos[0]?.name || "imported");
+    for (const info of infos) {
+      try {
+        const loaded = await emDetectSheet(info.name);
+        await emCheckSheet(loaded);
+      } catch (e) {
+        emState.sheets[info.name] = {
+          name: info.name, kind: "table", preview: null, headerRow: 1, dataStart: 2, fields: [],
+          descRow: 0, typeRow: 0, exportRow: 0,
+          node: emPascal(info.name, infos.indexOf(info)), skipped: false, imported: false,
+          loaded: false, error: String(e),
+        };
+      }
+      emRenderAll();
+    }
+    emState.active = infos[0]?.name || null;
+    $("em-file-meta").textContent = `${infos.length} 个工作表 · 源文件不会被修改`;
+    emSetStatus(infos.length ? "已读取，检查映射后导入" : "工作簿没有工作表");
+    emRenderAll();
+    if (emState.active) emScheduleCheck(emState.sheets[emState.active]);
+  } catch (e) {
+    emSetStatus("");
+    $("em-file-meta").textContent = "读取失败";
+    showFormError($("em-error"), String(e));
+    emRenderAll();
+  }
+}
+
+function emSwitchSheet(name) {
+  if (!emState?.sheets?.[name]) return;
+  emState.active = name;
+  emRenderAll();
+  const sheet = emSheet();
+  if (sheet?.loaded) emScheduleCheck(sheet);
+}
+
+/** 把状态里的节点/分组回填到设置输入框；正在输入的框不覆盖。 */
+function emSyncSettings(force = false) {
+  const groupEl = $("em-group");
+  const nodeEl = $("em-node");
+  const headerEl = $("em-header");
+  const startEl = $("em-start");
+  const descEl = $("em-desc-row");
+  const typeEl = $("em-type-row");
+  const exportEl = $("em-export-row");
+  const kindEl = $("em-kind");
+  const sheet = emSheet();
+  const has = !!sheet?.loaded;
+  const setIfIdle = (el, value) => {
+    if (force || document.activeElement !== el) el.value = value;
+  };
+  setIfIdle(kindEl, emKindOf(sheet));
+  setIfIdle(groupEl, emState?.group || "");
+  setIfIdle(nodeEl, sheet?.node || "");
+  setIfIdle(headerEl, sheet?.headerRow || 1);
+  setIfIdle(startEl, sheet?.dataStart || 2);
+  setIfIdle(descEl, sheet?.descRow || 0);
+  setIfIdle(typeEl, sheet?.typeRow || 0);
+  setIfIdle(exportEl, sheet?.exportRow || 0);
+  kindEl.disabled = !has;
+  groupEl.disabled = !has;
+  nodeEl.disabled = !has;
+  headerEl.disabled = !has;
+  startEl.disabled = !has;
+  const isTable = !sheet || emKindOf(sheet) === "table";
+  $("em-semantics").hidden = !isTable;
+  descEl.disabled = !has || !isTable;
+  typeEl.disabled = !has || !isTable;
+  exportEl.disabled = !has || !isTable;
+  $("em-redetect").disabled = !has;
+  $("em-detect-rows").disabled = !has;
+  const nodeOk = sheet ? emNodeValid(sheet.node) : true;
+  nodeEl.classList.toggle("em-invalid", !nodeOk);
+  $("em-node-hint").textContent = nodeOk ? "PascalCase，项目内唯一" : "需大写字母开头，只含英文、数字、下划线";
+  $("em-node-hint").classList.toggle("bad", !nodeOk);
+  const startOk = !sheet || sheet.dataStart > sheet.headerRow;
+  $("em-start-hint").textContent = startOk ? "必须大于字段行" : "数据起始行必须大于字段行";
+  $("em-start-hint").classList.toggle("bad", !startOk);
+  $("em-target-preview").innerHTML = sheet
+    ? `目标 <b>${escapeHtml(emState.group || "…")} / ${escapeHtml(sheet.node || "…")}</b>`
+    : "目标 —";
+}
+
+function emRenderRail() {
+  const list = $("em-sheet-list");
+  if (!emState || !emState.infos.length) {
+    list.innerHTML = `<div class="em-empty">${emState ? "没有工作表" : "选择文件后显示工作表"}</div>`;
+    $("em-sheet-count").textContent = "0";
+    $("em-rail-foot").textContent = "选择文件后读取工作表。";
+    return;
+  }
+  $("em-sheet-count").textContent = String(emState.infos.length);
+  list.innerHTML = emState.infos.map((info) => {
+    const s = emState.sheets[info.name];
+    let state = { cls: "off", text: "待配置" };
+    if (!s) state = { cls: "off", text: "待配置" };
+    else if (s.error) state = { cls: "bad", text: "读取失败" };
+    else if (s.skipped) state = { cls: "off", text: "已跳过" };
+    else if (s.imported) state = { cls: "ok", text: "已导入" };
+    else {
+      const { errors, infos } = emIssueCounts(s);
+      if (errors) state = { cls: "bad", text: `${errors} 个问题` };
+      else if (infos) state = { cls: "warn", text: "待确认" };
+      else state = { cls: "ok", text: "已就绪" };
+    }
+    const active = emState.active === info.name ? " active" : "";
+    return `<button class="em-sheet${active}" data-emsheet="${escapeHtml(info.name)}">
+      <span class="em-sheet-name">${escapeHtml(info.name)}</span>
+      <span class="em-state ${state.cls}">${state.text}</span>
+      <span class="em-sheet-meta">${info.columns} 列 · ${emFmt(info.rows)} 行</span>
+    </button>`;
+  }).join("");
+  const ready = emReadySheets().length;
+  $("em-rail-foot").innerHTML = `本轮计划导入 <b>${ready}</b> 个工作表；未配置或已跳过的表不会写入。`;
+}
+
+function emReadySheets() {
+  return (emState?.infos || []).filter((info) => {
+    const s = emState.sheets[info.name];
+    if (!s?.loaded || s.skipped || s.imported) return false;
+    return emIssueCounts(s).errors === 0;
+  });
+}
+
+function emRenderMap() {
+  const sheet = emSheet();
+  const rows = $("em-rows");
+  if (!sheet || !sheet.loaded) {
+    $("em-grid").classList.remove("entry");
+    $("em-map-sub").textContent = "未读取";
+    $("em-map-banner").innerHTML = "";
+    rows.innerHTML = `<div class="em-empty">${sheet?.error ? escapeHtml(sheet.error) : "选择文件后显示列映射"}</div>`;
+    $("em-auto-map").disabled = true;
+    $("em-toggle-all").disabled = true;
+    $("em-skip").disabled = true;
+    return;
+  }
+  const fields = sheet.fields;
+  const kind = emKindOf(sheet);
+  const isTable = kind === "table";
+  const included = fields.filter((f) => f.include).length;
+  $("em-grid").classList.toggle("entry", !isTable);
+  $("em-cols").innerHTML = isTable
+    ? `<span></span><span>源列</span><span></span><span>目标字段</span><span>类型</span><span>导出</span><span>说明</span><span></span>`
+    : `<span></span><span>源列</span><span></span><span>目标列（${emKindLabel(kind)}）</span><span></span>`;
+  $("em-map-sub").textContent = `${included} / ${fields.length} 列已${isTable ? "启用" : "映射"}`;
+  $("em-auto-map").disabled = sheet.skipped || sheet.imported;
+  $("em-toggle-all").disabled = sheet.skipped || sheet.imported;
+  $("em-skip").disabled = sheet.imported;
+  $("em-skip").textContent = sheet.skipped ? "恢复导入" : "跳过此表";
+
+  const { errors, infos } = emIssueCounts(sheet);
+  if (sheet.skipped) {
+    $("em-map-banner").innerHTML =
+      `<div class="em-banner off"><span>此表已跳过，不会参与本轮导入。</span><span class="spacer"></span>` +
+      `<button class="mini-btn" id="em-unskip">恢复导入</button></div>`;
+  } else if (errors) {
+    $("em-map-banner").innerHTML =
+      `<div class="em-banner bad"><span>有 ${errors} 个错误需要先修复，导入按钮已停用。</span></div>`;
+  } else {
+    $("em-map-banner").innerHTML = "";
+  }
+  if (!sheet.skipped && !errors) {
+    const fixed = isTable
+      ? ""
+      : `${emKindLabel(kind)}固定 ${emAllowedTargets(kind).join(" / ")}；未匹配的源列不会导入。`;
+    if (fixed || infos) {
+      const extra = infos ? `<span>${infos} 列未启用，不会写入。</span>` : "";
+      $("em-map-banner").innerHTML =
+        `<div class="em-banner off"><span>${fixed}</span><span class="spacer"></span>${extra}</div>`;
+    }
+  }
+
+  const idIndex = isTable ? fields.findIndex((f) => f.target_name === "id") : -1;
+  const q = emSearch.trim().toLowerCase();
+  const shown = fields.map((f, i) => ({ f, i })).filter(({ f }) => {
+    if (!q) return true;
+    const text = `${emCol(f.source_col)} ${emHeaderOf(sheet, f)} ${f.target_name}`.toLowerCase();
+    return text.includes(q);
+  });
+  const focus = document.activeElement;
+  let restore = null;
+  if (focus?.dataset?.emkey && focus.closest("[data-emrow]")) {
+    restore = {
+      index: Number(focus.closest("[data-emrow]").dataset.emrow),
+      key: focus.dataset.emkey,
+      caret: focus.selectionStart,
+    };
+  }
+  const allowed = emAllowedTargets(kind);
+  rows.innerHTML = shown.map(({ f, i }) => {
+    const head = emHeaderOf(sheet, f);
+    const sample = emSampleOf(sheet, f);
+    const isId = i === idIndex;
+    const flag = f.issue ? " bad" : "";
+    const types = EM_TYPES.includes(f.tbl_type) ? EM_TYPES : [f.tbl_type, ...EM_TYPES];
+    const checkbox = isId
+      ? `<span class="em-lock" title="主键列：目标字段固定为 id，类型固定为 int"><svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="10" width="16" height="10" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg></span>`
+      : `<input class="em-chk" type="checkbox" data-emkey="include" ${f.include ? "checked" : ""} ${sheet.skipped || sheet.imported ? "disabled" : ""} aria-label="启用 ${escapeHtml(head || emCol(f.source_col))}">`;
+    const source = `<div class="em-src">
+        <span class="em-colletter">${emCol(f.source_col)}</span>
+        <span class="em-src-text">
+          <span class="em-src-head${head ? "" : " empty"}">${head ? escapeHtml(head) : "（无表头）"}</span>
+          <span class="em-src-sample">${escapeHtml(sample)}</span>
+        </span>
+      </div>`;
+    const target = isTable
+      ? `<div class="em-targetcell">
+          <input class="input" data-emkey="target" value="${escapeHtml(f.target_name)}" ${isId ? "readonly" : ""} ${sheet.skipped || sheet.imported ? "disabled" : ""} spellcheck="false" aria-label="目标字段名">
+          ${f.issue ? `<div class="em-err">${escapeHtml(f.issue)}</div>` : ""}
+        </div>
+        <select class="combo em-type" data-emkey="type" ${isId || sheet.skipped || sheet.imported ? "disabled" : ""} aria-label="字段类型">
+          ${types.map((t) => `<option${t === f.tbl_type ? " selected" : ""}>${escapeHtml(t)}</option>`).join("")}
+        </select>
+        <select class="combo" data-emkey="export" ${sheet.skipped || sheet.imported ? "disabled" : ""} aria-label="导出范围">
+          ${EM_EXPORTS.map((e) => `<option value="${e.code}"${e.code === f.export ? " selected" : ""}>${e.label}</option>`).join("")}
+        </select>
+        <input class="input em-desc" data-emkey="desc" value="${escapeHtml(f.desc)}" ${sheet.skipped || sheet.imported ? "disabled" : ""} placeholder="字段说明" aria-label="字段说明">`
+      : `<div class="em-targetcell">
+          <select class="combo" data-emkey="target" ${sheet.skipped || sheet.imported ? "disabled" : ""} aria-label="目标列">
+            <option value="">不导入</option>
+            ${allowed.map((t) => `<option value="${t}"${t === f.target_name ? " selected" : ""}>${t}</option>`).join("")}
+          </select>
+          ${f.issue ? `<div class="em-err">${escapeHtml(f.issue)}</div>` : ""}
+        </div>`;
+    return `<div class="em-row${f.include ? "" : " off"}${f.issue ? " has-error" : ""}" data-emrow="${i}">
+      <span>${checkbox}</span>${source}<span class="em-arrow">→</span>${target}
+      <span class="em-flag${flag}">
+        ${f.issue ? `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3 2 21h20L12 3Z"/><path d="M12 9v5M12 17.5v.5"/></svg>` : ""}
+      </span>
+    </div>`;
+  }).join("") || `<div class="em-empty">没有匹配的列</div>`;
+
+  if (restore) {
+    const el = rows.querySelector(`[data-emrow="${restore.index}"] [data-emkey="${restore.key}"]`);
+    if (el) {
+      el.focus();
+      if (restore.caret != null && el.setSelectionRange) {
+        try { el.setSelectionRange(restore.caret, restore.caret); } catch { /* ignore */ }
+      }
+    }
+  }
+}
+
+function emRenderPreview() {
+  const sheet = emSheet();
+  const body = $("em-preview-body");
+  document.querySelectorAll("#excel-map .em-tab").forEach((t) => {
+    t.classList.toggle("active", t.dataset.emtab === emTab);
+  });
+  if (!sheet || !sheet.loaded) {
+    body.innerHTML = `<div class="em-empty">${emState ? "选择工作表并读取后显示预览" : "选择文件后显示预览"}</div>`;
+    $("em-preview-tools").textContent = "";
+    $("em-issue-count").textContent = "0";
+    $("em-issue-count").className = "em-count";
+    return;
+  }
+  const semText = [
+    sheet.descRow ? `说明 ${sheet.descRow}` : "",
+    sheet.typeRow ? `类型 ${sheet.typeRow}` : "",
+    sheet.exportRow ? `导出 ${sheet.exportRow}` : "",
+  ].filter(Boolean).join(" / ");
+  $("em-preview-tools").textContent =
+    `字段行 ${sheet.headerRow} · 数据从第 ${sheet.dataStart} 行开始` + (semText ? ` · ${semText}` : "");
+  const { issues, errors } = emIssueCounts(sheet);
+  $("em-issue-count").textContent = String(issues.length);
+  $("em-issue-count").className = "em-count" + (errors ? " bad" : "");
+
+  if (emTab === "source") {
+    const p = sheet.preview;
+    const cols = p.columns || [];
+    const width = Math.max(cols.length, ...(p.sample_rows || []).map((r) => r.length));
+    const lines = [];
+    for (const row of p.semantic_rows || []) {
+      if (row.row === sheet.headerRow) continue;
+      lines.push({ n: row.row, values: row.values, cls: `sem-row sem-${row.kind}` });
+    }
+    lines.push({ n: sheet.headerRow, values: cols, cls: "hdr-row" });
+    (p.sample_rows || []).forEach((row, i) => {
+      const n = sheet.dataStart + i;
+      lines.push({ n, values: row, cls: i === 0 ? "start-row" : "" });
+    });
+    lines.sort((a, b) => a.n - b.n);
+    let html = `<table class="em-table"><thead><tr><th class="rn">#</th>${Array.from({ length: width }, (_, c) => `<th>${emCol(c + 1)}</th>`).join("")}</tr></thead><tbody>`;
+    for (const line of lines) {
+      html += `<tr class="${line.cls}"><td class="rn">${line.n}</td>`;
+      for (let c = 0; c < width; c += 1) {
+        const v = line.values[c] ?? "";
+        html += `<td>${v === "" ? `<span class="empty-cell">—</span>` : escapeHtml(v)}</td>`;
+      }
+      html += "</tr>";
+    }
+    body.innerHTML = html + "</tbody></table>";
+    return;
+  }
+
+  if (emTab === "result") {
+    const kind = emKindOf(sheet);
+    if (kind !== "table") {
+      const order = emAllowedTargets(kind);
+      const inc = order
+        .map((t) => sheet.fields.find((f) => f.include && f.target_name === t))
+        .filter(Boolean);
+      if (!inc.length) {
+        body.innerHTML = `<div class="em-empty">没有映射任何列</div>`;
+        return;
+      }
+      const p = sheet.preview;
+      let html = `<table class="em-table em-result-table"><tbody>`;
+      html += `<tr class="h-name"><th class="rn">${emKindLabel(kind)}</th>${inc
+        .map((f) => `<th>${escapeHtml(f.target_name)}</th>`)
+        .join("")}</tr>`;
+      (p.sample_rows || []).forEach((row, i) => {
+        html += `<tr><td class="rn">${sheet.dataStart + i}</td>`;
+        for (const f of inc) {
+          let v = row[f.source_col - 1] ?? "";
+          if (f.target_name === "export") v = emExportLabel(emExportCode(v));
+          html += `<td>${escapeHtml(v)}</td>`;
+        }
+        html += "</tr>";
+      });
+      body.innerHTML = html + "</tbody></table>";
+      return;
+    }
+    const inc = emImportFields(sheet);
+    if (!inc.length) {
+      body.innerHTML = `<div class="em-empty">没有启用任何列</div>`;
+      return;
+    }
+    const p = sheet.preview;
+    const heads = [
+      ["h-desc", "说明", inc.map((f) => f.desc)],
+      ["h-export", "export", inc.map((f) => emExportLabel(f.export))],
+      ["h-type", "type", inc.map((f) => f.tbl_type)],
+      ["h-name", "字段", inc.map((f) => f.target_name)],
+    ];
+    let html = `<table class="em-table em-result-table"><tbody>`;
+    for (const [cls, label, vals] of heads) {
+      html += `<tr class="${cls}"><th class="rn">${label}</th>${vals.map((v) => `<th>${escapeHtml(v)}</th>`).join("")}</tr>`;
+    }
+    (p.sample_rows || []).forEach((row, i) => {
+      html += `<tr><td class="rn">${sheet.dataStart + i}</td>${inc.map((f) => `<td>${escapeHtml(row[f.source_col - 1] ?? "")}</td>`).join("")}</tr>`;
+    });
+    body.innerHTML = html + "</tbody></table>";
+    return;
+  }
+
+  if (!issues.length) {
+    body.innerHTML = `<div class="em-empty">没有发现问题，可以导入。</div>`;
+    return;
+  }
+  const icon = (level) => level === "error"
+    ? `<svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 7v6M12 16.5v.5"/></svg>`
+    : level === "warn"
+      ? `<svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3 2 21h20L12 3Z"/><path d="M12 9v5M12 17.5v.5"/></svg>`
+      : `<svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8v.5"/></svg>`;
+  body.innerHTML = `<div class="em-issues">${issues.map((it) => {
+    const loc = it.row != null ? `<div class="loc">映射第 ${it.row + 1} 行</div>` : "";
+    return `<button class="em-issue ${it.level}" ${it.row != null ? `data-emjump="${it.row}"` : ""}>
+      ${icon(it.level)}<span>${escapeHtml(it.text)}${loc}</span>
+      ${it.row != null ? `<span class="jump">定位</span>` : ""}
+    </button>`;
+  }).join("")}</div>`;
+}
+
+function emRenderFooter() {
+  const sheet = emSheet();
+  const ready = emReadySheets().length;
+  $("em-import-all").textContent = `导入全部就绪 (${ready})`;
+  $("em-import-all").disabled = ready === 0;
+  const run = $("em-run");
+  if (!sheet || !sheet.loaded) {
+    $("em-foot-dot").className = "em-dot";
+    $("em-foot-count").textContent = emState ? "未选择工作表" : "未选择文件";
+    $("em-foot-where").textContent = "";
+    $("em-foot-issues").textContent = "";
+    run.disabled = true;
+    return;
+  }
+  const { errors, infos } = emIssueCounts(sheet);
+  const enabled = emIncluded(sheet).length;
+  const info = emSheetInfo(sheet.name);
+  const dataRows = info ? Math.max(0, info.rows - sheet.dataStart + 1) : 0;
+  $("em-foot-dot").className = "em-dot " + (errors ? "bad" : infos ? "warn" : "ok");
+  const kind = emKindOf(sheet);
+  $("em-foot-count").textContent = sheet.skipped
+    ? `${sheet.name} 已跳过`
+    : kind === "table"
+      ? `将导入 ${enabled} 列 × ${emFmt(dataRows)} 行`
+      : `将导入约 ${emFmt(dataRows)} 条${emKindLabel(kind)}`;
+  $("em-foot-where").textContent = sheet.skipped ? "不会写入项目" : `→ ${emState.group || "…"} / ${sheet.node || "…"}`;
+  $("em-foot-issues").textContent = errors
+    ? `· ${errors} 个错误`
+    : infos ? `· ${infos} 条提示` : "";
+  run.disabled = !!sheet.skipped || !!sheet.imported || errors > 0;
+}
+
+function emRenderAll() {
+  emSyncSettings();
+  emRenderRail();
+  emRenderMap();
+  emRenderPreview();
+  emRenderFooter();
+}
+
+function emRenderMapOnly() {
+  emRenderMap();
+}
+
+/* ── 动作 ───────────────────────────────────────────────── */
+async function emChooseFile() {
+  const path = await pickPath("选择 Excel 工作簿", "xlsx");
+  if (path) await emOpenWorkbook(path);
+}
+
+async function emRunCurrent() {
+  const sheet = emSheet();
+  if (!sheet) return;
+  if (emIssueCounts(sheet).errors) {
+    showFormError($("em-error"), "还有未修复的问题，先处理后再导入");
+    return;
+  }
+  await emImportOne(sheet, false);
+}
+
+async function emImportOne(sheet, silent) {
   $("em-error").hidden = true;
   try {
+    const fields = emImportFields(sheet);
     const snap = await invoke("excel_import_mapped", {
-      request: {
-        path: $("em-path").value.trim(),
-        sheet: $("em-sheet").value,
-        header_row: Number($("em-header").value),
-        data_start: Number($("em-start").value),
-        group_name: $("em-group").value.trim(),
-        node_name: $("em-node").value.trim(),
-        fields: emPreview.fields,
-      },
+      request: emRequest(sheet, fields),
     });
     applySnapshot(snap);
+    sheet.imported = true;
+    sheet.importedNode = sheet.node;
     $("em-result").hidden = false;
-    $("em-result").textContent = "导入完成";
-    toast("Excel 映射导入完成", "ok");
+    $("em-result").textContent = `已导入 ${sheet.name} → ${emState.group}/${sheet.node}（${fields.length} 列）`;
+    if (!silent) toast(`已导入 ${emState.group}/${sheet.node}`, "ok");
+    emRenderAll();
+    return null;
   } catch (e) {
-    showFormError($("em-error"), String(e));
+    if (!silent) showFormError($("em-error"), String(e));
+    return `${sheet.name}: ${e}`;
   }
+}
+
+async function emImportAll() {
+  const ready = emReadySheets();
+  if (!ready.length) return;
+  $("em-error").hidden = true;
+  $("em-result").hidden = false;
+  $("em-result").textContent = `正在导入 ${ready.length} 张表…`;
+  const failed = [];
+  for (const info of ready) {
+    const sheet = emState.sheets[info.name];
+    const err = await emImportOne(sheet, true);
+    if (err) failed.push(err);
+  }
+  const ok = ready.length - failed.length;
+  $("em-result").textContent =
+    `导入完成：${ok}/${ready.length}` + (failed.length ? `\n失败：\n${failed.join("\n")}` : "");
+  toast(`已导入 ${ok}/${ready.length} 张表`, failed.length ? "error" : "ok");
+  emRenderAll();
+}
+
+function openExcelMap() {
+  emState = null;
+  emTab = "source";
+  emSearch = "";
+  $("em-search").value = "";
+  $("em-file-name").textContent = "未选择文件";
+  $("em-file-meta").textContent = "源文件不会被修改";
+  $("em-issue-count").textContent = "0";
+  $("em-status").textContent = "选择工作簿后开始";
+  $("em-result").hidden = true;
+  $("em-error").hidden = true;
+  const groups = [...new Set((state.snapshot?.tree || []).filter((r) => r.group).map((r) => r.group))];
+  $("em-group-list").innerHTML = groups
+    .map((g) => `<option value="${escapeHtml(g)}"></option>`)
+    .join("");
+  $("excel-map").hidden = false;
+  emRenderAll();
 }
 
 function initExcelMap() {
-  $("em-browse").addEventListener("click", async () => {
-    const path = await pickPath("选择 Excel 工作簿", "xlsx");
-    if (path) {
-      $("em-path").value = path;
-      loadExcelPreview();
+  $("em-browse").addEventListener("click", emChooseFile);
+  $("em-close").addEventListener("click", () => ($("excel-map").hidden = true));
+  $("em-cancel").addEventListener("click", () => ($("excel-map").hidden = true));
+  $("em-run").addEventListener("click", emRunCurrent);
+  $("em-import-all").addEventListener("click", emImportAll);
+  $("em-skip").addEventListener("click", () => {
+    const sheet = emSheet();
+    if (!sheet) return;
+    sheet.skipped = !sheet.skipped;
+    emRenderAll();
+  });
+  $("em-auto-map").addEventListener("click", () => {
+    const sheet = emSheet();
+    if (!sheet?.preview) return;
+    sheet.fields = emFieldsForKind(sheet.preview, emKindOf(sheet));
+    emScheduleCheck(sheet);
+    emRenderAll();
+  });
+  $("em-toggle-all").addEventListener("click", () => {
+    const sheet = emSheet();
+    if (!sheet) return;
+    const turnOn = sheet.fields.some((f) => !f.include);
+    const isTable = emKindOf(sheet) === "table";
+    sheet.fields.forEach((f) => {
+      if (isTable && f.target_name === "id") f.include = true;
+      else if (isTable) f.include = turnOn;
+      else f.include = turnOn && Boolean(f.target_name);
+    });
+    emScheduleCheck(sheet);
+    emRenderAll();
+  });
+  $("em-search").addEventListener("input", (e) => {
+    emSearch = e.target.value;
+    emRenderMapOnly();
+  });
+  $("em-group").addEventListener("input", (e) => {
+    if (!emState) return;
+    emState.group = e.target.value;
+    emRenderRail();
+    emRenderMap();
+    emRenderFooter();
+  });
+  $("em-node").addEventListener("input", (e) => {
+    const sheet = emSheet();
+    if (!sheet) return;
+    sheet.node = e.target.value;
+    emRenderRail();
+    emRenderMap();
+    emRenderFooter();
+  });
+  const reloadFromInputs = () => {
+    const sheet = emSheet();
+    if (!sheet) return;
+    const hr = Math.max(1, Number($("em-header").value) || 1);
+    const start = Math.max(2, Number($("em-start").value) || 2);
+    const isTable = emKindOf(sheet) === "table";
+    const desc = isTable ? Math.max(0, Number($("em-desc-row").value) || 0) : 0;
+    const type = isTable ? Math.max(0, Number($("em-type-row").value) || 0) : 0;
+    const exp = isTable ? Math.max(0, Number($("em-export-row").value) || 0) : 0;
+    emReloadSheet(sheet.name, hr, start, desc, type, exp, sheet.kind);
+  };
+  $("em-header").addEventListener("change", reloadFromInputs);
+  $("em-start").addEventListener("change", reloadFromInputs);
+  $("em-desc-row").addEventListener("change", reloadFromInputs);
+  $("em-type-row").addEventListener("change", reloadFromInputs);
+  $("em-export-row").addEventListener("change", reloadFromInputs);
+  $("em-redetect").addEventListener("click", async () => {
+    const sheet = emSheet();
+    if (!sheet) return;
+    try {
+      await emDetectSheet(sheet.name);
+      toast(`已识别为${emKindLabel(emSheet()?.kind)}`);
+    } catch (e) {
+      showFormError($("em-error"), String(e));
     }
   });
-  $("em-close").addEventListener("click", () => ($("excel-map").hidden = true));
-  $("em-load").addEventListener("click", loadExcelPreview);
-  $("em-run").addEventListener("click", runExcelMap);
-  $("em-import-all").addEventListener("click", importAllExcelSheets);
-  $("em-sheet").addEventListener("change", loadExcelPreview);
-  $("em-header").addEventListener("change", loadExcelPreview);
-  $("em-start").addEventListener("change", loadExcelPreview);
-  $("em-fields").addEventListener("input", (e) => {
-    const hit = emFieldRow(e.target);
-    if (!hit) return;
-    const key = e.target.dataset.emKey;
-    hit.f[key] = key === "source_col" ? Number(e.target.value) : e.target.value;
-    renderEmFinal();
+  $("em-kind").addEventListener("change", async (e) => {
+    const sheet = emSheet();
+    if (!sheet) return;
+    const kind = e.target.value;
+    if (kind === "table") {
+      try {
+        const sem = await invoke("excel_semantic_rows", {
+          path: emState.path,
+          sheet: sheet.name,
+          headerRow: sheet.headerRow,
+        });
+        await emReloadSheet(
+          sheet.name, sheet.headerRow, sheet.dataStart,
+          sem.desc_row, sem.type_row, sem.export_row, "table",
+        );
+      } catch (err) {
+        showFormError($("em-error"), String(err));
+      }
+    } else {
+      sheet.kind = kind;
+      sheet.descRow = 0;
+      sheet.typeRow = 0;
+      sheet.exportRow = 0;
+      sheet.fields = emEntryFieldsFromPreview(sheet.preview, kind);
+      emScheduleCheck(sheet);
+      emRenderAll();
+    }
   });
-  $("em-fields").addEventListener("change", (e) => {
-    const hit = emFieldRow(e.target);
-    if (!hit) return;
-    const key = e.target.dataset.emKey;
-    hit.f[key] = key === "source_col" ? Number(e.target.value) : e.target.value;
-    renderEmFinal();
+  $("em-detect-rows").addEventListener("click", async () => {
+    const sheet = emSheet();
+    if (!sheet) return;
+    try {
+      const sem = await invoke("excel_semantic_rows", {
+        path: emState.path,
+        sheet: sheet.name,
+        headerRow: sheet.headerRow,
+      });
+      await emReloadSheet(sheet.name, sheet.headerRow, sheet.dataStart,
+        sem.desc_row, sem.type_row, sem.export_row, false);
+      toast("已识别表头辅助行");
+    } catch (e) {
+      showFormError($("em-error"), String(e));
+    }
   });
-  $("em-fields").addEventListener("click", (e) => {
-    const del = e.target.closest("[data-em-remove]");
-    if (!del || !emPreview) return;
-    emPreview.fields.splice(Number(del.dataset.emRemove), 1);
-    renderEmFields();
-    renderEmFinal();
+  $("em-sheet-list").addEventListener("click", (e) => {
+    const btn = e.target.closest("[data-emsheet]");
+    if (btn) emSwitchSheet(btn.dataset.emsheet);
   });
-  $("em-add-field").addEventListener("click", () => {
-    if (!emPreview) return;
-    const n = emPreview.fields.length + 1;
-    emPreview.fields.push({
-      target_name: `field_${n}`,
-      source_col: Math.min(n, emPreview.columns.length || n),
-      tbl_type: "str",
-      export: "前后端",
-      desc: "",
+  $("em-rows").addEventListener("input", (e) => {
+    const row = e.target.closest("[data-emrow]");
+    if (!row) return;
+    const sheet = emSheet();
+    if (!sheet) return;
+    const f = sheet.fields[Number(row.dataset.emrow)];
+    const key = e.target.dataset.emkey;
+    if (!f || !key) return;
+    if (key === "target") f.target_name = e.target.value.trim();
+    else if (key === "desc") f.desc = e.target.value;
+    emScheduleCheck(sheet);
+  });
+  $("em-rows").addEventListener("change", (e) => {
+    const row = e.target.closest("[data-emrow]");
+    if (!row) return;
+    const sheet = emSheet();
+    if (!sheet) return;
+    const f = sheet.fields[Number(row.dataset.emrow)];
+    const key = e.target.dataset.emkey;
+    if (!f || !key) return;
+    if (key === "include") f.include = e.target.checked;
+    else if (key === "type") f.tbl_type = e.target.value;
+    else if (key === "export") f.export = e.target.value;
+    else if (key === "target" && emKindOf(sheet) !== "table") {
+      f.target_name = e.target.value;
+      f.include = Boolean(e.target.value);
+    }
+    emScheduleCheck(sheet);
+    emRenderAll();
+  });
+  document.querySelectorAll("#excel-map .em-tab").forEach((t) => {
+    t.addEventListener("click", () => {
+      emTab = t.dataset.emtab;
+      emRenderPreview();
     });
-    renderEmFields();
-    renderEmFinal();
+  });
+  $("em-preview-body").addEventListener("click", (e) => {
+    const jump = e.target.closest("[data-emjump]");
+    if (!jump) return;
+    const row = Number(jump.dataset.emjump);
+    emSearch = "";
+    $("em-search").value = "";
+    emRenderMapOnly();
+    const el = $("em-rows").querySelector(`[data-emrow="${row}"]`);
+    if (el) {
+      el.scrollIntoView({ block: "center", behavior: "smooth" });
+      el.classList.add("flash");
+      setTimeout(() => el.classList.remove("flash"), 1000);
+    }
+  });
+  $("excel-map").addEventListener("click", (e) => {
+    if (e.target.id === "em-unskip") {
+      const sheet = emSheet();
+      if (sheet) {
+        sheet.skipped = false;
+        emRenderAll();
+      }
+    }
   });
 }
 

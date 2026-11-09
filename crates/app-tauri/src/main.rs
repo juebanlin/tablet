@@ -618,8 +618,47 @@ fn excel_preview(
     path: String,
     sheet: Option<String>,
     header_row: Option<u32>,
+    data_start: Option<u32>,
+    desc_row: Option<u32>,
+    type_row: Option<u32>,
+    export_row: Option<u32>,
 ) -> Result<ExcelPreview, String> {
-    lock(&state)?.excel_preview(path, sheet, header_row)
+    lock(&state)?.excel_preview(path, sheet, header_row, data_start, desc_row, type_row, export_row)
+}
+
+#[tauri::command]
+fn excel_detect_layout(
+    state: tauri::State<'_, AppState>,
+    path: String,
+    sheet: String,
+) -> Result<crate::backend::ExcelDetectedLayout, String> {
+    lock(&state)?.excel_detect_layout(path, sheet)
+}
+
+#[tauri::command]
+fn excel_semantic_rows(
+    state: tauri::State<'_, AppState>,
+    path: String,
+    sheet: String,
+    header_row: u32,
+) -> Result<crate::backend::ExcelSemanticRows, String> {
+    lock(&state)?.excel_semantic_rows(path, sheet, header_row)
+}
+
+#[tauri::command]
+fn excel_sheet_info(
+    state: tauri::State<'_, AppState>,
+    path: String,
+) -> Result<Vec<crate::backend::ExcelSheetInfo>, String> {
+    lock(&state)?.excel_sheet_info(path)
+}
+
+#[tauri::command]
+fn excel_check_mapping(
+    state: tauri::State<'_, AppState>,
+    request: ExcelMapRequest,
+) -> Result<Vec<crate::backend::ExcelFieldIssue>, String> {
+    Ok(lock(&state)?.excel_check_mapping(request))
 }
 
 #[tauri::command]
@@ -1154,6 +1193,10 @@ fn run_gui(workdir_arg: Option<std::path::PathBuf>) -> anyhow::Result<()> {
             excel_sync_plan,
             excel_sync_action,
             excel_preview,
+            excel_detect_layout,
+            excel_semantic_rows,
+            excel_sheet_info,
+            excel_check_mapping,
             excel_import_mapped,
             open_folder,
             open_url,

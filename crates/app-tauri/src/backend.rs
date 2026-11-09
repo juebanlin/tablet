@@ -349,9 +349,57 @@ pub struct ExcelPreview {
     pub sheet: String,
     pub header_row: u32,
     pub data_start: u32,
+    /// 可选的语义行（0 = 未设置）。
+    pub desc_row: u32,
+    pub type_row: u32,
+    pub export_row: u32,
+    /// 语义行的原始值，供源表预览高亮 / 展示。
+    pub semantic_rows: Vec<ExcelSemanticRow>,
     pub columns: Vec<String>,
     pub fields: Vec<MappedFieldUi>,
     pub sample_rows: Vec<Vec<String>>,
+}
+
+#[derive(Serialize)]
+pub struct ExcelSemanticRow {
+    /// desc / type / export
+    pub kind: String,
+    pub row: u32,
+    pub values: Vec<String>,
+}
+
+/// 表头行上方可选的语义行识别结果。
+#[derive(Serialize)]
+pub struct ExcelSemanticRows {
+    pub desc_row: u32,
+    pub type_row: u32,
+    pub export_row: u32,
+}
+
+/// 自动识别出的整张表布局（节点类型 + 各行号）。
+#[derive(Serialize)]
+pub struct ExcelDetectedLayout {
+    pub kind: String,
+    pub header_row: u32,
+    pub data_start: u32,
+    pub desc_row: u32,
+    pub type_row: u32,
+    pub export_row: u32,
+}
+
+/// 映射界面左栏用的 Sheet 概览。
+#[derive(Serialize)]
+pub struct ExcelSheetInfo {
+    pub name: String,
+    pub columns: u32,
+    pub rows: u32,
+}
+
+/// 实时映射校验：`index` 指向请求里 fields 的下标。
+#[derive(Serialize)]
+pub struct ExcelFieldIssue {
+    pub index: usize,
+    pub message: String,
 }
 
 // ── 单元格校验原因（状态栏用）──────────────────────────────
@@ -416,6 +464,16 @@ pub struct ExcelMapRequest {
     pub sheet: String,
     pub header_row: u32,
     pub data_start: u32,
+    /// 目标节点类型：table / constant / enum（缺省 = table）。
+    #[serde(default)]
+    pub node_kind: String,
+    /// 可选的语义行（0 = 不使用）。导入时 core 会按这些行再覆盖一次。
+    #[serde(default)]
+    pub desc_row: u32,
+    #[serde(default)]
+    pub type_row: u32,
+    #[serde(default)]
+    pub export_row: u32,
     pub group_name: String,
     pub node_name: String,
     pub fields: Vec<MappedFieldUi>,
@@ -2151,6 +2209,10 @@ impl Backend {
         path: String,
         sheet: Option<String>,
         header_row: Option<u32>,
+        data_start: Option<u32>,
+        desc_row: Option<u32>,
+        type_row: Option<u32>,
+        export_row: Option<u32>,
     ) -> Result<ExcelPreview, String> {
         let project = self.engine.active().ok_or("没有活跃的 Project")?;
         let file = resolve_in_project(&project.project_root, &path);
@@ -2164,11 +2226,71 @@ impl Backend {
         let hr = header_row.unwrap_or_else(|| {
             tablet_core::excel_mapping::detect_header_row(&file, &sheet).unwrap_or(1)
         });
-        let data_start = hr + 1;
+        // 数据起始行可以手动改；低于表头后一行的值直接拒绝，别让预览静默错位。
+        let data_start = data_start.unwrap_or(hr + 1).max(hr + 1);
         let preview =
-            tablet_core::excel_mapping::read_sheet_preview(&file, &sheet, hr, data_start, 5)
+            tablet_core::excel_mapping::read_sheet_preview(&file, &sheet, hr, data_start, 10)
                 .map_err(|e| e.to_string())?;
-        let fields = tablet_core::excel_mapping::suggest_fields(&preview)
+        let desc_row = desc_row.unwrap_or(0);
+        let type_row = type_row.unwrap_or(0);
+        let export_row = export_row.unwrap_or(0);
+        let mut wanted: Vec<u32> = Vec::new();
+        for r in [desc_row, type_row, export_row] {
+            if r > 0 && !wanted.contains(&r) {
+                wanted.push(r);
+            }
+        }
+        let mut by_row: std::collections::HashMap<u32, Vec<String>> =
+            std::collections::HashMap::new();
+        if !wanted.is_empty() {
+            let rows = tablet_core::excel_mapping::read_rows(&file, &sheet, &wanted)
+                .map_err(|e| e.to_string())?;
+            for (row, values) in wanted.into_iter().zip(rows) {
+                by_row.insert(row, values);
+            }
+        }
+        let cell = |row: u32, col: u32| -> String {
+            by_row
+                .get(&row)
+                .and_then(|r| r.get((col as usize).saturating_sub(1)))
+                .map(|v| v.trim().to_string())
+                .unwrap_or_default()
+        };
+        let mut fields = tablet_core::excel_mapping::suggest_fields(&preview);
+        for f in &mut fields {
+            if desc_row > 0 {
+                let v = cell(desc_row, f.source_col);
+                if !v.is_empty() {
+                    f.desc = v;
+                }
+            }
+            if type_row > 0 {
+                let v = cell(type_row, f.source_col);
+                if !v.is_empty() {
+                    // 原样展示；合不合法交给 field_issues / validate_plan。
+                    f.tbl_type = v;
+                }
+            }
+            if export_row > 0 {
+                let v = cell(export_row, f.source_col);
+                if let Some(e) = tablet_core::excel_mapping::parse_export_value(&v) {
+                    f.export = e;
+                }
+            }
+        }
+        let mut semantic_rows: Vec<ExcelSemanticRow> = Vec::new();
+        for (kind, row) in [("desc", desc_row), ("type", type_row), ("export", export_row)] {
+            if row == 0 {
+                continue;
+            }
+            semantic_rows.push(ExcelSemanticRow {
+                kind: kind.to_string(),
+                row,
+                values: by_row.get(&row).cloned().unwrap_or_default(),
+            });
+        }
+        semantic_rows.sort_by_key(|r| r.row);
+        let fields = fields
             .into_iter()
             .map(|f| MappedFieldUi {
                 target_name: f.target_name,
@@ -2183,10 +2305,100 @@ impl Backend {
             sheet,
             header_row: hr,
             data_start,
+            desc_row,
+            type_row,
+            export_row,
+            semantic_rows,
             columns: preview.columns,
             fields,
             sample_rows: preview.rows,
         })
+    }
+
+    /// 自动识别节点类型（表 / 常量 / 枚举）与字段行、语义行。
+    pub fn excel_detect_layout(
+        &self,
+        path: String,
+        sheet: String,
+    ) -> Result<ExcelDetectedLayout, String> {
+        let project = self.engine.active().ok_or("没有活跃的 Project")?;
+        let file = resolve_in_project(&project.project_root, &path);
+        let d = tablet_core::excel_mapping::detect_layout(&file, &sheet)
+            .map_err(|e| e.to_string())?;
+        Ok(ExcelDetectedLayout {
+            kind: d.kind.as_str().to_string(),
+            header_row: d.header_row,
+            data_start: d.data_start,
+            desc_row: d.desc_row,
+            type_row: d.type_row,
+            export_row: d.export_row,
+        })
+    }
+
+    /// 尝试识别表头行上方的说明 / 类型 / 导出量行。
+    pub fn excel_semantic_rows(
+        &self,
+        path: String,
+        sheet: String,
+        header_row: u32,
+    ) -> Result<ExcelSemanticRows, String> {
+        let project = self.engine.active().ok_or("没有活跃的 Project")?;
+        let file = resolve_in_project(&project.project_root, &path);
+        let (desc_row, type_row, export_row) =
+            tablet_core::excel_mapping::detect_semantic_rows(&file, &sheet, header_row)
+                .map_err(|e| e.to_string())?;
+        Ok(ExcelSemanticRows { desc_row, type_row, export_row })
+    }
+
+    /// 工作簿里每张 sheet 的名字与行/列数（只读一次文件，供左栏概览）。
+    pub fn excel_sheet_info(&self, path: String) -> Result<Vec<ExcelSheetInfo>, String> {
+        let project = self.engine.active().ok_or("没有活跃的 Project")?;
+        let file = resolve_in_project(&project.project_root, &path);
+        tablet_core::excel_mapping::sheet_infos(&file)
+            .map_err(|e| e.to_string())
+            .map(|infos| {
+                infos
+                    .into_iter()
+                    .map(|i| ExcelSheetInfo { name: i.name, columns: i.columns, rows: i.rows })
+                    .collect()
+            })
+    }
+
+    /// 实时校验当前映射（字段名 / 关键字 / 重复 / id 类型等）。
+    ///
+    /// 只校验传进来的 fields（前端只传启用列），返回的 index 就是该数组的下标。
+    /// 真正的导入仍会走 `validate_plan`；这里只是把同一份 core 规则提前展示给界面。
+    pub fn excel_check_mapping(&self, req: ExcelMapRequest) -> Vec<ExcelFieldIssue> {
+        let kind = tablet_core::excel_mapping::MappedNodeKind::parse(&req.node_kind)
+            .unwrap_or(tablet_core::excel_mapping::MappedNodeKind::Table);
+        let fields: Vec<tablet_core::excel_mapping::MappedField> = req
+            .fields
+            .into_iter()
+            .map(|f| tablet_core::excel_mapping::MappedField {
+                target_name: f.target_name,
+                source_col: f.source_col,
+                tbl_type: f.tbl_type,
+                export: tablet_core::model::Export::from_input(&f.export),
+                desc: f.desc,
+            })
+            .collect();
+        if kind != tablet_core::excel_mapping::MappedNodeKind::Table {
+            return tablet_core::excel_mapping::entry_field_issues(kind, &fields)
+                .into_iter()
+                .map(|i| ExcelFieldIssue { index: i.index, message: i.message })
+                .collect();
+        }
+        let mut issues = tablet_core::excel_mapping::field_issues(&fields, 0)
+            .into_iter()
+            .map(|i| ExcelFieldIssue { index: i.index, message: i.message })
+            .collect::<Vec<_>>();
+        if !fields.iter().any(|f| f.target_name.eq_ignore_ascii_case("id")) {
+            issues.push(ExcelFieldIssue {
+                index: 0,
+                message: "缺少 id 列：至少有一列的目标字段要命名为 id".to_string(),
+            });
+        }
+        issues
     }
 
     pub fn excel_import_mapped(&mut self, req: ExcelMapRequest) -> Result<String, String> {
@@ -2202,6 +2414,8 @@ impl Backend {
             ));
         }
         let file = resolve_in_project(&project.project_root, &req.path);
+        let kind = tablet_core::excel_mapping::MappedNodeKind::parse(&req.node_kind)
+            .unwrap_or(tablet_core::excel_mapping::MappedNodeKind::Table);
         let fields = req
             .fields
             .into_iter()
@@ -2212,15 +2426,36 @@ impl Backend {
                 export: tablet_core::model::Export::from_input(&f.export),
                 desc: f.desc,
             })
-            .collect();
+            .collect::<Vec<_>>();
+        if kind != tablet_core::excel_mapping::MappedNodeKind::Table {
+            let plan = tablet_core::excel_mapping::EntryMappingPlan {
+                source: file,
+                sheet: req.sheet,
+                header_row: req.header_row,
+                data_start: req.data_start,
+                group_name: req.group_name,
+                node_name: req.node_name,
+                kind,
+                fields,
+            };
+            tablet_core::excel_mapping::validate_entry_plan(&plan).map_err(|e| e.to_string())?;
+            let outcome = self.engine.import_mapped_entries(&pid, &plan)?;
+            self.engine.revalidate_all_projects();
+            return Ok(format!(
+                "已导入 {}/{}（{}）",
+                outcome.group,
+                plan.node_name,
+                plan.kind.label()
+            ));
+        }
         let plan = tablet_core::excel_mapping::MappingPlan {
             source: file,
             sheet: req.sheet,
             header_row: req.header_row,
             data_start: req.data_start,
-            desc_row: 0,
-            type_row: 0,
-            export_row: 0,
+            desc_row: req.desc_row,
+            type_row: req.type_row,
+            export_row: req.export_row,
             group_name: req.group_name,
             node_name: req.node_name,
             fields,

@@ -349,9 +349,17 @@ enum 的 `id`（唯一 / 必填 / 正整数）、enum 的 `name`（唯一 / 必�
 Project 根右键 →「导入任意 Excel（映射）...」。
 
 - 源文件只读；输出是标准 **Tbl 组**（`config/<group>/<Node>.tbl`），不是 xlsx 组。
-- 每个 Sheet 独立映射：选表头行、数据起始行、id 列、节点名和字段；可「导入当前」或「导入全部」。
-- 可选描述行 / 类型行 / 导出行（0 = 没有）；字段名规范成 snake_case，类型按样本推断，导入前可改。
-- 目前只映射 **Table**；Constant / Enum 仍用 `.tblschema` 模板或手写 `.tbl`。
+- 左侧 Sheet 轨道列出全部工作表与状态；每个 Sheet 独立映射，可「导入当前」或「导入全部就绪」。
+- 节点类型可自动识别、也可手动改：
+  - 标准 4 行表头（说明/导出/类型/字段）→ **表**；
+  - 单行表头恰好 `name/type/value`（可带 `export/desc`）→ **常量**；
+  - 单行表头恰好 `id/name`（可带 `desc`）→ **枚举**。
+- 表：字段行 + 数据起始行 + 可选说明行 / 类型行 / 导出行（0 = 没有）；
+  字段名自动转 snake_case（`HeroName → hero_name`、`URLPath → url_path`、`道具ID → dao_ju_id`），
+  类型按类型行或样本推断，导入前全部可改。
+- 常量 / 枚举：源列映射到固定目标列（常量 `name/type/value/export/desc`，枚举 `id/name/desc`），
+  按表头自动匹配，可手动改。
+- 源表预览 / 导入结果 / 检查三页签；字段名、关键字、重复、缺列逐行实时提示。
 - 4 行表头已经合规的工作簿仍走「导入 Excel Group...」，那是原样复制、保留样式。
 - CLI 没有等价命令：`util xlsx-to-tbl` 需要 `.tblschema` 模板，不是任意列映射。
 

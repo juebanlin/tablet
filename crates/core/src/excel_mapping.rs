@@ -8,7 +8,8 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 
-use crate::model::{Export, FieldDef};
+use crate::model::{ConstEntry, EnumEntry, Export, FieldDef};
+use pinyin::ToPinyin;
 
 /// 源表预览（只读）。
 #[derive(Debug, Clone, PartialEq)]
@@ -53,6 +54,27 @@ pub fn list_sheets(path: &Path) -> Result<Vec<String>> {
     let book = umya_spreadsheet::reader::xlsx::read(path)
         .with_context(|| format!("打开 {}", path.display()))?;
     Ok(book.sheet_collection_no_check().iter().map(|s| s.name().to_string()).collect())
+}
+
+/// 工作簿里每张 sheet 的名字与「已用范围」（用于映射界面左栏的概览）。
+#[derive(Debug, Clone, PartialEq)]
+pub struct SheetInfo {
+    pub name: String,
+    pub columns: u32,
+    pub rows: u32,
+}
+
+pub fn sheet_infos(path: &Path) -> Result<Vec<SheetInfo>> {
+    let book = umya_spreadsheet::reader::xlsx::read(path)
+        .with_context(|| format!("打开 {}", path.display()))?;
+    Ok(book
+        .sheet_collection_no_check()
+        .iter()
+        .map(|s| {
+            let (columns, rows) = s.highest_column_and_row();
+            SheetInfo { name: s.name().to_string(), columns, rows }
+        })
+        .collect())
 }
 
 /// 打开一张 sheet 的预览。`header_row` / `data_start` 都是 1-based。
@@ -100,10 +122,40 @@ pub fn detect_header_row(path: &Path, sheet: &str) -> Result<u32> {
     let ws = book.sheet_by_name_mut(sheet)
         .map_err(|e| anyhow::anyhow!("打开 sheet {} 失败: {}", sheet, e))?;
     let (max_col, max_row) = ws.highest_column_and_row();
+
+    // 标准 4 行表头：desc / export / type / field。前两行（相对字段行）分别是
+    // 类型行与导出行时，下一行就是字段行——直接认它，避免 "cs|cs|s" 这类
+    // 每个值都长得像合法字段名、把导出码行顶成表头。
+    let semantic_kind = |r: u32| -> u8 {
+        let mut ty = 0usize;
+        let mut ex = 0usize;
+        let mut non_empty = 0usize;
+        for c in 1..=max_col {
+            let t = ws.value((c, r));
+            let t = t.trim();
+            if t.is_empty() { continue; }
+            non_empty += 1;
+            if crate::types::TblType::parse(t).is_some() { ty += 1; }
+            if parse_export_value(t).is_some() { ex += 1; }
+        }
+        if non_empty > 0 && ty * 2 >= non_empty { 1 }
+        else if non_empty > 0 && ex * 2 >= non_empty { 2 }
+        else { 0 }
+    };
+    for r in 3..=max_row.min(20) {
+        let a = semantic_kind(r - 1);
+        let b = semantic_kind(r - 2);
+        if semantic_kind(r) == 0 && ((a == 1 && b == 2) || (a == 2 && b == 1)) {
+            return Ok(r);
+        }
+    }
+
     let mut best = (0u32, 0i64);
     for r in 1..=max_row.min(20) {
         let mut score = 0i64;
         let mut non_empty = 0usize;
+        let mut type_hits = 0usize;
+        let mut export_hits = 0usize;
         for c in 1..=max_col {
             let v = ws.value((c, r));
             let t = v.trim();
@@ -116,6 +168,20 @@ pub fn detect_header_row(path: &Path, sheet: &str) -> Result<u32> {
             } else if t.parse::<f64>().is_ok() {
                 score -= 8;
             }
+            if crate::types::TblType::parse(t).is_some() {
+                type_hits += 1;
+            }
+            if parse_export_value(t).is_some() {
+                export_hits += 1;
+            }
+        }
+        // 整行几乎都是类型 / 导出码：这是标准 4 行表头里的语义行，不是字段行。
+        // 不罚分的话 `cs|cs|s|s|c` 会因为每个值都是合法字段名而盖过真正的字段行。
+        if non_empty > 0 && type_hits * 2 >= non_empty {
+            score -= 50;
+        }
+        if non_empty > 0 && export_hits * 2 >= non_empty {
+            score -= 50;
         }
         if non_empty > 0 && score > best.1 { best = (r, score); }
     }
@@ -126,25 +192,50 @@ pub fn detect_header_row(path: &Path, sheet: &str) -> Result<u32> {
 /// 列名规范化：ASCII 字母数字保留下划线，驼峰转 snake_case；中文/符号作为分隔符。
 /// 返回空串表示无法自动规范化，需要用户手填。
 pub fn normalize_field_name(raw: &str) -> String {
+    let chars: Vec<char> = raw.chars().collect();
     let mut out = String::new();
-    let mut prev_lower_or_digit = false;
-    for ch in raw.chars() {
+    let push_sep = |out: &mut String| {
+        if !out.is_empty() && !out.ends_with('_') {
+            out.push('_');
+        }
+    };
+    for (i, &ch) in chars.iter().enumerate() {
         if ch.is_ascii_alphanumeric() {
-            if ch.is_ascii_uppercase() && prev_lower_or_digit && !out.ends_with('_') {
+            let prev = if i > 0 { Some(chars[i - 1]) } else { None };
+            let next = chars.get(i + 1).copied();
+            let prev_lower_or_digit = prev.map_or(false, |p| p.is_ascii_lowercase() || p.is_ascii_digit());
+            let prev_upper = prev.map_or(false, |p| p.is_ascii_uppercase());
+            let prev_other = prev.map_or(false, |p| !p.is_ascii_alphanumeric() && p != '_');
+            let next_lower = next.map_or(false, |n| n.is_ascii_lowercase());
+            // 驼峰 / 连续大写 / 中文后接英文都断开：
+            // heroName → hero_name；AABb → aa_bb；URLPath → url_path；道具ID → dao_ju_id
+            let boundary = !out.is_empty()
+                && !out.ends_with('_')
+                && ch.is_ascii_uppercase()
+                && (prev_lower_or_digit || (prev_upper && next_lower) || prev_other);
+            if boundary {
                 out.push('_');
             }
             out.push(ch.to_ascii_lowercase());
-            prev_lower_or_digit = ch.is_ascii_lowercase() || ch.is_ascii_digit();
+        } else if let Some(py) = ch.to_pinyin() {
+            let plain = py.plain();
+            if plain.is_empty() {
+                push_sep(&mut out);
+            } else {
+                push_sep(&mut out);
+                out.push_str(plain);
+            }
         } else if ch == '_' || ch.is_whitespace() || ch.is_ascii_punctuation() {
-            if !out.is_empty() && !out.ends_with('_') { out.push('_'); }
-            prev_lower_or_digit = false;
+            push_sep(&mut out);
         } else {
-            if !out.is_empty() && !out.ends_with('_') { out.push('_'); }
-            prev_lower_or_digit = false;
+            // 其它 Unicode（emoji 等）当分隔符
+            push_sep(&mut out);
         }
     }
     let mut out = out.trim_matches('_').to_string();
-    if out.is_empty() { return out; }
+    if out.is_empty() {
+        return out;
+    }
     if out.chars().next().map_or(false, |c| c.is_ascii_digit()) {
         out.insert_str(0, "f_");
     }
@@ -242,6 +333,25 @@ pub fn read_row_values(path: &Path, sheet: &str, row: u32) -> Result<Vec<String>
     Ok((1..=max_col).map(|c| ws.value((c, row))).collect())
 }
 
+/// 一次打开读取多行（1-based）；行号 0 / 越界返回空行。
+pub fn read_rows(path: &Path, sheet: &str, rows: &[u32]) -> Result<Vec<Vec<String>>> {
+    let mut book = umya_spreadsheet::reader::xlsx::read(path)
+        .with_context(|| format!("打开 {} 失败", path.display()))?;
+    let ws = book.sheet_by_name_mut(sheet)
+        .map_err(|e| anyhow::anyhow!("打开 sheet {} 失败: {}", sheet, e))?;
+    let (max_col, max_row) = ws.highest_column_and_row();
+    Ok(rows
+        .iter()
+        .map(|&r| {
+            if r == 0 || r > max_row {
+                Vec::new()
+            } else {
+                (1..=max_col).map(|c| ws.value((c, r))).collect()
+            }
+        })
+        .collect())
+}
+
 /// 尝试识别表头行上方的 desc / type / export 行。识别不到返回 0。
 ///
 /// - type / export：在表头行之前找匹配值最多的一行；
@@ -290,6 +400,281 @@ pub fn detect_semantic_rows(path: &Path, sheet: &str, header_row: u32) -> Result
         if has_text { desc_row = r; break; }
     }
     Ok((desc_row, type_row, export_row))
+}
+
+/// 映射导入的目标节点类型。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MappedNodeKind {
+    Table,
+    Constant,
+    Enum,
+}
+
+impl MappedNodeKind {
+    pub fn parse(raw: &str) -> Option<Self> {
+        match raw.trim().to_ascii_lowercase().as_str() {
+            "table" | "表" => Some(Self::Table),
+            "constant" | "常量" => Some(Self::Constant),
+            "enum" | "枚举" => Some(Self::Enum),
+            _ => None,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Table => "table",
+            Self::Constant => "constant",
+            Self::Enum => "enum",
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Table => "表",
+            Self::Constant => "常量",
+            Self::Enum => "枚举",
+        }
+    }
+
+    /// 常量 / 枚举的固定目标列；Table 返回空（字段由用户自由命名）。
+    pub fn allowed_targets(self) -> &'static [&'static str] {
+        match self {
+            Self::Table => &[],
+            Self::Constant => &["name", "type", "value", "export", "desc"],
+            Self::Enum => &["id", "name", "desc"],
+        }
+    }
+
+    pub fn required_targets(self) -> &'static [&'static str] {
+        match self {
+            Self::Table => &["id"],
+            Self::Constant => &["name", "type", "value"],
+            Self::Enum => &["id", "name"],
+        }
+    }
+}
+
+/// 自动识别出的整张表布局：节点类型 + 字段行 + 数据行 + 可选语义行。
+#[derive(Debug, Clone, PartialEq)]
+pub struct DetectedLayout {
+    pub kind: MappedNodeKind,
+    pub header_row: u32,
+    pub data_start: u32,
+    pub desc_row: u32,
+    pub type_row: u32,
+    pub export_row: u32,
+}
+
+pub fn detect_layout(path: &Path, sheet: &str) -> Result<DetectedLayout> {
+    let header_row = detect_header_row(path, sheet)?;
+    let columns = read_row_values(path, sheet, header_row)?;
+    let mut kind = classify_columns(&columns);
+    let mut semantic = (0, 0, 0);
+    if header_row > 1 {
+        semantic = detect_semantic_rows(path, sheet, header_row)?;
+        // 上方有说明 / 类型 / 导出行的就是标准多行表头——即使字段恰好叫
+        // id/name/desc，也按“表”处理（单行枚举表不会在字段行上方放语义行）。
+        if semantic.0 > 0 || semantic.1 > 0 || semantic.2 > 0 {
+            kind = MappedNodeKind::Table;
+        }
+    }
+    let (desc_row, type_row, export_row) = semantic;
+    Ok(DetectedLayout {
+        kind,
+        header_row,
+        data_start: header_row + 1,
+        desc_row,
+        type_row,
+        export_row,
+    })
+}
+
+/// 标准布局判定：
+/// - 常量：单行表头恰好是 name/type/value(/export/desc)；
+/// - 枚举：单行表头恰好是 id/name(/desc)；
+/// - 其余（含标准 4 行表头）按表处理。
+fn classify_columns(columns: &[String]) -> MappedNodeKind {
+    let set: HashSet<String> = columns
+        .iter()
+        .map(|c| normalize_field_name(c))
+        .filter(|c| !c.is_empty())
+        .collect();
+    // 常量：有 name/type/value 就足够；多出来的源列不映射，不因此判成表。
+    if set.contains("name") && set.contains("type") && set.contains("value") {
+        return MappedNodeKind::Constant;
+    }
+    let enum_cols: HashSet<&str> = ["id", "name", "desc"].into_iter().collect();
+    if set.contains("id")
+        && set.contains("name")
+        && set.iter().all(|c| enum_cols.contains(c.as_str()))
+    {
+        return MappedNodeKind::Enum;
+    }
+    MappedNodeKind::Table
+}
+
+/// 常量 / 枚举的列映射计划：每个目标列绑一个源列，数据行 → 条目。
+#[derive(Debug, Clone, PartialEq)]
+pub struct EntryMappingPlan {
+    pub source: PathBuf,
+    pub sheet: String,
+    pub header_row: u32,
+    pub data_start: u32,
+    pub group_name: String,
+    pub node_name: String,
+    pub kind: MappedNodeKind,
+    pub fields: Vec<MappedField>,
+}
+
+pub fn entry_field_issues(kind: MappedNodeKind, fields: &[MappedField]) -> Vec<FieldIssue> {
+    let allowed = kind.allowed_targets();
+    let mut out = Vec::new();
+    let mut seen = HashSet::new();
+    let mut src = HashSet::new();
+    for (i, f) in fields.iter().enumerate() {
+        if !allowed.contains(&f.target_name.as_str()) {
+            out.push(FieldIssue {
+                index: i,
+                message: format!("目标列 {} 不适用于{}", f.target_name, kind.label()),
+            });
+            continue;
+        }
+        if !seen.insert(f.target_name.clone()) {
+            out.push(FieldIssue { index: i, message: format!("目标列重复: {}", f.target_name) });
+        }
+        if f.source_col == 0 {
+            out.push(FieldIssue { index: i, message: format!("目标列 {} 没有选择源列", f.target_name) });
+        } else if !src.insert(f.source_col) {
+            out.push(FieldIssue {
+                index: i,
+                message: format!("源列 {} 被多个目标列使用", f.source_col),
+            });
+        }
+    }
+    for req in kind.required_targets() {
+        if !seen.contains(*req) {
+            out.push(FieldIssue {
+                index: 0,
+                message: format!("缺少目标列 {}：{}必须有这一列", req, kind.label()),
+            });
+        }
+    }
+    out
+}
+
+pub fn validate_entry_plan(plan: &EntryMappingPlan) -> Result<(), String> {
+    if plan.kind == MappedNodeKind::Table {
+        return Err("EntryMappingPlan 只用于常量 / 枚举".to_string());
+    }
+    if plan.sheet.trim().is_empty() {
+        return Err("没有选择 sheet".to_string());
+    }
+    if !crate::validate::is_valid_group_name(&plan.group_name) {
+        return Err(format!("组名不合法: {}", plan.group_name));
+    }
+    if !crate::validate::is_valid_node_name(&plan.node_name) {
+        return Err(format!("节点名不合法: {}", plan.node_name));
+    }
+    if plan.data_start <= plan.header_row {
+        return Err("数据起始行必须在表头行之后".to_string());
+    }
+    if plan.fields.is_empty() {
+        return Err("至少映射一个字段".to_string());
+    }
+    if let Some(issue) = entry_field_issues(plan.kind, &plan.fields).into_iter().next() {
+        return Err(issue.message);
+    }
+    Ok(())
+}
+
+pub enum MappedEntries {
+    Constants(Vec<ConstEntry>),
+    Enums(Vec<EnumEntry>),
+}
+
+/// 常量 / 枚举：从数据起始行往下逐行读成条目。全空的映射单元格跳过。
+pub fn build_entries(plan: &EntryMappingPlan) -> Result<MappedEntries, String> {
+    validate_entry_plan(plan)?;
+    let mut book = umya_spreadsheet::reader::xlsx::read(&plan.source)
+        .map_err(|e| format!("打开 {} 失败: {}", plan.source.display(), e))?;
+    let ws = book.sheet_by_name_mut(&plan.sheet)
+        .map_err(|e| format!("打开 sheet {} 失败: {}", plan.sheet, e))?;
+    let max_row = ws.highest_row();
+    let find = |target: &str| {
+        plan.fields.iter().find(|f| f.target_name == target).map(|f| f.source_col)
+    };
+    let get = |row: u32, target: &str| {
+        find(target)
+            .map(|c| ws.value((c, row)).trim().to_string())
+            .unwrap_or_default()
+    };
+    let mut constants = Vec::new();
+    let mut enums = Vec::new();
+    for r in plan.data_start..=max_row {
+        let any = plan
+            .fields
+            .iter()
+            .any(|f| !ws.value((f.source_col, r)).trim().is_empty());
+        if !any {
+            continue;
+        }
+        match plan.kind {
+            MappedNodeKind::Constant => {
+                let name = get(r, "name");
+                if name.is_empty() {
+                    return Err(format!("第 {} 行：常量名不能为空", r));
+                }
+                let ty = get(r, "type");
+                if ty.is_empty() {
+                    return Err(format!("第 {} 行：类型不能为空", r));
+                }
+                if crate::types::TblType::parse(&ty).is_none() {
+                    return Err(format!("第 {} 行：类型不合法: {:?}", r, ty));
+                }
+                let export_raw = get(r, "export");
+                let export = if export_raw.is_empty() {
+                    Export::ClientServer
+                } else {
+                    parse_export_value(&export_raw)
+                        .ok_or_else(|| format!("第 {} 行：export 值不合法: {:?}", r, export_raw))?
+                };
+                constants.push(ConstEntry {
+                    name,
+                    tbl_type: ty,
+                    value: get(r, "value"),
+                    export,
+                    desc: get(r, "desc"),
+                });
+            }
+            MappedNodeKind::Enum => {
+                let id = get(r, "id");
+                let name = get(r, "name");
+                if id.is_empty() {
+                    return Err(format!("第 {} 行：枚举 id 不能为空", r));
+                }
+                if name.is_empty() {
+                    return Err(format!("第 {} 行：枚举名不能为空", r));
+                }
+                enums.push(EnumEntry { id, name, desc: get(r, "desc") });
+            }
+            MappedNodeKind::Table => unreachable!(),
+        }
+    }
+    match plan.kind {
+        MappedNodeKind::Constant => {
+            if constants.is_empty() {
+                return Err("没有可导入的数据行".to_string());
+            }
+            Ok(MappedEntries::Constants(constants))
+        }
+        MappedNodeKind::Enum => {
+            if enums.is_empty() {
+                return Err("没有可导入的数据行".to_string());
+            }
+            Ok(MappedEntries::Enums(enums))
+        }
+        MappedNodeKind::Table => unreachable!(),
+    }
 }
 
 /// 宽松解析 Excel 里的 export 值（短码或中文展示值）。
@@ -380,6 +765,43 @@ pub fn build_table_parts(plan: &MappingPlan) -> Result<(Vec<FieldDef>, Vec<Vec<S
     Ok((fields, records))
 }
 
+/// 单个字段的校验问题；`index` 指向传入 `fields` 切片里的下标。
+#[derive(Debug, Clone, PartialEq)]
+pub struct FieldIssue {
+    pub index: usize,
+    pub message: String,
+}
+
+/// 逐字段校验：字段名 / 关键字 / 重复 / 类型 / 源列 / id 类型。
+///
+/// 映射界面用它做输入时的实时提示；`validate_plan` 也走同一份规则，
+/// 避免 UI 与真正导入时判得不一样。
+pub fn field_issues(fields: &[MappedField], type_row: u32) -> Vec<FieldIssue> {
+    let mut out = Vec::new();
+    let mut names = HashSet::new();
+    for (i, f) in fields.iter().enumerate() {
+        if let Some((_, msg)) = crate::validate::validate_field_name(&f.target_name) {
+            out.push(FieldIssue { index: i, message: format!("字段 {}: {}", f.target_name, msg) });
+        }
+        if !names.insert(f.target_name.to_lowercase()) {
+            out.push(FieldIssue { index: i, message: format!("字段名重复: {}", f.target_name) });
+        }
+        if type_row == 0 && crate::types::TblType::parse(&f.tbl_type).is_none() {
+            out.push(FieldIssue {
+                index: i,
+                message: format!("字段 {} 的类型不合法: {}", f.target_name, f.tbl_type),
+            });
+        }
+        if f.source_col == 0 {
+            out.push(FieldIssue { index: i, message: format!("字段 {} 没有选择源列", f.target_name) });
+        }
+        if f.target_name == "id" && type_row == 0 && f.tbl_type != "int" {
+            out.push(FieldIssue { index: i, message: "id 的类型必须是 int".to_string() });
+        }
+    }
+    out
+}
+
 pub fn validate_plan(plan: &MappingPlan) -> Result<(), String> {
     if plan.sheet.trim().is_empty() {
         return Err("没有选择 sheet".to_string());
@@ -402,20 +824,8 @@ pub fn validate_plan(plan: &MappingPlan) -> Result<(), String> {
     if plan.type_row == 0 && plan.fields[0].tbl_type != "int" {
         return Err("id 的类型必须是 int".to_string());
     }
-    let mut names = HashSet::new();
-    for f in &plan.fields {
-        if let Some((_, msg)) = crate::validate::validate_field_name(&f.target_name) {
-            return Err(format!("字段 {}: {}", f.target_name, msg));
-        }
-        if !names.insert(f.target_name.to_lowercase()) {
-            return Err(format!("字段名重复: {}", f.target_name));
-        }
-        if plan.type_row == 0 && crate::types::TblType::parse(&f.tbl_type).is_none() {
-            return Err(format!("字段 {} 的类型不合法: {}", f.target_name, f.tbl_type));
-        }
-        if f.source_col == 0 {
-            return Err(format!("字段 {} 没有选择源列", f.target_name));
-        }
+    if let Some(issue) = field_issues(&plan.fields, plan.type_row).into_iter().next() {
+        return Err(issue.message);
     }
     Ok(())
 }
@@ -449,7 +859,13 @@ mod tests {
         assert_eq!(normalize_field_name("Hero Name"), "hero_name");
         assert_eq!(normalize_field_name("heroName"), "hero_name");
         assert_eq!(normalize_field_name("HP"), "hp");
-        assert_eq!(normalize_field_name("名称"), "");
+        assert_eq!(normalize_field_name("AABb"), "aa_bb");
+        assert_eq!(normalize_field_name("URLPath"), "url_path");
+        assert_eq!(normalize_field_name("IDCard"), "id_card");
+        assert_eq!(normalize_field_name("attack_power"), "attack_power");
+        assert_eq!(normalize_field_name("名称"), "ming_cheng");
+        assert_eq!(normalize_field_name("攻击力"), "gong_ji_li");
+        assert_eq!(normalize_field_name("道具ID"), "dao_ju_id");
         assert_eq!(normalize_node_name("hero base"), "HeroBase");
         assert_eq!(infer_type(&["1".into(), "2".into()]), "int");
         assert_eq!(infer_type(&["1.5".into()]), "float");
@@ -536,6 +952,158 @@ mod tests {
 
         let _ = std::fs::remove_dir_all(&dir);
     }
+    fn tmp_book(label: &str, sheet: &str, rows: &[&[&str]]) -> (std::path::PathBuf, std::path::PathBuf) {
+        let dir = std::env::temp_dir().join(format!(
+            "tablet_{}_{}_{}",
+            label,
+            std::process::id(),
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("book.xlsx");
+        let mut wb = rust_xlsxwriter::Workbook::new();
+        let ws = wb.add_worksheet();
+        ws.set_name(sheet).unwrap();
+        for (r, row) in rows.iter().enumerate() {
+            for (c, v) in row.iter().enumerate() {
+                ws.write_string(r as u32, c as u16, *v).unwrap();
+            }
+        }
+        std::fs::write(&path, wb.save_to_buffer().unwrap()).unwrap();
+        (dir, path)
+    }
+
+    #[test]
+    fn detects_standard_four_row_table_layout() {
+        let (dir, path) = tmp_book("layout4", "HeroBase", &[
+            &["英雄ID", "名字", "血量"],
+            &["cs", "cs", "s"],
+            &["int", "str", "long"],
+            &["ID", "Name", "Hp"],
+            &["1001", "亚瑟", "1200"],
+        ]);
+        let d = detect_layout(&path, "HeroBase").unwrap();
+        assert_eq!(d.kind, MappedNodeKind::Table);
+        assert_eq!((d.header_row, d.data_start), (4, 5));
+        assert_eq!((d.desc_row, d.type_row, d.export_row), (1, 3, 2));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn detects_constant_and_enum_layouts() {
+        let (dir_c, path_c) = tmp_book("layout_const", "GameConst", &[
+            &["name", "type", "value", "export", "desc"],
+            &["max_level", "int", "100", "cs", "等级上限"],
+        ]);
+        let dc = detect_layout(&path_c, "GameConst").unwrap();
+        assert_eq!(dc.kind, MappedNodeKind::Constant);
+        assert_eq!((dc.header_row, dc.data_start), (1, 2));
+        assert_eq!((dc.desc_row, dc.type_row, dc.export_row), (0, 0, 0));
+        let _ = std::fs::remove_dir_all(&dir_c);
+
+        let (dir_e, path_e) = tmp_book("layout_enum", "HeroType", &[
+            &["id", "name", "desc"],
+            &["1", "WARRIOR", "战士"],
+        ]);
+        let de = detect_layout(&path_e, "HeroType").unwrap();
+        assert_eq!(de.kind, MappedNodeKind::Enum);
+        assert_eq!((de.header_row, de.data_start), (1, 2));
+        let _ = std::fs::remove_dir_all(&dir_e);
+    }
+
+    #[test]
+    fn builds_constant_and_enum_entries() {
+        let (dir_c, path_c) = tmp_book("build_const", "GameConst", &[
+            &["name", "type", "value", "export", "desc"],
+            &["max_level", "int", "100", "cs", "等级上限"],
+            &["rate", "float", "1.5", "s", "倍率"],
+        ]);
+        let cf = |name: &str, col: u32| MappedField {
+            target_name: name.into(), source_col: col, tbl_type: "str".into(),
+            export: Export::ClientServer, desc: String::new(),
+        };
+        let plan = EntryMappingPlan {
+            source: path_c.clone(), sheet: "GameConst".into(), header_row: 1, data_start: 2,
+            group_name: "global".into(), node_name: "GameConst".into(),
+            kind: MappedNodeKind::Constant,
+            fields: vec![cf("name", 1), cf("type", 2), cf("value", 3), cf("export", 4), cf("desc", 5)],
+        };
+        match build_entries(&plan).unwrap() {
+            MappedEntries::Constants(items) => {
+                assert_eq!(items.len(), 2);
+                assert_eq!(items[0].name, "max_level");
+                assert_eq!(items[0].tbl_type, "int");
+                assert_eq!(items[1].export, Export::ServerOnly);
+                assert_eq!(items[1].desc, "倍率");
+            }
+            _ => panic!("应为常量"),
+        }
+        let _ = std::fs::remove_dir_all(&dir_c);
+
+        let (dir_e, path_e) = tmp_book("build_enum", "HeroType", &[
+            &["id", "name", "desc"],
+            &["1", "WARRIOR", "战士"],
+            &["2", "MAGE", "法师"],
+        ]);
+        let ef = |name: &str, col: u32| MappedField {
+            target_name: name.into(), source_col: col, tbl_type: "str".into(),
+            export: Export::ClientServer, desc: String::new(),
+        };
+        let plan = EntryMappingPlan {
+            source: path_e.clone(), sheet: "HeroType".into(), header_row: 1, data_start: 2,
+            group_name: "hero".into(), node_name: "HeroType".into(),
+            kind: MappedNodeKind::Enum,
+            fields: vec![ef("id", 1), ef("name", 2), ef("desc", 3)],
+        };
+        match build_entries(&plan).unwrap() {
+            MappedEntries::Enums(items) => {
+                assert_eq!(items.len(), 2);
+                assert_eq!(items[1].name, "MAGE");
+                assert_eq!(items[1].desc, "法师");
+            }
+            _ => panic!("应为枚举"),
+        }
+        let _ = std::fs::remove_dir_all(&dir_e);
+    }
+
+    #[test]
+    fn sheet_infos_reads_used_range() {
+        let dir = std::env::temp_dir().join(format!(
+            "tablet_sheet_infos_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
+        ));
+        let path = write_book(&dir);
+        let infos = sheet_infos(&path).unwrap();
+        assert_eq!(infos.len(), 1);
+        assert_eq!(infos[0].name, "HeroBase");
+        assert_eq!((infos[0].columns, infos[0].rows), (3, 3));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn field_issues_reports_each_rule_with_index() {
+        let f = |name: &str, ty: &str, col: u32| MappedField {
+            target_name: name.to_string(),
+            source_col: col,
+            tbl_type: ty.to_string(),
+            export: Export::ClientServer,
+            desc: String::new(),
+        };
+        let fields = vec![
+            f("id", "str", 1),     // id 必须是 int
+            f("type", "int", 2),   // Java/Go/Lua 关键字
+            f("name", "str", 3),
+            f("name", "str", 4),   // 重复
+            f("bad-name", "str", 0), // 非法名 + 缺源列
+        ];
+        let issues = field_issues(&fields, 0);
+        assert!(issues.iter().any(|i| i.index == 0 && i.message.contains("id 的类型必须是 int")));
+        assert!(issues.iter().any(|i| i.index == 1 && i.message.contains("关键字")));
+        assert!(issues.iter().any(|i| i.index == 3 && i.message.contains("字段名重复")));
+        assert!(issues.iter().any(|i| i.index == 4 && i.message.contains("不是合法字段名")));
+        assert!(issues.iter().any(|i| i.index == 4 && i.message.contains("没有选择源列")));
+    }
 }
 
 #[cfg(test)]
@@ -612,6 +1180,7 @@ mod semantic_row_tests {
         assert_eq!(desc, 0);
         let _ = std::fs::remove_dir_all(&dir);
     }
+
 }
 
 #[cfg(test)]
