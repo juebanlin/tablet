@@ -37,6 +37,8 @@ tests/*/go.sum
 
 # Claude
 .claude/
+.agents/
+.codex/
 
 # Tauri Univer 编辑器（Vite 产物；开发前 cd crates/app-tauri/univer-editor && npm ci && npm run build）
 crates/app-tauri/univer-editor/node_modules/
