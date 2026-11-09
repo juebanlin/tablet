@@ -57,7 +57,7 @@ function fastCommitCell(row, col, value) {
     invoke("commit_cell_fast", { row, col, value }),
   );
   opChain = op.catch(() => {});
-  op.then((res) => applyEditResult(res)).catch((e) => {
+  op.then((res) => applyEditResult(res, row, col)).catch((e) => {
     addLocalLog(2, String(e));
     toast(String(e), "error");
     // 后端拒绝时本地单元格已被乐观改掉，拉一次完整快照恢复。
@@ -67,12 +67,14 @@ function fastCommitCell(row, col, value) {
 }
 
 /** 用轻量编辑结果更新 chrome；不碰 grid.rows（本地已经改过）。 */
-function applyEditResult(res) {
+function applyEditResult(res, row, col) {
   const s = state.snapshot;
   if (!s || !res) return;
   s.status = res.status;
   s.tree = res.tree;
   s.issues = res.issues;
+  // 引用格：后端已按新值算好展示名，就地刷新；否则要重勾「显示引用名称」才更新。
+  if (res.display != null && grid) grid.setDisplayCellText(row, col, res.display);
   const st = res.status;
   $("dirty-dot").hidden = !st.dirty;
   $("btn-save").disabled = !st.dirty;

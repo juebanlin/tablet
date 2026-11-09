@@ -84,7 +84,12 @@ impl Project {
     /// 单纯刷新投影缓存，**不碰任何"脏"状态**——脏是算出来的（见
     /// [`Project::schema_changed`]），没有可以写错的标。
     pub fn resync_schema(&mut self) {
+        let previous_sections = std::mem::take(&mut self.schema.sections);
         let mut s = crate::schema_projection::schema_from_project(&self.groups, false);
+        // 组是按目录名排序加载的，manifest 的段序却是创建 / 上次保存时的顺序。
+        // 不沿用旧段序的话，加载后第一次保存就会把整份 manifest 重排一遍——
+        // 内容语义没变，git 却多出一堆挪动。
+        s.sections = preserve_section_order(s.sections, &previous_sections);
         s.meta = self.schema.meta.clone();
         s.separators = self.schema.separators.clone();
         self.schema = s;
@@ -154,6 +159,25 @@ impl Project {
         self.config.export = self.original_export.clone();
         self.config.validate = self.original_validate.clone();
     }
+}
+
+/// 按上一次的段序（加载时即 manifest 顺序）排列新投影；新出现的节点保持投影
+/// 里的相对顺序追加到末尾。这样「只改数据」不会把 manifest 段落搬来搬去。
+fn preserve_section_order(
+    mut sections: Vec<crate::schema_model::SchemaSection>,
+    previous: &[crate::schema_model::SchemaSection],
+) -> Vec<crate::schema_model::SchemaSection> {
+    use std::collections::HashMap;
+    let mut rank: HashMap<(&str, &str), usize> = HashMap::new();
+    for (i, sec) in previous.iter().enumerate() {
+        rank.entry((sec.group.as_str(), sec.name.as_str())).or_insert(i);
+    }
+    let tail = previous.len();
+    // 稳定排序：没匹配到旧段序的节点（新增）彼此保持原顺序。
+    sections.sort_by_key(|sec| {
+        rank.get(&(sec.group.as_str(), sec.name.as_str())).copied().unwrap_or(tail)
+    });
+    sections
 }
 
 /// `tablet.toml` 反序列化的顶层结构（全局配置）。
@@ -1089,5 +1113,35 @@ mod export_parse_tests {
         // 垃圾值：严格拒绝；宽松兜底成双端（UI 输入框本来就有下拉）
         assert_eq!(Export::parse_code("xyz"), None);
         assert_eq!(Export::from_input("xyz"), Export::ClientServer);
+    }
+}
+
+#[cfg(test)]
+mod section_order_tests {
+    use super::*;
+    use crate::schema_model::SchemaSection;
+
+    fn sec(group: &str, name: &str) -> SchemaSection {
+        SchemaSection {
+            group: group.to_string(),
+            name: name.to_string(),
+            mode: Default::default(),
+            storage: GroupStorage::Tbl,
+            fields: Vec::new(),
+            preset: Vec::new(),
+            display: None,
+            rules: Vec::new(),
+        }
+    }
+
+    /// 加载后组按目录名排序，manifest 的段序却是上次保存的顺序；
+    /// 重推投影时必须沿用旧段序，否则只改数据也会把整份 manifest 重排。
+    #[test]
+    fn reorder_keeps_previous_section_order_and_appends_new() {
+        let previous = vec![sec("hero", "HeroBase"), sec("hero", "HeroType")];
+        let projected = vec![sec("hero", "HeroType"), sec("item", "Item"), sec("hero", "HeroBase")];
+        let out = preserve_section_order(projected, &previous);
+        let names: Vec<&str> = out.iter().map(|s| s.name.as_str()).collect();
+        assert_eq!(names, ["HeroBase", "HeroType", "Item"]);
     }
 }

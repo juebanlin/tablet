@@ -71,8 +71,10 @@ fn commit_cell_fast(
 ) -> Result<EditResult, String> {
     let mut b = lock(&state)?;
     b.ensure_unlocked()?;
-    b.commit_cell(row, col, value);
-    Ok(b.edit_result())
+    let display = b.commit_cell(row, col, value);
+    let mut result = b.edit_result();
+    result.display = display;
+    Ok(result)
 }
 
 #[tauri::command]

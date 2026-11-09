@@ -126,6 +126,9 @@ pub struct EditResult {
     pub tree: Vec<TreeRow>,
     pub issues: Vec<IssueRow>,
     pub errors: Vec<[usize; 2]>,
+    /// 刚编辑那一格的展示值（开启「显示引用名称」时有意义；`null` = 不用更新）。
+    /// 轻量提交不回整份 Snapshot，前端拿它就地刷新引用名，避免要重勾开关才看到新名字。
+    pub display: Option<String>,
 }
 
 // ── 快照结构（前端直接消费）────────────────────────────────
@@ -816,6 +819,7 @@ impl Backend {
             tree: self.tree(),
             issues: self.issues(),
             errors,
+            display: None,
         }
     }
 
@@ -1457,8 +1461,9 @@ impl Backend {
         }
     }
 
-    pub fn commit_cell(&mut self, row: usize, col: usize, value: String) {
-        let Some((group, name, kind)) = self.selected_node() else { return };
+    /// 提交一个格子；返回该格的最新展示值（开启「显示引用名称」时用于就地刷新）。
+    pub fn commit_cell(&mut self, row: usize, col: usize, value: String) -> Option<String> {
+        let Some((group, name, kind)) = self.selected_node() else { return None };
         let (group, name) = (group.to_string(), name.to_string());
         match kind {
             SelKind::Table => self.engine.commit_table_cell(&group, &name, row, col, value),
@@ -1467,6 +1472,41 @@ impl Backend {
             _ => {}
         }
         self.revalidate_live(&group, &name);
+        self.cell_display_value(&group, &name, kind, row, col)
+    }
+
+    /// 单格的展示文本（引用列 = 目标表的展示列）；未开启「显示引用名称」时为 None。
+    fn cell_display_value(
+        &self,
+        group: &str,
+        name: &str,
+        kind: SelKind,
+        row: usize,
+        col: usize,
+    ) -> Option<String> {
+        if !self.show_ref_name {
+            return None;
+        }
+        let mut cache = std::collections::HashMap::new();
+        match kind {
+            SelKind::Table => {
+                let table = self.engine.find_table(group, name)?;
+                let ty = table.schema.fields.get(col)?.tbl_type.clone();
+                let raw = table.records.get(row).and_then(|r| r.get(col)).cloned().unwrap_or_default();
+                Some(self.display_ref_value(&ty, &raw, &mut cache))
+            }
+            SelKind::Constant => {
+                // Constant 只有 value 列（索引 2）可能带类型引用。
+                if col != 2 {
+                    return None;
+                }
+                let constant = self.engine.find_constant(group, name)?;
+                let entry = constant.entries.get(row)?;
+                Some(self.display_ref_value(&entry.tbl_type, &entry.value, &mut cache))
+            }
+            // Enum 没有引用列。
+            _ => None,
+        }
     }
 
     pub fn commit_header(&mut self, header_row: usize, col: usize, value: String) {

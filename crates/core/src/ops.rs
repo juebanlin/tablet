@@ -474,6 +474,20 @@ fn rename_tbl_file(
     None
 }
 
+/// 文本比较前先把「只是编码细节不同」的部分抹平：换行统一成 `\n`、去掉 BOM。
+///
+/// Git（`core.autocrlf`）、编辑器、同步盘都可能把同一个文件在 CRLF / LF 间来回转。
+/// 这种差异不代表内容变了；按原字节比较会误判，进而把没变的 manifest 重写一遍，
+/// 只留下新的 mtime（git diff 看不到，同步盘 / 备份却会动）。
+fn normalize_for_compare(s: &str) -> std::borrow::Cow<'_, str> {
+    let s = s.strip_prefix('\u{feff}').unwrap_or(s);
+    if s.contains('\r') {
+        std::borrow::Cow::Owned(s.replace("\r\n", "\n").replace('\r', "\n"))
+    } else {
+        std::borrow::Cow::Borrowed(s)
+    }
+}
+
 /// 保存单个 Project 的所有 dirty / deleted 节点；返回 (保存数, 删除数, 警告)。
 /// 抽出来给 save_all（active 一份）和 save_all_projects（遍历）共用。
 ///
@@ -585,11 +599,17 @@ fn save_project_files(project: &mut Project) -> (usize, usize, Vec<String>, bool
     // 它也为真，但 manifest 只记节点索引、不记字段行——写出来的是一字不差的同一份字节，
     // 唯一的变化是文件 mtime（git 看不出，编辑器 / 同步盘 / 备份却会被惊动）。
     // 结构真变了的那些（加列 / 改名 / 规则 / display）文本自己会不同，第三条判据接得住。
+    // 另外按**规范换行**比较（见 `normalize_for_compare`）：Git autocrlf 检出的 CRLF
+    // 文件与内存里的 LF 文本内容等价，不该因此重写。
     project.resync_schema();
     let schema_txt = crate::manifest::serialize_tblmanifest(&project.schema);
     let schema_path = project.project_root.join(crate::project::PROJECT_MANIFEST_FILE);
     let schema_on_disk = std::fs::read_to_string(&schema_path).ok();
-    let schema_needs_write = schema_on_disk.as_deref() != Some(schema_txt.as_str());
+    let schema_needs_write = schema_on_disk
+        .as_deref()
+        .map(normalize_for_compare)
+        .as_deref()
+        != Some(schema_txt.as_str());
     // **真正的写放在组循环之后**：schema 是 groups 的投影，如果某个组没写进去
     // （xlsx 被 Excel 占用 / 外部改过），先把 schema 落盘就会造出「schema 里有这个节点、
     // 盘上却没有它的数据」——项目当场打不开。要么一起成功，要么一起不写。
@@ -5117,6 +5137,23 @@ package = \"com.user.kept\"
         assert_eq!(count, 1, "只该写 T.tbl；manifest 内容没变就不该重写");
         assert_eq!(std::fs::read_to_string(&manifest).unwrap(), before, "manifest 内容应原样");
         assert!(!engine.project_mut().is_dirty(), "保存后不该还有未落盘改动");
+    }
+
+    /// Git autocrlf 检出的 manifest 是 CRLF；只改数据时不该因为行尾差异重写它。
+    #[test]
+    fn crlf_manifest_is_not_rewritten_when_content_is_equivalent() {
+        let (dir, mut engine) = engine_with_saved_node("save_crlf", "g", "T");
+        let manifest = dir.join("projects").join("p1")
+            .join(crate::project::PROJECT_MANIFEST_FILE);
+        let lf = std::fs::read_to_string(&manifest).unwrap();
+        let crlf = lf.replace('\n', "\r\n");
+        std::fs::write(&manifest, &crlf).unwrap();
+
+        engine.set_table_cell("g", "T", 0, 0, "2");
+        let (count, _, warnings, failed) = save_project_files(engine.project_mut());
+        assert!(!failed, "{warnings:?}");
+        assert_eq!(count, 1, "只该写 T.tbl；manifest 内容没变就不该重写");
+        assert_eq!(std::fs::read_to_string(&manifest).unwrap(), crlf, "manifest 行尾不该被改写");
     }
 
     /// 对照：manifest 真会变时仍然要写（`# @display` 只存在 manifest 里）。

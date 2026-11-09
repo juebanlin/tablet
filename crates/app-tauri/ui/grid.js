@@ -234,6 +234,19 @@ class SheetGrid {
     return true;
   }
 
+  /** 局部刷新展示值（引用列显示名字）；只改 displayRows，不动存盘原值。 */
+  setDisplayCellText(r, c, text) {
+    if (!this.node) return false;
+    const rows = this.node.displayRows || (this.node.displayRows = []);
+    while (rows.length <= r) rows.push([]);
+    const row = rows[r] || (rows[r] = []);
+    if (row[c] === text) return false;
+    row[c] = text;
+    const td = this.tds[r]?.[c];
+    if (td) this.paintCell(td, r, c);
+    return true;
+  }
+
   setCellValue(r, c, value) {
     if (this.setCellText(r, c, value)) {
       const td = this.tds[r]?.[c];

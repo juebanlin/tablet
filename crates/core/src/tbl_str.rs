@@ -49,6 +49,29 @@ pub fn encode(value: &str, tbl_type: &str) -> String {
     }
 }
 
+/// v3（`字段名:值` 行）的单元格编码：**竖线不转义**。
+///
+/// v3 一行的结构是 `字段名:值`，值里没有「列分隔符」这回事；`|` 只是普通字符。
+/// 仍按 v2 的规则转义它，会让加载后原样保存（哪怕只改了别的格子）凭空多出 `\|`，
+/// git 上表现为某个没碰过的列变了。`\` 与换行 / 制表符仍必须转义，否则值会破坏
+/// 行结构或与转义序列混淆。
+pub fn encode_v3(value: &str) -> String {
+    if !value.contains(SPECIAL_CHARS) {
+        return value.to_string();
+    }
+    let mut out = String::with_capacity(value.len() + 8);
+    for ch in value.chars() {
+        match ch {
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            _ => out.push(ch),
+        }
+    }
+    out
+}
+
 /// .tbl 存储表示 → 内存字符串。
 ///
 /// 参数含 Txt → 反向解析转义序列
@@ -175,6 +198,16 @@ mod tests {
             assert_eq!(encode(s, "List<str>"), s);
             assert_eq!(decode(s, "List<str>"), s);
         }
+    }
+
+    /// v3 的 `字段名:值` 行没有列分隔符概念，竖线必须原样保留；
+    /// 反斜杠 / 换行仍转义，否则值会破坏行结构或与转义序列混淆。
+    #[test]
+    fn v3_encoding_keeps_pipe_but_escapes_others() {
+        assert_eq!(encode_v3("property:1001#100|1002#10"), "property:1001#100|1002#10");
+        assert_eq!(encode_v3("a\\b|c\nd"), "a\\\\b|c\\nd");
+        let raw = "path\\to|file\nline2\tend";
+        assert_eq!(decode(&encode_v3(raw), "txt"), raw);
     }
 
     #[test]

@@ -1,7 +1,7 @@
 use std::path::Path;
 use anyhow::{Result, bail};
 use crate::model::*;
-use crate::tbl_str::{encode, decode, split_row};
+use crate::tbl_str::{encode, encode_v3, decode, split_row};
 
 const INDENT: &str = "  ";
 
@@ -192,8 +192,8 @@ impl TableCodec for V3Codec {
                 let val = value.trim();
                 if let Some(ref mut f) = cur_field {
                     match key {
-                        // 写盘走 `encode(desc, "txt")`（`serialize_table`），这里必须 decode 回去。
-                        // 漏了的话 `|` 会被写成 `\|` 并把反斜杠留在 desc 里（V2 那条路是解码的）。
+                        // 写盘走 `encode_v3`（反斜杠 / 换行转义，竖线原样），这里 decode 回去。
+                        // 漏了的话转义序列会原样留在 desc 里（V2 那条路也是解码的）。
                         "desc" => f.desc = decode(val, "txt"),
                         "export" => {
                             let Some(e) = Export::parse_code(val) else {
@@ -275,7 +275,8 @@ impl TableCodec for V3Codec {
             s.push('\n');
             s.push_str(&format!("@field {}\n", f.name));
             if !f.desc.is_empty() {
-                s.push_str(&format!("  desc:{}\n", encode(&f.desc, "txt")));
+                // v3 的 `desc:<值>` 不靠 `|` 分列，竖线原样写（见 tbl_str::encode_v3）。
+                s.push_str(&format!("  desc:{}\n", encode_v3(&f.desc)));
             }
             s.push_str(&format!("  export:{}\n", f.export.to_tbl()));
             s.push_str(&format!("  type:{}\n", f.tbl_type));
@@ -288,7 +289,8 @@ impl TableCodec for V3Codec {
             s.push_str(&format!("[{}]\n", id_val));
             for (i, cell) in row.iter().enumerate().skip(1) {
                 if cell.is_empty() { continue; }
-                s.push_str(&format!("  {}:{}\n", fields[i].name, encode(cell, &fields[i].tbl_type)));
+                // 同上：v3 的值区不以 `|` 分列，转义它只会制造无意义的 diff。
+                s.push_str(&format!("  {}:{}\n", fields[i].name, encode_v3(cell)));
             }
         }
         s
@@ -498,9 +500,9 @@ mod tests {
         }
     }
 
-    /// `desc` 写在 `@field` 块里是 `desc:<值>`，上面没有分隔符语义——但写盘时走的是
-    /// `encode(desc, "txt")` 转义。读回来必须 `decode` 回去，否则 `|` 会变成 `\|`
-    /// 原样留在 desc 里（写转义、读不解码 = 往返不保真）。
+    /// `desc` 写在 `@field` 块里是 `desc:<值>`，上面没有分隔符语义——写盘走
+    /// `encode_v3`（竖线原样、反斜杠 / 换行转义）。读回来必须 `decode` 回去，
+    /// 否则转义序列会原样留在 desc 里（写转义、读不解码 = 往返不保真）。
     #[test]
     fn v3_round_trip_preserves_desc_with_special_characters() {
         for desc in ["普通说明", "含 | 竖线", r"含 \ 反斜杠", "含\n换行"] {
@@ -512,6 +514,36 @@ mod tests {
             let _ = std::fs::remove_file(&p);
             assert_eq!(back.schema.fields[1].desc, desc, "desc 往返失真:\n{}", txt);
         }
+    }
+
+    /// 回归：v3 的值区不以 `|` 分列，竖线要原样保留。
+    /// 以前保存会把没编辑过的 `a|b` 改写成 `a\|b`，git 上凭空多出一列改动。
+    #[test]
+    fn v3_round_trip_keeps_literal_pipe_in_txt_cells() {
+        let f = vec![
+            FieldDef { name: "id".into(), desc: "ID".into(), tbl_type: "int".into(), export: Export::ClientServer },
+            FieldDef { name: "property".into(), desc: "属性".into(), tbl_type: "txt".into(), export: Export::ClientServer },
+        ];
+        let value = "property:1001#100|1002#10";
+        let table = Table {
+            name: "T".into(), original_name: "T".into(), path: Default::default(),
+            schema: TableSchema { fields: f.clone() },
+            records: vec![vec!["1".into(), value.into()]],
+            dirty: false, deleted: false,
+            original_records: vec![], original_fields: f,
+            saved: true, fmt_ver: TblVersion::V3,
+            display_field: None, original_display_field: None,
+            rules: Vec::new(), original_rules: Vec::new(),
+        };
+        let txt = serialize_table(&table);
+        assert!(txt.contains(&format!("  property:{value}")), "竖线被转义了:\n{txt}");
+
+        let p = tmp("pipe");
+        std::fs::write(&p, &txt).unwrap();
+        let back = match parse_tbl(&p).unwrap() { TblFile::Table(t) => t, _ => panic!("应为 Table") };
+        let _ = std::fs::remove_file(&p);
+        assert_eq!(back.records[0][1], value, "往返失真:\n{txt}");
+        assert_eq!(serialize_table(&back), txt, "重新保存不该再产生 diff");
     }
     /// 中文展示值不是磁盘格式的一部分：`.tbl` 里读到就报错，不静默兜底
     /// （CLAUDE.md「数据格式：不做旧数据兼容」）。
