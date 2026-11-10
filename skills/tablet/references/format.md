@@ -336,7 +336,9 @@ Enum sheet（1 行表头）
 
 - 字段按**表头里的字段名**对齐（策划可以在中间插私有列，工具不碰）；
 - workbook 里少了 sheet（或整本 `<group>.xlsx` 被删）：启动仍成功，缺的节点 / 组会记警告
-  并从 `project.tblmanifest` 移除；workbook 多出来的 sheet → 忽略；
+  并从 `project.tblmanifest` 移除；
+- workbook 新加 sheet：首行是 constant / enum 固定表头，或 4 行表头里有合法 `id` 列，
+  会自动登记为节点并补进 manifest；其余 sheet 视为私有，忽略；
 - sheet 名 ≤31 字符，且不能含 `\ / ? * [ ] :`；
 - **不要手写这个文件**：二进制、且要保留样式。用 `tablet-cli schema` / `tablet-cli excel` 生成或往返。
 

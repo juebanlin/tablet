@@ -176,18 +176,14 @@ fn load_specific_project_impl(
     // `.tbl` 表头与 workbook 表头。这里补全内存投影，供导出 / 校验 / UI 使用。
     project.resync_schema();
 
-    // xlsx 组 / sheet 被策划从工作簿里删掉时，落盘 manifest 里的旧段已经失效。
-    // 启动时顺手修正（只写文本没变才跳过），避免下次启动仍然带着幽灵节点。
-    if !issues.dropped.is_empty() {
-        let schema_txt = crate::manifest::serialize_tblmanifest(&project.schema);
-        let path = project_root.join(PROJECT_MANIFEST_FILE);
-        let on_disk = std::fs::read_to_string(&path).ok();
-        if on_disk.as_deref() != Some(schema_txt.as_str()) {
-            if let Err(e) = std::fs::write(&path, &schema_txt) {
-                issues
-                    .warnings
-                    .push(format!("修正 {} 失败: {e}", path.display()));
-            }
+    // 数据文件被删（移除旧段）或 workbook 新加 sheet（补新段）时，落盘 manifest
+    // 已经和内存投影不一致；启动时顺手修正，避免下次启动仍然对不上。
+    if issues.schema_changed() {
+        if let Err(e) = persist_manifest(&project) {
+            let path = project_root.join(PROJECT_MANIFEST_FILE);
+            issues
+                .warnings
+                .push(format!("修正 {} 失败: {e}", path.display()));
         }
     }
     project.load_warnings = issues.warnings;
@@ -571,6 +567,15 @@ fn read_project_created_at(project_root: &Path) -> String {
 pub(crate) struct LoadIssues {
     pub warnings: Vec<String>,
     pub dropped: Vec<(String, String)>,
+    /// 自动登记的新 sheet / 节点数（workbook 里新加、manifest 没有）。
+    pub added: usize,
+}
+
+impl LoadIssues {
+    /// manifest 是否需要按加载结果重写（删掉了失效段，或补上了新节点）。
+    pub(crate) fn schema_changed(&self) -> bool {
+        !self.dropped.is_empty() || self.added > 0
+    }
 }
 
 fn load_groups_in(
@@ -780,7 +785,7 @@ pub(crate) fn load_xlsx_group(
     let mut constants = Vec::new();
     let mut enums = Vec::new();
 
-    for sec in sections {
+    for sec in &sections {
         // 存在性必须问 sheet_collection_no_check()：`sheet_by_name()` 对没反序列化的
         // sheet 一律返回 NotDeserialized，在 lazy book 上会骗我们「这张表不存在」。
         // 名字大小写：Excel 里 sheet 名唯一是大小写不敏感的，这里用同样口径找。
@@ -822,6 +827,56 @@ pub(crate) fn load_xlsx_group(
         }
     }
 
+    // 反向同步：manifest 没有、workbook 里新加的 sheet 自动登记为节点。
+    // 只认两种「明确结构」：
+    // - Constant / Enum：首行固定表头；
+    // - Table：4 行表头里存在合法的 id 列（id 名 + 类型可解析 + export 可解析）。
+    // 其余 sheet 视为策划私有，忽略（不建节点、不入 manifest）。
+    let known: Vec<String> = sections.iter().map(|s| s.name.to_lowercase()).collect();
+    let extra_sheets: Vec<String> = book
+        .sheet_collection_no_check()
+        .iter()
+        .map(|s| s.name().to_string())
+        .filter(|n| !n.eq_ignore_ascii_case("_empty"))
+        .filter(|n| !known.iter().any(|k| *k == n.to_lowercase()))
+        .filter(|n| crate::validate::is_valid_node_name(n))
+        .collect();
+    for sheet_name in extra_sheets {
+        let ws = book
+            .sheet_by_name_mut(&sheet_name)
+            .map_err(|e| anyhow::anyhow!("打开 sheet {} 失败: {}", sheet_name, e))?;
+        let Some(mode) = detect_new_sheet_mode(ws) else {
+            continue;
+        };
+        let sec = crate::schema_model::SchemaSection {
+            group: name.to_string(),
+            name: sheet_name.clone(),
+            mode: mode.clone(),
+            storage: crate::model::GroupStorage::Xlsx,
+            fields: Vec::new(),
+            preset: Vec::new(),
+            display: None,
+            rules: Vec::new(),
+        };
+        match mode {
+            crate::schema_model::SchemaMode::Table => {
+                tables.push(table_from_sheet(&sec, ws, book_path)?);
+            }
+            crate::schema_model::SchemaMode::Constant => {
+                constants.push(constant_from_sheet(&sec, ws, book_path)?);
+            }
+            crate::schema_model::SchemaMode::Enum => {
+                enums.push(enum_from_sheet(&sec, ws, book_path)?);
+            }
+        }
+        if let Some(iss) = issues.as_deref_mut() {
+            iss.warnings.push(format!(
+                "Excel 组 {name} 新增 sheet {sheet_name}，已自动加入 project.tblmanifest"
+            ));
+            iss.added += 1;
+        }
+    }
+
     let stamp = file_stamp(book_path);
     Ok(Group {
         name: name.to_string(),
@@ -837,12 +892,29 @@ pub(crate) fn load_xlsx_group(
 }
 
 /// 重新从磁盘读一个 xlsx 组（外部编辑后的刷新）。
+///
+/// 与启动加载同一套宽容规则：缺 sheet / 新加 sheet 都记进 `issues`，
+/// 由调用方打日志并用 [`persist_manifest`] 修正清单。
 pub(crate) fn reload_xlsx_group(
     group: &Group,
     schema: &TblSchema,
+    issues: Option<&mut LoadIssues>,
 ) -> Result<Group> {
-    // 手动「重新加载」保持严格：缺 sheet 说明情况异常，交给用户处理，不静默丢节点。
-    load_xlsx_group(&group.name, &group.dir, schema, &group.book_path(), None)
+    load_xlsx_group(&group.name, &group.dir, schema, &group.book_path(), issues)
+}
+
+/// 把内存 schema 投影写回 `project.tblmanifest`（与盘上文本相同则跳过）。
+///
+/// 启动加载与 xlsx 组重载用它做「自动修正清单」：节点索引来自 groups 投影，
+/// 不涉及数据文件本身，所以可以安全地直接写。
+pub(crate) fn persist_manifest(project: &Project) -> std::io::Result<bool> {
+    let txt = crate::manifest::serialize_tblmanifest(&project.schema);
+    let path = project.project_root.join(PROJECT_MANIFEST_FILE);
+    if std::fs::read_to_string(&path).ok().as_deref() == Some(txt.as_str()) {
+        return Ok(false);
+    }
+    std::fs::write(&path, txt)?;
+    Ok(true)
 }
 
 /// `(mtime, size)`：保存前拿来发现「文件被外部改过」。
@@ -1114,6 +1186,32 @@ pub(crate) fn load_xlsx_group_all_sheets(
 
 /// 认一张 sheet 是 table / constant / enum。
 /// Constant / Enum 的 1 行表头是固定值；其它一律按 Table 的 4 行表头读（读不出来会报错）。
+/// manifest 里没有的新 sheet → 节点类型；认不出来返回 None（视为策划私有 sheet）。
+///
+/// - Constant / Enum：首行固定表头精确匹配；
+/// - Table：4 行表头里存在**合法的 id 列**（字段名 id、类型可解析、export 可解析）。
+///   其余列不合规也不要紧，`table_from_sheet` 会按普通列（aux）收进来，不丢数据。
+fn detect_new_sheet_mode(ws: &umya_spreadsheet::Worksheet) -> Option<crate::schema_model::SchemaMode> {
+    use crate::excel_sync::vo::{HDR_EXPORT, HDR_NAME, HDR_TYPE};
+    use crate::schema_model::SchemaMode;
+    let cell = |c: u32, r: u32| ws.value((c, r)).trim().to_string();
+    if cell(1, 1) == "name" && cell(2, 1) == "type" && cell(3, 1) == "value"
+        && cell(4, 1) == "export" && cell(5, 1) == "desc"
+    {
+        return Some(SchemaMode::Constant);
+    }
+    if cell(1, 1) == "id" && cell(2, 1) == "name" && cell(3, 1) == "desc" {
+        return Some(SchemaMode::Enum);
+    }
+    let (max_col, _) = ws.highest_column_and_row();
+    let has_valid_id = (1..=max_col).any(|c| {
+        cell(c, HDR_NAME) == "id"
+            && crate::types::TblType::parse(&cell(c, HDR_TYPE)).is_some()
+            && parse_xlsx_export(&cell(c, HDR_EXPORT)).is_some()
+    });
+    if has_valid_id { Some(SchemaMode::Table) } else { None }
+}
+
 fn detect_sheet_mode(ws: &umya_spreadsheet::Worksheet) -> crate::schema_model::SchemaMode {
     use crate::schema_model::SchemaMode;
     let cell = |c: u32| ws.value((c, 1)).trim().to_string();
@@ -1144,6 +1242,20 @@ mod tests {
             root.join(PROJECT_MANIFEST_FILE),
             format!("#!tblmanifest v1\n# @meta id: {}\n# @meta name: {}\n", id, name),
         ).unwrap();
+    }
+
+    fn write_book_sheet(
+        wb: &mut rust_xlsxwriter::Workbook,
+        name: &str,
+        rows: &[&[&str]],
+    ) {
+        let ws = wb.add_worksheet();
+        ws.set_name(name).unwrap();
+        for (r, row) in rows.iter().enumerate() {
+            for (c, v) in row.iter().enumerate() {
+                ws.write_string(r as u32, c as u16, *v).unwrap();
+            }
+        }
     }
 
     #[test]
@@ -1894,6 +2006,80 @@ mistyped = \"block\"
         );
         let manifest = std::fs::read_to_string(root.join(PROJECT_MANIFEST_FILE)).unwrap();
         assert!(!manifest.contains("ghost"), "manifest 应移除该组全部节点:\n{manifest}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// workbook 新加 sheet：能识别的自动登记为节点，并补进 manifest；私有 sheet 忽略。
+    #[test]
+    fn new_xlsx_sheets_are_auto_registered_and_manifest_updated() {
+        let dir = unique_tmp("xlsx_new_sheets");
+        let root = dir.join("projects/p");
+        std::fs::create_dir_all(root.join("config")).unwrap();
+        std::fs::write(dir.join("tablet.toml"), "[project]\nlast_project = \"p\"\n").unwrap();
+
+        let book = root.join("config/g.xlsx");
+        let mut wb = rust_xlsxwriter::Workbook::new();
+        // 已登记的表
+        write_book_sheet(&mut wb, "T", &[
+            &["ID", "名字"], &["cs", "cs"], &["int", "str"], &["id", "name"], &["1", "a"],
+        ]);
+        // 新表：合法 id + 一列不合规（中文列名 → 普通列）
+        write_book_sheet(&mut wb, "NewTable", &[
+            &["ID", "名字", "价格"], &["cs", "cs", "s"], &["int", "str", "int"],
+            &["id", "name", "价格"], &["1", "a", "9"],
+        ]);
+        write_book_sheet(&mut wb, "NewConst", &[
+            &["name", "type", "value", "export", "desc"], &["a", "int", "1", "cs", "x"],
+        ]);
+        write_book_sheet(&mut wb, "NewEnum", &[&["id", "name", "desc"], &["1", "A", "a"]]);
+        // 私有 sheet：固定表头不匹配、也没有合法 id → 不引入
+        write_book_sheet(&mut wb, "Private", &[&["备注"], &["x"]]);
+        std::fs::write(&book, wb.save_to_buffer().unwrap()).unwrap();
+
+        let mut schema = crate::schema_model::TblSchema::default();
+        schema.meta.id = "p".into();
+        schema.meta.name = "P".into();
+        schema.sections.push(crate::schema_model::SchemaSection {
+            group: "g".into(),
+            name: "T".into(),
+            mode: crate::schema_model::SchemaMode::Table,
+            storage: crate::model::GroupStorage::Xlsx,
+            fields: Vec::new(),
+            preset: Vec::new(),
+            display: None,
+            rules: Vec::new(),
+        });
+        std::fs::write(
+            root.join(PROJECT_MANIFEST_FILE),
+            crate::manifest::serialize_tblmanifest(&schema),
+        )
+        .unwrap();
+
+        let proj = load_project(&dir).expect("新增 sheet 不应拖垮加载");
+        let g = proj.groups.iter().find(|g| g.name == "g").expect("组在");
+        let nt = g.tables.iter().find(|t| t.name == "NewTable").expect("新表应登记");
+        assert!(
+            nt.schema.fields.iter().any(|f| f.is_aux() && f.label() == "价格"),
+            "不合规列应走普通列: {:?}",
+            nt.schema.fields.iter().map(|f| (f.name.clone(), f.label().to_string())).collect::<Vec<_>>()
+        );
+        assert_eq!(nt.records[0], vec!["1".to_string(), "a".to_string(), "9".to_string()]);
+        assert!(g.constants.iter().any(|c| c.name == "NewConst"), "新常量应登记");
+        assert!(g.enums.iter().any(|e| e.name == "NewEnum"), "新枚举应登记");
+        assert!(
+            !proj.groups.iter().any(|g| g.tables.iter().any(|t| t.name == "Private")),
+            "私有 sheet 不应变成节点"
+        );
+        assert!(
+            proj.load_warnings.iter().any(|w| w.contains("NewTable")),
+            "应记录自动登记警告: {:?}",
+            proj.load_warnings
+        );
+        let manifest = std::fs::read_to_string(root.join(PROJECT_MANIFEST_FILE)).unwrap();
+        for n in ["NewTable", "NewConst", "NewEnum"] {
+            assert!(manifest.contains(n), "manifest 应补上 {}:\n{manifest}", n);
+        }
+        assert!(!manifest.contains("Private"), "私有 sheet 不应入 manifest:\n{manifest}");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

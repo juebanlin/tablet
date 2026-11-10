@@ -5136,14 +5136,33 @@ impl ProjectEngine {
         if project.groups[idx].is_dirty() {
             anyhow::bail!("{} 有未保存改动，拒绝重载", group_name);
         }
-        let fresh = crate::project::reload_xlsx_group(&project.groups[idx], &project.schema)?;
+        // 与启动加载同一套规则：缺 sheet 跳过、workbook 新加 sheet 自动登记。
+        let mut issues = crate::project::LoadIssues::default();
+        let fresh = crate::project::reload_xlsx_group(
+            &project.groups[idx],
+            &project.schema,
+            Some(&mut issues),
+        )?;
         project.groups[idx] = fresh;
         project.resync_schema();
+        let manifest_err = if issues.schema_changed() {
+            crate::project::persist_manifest(project)
+                .err()
+                .map(|e| format!("修正 project.tblmanifest 失败: {e}"))
+        } else {
+            None
+        };
         if active {
             self.revalidate_all();
         }
         // 外部工作簿重载 = 新基线，不是编辑器动作；旧历史不再成立。
         self.clear_history(project_id);
+        for w in issues.warnings {
+            self.warn_log(format!("[{project_id}] {w}"));
+        }
+        if let Some(e) = manifest_err {
+            self.warn_log(format!("[{project_id}] {e}"));
+        }
         Ok(())
     }
 
@@ -6600,6 +6619,41 @@ package = \"com.user.kept\"
         assert!(engine.xlsx_external_changes().is_empty(), "重载后应不再有改动");
         assert!(!engine.find_project("p1").unwrap().is_dirty(), "重载不该把项目弄脏");
 
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 外部往 workbook 新加 sheet → 重载自动登记节点并补 manifest。
+    #[test]
+    fn reload_auto_registers_a_new_sheet_and_updates_manifest() {
+        let (dir, mut engine) = engine_with_xlsx_group("xlsx_reload_new");
+        assert!(engine.save_all());
+        let book = xlsx_book(&dir);
+        {
+            let mut b = umya_spreadsheet::reader::xlsx::read(&book).unwrap();
+            b.new_sheet("NewHot").unwrap();
+            let ws = b.sheet_by_name_mut("NewHot").unwrap();
+            let rows = [
+                ["ID", "名字"], ["cs", "cs"], ["int", "str"], ["id", "name"], ["1", "x"],
+            ];
+            for (r, row) in rows.iter().enumerate() {
+                for (c, v) in row.iter().enumerate() {
+                    ws.cell_mut((c as u32 + 1, r as u32 + 1)).set_value(*v);
+                }
+            }
+            umya_spreadsheet::writer::xlsx::write(&b, &book).unwrap();
+        }
+
+        engine.reload_xlsx_group("p1", "xg").expect("重载应成功");
+        assert!(engine.find_table("xg", "NewHot").is_some(), "新 sheet 应登记为表");
+        let manifest = std::fs::read_to_string(
+            dir.join("projects/p1").join(crate::project::PROJECT_MANIFEST_FILE),
+        ).unwrap();
+        assert!(manifest.contains("NewHot"), "manifest 应补上:\n{manifest}");
+        assert!(
+            engine.logs().iter().any(|l| l.level == LogLevel::Warning
+                && l.message.contains("NewHot")),
+            "重载应把自动登记写进警告日志"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
