@@ -1769,6 +1769,7 @@ impl ProjectEngine {
             original_validate: crate::model::ValidateConfig::default(),
             groups: Vec::new(),
             state: crate::model::ProjectState::Pending,
+            load_warnings: Vec::new(),
         };
 
         // 用 apply_schema_to_project 把 sections 展开为 groups+nodes：
@@ -5488,6 +5489,7 @@ mod project_toml_template_tests {
             original_validate,
             groups: Vec::new(),
             state: crate::model::ProjectState::Pending,
+            load_warnings: Vec::new(),
         }
     }
 

@@ -143,8 +143,9 @@ fn load_specific_project_impl(
     // （project.toml 中的 [separators] 段会被忽略）
 
     let data_dir = project_root.join("config");
+    let mut issues = LoadIssues::default();
     let mut groups = if data_dir.is_dir() {
-        load_groups_in(&data_dir, &manifest)?
+        load_groups_in(&data_dir, &manifest, &mut issues)?
     } else {
         std::fs::create_dir_all(&data_dir)?;
         println!("已创建配置目录: {}", data_dir.display());
@@ -169,10 +170,27 @@ fn load_specific_project_impl(
         schema: manifest,
         groups,
         state: crate::model::ProjectState::Loaded,
+        load_warnings: Vec::new(),
     };
     // 运行时 schema 是 groups 的投影：manifest 只提供索引/语义，字段结构来自
     // `.tbl` 表头与 workbook 表头。这里补全内存投影，供导出 / 校验 / UI 使用。
     project.resync_schema();
+
+    // xlsx 组 / sheet 被策划从工作簿里删掉时，落盘 manifest 里的旧段已经失效。
+    // 启动时顺手修正（只写文本没变才跳过），避免下次启动仍然带着幽灵节点。
+    if !issues.dropped.is_empty() {
+        let schema_txt = crate::manifest::serialize_tblmanifest(&project.schema);
+        let path = project_root.join(PROJECT_MANIFEST_FILE);
+        let on_disk = std::fs::read_to_string(&path).ok();
+        if on_disk.as_deref() != Some(schema_txt.as_str()) {
+            if let Err(e) = std::fs::write(&path, &schema_txt) {
+                issues
+                    .warnings
+                    .push(format!("修正 {} 失败: {e}", path.display()));
+            }
+        }
+    }
+    project.load_warnings = issues.warnings;
     Ok(project)
 }
 
@@ -543,7 +561,23 @@ fn read_project_created_at(project_root: &Path) -> String {
 }
 
 
-fn load_groups_in(data_dir: &Path, schema: &TblSchema) -> Result<Vec<Group>> {
+/// 启动加载时发现的「可以继续启动」的问题。
+///
+/// 目前只覆盖 xlsx 组：策划在 Excel 里删掉整本工作簿或其中若干 sheet 后，
+/// manifest 仍留着旧节点。这类情况不能拖垮整个 Project 的加载：
+/// - `warnings` 交给 GUI / CLI 打日志；
+/// - `dropped` 是已经不存在的 (group, node)，加载后从 `project.tblmanifest` 移除。
+#[derive(Default)]
+pub(crate) struct LoadIssues {
+    pub warnings: Vec<String>,
+    pub dropped: Vec<(String, String)>,
+}
+
+fn load_groups_in(
+    data_dir: &Path,
+    schema: &TblSchema,
+    issues: &mut LoadIssues,
+) -> Result<Vec<Group>> {
     // config/ 下现在混放两种组：
     //   config/<group>/        Tbl 组（目录）
     //   config/<group>.xlsx    Xlsx 组（单个工作簿；sheet = 节点）
@@ -590,12 +624,84 @@ fn load_groups_in(data_dir: &Path, schema: &TblSchema) -> Result<Vec<Group>> {
         );
     }
 
+    // Tbl 组的 .tbl 文件（或整个组目录）被删：manifest 里的段还留着，但盘上没有数据源。
+    // 跳过缺失节点并记警告；加载完成后由 `load_specific_project_impl` 修 manifest。
+    // 注意只处理「文件不存在」；文件存在但内容读不懂（parse_tbl 报错）仍然让加载失败。
+    let mut tbl_groups: Vec<&str> = schema
+        .sections
+        .iter()
+        .filter(|s| s.storage == crate::model::GroupStorage::Tbl)
+        .map(|s| s.group.as_str())
+        .collect();
+    tbl_groups.sort();
+    tbl_groups.dedup();
+    for name in tbl_groups {
+        let secs: Vec<&crate::schema_model::SchemaSection> = schema
+            .sections
+            .iter()
+            .filter(|s| s.group == name && s.storage == crate::model::GroupStorage::Tbl)
+            .collect();
+        match dir_names.iter().position(|n| n == name) {
+            None => {
+                issues.warnings.push(format!(
+                    "组 {name} 的目录 config/{name}/ 不存在，已跳过该组（{} 个节点：{}），并已从 project.tblmanifest 移除",
+                    secs.len(),
+                    secs.iter().map(|s| s.name.as_str()).collect::<Vec<_>>().join("、")
+                ));
+                for sec in secs {
+                    issues.dropped.push((name.to_string(), sec.name.clone()));
+                }
+            }
+            Some(idx) => {
+                let dir = &dirs[idx];
+                for sec in secs {
+                    if !dir.join(format!("{}.tbl", sec.name)).is_file() {
+                        issues.warnings.push(format!(
+                            "组 {name} 缺少文件 config/{name}/{}.tbl，已跳过该节点，并已从 project.tblmanifest 移除",
+                            sec.name
+                        ));
+                        issues.dropped.push((name.to_string(), sec.name.clone()));
+                    }
+                }
+            }
+        }
+    }
+
+    // 整本工作簿被删掉的 xlsx 组：manifest 里的段还留着，但盘上没有任何数据源。
+    let mut xlsx_groups: Vec<&str> = schema
+        .sections
+        .iter()
+        .filter(|s| s.storage == crate::model::GroupStorage::Xlsx)
+        .map(|s| s.group.as_str())
+        .collect();
+    xlsx_groups.sort();
+    xlsx_groups.dedup();
+    for name in xlsx_groups {
+        if book_names.iter().any(|n| n == name) {
+            continue;
+        }
+        let nodes: Vec<String> = schema
+            .sections
+            .iter()
+            .filter(|s| s.group == name && s.storage == crate::model::GroupStorage::Xlsx)
+            .map(|s| s.name.clone())
+            .collect();
+        issues.warnings.push(format!(
+            "Excel 组 {name} 的工作簿 config/{name}.xlsx 不存在，已跳过该组（{} 个节点：{}），并已从 project.tblmanifest 移除",
+            nodes.len(),
+            nodes.join("、")
+        ));
+        for node in nodes {
+            issues.dropped.push((name.to_string(), node));
+        }
+    }
+
     let mut groups = Vec::new();
     for (name, dir) in dir_names.into_iter().zip(dirs) {
         groups.push(load_tbl_group(&name, &dir)?);
     }
     for (name, book) in book_names.into_iter().zip(books) {
-        groups.push(load_xlsx_group(&name, data_dir, schema, &book)?);
+        groups.push(load_xlsx_group(&name, data_dir, schema, &book, Some(issues))?);
     }
     Ok(groups)
 }
@@ -649,8 +755,9 @@ fn load_tbl_group(name: &str, dir: &Path) -> Result<Group> {
 /// 加载 Xlsx 组：**结构与数据都来自 workbook**；manifest 的 section 只决定节点清单
 /// （@02.27）。
 ///
-/// 三条硬规则（都是「读不懂就报错」那条契约的延续）：
-/// - schema 有 section、workbook 没有同名 sheet → 报错；
+/// 规则：
+/// - schema 有 section、workbook 没有同名 sheet：`issues = Some` 时跳过并记警告
+///   （启动加载：策划删了 sheet，不能拖垮整个 Project）；`None` 时报错（手动重载，需人处理）。
 /// - section 的类型决定 sheet 怎么读（table 4 行表头 / constant、enum 1 行表头）；
 /// - workbook 里有、manifest 里没有的 sheet → 忽略（策划的私有 sheet，P3 才变成"托管节点"）；
 /// - Table 的字段 / 类型 / export / desc 全部从 4 行表头读，manifest 不提供。
@@ -659,6 +766,7 @@ pub(crate) fn load_xlsx_group(
     dir: &Path,
     schema: &TblSchema,
     book_path: &Path,
+    mut issues: Option<&mut LoadIssues>,
 ) -> Result<Group> {
     use crate::model::GroupStorage;
 
@@ -680,6 +788,19 @@ pub(crate) fn load_xlsx_group(
             .find(|s| s.name().eq_ignore_ascii_case(&sec.name))
             .map(|s| s.name().to_string());
         let Some(sheet_name) = actual else {
+            if let Some(iss) = issues.as_deref_mut() {
+                // 策划在 Excel 里删了 sheet：启动继续，警告进日志，manifest 稍后修正。
+                let file = book_path
+                    .file_name()
+                    .map(|s| s.to_string_lossy().to_string())
+                    .unwrap_or_default();
+                iss.warnings.push(format!(
+                    "Excel 组 {name} 缺少 sheet {}（config/{file}），已跳过该节点，并已从 project.tblmanifest 移除",
+                    sec.name
+                ));
+                iss.dropped.push((name.to_string(), sec.name.clone()));
+                continue;
+            }
             anyhow::bail!(
                 "组 {} 的 schema 里有 {}，但 {} 里没有同名 sheet",
                 name, sec.name, book_path.display()
@@ -720,7 +841,8 @@ pub(crate) fn reload_xlsx_group(
     group: &Group,
     schema: &TblSchema,
 ) -> Result<Group> {
-    load_xlsx_group(&group.name, &group.dir, schema, &group.book_path())
+    // 手动「重新加载」保持严格：缺 sheet 说明情况异常，交给用户处理，不静默丢节点。
+    load_xlsx_group(&group.name, &group.dir, schema, &group.book_path(), None)
 }
 
 /// `(mtime, size)`：保存前拿来发现「文件被外部改过」。
@@ -1611,7 +1733,7 @@ mistyped = \"block\"
             display: None,
             rules: Vec::new(),
         });
-        let group = load_xlsx_group("g", &dir, &schema, &book).expect("非规范列不应拖垮加载");
+        let group = load_xlsx_group("g", &dir, &schema, &book, None).expect("非规范列不应拖垮加载");
         let t = &group.tables[0];
         assert_eq!(t.schema.fields.len(), 3);
         assert!(!t.schema.fields[0].is_aux());
@@ -1622,6 +1744,197 @@ mistyped = \"block\"
         assert_eq!(aux.tbl_type, "任意类型");
         assert_eq!(aux.aux.as_ref().unwrap().raw_export, "随便");
         assert_eq!(t.records[0][2], "保留 | 原样");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 策划在 Excel 里删掉某个 sheet：项目要能正常打开，记警告，并修掉 manifest 里的旧段。
+    #[test]
+    fn missing_xlsx_sheet_loads_with_warning_and_prunes_manifest() {
+        let dir = unique_tmp("xlsx_missing_sheet");
+        let root = dir.join("projects/p");
+        std::fs::create_dir_all(root.join("config")).unwrap();
+        std::fs::write(dir.join("tablet.toml"), "[project]\nlast_project = \"p\"\n").unwrap();
+
+        // 工作簿里只有 T；manifest 还声明了被删掉的 Gone。
+        let book = root.join("config/g.xlsx");
+        let mut wb = rust_xlsxwriter::Workbook::new();
+        let ws = wb.add_worksheet();
+        ws.set_name("T").unwrap();
+        let rows = [
+            ["ID", "名字"],
+            ["cs", "cs"],
+            ["int", "str"],
+            ["id", "name"],
+            ["1", "亚瑟"],
+        ];
+        for (r, row) in rows.iter().enumerate() {
+            for (c, v) in row.iter().enumerate() {
+                ws.write_string(r as u32, c as u16, *v).unwrap();
+            }
+        }
+        std::fs::write(&book, wb.save_to_buffer().unwrap()).unwrap();
+
+        let mut schema = crate::schema_model::TblSchema::default();
+        schema.meta.id = "p".into();
+        schema.meta.name = "P".into();
+        for name in ["T", "Gone"] {
+            schema.sections.push(crate::schema_model::SchemaSection {
+                group: "g".into(),
+                name: name.into(),
+                mode: crate::schema_model::SchemaMode::Table,
+                storage: crate::model::GroupStorage::Xlsx,
+                fields: Vec::new(),
+                preset: Vec::new(),
+                display: None,
+                rules: Vec::new(),
+            });
+        }
+        std::fs::write(
+            root.join(PROJECT_MANIFEST_FILE),
+            crate::manifest::serialize_tblmanifest(&schema),
+        )
+        .unwrap();
+
+        let proj = load_project(&dir).expect("缺 sheet 不应拖垮启动");
+        let g = proj.groups.iter().find(|g| g.name == "g").expect("组还在");
+        assert_eq!(g.tables.len(), 1);
+        assert_eq!(g.tables[0].name, "T");
+        assert!(
+            proj.load_warnings.iter().any(|w| w.contains("Gone")),
+            "应记录缺失 sheet 警告: {:?}",
+            proj.load_warnings
+        );
+        let manifest = std::fs::read_to_string(root.join(PROJECT_MANIFEST_FILE)).unwrap();
+        assert!(!manifest.contains("Gone"), "manifest 应移除缺失节点:\n{manifest}");
+        assert!(manifest.contains("T"), "存在的节点应保留:\n{manifest}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Tbl 组的某个 `.tbl` 被删：项目正常启动，警告 + manifest 移除该节点。
+    #[test]
+    fn missing_tbl_node_loads_with_warning_and_prunes_manifest() {
+        let dir = unique_tmp("tbl_missing_node");
+        let root = dir.join("projects/p");
+        std::fs::create_dir_all(root.join("config/g")).unwrap();
+        std::fs::write(dir.join("tablet.toml"), "[project]\nlast_project = \"p\"\n").unwrap();
+        std::fs::write(
+            root.join("config/g/T.tbl"),
+            "#!tbl v3\n#mode table\n---\n\n@field id\n  desc:ID\n  export:cs\n  type:int\n\n[1]\n",
+        )
+        .unwrap();
+
+        let mut schema = crate::schema_model::TblSchema::default();
+        schema.meta.id = "p".into();
+        schema.meta.name = "P".into();
+        for name in ["T", "Gone"] {
+            schema.sections.push(crate::schema_model::SchemaSection {
+                group: "g".into(),
+                name: name.into(),
+                mode: crate::schema_model::SchemaMode::Table,
+                storage: crate::model::GroupStorage::Tbl,
+                fields: Vec::new(),
+                preset: Vec::new(),
+                display: None,
+                rules: Vec::new(),
+            });
+        }
+        std::fs::write(
+            root.join(PROJECT_MANIFEST_FILE),
+            crate::manifest::serialize_tblmanifest(&schema),
+        )
+        .unwrap();
+
+        let proj = load_project(&dir).expect("缺 .tbl 不应拖垮启动");
+        let g = proj.groups.iter().find(|g| g.name == "g").expect("组还在");
+        assert_eq!(g.tables.len(), 1);
+        assert_eq!(g.tables[0].name, "T");
+        assert!(
+            proj.load_warnings.iter().any(|w| w.contains("Gone.tbl")),
+            "应记录缺失 .tbl 警告: {:?}",
+            proj.load_warnings
+        );
+        let manifest = std::fs::read_to_string(root.join(PROJECT_MANIFEST_FILE)).unwrap();
+        assert!(!manifest.contains("Gone"), "manifest 应移除缺失节点:\n{manifest}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Tbl 组整个目录被删：也要能启动，警告 + manifest 移除该组全部段。
+    #[test]
+    fn missing_tbl_group_dir_loads_with_warning_and_prunes_manifest() {
+        let dir = unique_tmp("tbl_missing_dir");
+        let root = dir.join("projects/p");
+        std::fs::create_dir_all(root.join("config")).unwrap();
+        std::fs::write(dir.join("tablet.toml"), "[project]\nlast_project = \"p\"\n").unwrap();
+
+        let mut schema = crate::schema_model::TblSchema::default();
+        schema.meta.id = "p".into();
+        schema.meta.name = "P".into();
+        schema.sections.push(crate::schema_model::SchemaSection {
+            group: "ghost".into(),
+            name: "N".into(),
+            mode: crate::schema_model::SchemaMode::Table,
+            storage: crate::model::GroupStorage::Tbl,
+            fields: Vec::new(),
+            preset: Vec::new(),
+            display: None,
+            rules: Vec::new(),
+        });
+        std::fs::write(
+            root.join(PROJECT_MANIFEST_FILE),
+            crate::manifest::serialize_tblmanifest(&schema),
+        )
+        .unwrap();
+
+        let proj = load_project(&dir).expect("组目录丢失不应拖垮启动");
+        assert!(proj.groups.is_empty());
+        assert!(
+            proj.load_warnings.iter().any(|w| w.contains("config/ghost/")),
+            "应记录组目录缺失警告: {:?}",
+            proj.load_warnings
+        );
+        let manifest = std::fs::read_to_string(root.join(PROJECT_MANIFEST_FILE)).unwrap();
+        assert!(!manifest.contains("ghost"), "manifest 应移除该组全部节点:\n{manifest}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 整本工作簿被删掉：组整体消失也要能启动，警告 + 从 manifest 移除该组全部段。
+    #[test]
+    fn missing_xlsx_workbook_loads_with_warning_and_prunes_manifest() {
+        let dir = unique_tmp("xlsx_missing_book");
+        let root = dir.join("projects/p");
+        std::fs::create_dir_all(root.join("config")).unwrap();
+        std::fs::write(dir.join("tablet.toml"), "[project]\nlast_project = \"p\"\n").unwrap();
+
+        let mut schema = crate::schema_model::TblSchema::default();
+        schema.meta.id = "p".into();
+        schema.meta.name = "P".into();
+        schema.sections.push(crate::schema_model::SchemaSection {
+            group: "hero".into(),
+            name: "HeroBase".into(),
+            mode: crate::schema_model::SchemaMode::Table,
+            storage: crate::model::GroupStorage::Xlsx,
+            fields: Vec::new(),
+            preset: Vec::new(),
+            display: None,
+            rules: Vec::new(),
+        });
+        std::fs::write(
+            root.join(PROJECT_MANIFEST_FILE),
+            crate::manifest::serialize_tblmanifest(&schema),
+        )
+        .unwrap();
+
+        let proj = load_project(&dir).expect("整本工作簿丢失不应拖垮启动");
+        assert!(proj.groups.is_empty(), "没有工作簿就没有组");
+        assert!(
+            proj.load_warnings
+                .iter()
+                .any(|w| w.contains("hero.xlsx") && w.contains("HeroBase")),
+            "应记录工作簿缺失警告: {:?}",
+            proj.load_warnings
+        );
+        let manifest = std::fs::read_to_string(root.join(PROJECT_MANIFEST_FILE)).unwrap();
+        assert!(!manifest.contains("HeroBase"), "manifest 应移除该组全部节点:\n{manifest}");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

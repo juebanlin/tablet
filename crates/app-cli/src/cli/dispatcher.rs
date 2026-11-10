@@ -195,6 +195,7 @@ fn run(cli: Cli) -> Result<i32> {
         }
     };
     let mut engine = ProjectEngine::new(project, global_config);
+    print_load_warnings(&engine);
 
     let warns = apply_overrides(&mut engine, &cli.overrides);
     output::print_override_warnings_cli(&warns);
@@ -458,8 +459,19 @@ fn run(cli: Cli) -> Result<i32> {
 /// CLI 主要由 AI / 脚本驱动：**静静少一个项目比报错更难查**（@02.26）。打不开的项目在
 /// `load_workspace` 里已经被跳过了（不会进 engine），所以这里只负责吵 + 非零退出 ——
 /// `bail!` 经 main.rs 翻成 exit 1。
+/// xlsx 组 / sheet 从工作簿消失时项目仍会加载，manifest 已自动修正；
+/// CLI 也把原因打到 stderr，避免「节点悄悄没了」难以排查。
+fn print_load_warnings(engine: &ProjectEngine) {
+    for p in &engine.projects {
+        for w in &p.load_warnings {
+            eprintln!("警告: Project {}: {}", p.schema.meta.id, w);
+        }
+    }
+}
+
 fn load_workspace_checked(workdir: &std::path::Path) -> Result<(ProjectEngine, bool)> {
     let (engine, config_fixed, failed) = load_workspace(workdir)?;
+    print_load_warnings(&engine);
     if !failed.is_empty() {
         for f in &failed {
             eprintln!("错误: Project {} 打不开: {}", f.id, f.message);

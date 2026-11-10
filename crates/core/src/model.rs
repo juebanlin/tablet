@@ -61,6 +61,10 @@ pub struct Project {
     /// 项目状态：Loaded（已落盘）或 Pending（待保存）。
     /// save 时 Pending 项目会先 create_dir_all，然后切换为 Loaded。
     pub state: ProjectState,
+    /// 启动加载时发现、但不妨碍继续启动的问题（目前是 xlsx 组 / sheet 从工作簿消失）。
+    /// 仅内存，不参与落盘；由 GUI / CLI 打进日志。项目加载后这些节点已从
+    /// `schema.sections` 与 `project.tblmanifest` 移除。
+    pub load_warnings: Vec<String>,
 }
 
 impl Project {

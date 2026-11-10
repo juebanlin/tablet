@@ -858,6 +858,19 @@ impl Backend {
         for alert in &load_alerts {
             engine.ui_log(format!("[项目打不开] {alert}"));
         }
+        // xlsx 组 / sheet 被策划从工作簿删掉：项目照常打开，只把原因追加到日志
+        // （warn_log 同时进 UI 面板和日志文件）。
+        let load_warnings: Vec<String> = engine
+            .projects
+            .iter()
+            .flat_map(|p| {
+                let id = p.schema.meta.id.clone();
+                p.load_warnings.iter().map(move |w| format!("[{}] {}", id, w))
+            })
+            .collect();
+        for warning in &load_warnings {
+            engine.warn_log(warning.clone());
+        }
         // 上次 Excel 快速编辑的临时副本在这里清（正常结束会话时已删，这里兜底崩溃/强杀）。
         cleanup_excel_cache(&mut engine);
         engine.revalidate_all_projects();
