@@ -1102,6 +1102,8 @@ button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 
 /* ── 全局设置 / 导出 ──────────────────────────────────────── */
 .gs-check { margin: 8px 0 8px 86px; }
+#export-dialog .modal-box { width: min(760px, 96vw); }
+#export-dialog .modal-actions { flex-wrap: wrap; row-gap: 8px; }
 .export-format-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 14px; margin-bottom: 12px; }
 .export-result {
   max-height: 220px;

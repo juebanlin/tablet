@@ -806,7 +806,7 @@ function hideContextSubmenu() {
   }
 }
 
-function buildContextMenuItems(menu, items) {
+function buildContextMenuItems(menu, items, isSubmenu = false) {
   for (const it of items) {
     if (it.sep) {
       const d = document.createElement("div");
@@ -830,7 +830,9 @@ function buildContextMenuItems(menu, items) {
         showContextSubmenu(d, it.children);
       });
     } else {
-      d.addEventListener("mouseenter", hideContextSubmenu);
+      // 只在主菜单的普通项上收起二级菜单。二级菜单自己的项再触发就会
+      // 把刚打开的菜单关掉（表现为鼠标一挪进二级菜单就消失）。
+      if (!isSubmenu) d.addEventListener("mouseenter", hideContextSubmenu);
       d.addEventListener("click", () => {
         hideContextMenu();
         Promise.resolve(it.action()).catch((e) => addLocalLog(2, String(e)));
@@ -845,7 +847,7 @@ function showContextSubmenu(anchor, items) {
   const sub = document.createElement("div");
   sub.id = "ctx-submenu";
   sub.className = "ctx-menu ctx-submenu";
-  buildContextMenuItems(sub, items);
+  buildContextMenuItems(sub, items, true);
   document.body.appendChild(sub);
   const r = anchor.getBoundingClientRect();
   const sr = sub.getBoundingClientRect();
