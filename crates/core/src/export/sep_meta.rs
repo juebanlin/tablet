@@ -21,6 +21,7 @@ pub fn collect_used_sep_keys_table(table: &Table) -> BTreeSet<SepKey> {
     use crate::model::Export;
     let mut used = BTreeSet::new();
     for f in &table.schema.fields {
+        if f.is_aux() { continue; }
         if matches!(f.export, Export::ClientServer | Export::ServerOnly) {
             collect_from_type(&f.tbl_type, &mut used);
         }

@@ -16,7 +16,7 @@ pub fn fields() -> Vec<FieldDef> {
         desc: d.to_string(),
         tbl_type: t.to_string(),
         export: Export::ClientServer,
-    }).collect()
+     aux: None, source_col: None,}).collect()
 }
 
 pub fn table(name: &str, records: Vec<Vec<&str>>) -> Table {

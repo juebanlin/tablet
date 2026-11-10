@@ -1291,14 +1291,14 @@ id | int | cs | x
                 schema: TableSchema { fields: vec![FieldDef {
                     name: "key".to_string(), desc: String::new(),
                     tbl_type: "str".to_string(), export: Export::ClientServer,
-                }] },
+                 aux: None, source_col: None,}] },
                 records: vec![vec!["A".to_string()]],
                 dirty: false, deleted: false,
                 original_records: vec![vec!["A".to_string()]],
                 original_fields: vec![FieldDef {
                     name: "key".to_string(), desc: String::new(),
                     tbl_type: "str".to_string(), export: Export::ClientServer,
-                }],
+                 aux: None, source_col: None,}],
                 saved: true,
                 fmt_ver: crate::tbl::TblVersion::V3,
                 display_field: None,

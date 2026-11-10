@@ -170,6 +170,7 @@ pub fn schema_hash_table(table: &Table) -> u64 {
     push_str(&mut buf, &table.name);
     push_u16(&mut buf, KIND_TABLE);
     for f in &table.schema.fields {
+        if f.is_aux() { continue; }
         push_str(&mut buf, &f.name);
         push_str(&mut buf, &f.tbl_type);
         buf.push(tag_of(TblType::parse(&f.tbl_type).as_ref()));
@@ -191,6 +192,7 @@ pub fn encode_table(table: &Table, sep: &SeparatorsSection) -> Vec<u8> {
         .fields
         .iter()
         .enumerate()
+        .filter(|(_, f)| !f.is_aux())
         .map(|(ci, f)| ColSpec {
             name: f.name.clone(),
             type_str: f.tbl_type.clone(),
@@ -427,11 +429,11 @@ mod tests {
 
     fn table() -> Table {
         let fields = vec![
-            FieldDef { name: "id".into(), desc: "ID".into(), tbl_type: "int".into(), export: Export::ClientServer },
-            FieldDef { name: "name".into(), desc: "名字".into(), tbl_type: "str".into(), export: Export::ClientServer },
-            FieldDef { name: "hp".into(), desc: "血量".into(), tbl_type: "long".into(), export: Export::ClientServer },
-            FieldDef { name: "ok".into(), desc: "".into(), tbl_type: "bool".into(), export: Export::ClientServer },
-            FieldDef { name: "tags".into(), desc: "".into(), tbl_type: "List<int>".into(), export: Export::ClientServer },
+            FieldDef { name: "id".into(), desc: "ID".into(), tbl_type: "int".into(), export: Export::ClientServer , aux: None, source_col: None},
+            FieldDef { name: "name".into(), desc: "名字".into(), tbl_type: "str".into(), export: Export::ClientServer , aux: None, source_col: None},
+            FieldDef { name: "hp".into(), desc: "血量".into(), tbl_type: "long".into(), export: Export::ClientServer , aux: None, source_col: None},
+            FieldDef { name: "ok".into(), desc: "".into(), tbl_type: "bool".into(), export: Export::ClientServer , aux: None, source_col: None},
+            FieldDef { name: "tags".into(), desc: "".into(), tbl_type: "List<int>".into(), export: Export::ClientServer , aux: None, source_col: None},
         ];
         let records = vec![
             vec!["1".into(), "亚瑟".into(), "100".into(), "true".into(), "1;2".into()],

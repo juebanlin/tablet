@@ -757,46 +757,62 @@ fn table_from_sheet(
 
     let mut fields: Vec<FieldDef> = Vec::new();
     let mut col_of: Vec<u32> = Vec::new();
+    let mut aux_seq = 0usize;
+    let mut seen_names = std::collections::HashSet::new();
     for c in 1..=last_col {
-        let name = ws.value((c, HDR_NAME)).trim().to_string();
-        if name.is_empty() { continue; }
-        if let Some((_, msg)) = crate::validate::validate_field_name(&name) {
-            anyhow::bail!(
-                "{} 的 sheet {} 第 {} 列字段名不合法: {}",
-                book_path.display(), sec.name, c, msg
-            );
-        }
+        let label = ws.value((c, HDR_NAME)).trim().to_string();
+        if label.is_empty() { continue; }
+        let desc = ws.value((c, HDR_DESC));
         let ty = ws.value((c, HDR_TYPE)).trim().to_string();
-        if crate::types::TblType::parse(&ty).is_none() {
-            anyhow::bail!(
-                "{} 的 sheet {} 字段 {} 的类型 {:?} 不合法",
-                book_path.display(), sec.name, name, ty
-            );
+        let export_raw = ws.value((c, HDR_EXPORT));
+        let export = parse_xlsx_export(&export_raw);
+        let name_ok = crate::validate::validate_field_name(&label).is_none();
+        let type_ok = crate::types::TblType::parse(&ty).is_some();
+        let export_ok = export.is_some();
+        let dup = !seen_names.insert(label.to_lowercase());
+
+        if name_ok && type_ok && export_ok && !dup {
+            fields.push(FieldDef {
+                name: label,
+                desc,
+                tbl_type: ty,
+                export: export.unwrap(),
+                aux: None,
+                source_col: Some(c),
+            });
+        } else {
+            // 非 tablet 规范列：留在模型里展示 / 编辑 / 原样保存，但不参与校验 / 引用 / 导出。
+            aux_seq += 1;
+            let mut key = format!("aux_{}", aux_seq);
+            while fields.iter().any(|f| f.name == key) {
+                aux_seq += 1;
+                key = format!("aux_{}", aux_seq);
+            }
+            fields.push(FieldDef {
+                name: key,
+                desc,
+                tbl_type: ty,
+                export: export.unwrap_or(crate::model::Export::ClientServer),
+                aux: Some(crate::model::AuxMeta {
+                    label,
+                    raw_export: export_raw,
+                }),
+                source_col: Some(c),
+            });
         }
-        let export = parse_xlsx_export(&ws.value((c, HDR_EXPORT)))
-            .ok_or_else(|| anyhow::anyhow!(
-                "{} 的 sheet {} 字段 {} 的 export 值 {:?} 不合法（只接受 cs/c/s/- 或中文展示值）",
-                book_path.display(), sec.name, name, ws.value((c, HDR_EXPORT))
-            ))?;
-        fields.push(FieldDef {
-            name,
-            desc: ws.value((c, HDR_DESC)),
-            tbl_type: ty,
-            export,
-        });
         col_of.push(c);
     }
-    if fields.first().map_or(true, |f| f.name != "id") {
-        anyhow::bail!(
-            "{} 的 sheet {} 第一个字段必须是 id（当前是 {:?}）",
-            book_path.display(), sec.name,
-            fields.first().map(|f| f.name.as_str()).unwrap_or("")
-        );
+    if fields.is_empty() {
+        anyhow::bail!("{} 的 sheet {} 没有字段列", book_path.display(), sec.name);
     }
-    let mut seen = std::collections::HashSet::new();
-    for f in &fields {
-        if !seen.insert(&f.name) {
-            anyhow::bail!("{} 的 sheet {} 字段名重复: {}", book_path.display(), sec.name, f.name);
+    // 有合法 id 列就把它提到最前面（Excel 列顺序不动，保存按字段名回写）；
+    // 没有合法 id 时不在这里判死，交给校验 / 网格提示，项目仍能打开。
+    if let Some(pos) = fields.iter().position(|f| !f.is_aux() && f.name == "id") {
+        if pos > 0 {
+            let f = fields.remove(pos);
+            let c = col_of.remove(pos);
+            fields.insert(0, f);
+            col_of.insert(0, c);
         }
     }
 
@@ -1562,4 +1578,51 @@ mistyped = \"block\"
             .expect_err("非法 TOML 必须报错");
         assert!(format!("{:#}", err).contains(PROJECT_TOML_FILE));
     }
+    #[test]
+    fn xlsx_extra_invalid_column_loads_as_aux_instead_of_failing() {
+        let dir = unique_tmp("xlsx_aux");
+        std::fs::create_dir_all(&dir).unwrap();
+        let book = dir.join("g.xlsx");
+        let mut wb = rust_xlsxwriter::Workbook::new();
+        let ws = wb.add_worksheet();
+        ws.set_name("T").unwrap();
+        let rows = [
+            ["ID", "名字", "策划备注"],
+            ["cs", "cs", "随便"],
+            ["int", "str", "任意类型"],
+            ["id", "name", "备注"],
+            ["1", "亚瑟", "保留 | 原样"],
+        ];
+        for (r, row) in rows.iter().enumerate() {
+            for (c, v) in row.iter().enumerate() {
+                ws.write_string(r as u32, c as u16, *v).unwrap();
+            }
+        }
+        std::fs::write(&book, wb.save_to_buffer().unwrap()).unwrap();
+
+        let mut schema = crate::schema_model::TblSchema::default();
+        schema.sections.push(crate::schema_model::SchemaSection {
+            group: "g".into(),
+            name: "T".into(),
+            mode: crate::schema_model::SchemaMode::Table,
+            storage: crate::model::GroupStorage::Xlsx,
+            fields: Vec::new(),
+            preset: Vec::new(),
+            display: None,
+            rules: Vec::new(),
+        });
+        let group = load_xlsx_group("g", &dir, &schema, &book).expect("非规范列不应拖垮加载");
+        let t = &group.tables[0];
+        assert_eq!(t.schema.fields.len(), 3);
+        assert!(!t.schema.fields[0].is_aux());
+        assert!(!t.schema.fields[1].is_aux());
+        let aux = &t.schema.fields[2];
+        assert!(aux.is_aux());
+        assert_eq!(aux.label(), "备注");
+        assert_eq!(aux.tbl_type, "任意类型");
+        assert_eq!(aux.aux.as_ref().unwrap().raw_export, "随便");
+        assert_eq!(t.records[0][2], "保留 | 原样");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
 }

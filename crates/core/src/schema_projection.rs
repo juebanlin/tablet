@@ -15,7 +15,7 @@ pub fn schema_from_project(groups: &[Group], with_preset: bool) -> TblSchema {
     for group in groups {
         for table in &group.tables {
             if table.deleted { continue; }
-            let fields = table.schema.fields.iter().map(|f| SchemaField {
+            let fields = table.schema.fields.iter().filter(|f| !f.is_aux()).map(|f| SchemaField {
                 name: f.name.clone(),
                 tbl_type: f.tbl_type.clone(),
                 export: export_to_code(&f.export),
@@ -164,7 +164,7 @@ pub fn apply_schema_to_project(
                     tbl_type: f.tbl_type.clone(),
                     // .tblschema 的字段行在 `parse_field_line` 已严格校验；这里拿到的是已校验数据
                     export: Export::from_input(&f.export),
-                }).collect();
+                 aux: None, source_col: None,}).collect();
                 let new_len = fields.len();
 
                 let records: Vec<Vec<String>> = if with_preset {

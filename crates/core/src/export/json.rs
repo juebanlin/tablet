@@ -38,7 +38,7 @@ fn build_sep_meta(sep: &SeparatorsSection, used_keys: &std::collections::BTreeSe
 pub fn export_table(table: &Table, strategy: &EmptyStrategy) -> Value {
     let fields = &table.schema.fields;
     let export_cols: Vec<(usize, &FieldDef)> = fields.iter().enumerate()
-        .filter(|(_, f)| is_server_export(&f.export))
+        .filter(|(_, f)| !f.is_aux() && is_server_export(&f.export))
         .collect();
 
     let rows: Vec<Value> = table.records.iter().map(|record| {
@@ -95,6 +95,24 @@ pub fn export_constant(constant: &Constant, strategy: &EmptyStrategy) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn auxiliary_columns_are_not_exported() {
+        use super::super::test_fixtures::{field, table};
+        let mut t = table("Item", vec![field("id", "ID", "int"), field("name", "名字", "str")]);
+        t.schema.fields.push(crate::model::FieldDef {
+            name: "aux_1".into(), desc: "策划备注".into(), tbl_type: "任意".into(),
+            export: crate::model::Export::ClientServer,
+            aux: Some(crate::model::AuxMeta { label: "备注".into(), raw_export: "随便".into() }),
+         source_col: None,});
+        t.records.push(vec!["1".into(), "亚瑟".into(), "内部备注".into()]);
+        let v = export_table(&t, &EmptyStrategy::Null);
+        let row = &v[0];
+        assert!(row.get("id").is_some());
+        assert!(row.get("name").is_some());
+        assert!(row.get("aux_1").is_none(), "辅助列不能导出: {}", v);
+        assert!(row.get("备注").is_none(), "辅助列原始表头也不能导出: {}", v);
+    }
 
     #[test]
     fn data_key_is_the_source_field_name() {

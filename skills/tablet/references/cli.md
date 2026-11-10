@@ -1,7 +1,6 @@
 # tablet-cli 命令参考
 
-同一个 exe 两种模式：`tablet` 无参数 = GUI，带参数 = CLI；`tablet-cli` 是纯 CLI 二进制，命令完全一致。
-下文一律写 `tablet-cli`。
+`tablet-cli` 是纯 CLI 二进制；下文一律使用它。
 
 先确认命令可用：`tablet-cli --version`（或 `tablet --version`）。
 没有的话从源码编：`cargo build -p tablet-cli`（产物 `target/debug/tablet-cli`）。
@@ -44,8 +43,8 @@ tablet-cli project delete --id <id> --confirm
 - `delete` / `clone` 目标不存在 → exit 1，不会假装成功。
 - `import-tbl`：文件名 = 节点名，组名默认取共同父目录；节点名项目级冲突直接失败。
 - `import-xlsx`：文件 = 组，sheet = 节点；工作簿原样复制，保留样式。
-- 任意布局 Excel 的交互式列映射目前只在 GUI（Project 根右键「导入任意 Excel（映射）...」）；
-  CLI 的 `util xlsx-to-tbl` 仍要求 `.tblschema` 模板。
+- 任意布局 Excel 的列映射没有 CLI 等价命令；先用 `.tblschema` + `util xlsx-to-tbl`，
+  或把表整理成标准 4 行表头后用 `project import-xlsx`。
 
 ## schema
 
@@ -71,14 +70,14 @@ tablet-cli schema delete-node  --group <G> --name <N>
 （结构与数据都在工作簿里；manifest 只记 storage）。默认 `tbl`。
 
 工作簿组对 `validate` / `export` / `schema show` 完全透明；`util` 系列是文件工具，不识别这种组。
-GUI 开着时 CLI 会被工作区锁拒绝（`util` / `list-templates` 除外）。
+同一工作区已有 tablet 进程持锁时 CLI 会被拒绝（`util` / `list-templates` 除外）。
 
 `--tbl-fmt` 只决定新表第一次落盘用哪个 `.tbl` 版本（`v3` 块式，默认；`v2` 稀疏行）。之后以文件头为准。
 
 `schema show --rules` 在结构树每项下面列出该节点的**有效规则**（系统内置 + 用户 `# @rule`，
 系统项带 `[系统]` 标记、按 `@01.8.11` 只读）。排查「为什么这行报错」先看它。
 
-`schema export` 对应 GUI 的「导出 Schema... / 另存为模板...」：
+`schema export`：
 
 - 默认导出全部节点、只导结构；`--with-preset` 才带 `# @preset` 数据。
 - `--group` / `--node` 可重复，取并集。
@@ -182,7 +181,7 @@ tablet-cli workspace reload    # 丢弃内存改动，从盘重读
 tablet-cli workspace clear --confirm   # 清空所有 .tbl（危险）
 ```
 
-`workspace info` 是只读快照，**不占工作区锁**：GUI 开着也能读，给 Unity 插件 / CI 显示当前分支。
+`workspace info` 是只读快照，**不占工作区锁**，可并行读取，给 Unity 插件 / CI 显示当前分支。
 Git 直接读 `.git`（含 submodule / worktree）；SVN 用 `svn info --show-item`（1.9+）。
 `--fmt json` 字段：`workdir` / `vcs` / `branch` / `revision` / `detached` / `vcs_error` /
 `last_project` / `projects`。
@@ -218,7 +217,7 @@ tablet-cli util gen-test --lang java|go --schema <s.tblschema> -o <dir>
 ```
 
 `util validate-type` 是写 schema 时最快的自测手段：先验一个值再落文件。
-`util xlsx-to-tbl` 按模板 section 的列名取数；任意布局映射请走 GUI「导入任意 Excel」。
+`util xlsx-to-tbl` 按模板 section 的列名取数；任意布局没有 CLI 等价命令。
 
 ---
 
@@ -259,4 +258,4 @@ done
 | `保存失败：项目存在 N 个验证错误` | 先 `validate` 定位，再改 `.tbl` |
 | `Project X 打不开: … 解析失败` | 该项目的 `project.tblmanifest` 或某个 `.tbl` 坏了；`project new` 仍可用 |
 | `--fmt json` 没输出 JSON | 该命令不支持（只有查询类支持） |
-| `工作区正被另一个 GUI 使用（PID xxx）` | GUI 开着时 CLI 拒绝执行；先关 GUI（`util` / `list-templates` 不受限） |
+| `工作区正被另一个 tablet 进程使用（PID xxx）` | 先结束占用进程（`util` / `list-templates` 不受限） |

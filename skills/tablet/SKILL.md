@@ -1,6 +1,6 @@
 ---
 name: tablet
-description: 生成 / 修改 / 校验 tablet 配置表，并用 tablet-cli 跑通「建项目 → 验证 → 导出」流水线。当用户要新建或扩展 .tblschema 模板、设计字段与类型、追加 # @preset 预设数据、手改 .tbl 数据文件、把任意布局的 Excel 映射导入为 .tbl（GUI）、给列 / 表加校验规则（# @rule，多规则各自级别）、从 Unity 插件 / bat 调外部工具刷新配置、查看工作区版本分支，或执行 tablet-cli 命令（project new / schema / validate / export / excel / workspace）时使用。涵盖 .tblschema v1 与 .tbl v3/v2 格式、7 个基础类型 + 复合范式 + @Ref、规则表达式（when/and/or）、错误/警告/信息分级、12 种导出格式、解析器强制的命名规则、退出码约定。
+description: 生成 / 修改 / 校验 tablet 配置表，并用 tablet-cli 跑通「建项目 → 验证 → 导出」流水线。当用户要新建或扩展 .tblschema 模板、设计字段与类型、追加 # @preset 预设数据、手改 .tbl 数据文件、用 CLI 导入 / 导出 Excel 组、给列 / 表加校验规则（# @rule，多规则各自级别）、从 Unity 插件 / bat 调外部工具刷新配置、查看工作区版本分支，或执行 tablet-cli 命令（project new / schema / validate / export / excel / workspace）时使用。涵盖 .tblschema v1 与 .tbl v3/v2 格式、7 个基础类型 + 复合范式 + @Ref、规则表达式（when/and/or）、错误/警告/信息分级、12 种导出格式、解析器强制的命名规则、退出码约定。
 user-invocable: true
 allowed-tools:
   - Read
@@ -28,12 +28,12 @@ allowed-tools:
 |---|---|
 | 从零建一套配置 | 写 `<id>.tblschema`（含 `# @preset` 数据）→ `project new --from-file` |
 | 已有的项目加/改数据 | 直接改 `projects/<id>/config/<group>/<Name>.tbl` → `workspace save` |
-| 数据在 `.xlsx` 里的组（工作簿组） | 见 §五之二：**不要手写 xlsx**，用 GUI / Excel / schema 命令 |
-| 用户给的是任意布局的 Excel | GUI：Project 根右键「导入任意 Excel（映射）...」；见 §五之四 |
+| 数据在 `.xlsx` 里的组（工作簿组） | 见 §五之二：**不要手写 xlsx**；用 `tablet-cli excel` / `schema` 命令 |
+| 用户给的是任意布局的 Excel | 先整理成标准 4 行表头后 `project import-xlsx`；或写 `.tblschema` + `util xlsx-to-tbl`。任意布局列映射没有 CLI 等价命令 |
 | 加一个组 / 表 / 常量 / 枚举 | `tablet-cli schema add-*`（会自动校验并落盘） |
 | 只想知道结构 | `tablet-cli schema show --fmt json` |
 | 看每个节点的有效校验规则 | `tablet-cli schema show --rules` |
-| 给某列加约束 | 在 `.tblschema` 段内写 `# @rule`（见 §五之三），或 GUI 右键「校验规则」 |
+| 给某列加约束 | 新建模板写在 `.tblschema` 段内的 `# @rule`；已有项目直接编辑 `project.tblmanifest`（见 §五之三） |
 | 导出项目结构 / 存为模板 | `tablet-cli schema export --out <file>` / `--as-template --meta-id ID` |
 | 看工作区在哪个分支 | `tablet-cli workspace info`（不占锁，CLI / Unity 插件都能读） |
 | Unity 插件按钮刷新配置 | 见 §六之二；宿主直接调 `export data --json` + `export code --csharp-unity` |
@@ -216,11 +216,12 @@ max_level|int|100|cs|等级上限
 - Table sheet：第 1–4 行是 desc / export / type / 字段名，第 5 行起是数据。
   这 4 行**就是结构真相源**，字段名 / 类型 / export 改了会按新表头加载。
 - Constant sheet：1 行表头 `name | type | value | export | desc`；Enum：`id | name | desc`。
-- **不要用文本工具手写 `.xlsx`**（二进制）。要改数据：GUI 里编辑、或「用 Excel 打开（原文件）」、
-  或把整组转成 `.tbl`（复制组 → 粘贴为 .tbl Group）。
+- **不要用文本工具手写 `.xlsx`**（二进制）。数据用
+  `tablet-cli excel export --group G -o <file.xlsx>` / `excel import --group G --file <file.xlsx>`
+  往返；或让项目改用 `.tbl` 组。
 - 建组：`schema add-group --name G --storage xlsx`；之后 `add-table` / `add-constant` / `add-enum`
   自动落成 sheet（节点名 = sheet 名，必须 PascalCase 且 ≤31 字符）。
-- GUI 开着时 CLI 会拒绝执行（工作区锁）；`util` / `list-templates` 除外。
+- 同一工作区已有 tablet 进程持锁时 CLI 会拒绝执行（`util` / `list-templates` 除外）。
 
 ## 五之三、校验规则（`# @rule`）
 
@@ -339,29 +340,9 @@ enum 的 `id`（唯一 / 必填 / 正整数）、enum 的 `name`（唯一 / 必�
 - 改了被引用节点（`@X` 或 `ref_exists` 的目标）后，依赖它的节点会**自动重算**。
 - 阻断保存的级别由项目策略决定（`project.toml` 的 `[validate]`：error / warning / info
   各取 `block` / `report` / `ignore`，默认 error=block、warning=report、info=ignore）。
-  不要手写 `project.toml`，用 GUI 的「项目设置 → 校验」。
+  直接编辑 `project.toml` 的 `[validate]`；这是文本配置，不是生成物。
 - CI 用 `validate --strict`：所有「仅提示」级也算失败。
 - 查看有效规则：`tablet-cli schema show --rules`。
-
-## 五之四、任意 Excel 映射导入（GUI）
-
-源 Excel 的表头行、列顺序、列名都不固定时，不要手写 `.tbl`，走 GUI：
-Project 根右键 →「导入任意 Excel（映射）...」。
-
-- 源文件只读；输出是标准 **Tbl 组**（`config/<group>/<Node>.tbl`），不是 xlsx 组。
-- 左侧 Sheet 轨道列出全部工作表与状态；每个 Sheet 独立映射，可「导入当前」或「导入全部就绪」。
-- 节点类型可自动识别、也可手动改：
-  - 标准 4 行表头（说明/导出/类型/字段）→ **表**；
-  - 单行表头恰好 `name/type/value`（可带 `export/desc`）→ **常量**；
-  - 单行表头恰好 `id/name`（可带 `desc`）→ **枚举**。
-- 表：字段行 + 数据起始行 + 可选说明行 / 类型行 / 导出行（0 = 没有）；
-  字段名自动转 snake_case（`HeroName → hero_name`、`URLPath → url_path`、`道具ID → dao_ju_id`），
-  类型按类型行或样本推断，导入前全部可改。
-- 常量 / 枚举：源列映射到固定目标列（常量 `name/type/value/export/desc`，枚举 `id/name/desc`），
-  按表头自动匹配，可手动改。
-- 源表预览 / 导入结果 / 检查三页签；字段名、关键字、重复、缺列逐行实时提示。
-- 4 行表头已经合规的工作簿仍走「导入 Excel Group...」，那是原样复制、保留样式。
-- CLI 没有等价命令：`util xlsx-to-tbl` 需要 `.tblschema` 模板，不是任意列映射。
 
 ## 六、CLI 速查
 
@@ -374,7 +355,7 @@ tablet-cli [-w <workdir>] [--project <id>] [--fmt json] <命令>
 | 看模板 | `list-templates` |
 | 项目 | `project list` / `info` / `new` / `rename` / `delete --confirm` / `clone` |
 | 原生导入 | `project import-tbl --id P [--group G] <PATH>...`；`project import-xlsx --id P <FILE.xlsx>` |
-| 模板驱动 Excel 取数 | `util xlsx-to-tbl <f.xlsx> --schema <tpl.tblschema> -o <dir>`（列名要匹配模板；任意布局见 §五之四） |
+| 模板驱动 Excel 取数 | `util xlsx-to-tbl <f.xlsx> --schema <tpl.tblschema> -o <dir>`（列名要匹配模板；任意布局没有 CLI 等价命令） |
 | 结构 | `schema show [--rules]`；`add-group --name G [--storage tbl\|xlsx]`；`add-table --group G --name N [--tbl-fmt v2\|v3]`；`add-constant --group G --name N`；`add-enum --group G --name N --entry 1:X:说明` |
 | 导出结构 | `schema export --out <file> [--group G] [--node G/N] [--with-preset]`；`schema export --as-template --meta-id ID` |
 | 改名 / 删除 | `schema rename-group --old A --new B`；`schema rename-node --group G --old A --new B`；`schema delete-group --name G`；`schema delete-node --group G --name N` |
@@ -394,7 +375,7 @@ tablet-cli [-w <workdir>] [--project <id>] [--fmt json] <命令>
 
 tablet 不内置 Unity 配置或命令。宿主（bat / Unity EditorWindow）自己调用：
 
-1. 一次性把导出路径设好（GUI「项目设置 → 导出」）：
+1. 一次性把导出路径设好（编辑 `project.toml` 的 `[export]`；也可每次命令用 `-o` 覆盖）：
    - `[export.server] data_output` → JSON 落到 `<data_output>/json/`
    - `[export.client.csharp_unity] code_output` → C# 落到该目录
    - 绝对 / 相对都可以；**相对路径按 `projects/<id>/` 解析**。
@@ -426,7 +407,7 @@ tablet-cli -w <config仓库根> --project game export code --csharp-unity
 
 ## 八、不要做的事
 
-- ❌ 除了 `.tblschema` / `.tbl`，不要手写其它配置文件（`project.tblmanifest` / `project.toml` / `tablet.toml`）；临时改配置用 `-s key=value`。
+- ❌ 不要手写二进制 / 生成物。`.tblschema` / `.tbl` / `project.tblmanifest` / `project.toml` / `tablet.toml` 都是文本配置，可按格式直接编辑；能用 CLI 表达的改动优先用 CLI。
 - ❌ 不要在 `.tblschema` 里给 constant / enum 段写数据行——只能进 `# @preset`。
 - ❌ 不要用中文导出码、不要给枚举或 table 的 id 用 0 / 负数、不要用关键字当字段名。
 - ❌ 不要给系统已保证的列再挂 `unique()` / `non_empty()`（只会得到冗余警告）。
@@ -451,7 +432,7 @@ tablet-cli -w <config仓库根> --project game export code --csharp-unity
 # 运行日志（写在 workdir 根）
 tablet.log
 tablet-crash.log
-# Excel 桥接 / 编辑产生的临时工作簿（GUI 启动、退出时自动清理）
+# Excel 桥接 / 编辑产生的临时工作簿（tablet 进程启动、退出时自动清理）
 projects/*/.excel/
 projects/*/.tbl-cache/
 # xlsx 组保存时的中间文件

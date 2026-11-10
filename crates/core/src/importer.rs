@@ -41,7 +41,7 @@ pub fn xlsx_to_tbl(schema: &TblSchema, xlsx_path: &Path, output_dir: &Path) -> R
                     desc: f.desc.clone(),
                     tbl_type: f.tbl_type.clone(),
                     export: Export::from_input(&f.export),
-                }).collect();
+                 aux: None, source_col: None,}).collect();
                 if fields.is_empty() {
                     anyhow::bail!("[{}] 没有字段，无法映射 Excel", sec.name);
                 }

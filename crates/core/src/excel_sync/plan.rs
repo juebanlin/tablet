@@ -365,7 +365,7 @@ mod tests {
             g.tables[0].schema.fields.push(crate::model::FieldDef {
                 name: "atk".into(), desc: "攻击".into(),
                 tbl_type: "int".into(), export: crate::model::Export::ClientServer,
-            });
+             aux: None, source_col: None,});
             g
         };
         let sheets = vec![matched(vec![vec!["1", "carol"], vec!["2", "bob"]])];
@@ -382,7 +382,7 @@ mod tests {
         g.tables[0].schema.fields.push(crate::model::FieldDef {
             name: "atk".into(), desc: "攻击".into(),
             tbl_type: "int".into(), export: crate::model::Export::ClientServer,
-        });
+         aux: None, source_col: None,});
         let sheets = vec![xlsx(&[("id", "编号"), ("name", "名字"), ("公式", "策划的")],
                               &[vec!["1", "alice", "=A1"]])];
         let p = &plan_group(&g, Some(&sheets)).pairs[0];
@@ -402,7 +402,7 @@ mod tests {
         g.tables[0].schema.fields.push(crate::model::FieldDef {
             name: "atk".into(), desc: "攻击".into(),
             tbl_type: "int".into(), export: crate::model::Export::ClientServer,
-        });
+         aux: None, source_col: None,});
         let sheets = vec![xlsx(&[("id", "编号"), ("name2", "名字"), ("atk", "攻击")],
                               &[vec!["1", "alice", "9"]])];
         let p = &plan_group(&g, Some(&sheets)).pairs[0];

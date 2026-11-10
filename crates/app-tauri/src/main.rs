@@ -14,7 +14,8 @@ use std::sync::Mutex;
 use tauri::{Emitter, Manager};
 
 use backend::{
-    Backend, CreateProjectRequest, ExcelMapRequest, ExcelPollItem, ExcelPreview, ExportFormatsUi,
+    Backend, CreateProjectRequest, ExcelExportSelection, ExcelImportRequest, ExcelMapRequest,
+    ExcelPollItem, ExcelPreview, ExcelSheetInspect, ExportFormatsUi,
     CellIssue, EditResult, ExcelSyncRowUi, ExportReport, ExportUi, GlobalSettingsUi, PasteGroupPreviewUi,
     PasteGroupRowUi,
     ProjectSettings, RefPickerData, RuleItem, RulesPayload,
@@ -75,6 +76,17 @@ fn commit_cell_fast(
     let mut result = b.edit_result();
     result.display = display;
     Ok(result)
+}
+
+#[tauri::command]
+fn set_column_aux(
+    state: tauri::State<'_, AppState>,
+    col: usize,
+    aux: bool,
+) -> Result<Snapshot, String> {
+    let mut b = lock(&state)?;
+    b.set_column_aux(col, aux)?;
+    Ok(b.snapshot())
 }
 
 #[tauri::command]
@@ -586,6 +598,33 @@ fn excel_import(
 }
 
 #[tauri::command]
+fn excel_export_selected(
+    state: tauri::State<'_, AppState>,
+    path: String,
+    selections: Vec<ExcelExportSelection>,
+) -> Result<String, String> {
+    lock(&state)?.excel_export_selected(path, selections)
+}
+
+#[tauri::command]
+fn excel_inspect_workbook(
+    state: tauri::State<'_, AppState>,
+    path: String,
+) -> Result<Vec<ExcelSheetInspect>, String> {
+    lock(&state)?.excel_inspect_workbook(&path)
+}
+
+#[tauri::command]
+fn excel_import_multi(
+    state: tauri::State<'_, AppState>,
+    request: ExcelImportRequest,
+) -> Result<Snapshot, String> {
+    let mut b = lock(&state)?;
+    b.excel_import_multi(request)?;
+    Ok(b.snapshot())
+}
+
+#[tauri::command]
 fn excel_files(state: tauri::State<'_, AppState>) -> Result<Vec<String>, String> {
     Ok(lock(&state)?.excel_files())
 }
@@ -980,6 +1019,15 @@ fn open_project_dir(
 }
 
 #[tauri::command]
+fn open_group_dir(
+    state: tauri::State<'_, AppState>,
+    project: String,
+    group: String,
+) -> Result<(), String> {
+    lock(&state)?.open_group_dir(&project, &group)
+}
+
+#[tauri::command]
 fn reload_group(
     state: tauri::State<'_, AppState>,
     project: String,
@@ -1133,6 +1181,7 @@ fn run_gui(workdir_arg: Option<std::path::PathBuf>) -> anyhow::Result<()> {
             commit_cell,
             commit_cell_fast,
             commit_header,
+            set_column_aux,
             clear_cells,
             paste_cells,
             insert_row,
@@ -1176,6 +1225,9 @@ fn run_gui(workdir_arg: Option<std::path::PathBuf>) -> anyhow::Result<()> {
             schema_import_preview,
             schema_import,
             excel_export,
+            excel_export_selected,
+            excel_inspect_workbook,
+            excel_import_multi,
             excel_import,
             excel_begin_edit,
             excel_poll,
@@ -1225,6 +1277,7 @@ fn run_gui(workdir_arg: Option<std::path::PathBuf>) -> anyhow::Result<()> {
             import_tbl,
             import_xlsx_group,
             open_project_dir,
+            open_group_dir,
             reload_group,
             export_template,
         ])

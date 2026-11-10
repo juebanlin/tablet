@@ -876,7 +876,7 @@ pub struct TableSchema {
 
 impl TableSchema {
     pub fn index_col(&self) -> Option<usize> {
-        self.fields.iter().position(|f| f.name == "id")
+        self.fields.iter().position(|f| !f.is_aux() && f.name == "id")
     }
 }
 
@@ -886,6 +886,33 @@ pub struct FieldDef {
     pub desc: String,
     pub tbl_type: String,
     pub export: Export,
+    /// 辅助列元数据：`Some` = 不参与校验 / 引用 / 导出，只随表格展示与保存。
+    /// `name` 是内部唯一 key（`aux_1` 等），原始表头/非法 export 放这里。
+    pub aux: Option<AuxMeta>,
+    /// xlsx 组里这一列在 workbook 的源列号（1-based）。保存时优先按它回写，
+    /// 这样“辅助列升级/改名”不会因为找不到旧表头而被追加到最后一列。
+    /// `.tbl` 组为 None。
+    pub source_col: Option<u32>,
+}
+
+/// 辅助列（Excel 里的非 tablet 规范列）需要原样保留的原始信息。
+#[derive(Debug, Clone, PartialEq)]
+pub struct AuxMeta {
+    /// 原始表头（可以不是合法字段名）。
+    pub label: String,
+    /// 原始 export 单元格文本；非法值也原样保留，保存时写回。
+    pub raw_export: String,
+}
+
+impl FieldDef {
+    pub fn is_aux(&self) -> bool {
+        self.aux.is_some()
+    }
+
+    /// 展示名：辅助列用原始表头，普通列用字段名。
+    pub fn label(&self) -> &str {
+        self.aux.as_ref().map(|a| a.label.as_str()).unwrap_or(&self.name)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]

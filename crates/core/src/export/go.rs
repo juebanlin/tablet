@@ -367,7 +367,7 @@ fn gen_table_tpl(table: &Table, pkg: &str, _group: &str, enum_names: &HashSet<St
     let key = table.name.clone();
 
     let fields: Vec<&FieldDef> = table.schema.fields.iter()
-        .filter(|f| is_server_export(&f.export))
+        .filter(|f| !f.is_aux() && is_server_export(&f.export))
         .collect();
 
     writeln!(s, "package {}", pkg).unwrap();

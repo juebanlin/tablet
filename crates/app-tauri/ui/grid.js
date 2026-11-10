@@ -9,6 +9,8 @@
 // 选择变化只改 class，不重建 DOM —— 拖选时不能卡。
 
 const ALPHA = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+/** 最后一条数据列之后的空白宽度：内容刚好铺满视口时也能横向滚动。 */
+const SPACER_W = 160;
 
 /** 列序号 → Excel 列字母：0=A、25=Z、26=AA……与 Slint 版 col_letter 一致。 */
 function colLetter(idx) {
@@ -138,6 +140,11 @@ class SheetGrid {
     this.closeHeaderPicker();
     const prev = this.node;
     const sameNode = !!prev && !!node && prev.title === node.title;
+    // 拖拽列宽期间如果恰好收到一次快照刷新（大表校验慢时常见），快照里的旧列宽
+    // 会把手动调整覆盖掉；这里保留拖拽中的本地列宽，松手后由 save_grid_view 落盘。
+    const keepWidths = this._resizing && sameNode
+      ? { auto: this.autoWidth, widths: this.colWidths.slice() }
+      : null;
     const keep =
       opts.keepSelection && sameNode
         ? { anchor: { ...this.anchor }, focus: { ...this.focus }, kind: this.kind }
@@ -166,6 +173,10 @@ class SheetGrid {
         }
       }
       if (cached && !this.autoWidth) this.colWidths = cached.slice();
+    }
+    if (keepWidths && keepWidths.widths.length === this.colWidths.length) {
+      this.autoWidth = keepWidths.auto;
+      this.colWidths = keepWidths.widths;
     }
     this.render();
 
@@ -507,6 +518,10 @@ class SheetGrid {
         this.closeHeaderPicker();
       });
     }
+    // 菜单宽度按内容自适应，不跟随列宽（宽列会把菜单拉得很大）。
+    popup.style.width = "max-content";
+    popup.style.minWidth = "120px";
+    popup.style.maxWidth = "min(280px, calc(100vw - 16px))";
     popup.style.left = `${Math.max(4, Math.min(rect.left, window.innerWidth - 240))}px`;
     popup.style.top = `${Math.max(4, Math.min(rect.bottom + 2, window.innerHeight - 320))}px`;
     document.body.appendChild(popup);
@@ -585,8 +600,15 @@ class SheetGrid {
       colEls.push(col);
       colgroup.appendChild(col);
     }
+    // 末尾空白列：给最后一条数据之后留出一条空白，像 Excel 一样可以继续横向滚动。
+    const spacerCol = document.createElement("col");
+    spacerCol.style.width = `${SPACER_W}px`;
+    colgroup.appendChild(spacerCol);
     this.colEls = colEls;
     this.table.appendChild(colgroup);
+    // 显式表格宽度 = 各列 + 行号 + 末尾空白。否则 `table-layout: fixed` 的表格
+    // 宽度 auto 会填满视口，列一多就按比例压缩列宽，永远不会出现横向滚动条。
+    this.syncTableWidth();
 
     // 表头
     const thead = document.createElement("thead");
@@ -613,6 +635,7 @@ class SheetGrid {
       this.colheads.push(th);
       letterRow.appendChild(th);
     }
+    letterRow.appendChild(this.makeSpacerCell("th"));
     thead.appendChild(letterRow);
 
     n.headers.forEach((row, hi) => {
@@ -625,6 +648,7 @@ class SheetGrid {
         const th = document.createElement("th");
         th.className = "hdr";
         th.dataset.header = `${hi}:${ci}`;
+        if (this.node.kinds?.[ci] === "aux") th.classList.add("aux");
         if (this.isReadonlyCol(ci)) th.classList.add("readonly");
         if (hi === 1 && !this.isReadonlyCol(ci)) th.classList.add("export");
         if (hi === 2 && !this.isReadonlyCol(ci)) th.classList.add("type");
@@ -632,6 +656,7 @@ class SheetGrid {
         cells.push(th);
         tr.appendChild(th);
       });
+      tr.appendChild(this.makeSpacerCell("th"));
       this.headerCells.push(cells);
       thead.appendChild(tr);
     });
@@ -677,21 +702,30 @@ class SheetGrid {
     for (let c = 0; c < cols; c++) {
       const td = document.createElement("td");
       td.dataset.cell = `${r}:${c}`;
+      if (this.node.kinds?.[c] === "aux") td.classList.add("aux");
       if (this.isReadonlyCol(c)) td.classList.add("readonly");
       if (this.isNumericCol(c)) td.classList.add("num");
       this.paintCell(td, r, c);
       rowCells.push(td);
       tr.appendChild(td);
     }
+    tr.appendChild(this.makeSpacerCell("td"));
     this.tds[r] = rowCells;
     return tr;
+  }
+
+  /** 表格末尾的空白单元格：只占位，不参与选中 / 复制 / 编辑。 */
+  makeSpacerCell(tag) {
+    const cell = document.createElement(tag);
+    cell.className = "spacer";
+    return cell;
   }
 
   virtualGapRow(height) {
     const tr = document.createElement("tr");
     tr.className = "virtual-gap";
     const td = document.createElement("td");
-    td.colSpan = this.cols + 1;
+    td.colSpan = this.cols + 2;
     td.style.height = `${height}px`;
     td.style.padding = "0";
     td.style.border = "0";
@@ -781,23 +815,23 @@ class SheetGrid {
   }
 
   paintCell(td, r, c) {    const text = this.displayCellText(r, c);
-    const kind = this.node.kinds[c] || "text";
-    const arrow = ["ref", "export", "type"].includes(kind) && text !== "";
     td.innerHTML = "";
     td.appendChild(document.createTextNode(text));
-    if (arrow) {
-      const span = document.createElement("span");
-      span.className = "arrow";
-      span.textContent = "▼";
-      td.appendChild(span);
-    }
     td.classList.toggle("has-error", this.errorSet?.has(`${r}:${c}`) || false);
   }
 
   setColWidth(c, w) {
     this.colWidths[c] = Math.max(40, Math.round(w));
     this.colEls[c].style.width = this.colWidths[c] + "px";
+    this.syncTableWidth();
     if (!this.autoWidth) this.cacheWidths();
+  }
+
+  /** 把表格宽度钉成列宽总和，超出视口时由 .grid-scroll 出横向滚动条。 */
+  syncTableWidth() {
+    if (!this.node || !this.colWidths.length) return;
+    const total = this.gutterW + this.colWidths.reduce((a, b) => a + b, 0) + SPACER_W;
+    this.table.style.width = `${total}px`;
   }
 
   cacheWidths() {
@@ -821,6 +855,7 @@ class SheetGrid {
     if (!this.node) return;
     for (let c = 0; c < this.cols; c++) this.colWidths[c] = this.autoFitWidth(c);
     if (this.colEls) this.colEls.forEach((col, c) => (col.style.width = this.colWidths[c] + "px"));
+    this.syncTableWidth();
     if (!this.autoWidth) this.cacheWidths();
     if (!silent) this.onLog(0, "列宽已自适应");
   }
@@ -993,7 +1028,10 @@ class SheetGrid {
     if (this.kind === "all") return `整表 ${this.rows}行×${this.cols}列`;
     if (this.kind === "row") return `第 ${this.focus.r + 1} 行`;
     if (this.kind === "col") return `${colLetter(this.focus.c)} 列`;
-    if (this.kind === "cell") return `${colLetter(this.focus.c)}${this.focus.r + 1}`;
+    if (this.kind === "cell") {
+      const base = `${colLetter(this.focus.c)}${this.focus.r + 1}`;
+      return this.node?.kinds?.[this.focus.c] === "aux" ? `${base} · 普通列（不导出）` : base;
+    }
     const b = this.bounds();
     const rows = b.r1 - b.r0 + 1;
     const cols = b.c1 - b.c0 + 1;
@@ -1232,14 +1270,7 @@ class SheetGrid {
   }
 
   paintHeader(th, hi, ci) {
-    const text = this.node.headers[hi][ci];
-    th.textContent = text;
-    if ((hi === 1 || hi === 2) && !this.isReadonlyCol(ci)) {
-      const span = document.createElement("span");
-      span.className = "arrow";
-      span.textContent = "▼";
-      th.appendChild(span);
-    }
+    th.textContent = this.node.headers[hi][ci];
   }
 
   setActiveValue(value) {
@@ -1612,10 +1643,12 @@ class SheetGrid {
     const startX = e.clientX;
     const startW = this.colWidths[c];
     this.autoWidth = false;
+    this._resizing = true;
     const move = (ev) => this.setColWidth(c, startW + ev.clientX - startX);
     const up = () => {
       document.removeEventListener("pointermove", move);
       document.removeEventListener("pointerup", up);
+      this._resizing = false;
       this.onLog(0, `${colLetter(c)} 列宽 ${this.colWidths[c]}px`);
     };
     document.addEventListener("pointermove", move);

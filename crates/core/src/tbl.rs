@@ -87,7 +87,7 @@ impl TableCodec for V2Codec {
                 desc: descs.get(i).map(|s| s.trim().to_string()).unwrap_or_default(),
                 tbl_type: types.get(i).unwrap_or(&"str").trim().to_string(),
                 export,
-            });
+             aux: None, source_col: None,});
         }
 
         let records: Vec<Vec<String>> = data_lines.iter()
@@ -173,7 +173,26 @@ impl TableCodec for V3Codec {
                     desc: String::new(),
                     tbl_type: String::from("str"),
                     export: Export::ClientServer,
-                });
+                    aux: None,
+                 source_col: None,});
+                continue;
+            }
+
+            // @aux block start：辅助列（原始 Excel 表头 / 非法类型 / 非法 export）
+            if let Some(key) = trimmed.strip_prefix("@aux ") {
+                if let Some(f) = cur_field.take() { field_defs.push(f); }
+                if let Some(r) = cur_record.take() { records.push(r); }
+                let key = key.trim().to_string();
+                cur_field = Some(FieldDef {
+                    name: key.clone(),
+                    desc: String::new(),
+                    tbl_type: String::new(),
+                    export: Export::ClientServer,
+                    aux: Some(crate::model::AuxMeta {
+                        label: key,
+                        raw_export: String::new(),
+                    }),
+                 source_col: None,});
                 continue;
             }
 
@@ -191,23 +210,40 @@ impl TableCodec for V3Codec {
                 let key = key.trim();
                 let val = value.trim();
                 if let Some(ref mut f) = cur_field {
+                    let is_aux = f.aux.is_some();
                     match key {
                         // 写盘走 `encode_v3`（反斜杠 / 换行转义，竖线原样），这里 decode 回去。
                         // 漏了的话转义序列会原样留在 desc 里（V2 那条路也是解码的）。
                         "desc" => f.desc = decode(val, "txt"),
                         "export" => {
-                            let Some(e) = Export::parse_code(val) else {
-                                bail!("{}: @field {} 的 export 值 \"{}\" 不合法——只接受短码 cs / c / s / -",
-                                    path.display(), f.name, val);
-                            };
-                            f.export = e;
+                            if is_aux {
+                                // 辅助列保留原始文本；解析失败也原样写回。
+                                if let Some(meta) = f.aux.as_mut() {
+                                    meta.raw_export = val.to_string();
+                                }
+                                f.export = Export::from_input(val);
+                            } else {
+                                let Some(e) = Export::parse_code(val) else {
+                                    bail!("{}: @field {} 的 export 值 \"{}\" 不合法——只接受短码 cs / c / s / -",
+                                        path.display(), f.name, val);
+                                };
+                                f.export = e;
+                            }
                         }
                         "type" => f.tbl_type = val.to_string(),
+                        "name" if is_aux => {
+                            if let Some(meta) = f.aux.as_mut() {
+                                meta.label = decode(val, "txt");
+                            }
+                        }
                         // 拼错的属性名不能吞：`descr:` / `typo:` 会让这段描述/类型
                         // 悄悄变回默认值，而文件看着没毛病。
                         _ => bail!(
-                            "{}: @field {} 有未知属性 \"{}\"（只认 desc / export / type）",
-                            path.display(), f.name, key
+                            "{}: @{} {} 有未知属性 \"{}\"（只认 name / desc / export / type）",
+                            path.display(),
+                            if is_aux { "aux" } else { "field" },
+                            f.name,
+                            key
                         ),
                     }
                 } else if let Some(ref mut r) = cur_record {
@@ -241,7 +277,7 @@ impl TableCodec for V3Codec {
             field_defs.insert(0, FieldDef {
                 name: "id".into(), desc: "ID".into(),
                 tbl_type: "int".into(), export: Export::ClientServer,
-            });
+             aux: None, source_col: None,});
         }
 
         // normalize records to field_defs width
@@ -270,16 +306,26 @@ impl TableCodec for V3Codec {
         s.push_str("#mode table\n");
         s.push_str("---\n");
 
-        // @field blocks
+        // @field / @aux blocks
         for f in fields {
             s.push('\n');
-            s.push_str(&format!("@field {}\n", f.name));
-            if !f.desc.is_empty() {
-                // v3 的 `desc:<值>` 不靠 `|` 分列，竖线原样写（见 tbl_str::encode_v3）。
-                s.push_str(&format!("  desc:{}\n", encode_v3(&f.desc)));
+            if let Some(meta) = &f.aux {
+                s.push_str(&format!("@aux {}\n", f.name));
+                s.push_str(&format!("  name:{}\n", encode_v3(&meta.label)));
+                if !f.desc.is_empty() {
+                    s.push_str(&format!("  desc:{}\n", encode_v3(&f.desc)));
+                }
+                s.push_str(&format!("  export:{}\n", meta.raw_export));
+                s.push_str(&format!("  type:{}\n", f.tbl_type));
+            } else {
+                s.push_str(&format!("@field {}\n", f.name));
+                if !f.desc.is_empty() {
+                    // v3 的 `desc:<值>` 不靠 `|` 分列，竖线原样写（见 tbl_str::encode_v3）。
+                    s.push_str(&format!("  desc:{}\n", encode_v3(&f.desc)));
+                }
+                s.push_str(&format!("  export:{}\n", f.export.to_tbl()));
+                s.push_str(&format!("  type:{}\n", f.tbl_type));
             }
-            s.push_str(&format!("  export:{}\n", f.export.to_tbl()));
-            s.push_str(&format!("  type:{}\n", f.tbl_type));
         }
 
         // [id] records
@@ -483,8 +529,8 @@ mod tests {
 
     fn table_with_desc(desc: &str) -> Table {
         let f = vec![
-            FieldDef { name: "id".into(), desc: "ID".into(), tbl_type: "int".into(), export: Export::ClientServer },
-            FieldDef { name: "name".into(), desc: desc.into(), tbl_type: "str".into(), export: Export::ClientServer },
+            FieldDef { name: "id".into(), desc: "ID".into(), tbl_type: "int".into(), export: Export::ClientServer , aux: None, source_col: None},
+            FieldDef { name: "name".into(), desc: desc.into(), tbl_type: "str".into(), export: Export::ClientServer , aux: None, source_col: None},
         ];
         Table {
             name: "T".into(), original_name: "T".into(), path: std::path::PathBuf::new(),
@@ -516,13 +562,52 @@ mod tests {
         }
     }
 
+    #[test]
+    fn v3_aux_block_round_trips() {
+        let fields = vec![
+            FieldDef { name: "id".into(), desc: "ID".into(), tbl_type: "int".into(),
+                export: Export::ClientServer, aux: None , source_col: None},
+            FieldDef { name: "aux_1".into(), desc: "策划备注".into(), tbl_type: "任意类型".into(),
+                export: Export::from_input("随便"),
+                aux: Some(crate::model::AuxMeta {
+                    label: "备注".into(), raw_export: "随便".into(),
+                }) , source_col: None},
+        ];
+        let table = Table {
+            name: "T".into(), original_name: "T".into(), path: Default::default(),
+            schema: TableSchema { fields: fields.clone() },
+            records: vec![vec!["1".into(), "保留 | 原样".into()]],
+            dirty: false, deleted: false,
+            original_records: vec![], original_fields: fields,
+            saved: true, fmt_ver: TblVersion::V3,
+            display_field: None, original_display_field: None,
+            rules: Vec::new(), original_rules: Vec::new(),
+        };
+        let txt = serialize_table(&table);
+        assert!(txt.contains("@aux aux_1"), "{txt}");
+        assert!(txt.contains("name:备注"), "{txt}");
+        assert!(txt.contains("type:任意类型"), "{txt}");
+        assert!(txt.contains("export:随便"), "{txt}");
+        let p = tmp("aux");
+        std::fs::write(&p, &txt).unwrap();
+        let back = match parse_tbl(&p).unwrap() { TblFile::Table(t) => t, _ => panic!() };
+        let _ = std::fs::remove_file(&p);
+        assert_eq!(back.schema.fields.len(), 2);
+        let aux = &back.schema.fields[1];
+        assert!(aux.is_aux());
+        assert_eq!(aux.label(), "备注");
+        assert_eq!(aux.tbl_type, "任意类型");
+        assert_eq!(aux.aux.as_ref().unwrap().raw_export, "随便");
+        assert_eq!(back.records[0][1], "保留 | 原样");
+    }
+
     /// 回归：v3 的值区不以 `|` 分列，竖线要原样保留。
     /// 以前保存会把没编辑过的 `a|b` 改写成 `a\|b`，git 上凭空多出一列改动。
     #[test]
     fn v3_round_trip_keeps_literal_pipe_in_txt_cells() {
         let f = vec![
-            FieldDef { name: "id".into(), desc: "ID".into(), tbl_type: "int".into(), export: Export::ClientServer },
-            FieldDef { name: "property".into(), desc: "属性".into(), tbl_type: "txt".into(), export: Export::ClientServer },
+            FieldDef { name: "id".into(), desc: "ID".into(), tbl_type: "int".into(), export: Export::ClientServer , aux: None, source_col: None},
+            FieldDef { name: "property".into(), desc: "属性".into(), tbl_type: "txt".into(), export: Export::ClientServer , aux: None, source_col: None},
         ];
         let value = "property:1001#100|1002#10";
         let table = Table {

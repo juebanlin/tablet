@@ -253,6 +253,23 @@ start_pos   | Tuple2<int,int> | 5,10 | cs | 出生坐标
 - **拼错会报错，不会静默丢数据**：记录里出现未声明的字段名、`@field` 里出现
   `desc` / `export` / `type` 之外的属性，都会带 `[记录 id]` / 字段名报错。
 
+### 普通列 —— `@aux`（非 tablet 规范列）
+
+xlsx 组里不合法的新增列会以普通列保存；`.tbl` 用同类块承载：
+
+```text
+@aux aux_1
+  name:策划备注
+  desc:内部备注
+  export:随便
+  type:任意类型
+```
+
+- `@aux <key>` 在记录前，和 `@field` 同级；记录行用 key（如 `aux_1:值`）；
+- `name` 是原始表头，`type` / `export` 原样保存，不校验；
+- 普通列不参与校验、引用、导出、代码生成；不要主动创建普通列，除非用户明确要求在
+  `.tbl` 里保留一列非 tablet 数据。
+
 ### Constant / Enum —— v2（CSV）
 
 ```text
@@ -320,7 +337,7 @@ Enum sheet（1 行表头）
 - 字段按**表头里的字段名**对齐（策划可以在中间插私有列，工具不碰）；
 - schema 有 section、workbook 没有同名 sheet → 项目打不开；workbook 多出来的 sheet → 忽略；
 - sheet 名 ≤31 字符，且不能含 `\ / ? * [ ] :`；
-- **不要手写这个文件**：二进制、且要保留样式。用 GUI / Excel / CLI 的 schema 命令。
+- **不要手写这个文件**：二进制、且要保留样式。用 `tablet-cli schema` / `tablet-cli excel` 生成或往返。
 
 ---
 

@@ -328,10 +328,10 @@ fn value_to_ts(raw: &str, tbl_type_str: &str, sep: &SeparatorsSection) -> String
 pub fn export_table_ts(table: &Table, side: TypeScriptSide) -> String {
     let fields = &table.schema.fields;
     let export_cols: Vec<(usize, &FieldDef)> = fields.iter().enumerate()
-        .filter(|(_, f)| export_visible(&f.export, side))
+        .filter(|(_, f)| !f.is_aux() && export_visible(&f.export, side))
         .collect();
 
-    let index_col = fields.iter().position(|f| f.name == "id").unwrap_or(0);
+    let index_col = fields.iter().position(|f| !f.is_aux() && f.name == "id").unwrap_or(0);
 
     let mut s = String::new();
     writeln!(s, "// 使用：import {{ {}, {}Tpl }} from './{}'",

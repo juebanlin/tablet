@@ -161,19 +161,27 @@ function applySnapshot(s) {
     );
     if (!exists) {
       const project = sel.project || s.status.active_project;
-      state.selected = project
-        ? { project, kind: "project", group: null, name: null }
+      const projectRow = project
+        ? (s.tree || []).find((r) => r.kind === "project" && r.project === project)
         : null;
-      if (project && !state.repairingSelection) {
-        state.repairingSelection = true;
-        invoke("select_node", { project, kind: "project", group: null, name: null })
-          .then((snap) => {
-            state.repairingSelection = false;
-            applySnapshot(snap);
-          })
-          .catch(() => {
-            state.repairingSelection = false;
-          });
+      // 项目已经关闭 / 被删除时不能走“选中修复”：select_node 发现项目未打开会
+      // 自动 open_project，把刚关掉的项目又拉回来（关闭项目看起来没反应）。
+      // 直接清空选中，等用户自己重新打开。
+      if (!projectRow || projectRow.closed) {
+        state.selected = null;
+      } else {
+        state.selected = { project, kind: "project", group: null, name: null };
+        if (!state.repairingSelection) {
+          state.repairingSelection = true;
+          invoke("select_node", { project, kind: "project", group: null, name: null })
+            .then((snap) => {
+              state.repairingSelection = false;
+              applySnapshot(snap);
+            })
+            .catch(() => {
+              state.repairingSelection = false;
+            });
+        }
       }
     }
   }
@@ -765,13 +773,12 @@ function initSplitters() {
 
 // ── 右键菜单 / 弹窗 ─────────────────────────────────────────
 function hideContextMenu() {
+  hideContextSubmenu();
   $("ctx-menu").hidden = true;
 }
 
-function showContextMenu(x, y, items) {
-  const menu = $("ctx-menu");
-  menu.innerHTML = "";
-  // 与 Slint 版一致：不可用的项直接不出现（不再灰显）；顺带去掉空分隔线。
+/** 过滤不可用项 / 空分隔线；子菜单递归过滤，全空则整项消失。 */
+function normalizeContextItems(items) {
   const list = [];
   for (const it of items) {
     if (it.sep) {
@@ -779,14 +786,28 @@ function showContextMenu(x, y, items) {
       continue;
     }
     if (it.disabled) continue;
+    if (it.children) {
+      const kids = normalizeContextItems(it.children);
+      if (kids.length) list.push({ ...it, children: kids });
+      continue;
+    }
     list.push(it);
   }
   while (list.length && list[list.length - 1].sep) list.pop();
-  if (!list.length) {
-    menu.hidden = true;
-    return;
+  return list;
+}
+
+let ctxSubmenu = null;
+
+function hideContextSubmenu() {
+  if (ctxSubmenu) {
+    ctxSubmenu.remove();
+    ctxSubmenu = null;
   }
-  for (const it of list) {
+}
+
+function buildContextMenuItems(menu, items) {
+  for (const it of items) {
     if (it.sep) {
       const d = document.createElement("div");
       d.className = "ctx-sep";
@@ -794,14 +815,59 @@ function showContextMenu(x, y, items) {
       continue;
     }
     const d = document.createElement("div");
-    d.className = "ctx-item" + (it.danger ? " danger" : "");
-    d.textContent = it.label;
-    d.addEventListener("click", () => {
-      hideContextMenu();
-      Promise.resolve(it.action()).catch((e) => addLocalLog(2, String(e)));
-    });
+    d.className = "ctx-item" + (it.danger ? " danger" : "") + (it.children ? " has-sub" : "");
+    const label = document.createElement("span");
+    label.textContent = it.label;
+    d.appendChild(label);
+    if (it.children) {
+      const arrow = document.createElement("span");
+      arrow.className = "ctx-arrow";
+      arrow.textContent = "›";
+      d.appendChild(arrow);
+      d.addEventListener("mouseenter", () => showContextSubmenu(d, it.children));
+      d.addEventListener("click", (e) => {
+        e.stopPropagation();
+        showContextSubmenu(d, it.children);
+      });
+    } else {
+      d.addEventListener("mouseenter", hideContextSubmenu);
+      d.addEventListener("click", () => {
+        hideContextMenu();
+        Promise.resolve(it.action()).catch((e) => addLocalLog(2, String(e)));
+      });
+    }
     menu.appendChild(d);
   }
+}
+
+function showContextSubmenu(anchor, items) {
+  hideContextSubmenu();
+  const sub = document.createElement("div");
+  sub.id = "ctx-submenu";
+  sub.className = "ctx-menu ctx-submenu";
+  buildContextMenuItems(sub, items);
+  document.body.appendChild(sub);
+  const r = anchor.getBoundingClientRect();
+  const sr = sub.getBoundingClientRect();
+  let left = r.right + 2;
+  if (left + sr.width > window.innerWidth - 4) left = r.left - sr.width - 2;
+  const top = Math.max(4, Math.min(r.top, window.innerHeight - sr.height - 4));
+  sub.style.left = `${Math.max(4, left)}px`;
+  sub.style.top = `${top}px`;
+  ctxSubmenu = sub;
+}
+
+function showContextMenu(x, y, items) {
+  hideContextSubmenu();
+  const menu = $("ctx-menu");
+  menu.innerHTML = "";
+  // 与 Slint 版一致：不可用的项直接不出现（不再灰显）；顺带去掉空分隔线。
+  const list = normalizeContextItems(items);
+  if (!list.length) {
+    menu.hidden = true;
+    return;
+  }
+  buildContextMenuItems(menu, list);
   menu.hidden = false;
   const r = menu.getBoundingClientRect();
   menu.style.left = Math.max(0, Math.min(x, window.innerWidth - r.width - 4)) + "px";
@@ -1063,30 +1129,58 @@ function projectMenu(t) {
   const st = status();
   return [
     { label: "保存", action: () => saveProject(t.project) },
-    { label: "导出…", action: () => openExportDialog() },
-    { label: "导出 Schema…", action: () => openSchemaDialog("export") },
-    { label: "另存为模板…", action: () => openSchemaDialog("template") },
-    { label: "合并 Schema…", action: () => openSchemaDialog("import") },
-    { sep: true },
-    { label: "新建 Group", action: () => newGroup(t.project, false) },
-    { label: "新建 Excel Group", action: () => newGroup(t.project, true) },
-    { label: "导入 .tbl 文件…", action: () => importTblFlow(t.project) },
-    { label: "导入 Excel Group…", action: () => importXlsxFlow(t.project) },
-    { label: "导入任意 Excel（映射）…", action: () => openExcelMap() },
+    {
+      label: "导出",
+      children: [
+        { label: "导出数据 / 代码…", action: () => openExportDialog() },
+        { label: "导出 Excel…", action: () => openExcelTransfer("export") },
+        { label: "导出 Schema…", action: () => openSchemaDialog("export") },
+        { label: "另存为模板…", action: () => openSchemaDialog("template") },
+      ],
+    },
+    {
+      label: "导入",
+      children: [
+        { label: "导入 .tbl 文件…", action: () => importTblFlow(t.project) },
+        { label: "导入 Excel Group…", action: () => importXlsxFlow(t.project) },
+        { label: "导入任意 Excel（映射）…", action: () => openExcelMap() },
+        { label: "导入 Excel（多组）…", action: () => openExcelTransfer("import") },
+        { label: "合并 Schema…", action: () => openSchemaDialog("import") },
+      ],
+    },
+    {
+      label: "新建",
+      children: [
+        { label: "Group", action: () => newGroup(t.project, false) },
+        { label: "Excel Group", action: () => newGroup(t.project, true) },
+      ],
+    },
     { label: "克隆项目…", action: () => cloneProject(t.project) },
-    { sep: true },
-    { label: "粘贴为 .tbl Group", disabled: !st.has_group_clipboard, action: () => pasteGroupFmt(t.project, "tbl") },
-    { label: "粘贴为 Excel Group", disabled: !st.has_group_clipboard, action: () => pasteGroupFmt(t.project, "xlsx") },
+    {
+      label: "粘贴",
+      children: [
+        {
+          label: "粘贴为 .tbl Group",
+          disabled: !st.has_group_clipboard,
+          action: () => pasteGroupFmt(t.project, "tbl"),
+        },
+        {
+          label: "粘贴为 Excel Group",
+          disabled: !st.has_group_clipboard,
+          action: () => pasteGroupFmt(t.project, "xlsx"),
+        },
+      ],
+    },
     { sep: true },
     { label: "项目设置…", action: () => openProjectSettings(t.project) },
-    { label: "删除…", danger: true, action: () => deleteProject(t.project) },
-    { sep: true },
-    { label: "关闭", action: () => closeProject(t.project) },
     {
       label: "打开所在目录",
       action: () =>
         invoke("open_project_dir", { project: t.project }).catch((e) => toast(String(e), "error")),
     },
+    { sep: true },
+    { label: "关闭", action: () => closeProject(t.project) },
+    { label: "删除…", danger: true, action: () => deleteProject(t.project) },
   ];
 }
 
@@ -1097,18 +1191,8 @@ function groupMenu(t) {
     (r) => r.kind === "group" && r.project === t.project && r.group === t.group,
   );
   const xlsx = !!row?.xlsx;
-  const items = [
-    { label: "新建 Table（v3）", disabled: locked, action: () => newNode(t.project, t.group, "table", "v3") },
-    { label: "新建 Table（v2）", disabled: locked, action: () => newNode(t.project, t.group, "table", "v2") },
-    { label: "新建 Constant", disabled: locked, action: () => newNode(t.project, t.group, "constant") },
-    { label: "新建 Enum", disabled: locked, action: () => newNode(t.project, t.group, "enum") },
-    { sep: true },
-    {
-      label: "Univer 编辑",
-      // 已经在这个组的 Univer 窗口里打开时不重复打开（主界面只读，点也只会聚焦）。
-      disabled: locked,
-      action: () => univerEdit(t.project, t.group),
-    },
+  const excelSession = (status().excel_editing || []).includes(t.group);
+  const excelItems = [
     {
       label: xlsx ? "用 Excel 打开（原文件）" : "用 Excel 打开（整组）",
       disabled: locked,
@@ -1119,31 +1203,26 @@ function groupMenu(t) {
             )
           : excelEdit(t.project, t.group),
     },
-    { label: "导出 Excel…", action: () => openExcelDialog("export", t.group) },
-    { label: "导入 Excel…", disabled: locked, action: () => openExcelDialog("import", t.group) },
-    { sep: true },
-    { label: "复制 Group", action: () => runOp("copy_group", { project: t.project, group: t.group }) },
-    { label: "粘贴节点", disabled: locked || !st.has_node_clipboard, action: () => pasteNodeFmt(t.project, t.group) },
-    { label: "粘贴为 v3", disabled: locked || !st.node_clipboard_is_table, action: () => pasteNodeFmt(t.project, t.group, "v3") },
-    { label: "粘贴为 v2", disabled: locked || !st.node_clipboard_is_table, action: () => pasteNodeFmt(t.project, t.group, "v2") },
-    { label: "粘贴为 .tbl Group", disabled: locked || !st.has_group_clipboard, action: () => pasteGroupFmt(t.project, "tbl") },
-    { label: "粘贴为 Excel Group", disabled: locked || !st.has_group_clipboard, action: () => pasteGroupFmt(t.project, "xlsx") },
-    { sep: true },
-    { label: "重命名", disabled: locked, action: () => renameGroup(t.project, t.group) },
-    { label: "删除", danger: true, disabled: locked, action: () => deleteGroup(t.project, t.group) },
+    { label: "导出 Excel…", action: () => openExcelTransfer("export", { group: t.group }) },
+    {
+      label: "导入 Excel…",
+      disabled: locked,
+      action: () => openExcelTransfer("import", { group: t.group }),
+    },
   ];
   if (xlsx) {
-    items.push({
+    excelItems.push({
       label: "重新加载",
       action: () => runOp("reload_group", { project: t.project, group: t.group }),
     });
   }
-  if ((status().excel_editing || []).includes(t.group)) {
-    items.push({
+  if (excelSession) {
+    excelItems.push({ sep: true });
+    excelItems.push({
       label: "结束 Excel 编辑",
       action: () => runOp("excel_end_edit", { project: t.project, group: t.group }),
     });
-    items.push({
+    excelItems.push({
       label: "放弃 Excel 改动",
       danger: true,
       action: async () => {
@@ -1156,7 +1235,44 @@ function groupMenu(t) {
       },
     });
   }
-  return items;
+
+  return [
+    {
+      label: "新建",
+      children: [
+        { label: "Table（v3）", disabled: locked, action: () => newNode(t.project, t.group, "table", "v3") },
+        { label: "Table（v2）", disabled: locked, action: () => newNode(t.project, t.group, "table", "v2") },
+        { label: "Constant", disabled: locked, action: () => newNode(t.project, t.group, "constant") },
+        { label: "Enum", disabled: locked, action: () => newNode(t.project, t.group, "enum") },
+      ],
+    },
+    {
+      label: "Univer 编辑",
+      disabled: locked,
+      action: () => univerEdit(t.project, t.group),
+    },
+    { label: "Excel", children: excelItems },
+    { label: "复制 Group", action: () => runOp("copy_group", { project: t.project, group: t.group }) },
+    {
+      label: "粘贴",
+      children: [
+        { label: "粘贴节点", disabled: locked || !st.has_node_clipboard, action: () => pasteNodeFmt(t.project, t.group) },
+        { label: "粘贴为 v3", disabled: locked || !st.node_clipboard_is_table, action: () => pasteNodeFmt(t.project, t.group, "v3") },
+        { label: "粘贴为 v2", disabled: locked || !st.node_clipboard_is_table, action: () => pasteNodeFmt(t.project, t.group, "v2") },
+        { label: "粘贴为 .tbl Group", disabled: locked || !st.has_group_clipboard, action: () => pasteGroupFmt(t.project, "tbl") },
+        { label: "粘贴为 Excel Group", disabled: locked || !st.has_group_clipboard, action: () => pasteGroupFmt(t.project, "xlsx") },
+      ],
+    },
+    { sep: true },
+    { label: "重命名", disabled: locked, action: () => renameGroup(t.project, t.group) },
+    {
+      label: "打开所在目录",
+      action: () =>
+        invoke("open_group_dir", { project: t.project, group: t.group })
+          .catch((e) => toast(String(e), "error")),
+    },
+    { label: "删除", danger: true, disabled: locked, action: () => deleteGroup(t.project, t.group) },
+  ];
 }
 
 function nodeMenu(t) {
@@ -1167,15 +1283,31 @@ function nodeMenu(t) {
     items.push({ label: "校验规则…", disabled: locked, action: () => openRulesEditor() });
     items.push({ sep: true });
   }
-  items.push(
-    { label: "复制", action: () => runOp("copy_node", { project: t.project, group: t.group, name: t.name, kind: t.kind }) },
-    { label: "粘贴节点", disabled: locked || !st.has_node_clipboard, action: () => pasteNodeFmt(t.project, t.group) },
-    { label: "粘贴为 v3", disabled: locked || !st.node_clipboard_is_table, action: () => pasteNodeFmt(t.project, t.group, "v3") },
-    { label: "粘贴为 v2", disabled: locked || !st.node_clipboard_is_table, action: () => pasteNodeFmt(t.project, t.group, "v2") },
-    { sep: true },
-    { label: "重命名", disabled: locked, action: () => renameNode(t) },
-    { label: "删除", danger: true, disabled: locked, action: () => deleteNode(t) },
-  );
+  items.push({
+    label: "导出 Excel…",
+    action: () => openExcelTransfer("export", { group: t.group, node: t.name }),
+  });
+  items.push({
+    label: "复制",
+    action: () => runOp("copy_node", { project: t.project, group: t.group, name: t.name, kind: t.kind }),
+  });
+  items.push({
+    label: "粘贴",
+    children: [
+      { label: "粘贴节点", disabled: locked || !st.has_node_clipboard, action: () => pasteNodeFmt(t.project, t.group) },
+      { label: "粘贴为 v3", disabled: locked || !st.node_clipboard_is_table, action: () => pasteNodeFmt(t.project, t.group, "v3") },
+      { label: "粘贴为 v2", disabled: locked || !st.node_clipboard_is_table, action: () => pasteNodeFmt(t.project, t.group, "v2") },
+    ],
+  });
+  items.push({ sep: true });
+  items.push({ label: "重命名", disabled: locked, action: () => renameNode(t) });
+  items.push({
+    label: "打开所在目录",
+    action: () =>
+      invoke("open_group_dir", { project: t.project, group: t.group })
+        .catch((e) => toast(String(e), "error")),
+  });
+  items.push({ label: "删除", danger: true, disabled: locked, action: () => deleteNode(t) });
   return items;
 }
 
@@ -1372,6 +1504,23 @@ function gridMenu(ctx) {
       action: () => runOp("insert_column", { at: c + 1 }).then(() => grid.revealColumn(c + 1)),
     });
     items.push({ label: "删除列", danger: true, action: () => runOp("delete_column", { at: c }) });
+    if (grid.node?.mode === "table") {
+      const isAux = grid.node.kinds?.[c] === "aux";
+      const fieldName = grid.node.headers?.[3]?.[c] || "";
+      items.push({ sep: true });
+      if (isAux) {
+        items.push({
+          label: "转为 TBL 列",
+          action: () => runOp("set_column_aux", { col: c, aux: false }),
+        });
+      } else {
+        items.push({
+          label: "转为普通列",
+          disabled: fieldName === "id",
+          action: () => runOp("set_column_aux", { col: c, aux: true }),
+        });
+      }
+    }
   }
   if (ctx.shape === "blank") items.push({ label: "粘贴", action: () => grid.pasteClipboard() });
   if (grid.locked) {
@@ -1413,10 +1562,10 @@ function initContextMenus() {
   });
 
   document.addEventListener("pointerdown", (e) => {
-    if (!e.target.closest("#ctx-menu")) hideContextMenu();
+    if (!e.target.closest("#ctx-menu") && !e.target.closest("#ctx-submenu")) hideContextMenu();
   });
   document.addEventListener("contextmenu", (e) => {
-    if (!e.target.closest("#ctx-menu") && !e.defaultPrevented) hideContextMenu();
+    if (!e.target.closest("#ctx-menu") && !e.target.closest("#ctx-submenu") && !e.defaultPrevented) hideContextMenu();
   });
   document.addEventListener("keydown", (e) => {
     if (e.key === "Escape") hideContextMenu();
@@ -4206,40 +4355,6 @@ function initSchemaDialog() {
   });
 }
 
-// ── Excel ───────────────────────────────────────────────────
-let excelCtx = { kind: "export", group: "" };
-
-function openExcelDialog(kind, group) {
-  excelCtx = { kind, group };
-  $("excel-title").textContent = `${kind === "export" ? "导出 Excel" : "导入 Excel"} — ${group}`;
-  $("excel-path").value = `.excel/${group}.xlsx`;
-  $("excel-open").hidden = kind !== "export";
-  $("excel-result").hidden = true;
-  $("excel-error").hidden = true;
-  $("excel-dialog").hidden = false;
-}
-
-async function runExcel() {
-  const path = $("excel-path").value.trim();
-  if (!path) return showFormError($("excel-error"), "请填写文件路径");
-  $("excel-error").hidden = true;
-  try {
-    if (excelCtx.kind === "export") {
-      const msg = await invoke("excel_export", { group: excelCtx.group, path });
-      $("excel-result").hidden = false;
-      $("excel-result").textContent = msg;
-      toast(msg, "ok");
-      refreshExcelFiles();
-    } else {
-      const snap = await invoke("excel_import", { group: excelCtx.group, path });
-      applySnapshot(snap);
-      toast("Excel 导入完成", "ok");
-    }
-  } catch (e) {
-    showFormError($("excel-error"), String(e));
-  }
-}
-
 let excelFileCache = [];
 let excelSelection = new Set();
 
@@ -4343,26 +4458,6 @@ function openExcelSyncDialog() {
 }
 
 function initExcelDialog() {
-  $("excel-close").addEventListener("click", () => ($("excel-dialog").hidden = true));
-  $("excel-open").addEventListener("click", () => {
-    const p = $("excel-path").value.trim();
-    if (!p) return;
-    invoke("open_folder", { path: p }).catch((e) => addLocalLog(2, String(e)));
-  });
-  $("excel-run").addEventListener("click", runExcel);
-  $("excel-browse").addEventListener("click", async () => {
-    if (excelCtx.kind === "export") {
-      const path = await invoke("pick_save", {
-        title: "导出 Excel",
-        defaultName: `${excelCtx.group}.xlsx`,
-        extensions: ["xlsx"],
-      }).catch(() => null);
-      if (path) $("excel-path").value = path;
-    } else {
-      const path = await pickPath("选择 Excel 工作簿", "xlsx");
-      if (path) $("excel-path").value = path;
-    }
-  });
   $("excel-refresh").addEventListener("click", refreshExcelFiles);
   $("excel-list").addEventListener("click", (e) => {
     const card = e.target.closest(".excel-card[data-file]");
@@ -5247,6 +5342,605 @@ function openExcelMap() {
   emRenderAll();
 }
 
+// ── Excel 导入 / 导出（多组勾选 + 逐行选组）────────────────
+// 导出：左树跨组勾选，仍只生成一本 xlsx。
+// 导入：右侧每行选择目标组 + 目标节点名；左侧是按勾选行计算的变更预览。
+let xtState = null;
+
+function xtActiveProject() {
+  return state.snapshot?.status?.active_project || "";
+}
+
+function xtGroups() {
+  const pid = xtActiveProject();
+  if (!pid) return [];
+  const rows = state.snapshot?.tree || [];
+  const groups = [];
+  for (const g of rows) {
+    if (g.project !== pid || g.kind !== "group" || g.closed) continue;
+    const nodes = rows
+      .filter(
+        (r) =>
+          r.project === pid &&
+          r.group === g.group &&
+          (r.kind === "table" || r.kind === "constant" || r.kind === "enum") &&
+          r.mark !== "-",
+      )
+      .map((r) => ({ kind: r.kind, name: r.name, group: g.group }));
+    groups.push({ name: g.group, label: g.label, nodes });
+  }
+  return groups;
+}
+
+function xtNodeKey(group, name) {
+  return `${group}::${name}`;
+}
+
+function openExcelTransfer(mode, scope) {
+  xtOpen(mode, scope || {});
+}
+
+function xtInferGroup(sheetName) {
+  const hits = xtState.groups.filter((g) =>
+    g.nodes.some((n) => n.name.toLowerCase() === sheetName.toLowerCase()),
+  );
+  return hits.length === 1 ? hits[0].name : "";
+}
+
+function xtTargetName(sheet) {
+  const value = xtState.rowTargets[sheet.name];
+  return value === undefined ? sheet.name : value;
+}
+
+function xtTargetGroupName(sheet) {
+  const g = xtState.rowGroups[sheet.name] || "";
+  return g === "__new__" ? xtState.newGroupName : g;
+}
+
+function xtSheetStatus(sheet) {
+  if (sheet.error) return { label: "识别失败", cls: "error", disabled: true };
+  const g = xtState.rowGroups[sheet.name] || "";
+  const name = xtTargetName(sheet);
+  if (!g) return { label: "未选择组", cls: "none", disabled: true };
+  if (!name) return { label: "跳过", cls: "none", disabled: true };
+  if (g === "__new__") return { label: "新增", cls: "new", disabled: false };
+  const group = xtState.groups.find((x) => x.name === g);
+  const exists = !!group && group.nodes.some((n) => n.name.toLowerCase() === name.toLowerCase());
+  return exists
+    ? { label: "覆盖", cls: "over", disabled: false }
+    : { label: "新增", cls: "new", disabled: false };
+}
+
+function xtImportPlan() {
+  const byGroup = new Map();
+  for (const sheet of xtState.sheets) {
+    if (!xtState.checked.has(sheet.name) || sheet.error) continue;
+    const g = xtState.rowGroups[sheet.name] || "";
+    const name = xtTargetName(sheet);
+    if (!g || !name) continue;
+    const groupName = g === "__new__" ? xtState.newGroupName : g;
+    const st = xtSheetStatus(sheet);
+    if (!byGroup.has(groupName)) {
+      byGroup.set(groupName, { pending: g === "__new__", over: [], added: [] });
+    }
+    byGroup.get(groupName)[st.cls === "over" ? "over" : "added"].push({
+      name,
+      kind: sheet.kind,
+    });
+  }
+  return byGroup;
+}
+
+function xtImportStats() {
+  const plan = xtImportPlan();
+  let over = 0;
+  let added = 0;
+  for (const entry of plan.values()) {
+    over += entry.over.length;
+    added += entry.added.length;
+  }
+  return { plan, over, added, groups: plan.size };
+}
+
+function xtSelectedExportCount() {
+  return xtState.selected.size;
+}
+
+function xtSelectedImportCount() {
+  return xtState.sheets.filter(
+    (s) =>
+      xtState.checked.has(s.name) &&
+      !s.error &&
+      xtState.rowGroups[s.name] &&
+      xtTargetName(s),
+  ).length;
+}
+
+function xtImportUnassigned() {
+  return xtState.sheets.filter((s) => !s.error && !xtState.rowGroups[s.name]).length;
+}
+
+function xtPreviewChips(entry) {
+  const chips = [];
+  if (entry?.over.length) chips.push(`<span class="xt-chip over">覆盖 ${entry.over.length}</span>`);
+  if (entry?.added.length) chips.push(`<span class="xt-chip new">新增 ${entry.added.length}</span>`);
+  if (!chips.length) chips.push('<span class="xt-chip none">无变更</span>');
+  return `<span class="xt-preview">${chips.join("")}</span>`;
+}
+
+function xtRenderExportTree() {
+  const rows = [`<div class="xt-project-row">▾ ${xtState.projectId}</div>`];
+  for (const g of xtState.groups) {
+    const ids = g.nodes.map((n) => xtNodeKey(g.name, n.name));
+    const picked = ids.filter((k) => xtState.selected.has(k)).length;
+    const stateText = picked === 0 ? "unchecked" : picked === ids.length ? "checked" : "mixed";
+    rows.push(`
+      <div class="xt-tree-row group" data-xt-group="${escapeHtml(g.name)}">
+        <span class="xt-check" data-xt-group-check="${escapeHtml(g.name)}" data-state="${stateText}"
+          role="checkbox" aria-checked="${stateText === "mixed" ? "mixed" : stateText === "checked"}"></span>
+        <span>${escapeHtml(g.label)}</span>
+        <span class="xt-count">${picked}/${g.nodes.length}</span>
+      </div>
+    `);
+    for (const n of g.nodes) {
+      const key = xtNodeKey(g.name, n.name);
+      const on = xtState.selected.has(key);
+      rows.push(`
+        <button type="button" class="xt-tree-row node" data-xt-node="${escapeHtml(key)}">
+          <span class="xt-check" data-state="${on ? "checked" : "unchecked"}" aria-checked="${on}"></span>
+          <span class="xt-dot ${n.kind}"></span>
+          <span>${escapeHtml(n.name)}</span>
+          <span class="xt-kind">${g.name}</span>
+        </button>
+      `);
+    }
+  }
+  $("xt-tree").innerHTML = rows.join("");
+  $("xt-tree-title").textContent = "选择节点";
+  $("xt-tree-summary").textContent = `${xtSelectedExportCount()}/${xtState.totalNodes} 已选`;
+  $("xt-tree-note").textContent = "组复选框全选；可跨组勾选节点，仍只生成一本 xlsx。";
+}
+
+function xtRenderImportTree() {
+  const { plan, over, added, groups } = xtImportStats();
+  const rows = [`<div class="xt-project-row">▾ ${xtState.projectId}</div>`];
+  for (const g of xtState.groups) {
+    const entry = plan.get(g.name);
+    const overNames = new Set((entry?.over || []).map((x) => x.name.toLowerCase()));
+    const newEntries = entry?.added || [];
+    rows.push(`
+      <div class="xt-tree-row group static${entry ? "" : " dim"}">
+        <span class="xt-dot"></span>
+        <span>${escapeHtml(g.label)}</span>
+        ${xtPreviewChips(entry)}
+      </div>
+    `);
+    for (const n of g.nodes) {
+      const isOver = overNames.has(n.name.toLowerCase());
+      rows.push(`
+        <div class="xt-tree-row node static${isOver ? "" : " dim"}">
+          <span class="xt-dot ${n.kind}"></span>
+          <span>${escapeHtml(n.name)}</span>
+          ${isOver ? '<span class="xt-preview"><span class="xt-chip over">覆盖</span></span>' : ""}
+        </div>
+      `);
+    }
+    for (const item of newEntries) {
+      rows.push(`
+        <div class="xt-tree-row node static xt-virtual">
+          <span class="xt-dot ${item.kind}"></span>
+          <span>+ ${escapeHtml(item.name)}</span>
+          <span class="xt-preview"><span class="xt-chip new">新增</span></span>
+        </div>
+      `);
+    }
+  }
+  for (const [name, entry] of plan) {
+    if (xtState.groups.some((g) => g.name === name)) continue;
+    rows.push(`
+      <div class="xt-tree-row group static xt-virtual">
+        <span>＋</span>
+        <span>${escapeHtml(name)}</span>
+        <span class="xt-preview"><span class="xt-chip new">新组</span></span>
+      </div>
+    `);
+    for (const item of entry.added) {
+      rows.push(`
+        <div class="xt-tree-row node static xt-virtual">
+          <span class="xt-dot ${item.kind}"></span>
+          <span>+ ${escapeHtml(item.name)}</span>
+          <span class="xt-preview"><span class="xt-chip new">新增</span></span>
+        </div>
+      `);
+    }
+  }
+  $("xt-tree").innerHTML = rows.join("");
+  $("xt-tree-title").textContent = "变更预览";
+  $("xt-tree-summary").textContent = `${groups} 个组 · 覆盖 ${over} / 新增 ${added}`;
+  $("xt-tree-note").textContent = "左侧只读预览：只统计右侧已勾选的行；每行可选现有组或新建组。";
+}
+
+function xtFileCard(name, path, actionId) {
+  return `
+    <div class="xt-file">
+      <div class="xt-file-meta">
+        <div class="xt-file-name">${escapeHtml(name)}</div>
+        <div class="xt-file-path">${escapeHtml(path)}</div>
+      </div>
+      <button class="btn" id="${actionId}">${actionId === "xt-pick-export" ? "更改位置…" : "选择文件…"}</button>
+    </div>
+  `;
+}
+
+function xtRenderExportPane() {
+  const nodes = xtState.groups.flatMap((g) =>
+    g.nodes.map((n) => ({ ...n, group: g.name })),
+  );
+  const selected = nodes.filter((n) => xtState.selected.has(xtNodeKey(n.group, n.name)));
+  const groupCount = new Set(selected.map((n) => n.group)).size;
+  const rows = nodes
+    .map((n) => {
+      const on = xtState.selected.has(xtNodeKey(n.group, n.name));
+      return `
+        <div class="xt-row export${on ? "" : " off"}">
+          <span class="xt-check" data-xt-row-node="${escapeHtml(xtNodeKey(n.group, n.name))}"
+            data-state="${on ? "checked" : "unchecked"}"></span>
+          <span class="xt-sheet"><span class="xt-group-path">${escapeHtml(n.group)} /</span><span>${escapeHtml(n.name)}</span></span>
+          <span class="xt-kind">${n.kind === "table" ? "表" : n.kind === "enum" ? "枚举" : "常量"}</span>
+          <span class="xt-size">${n.group}</span>
+          <span class="xt-chip ${on ? "gen" : "none"}">${on ? "将生成" : "不导出"}</span>
+        </div>
+      `;
+    })
+    .join("");
+  return `
+    ${xtFileCard(xtBaseName(xtState.path), xtState.path, "xt-pick-export")}
+    <div class="xt-stats">
+      <div class="xt-stat accent"><b>1</b><span>个文件</span></div>
+      <div class="xt-stat"><b>${selected.length}</b><span>个 sheet</span></div>
+      <div class="xt-stat"><b>${groupCount}</b><span>个组</span></div>
+    </div>
+    <div class="xt-table-wrap">
+      <div class="xt-thead export"><span></span><span>Sheet</span><span>类型</span><span>组</span><span>状态</span></div>
+      ${rows || '<div class="xt-empty">当前项目没有可导出的节点</div>'}
+    </div>
+    <div class="xt-note-box">选中多个组时仍只输出 ${escapeHtml(xtBaseName(xtState.path))}；文件里只有 sheet，不记录组归属。导入时按 sheet 名自动推断组，推断不出就手动选组。</div>
+  `;
+}
+
+function xtRenderImportPane() {
+  if (!xtState.importPath) {
+    return `
+      <div class="xt-empty">选择一本 Excel 工作簿开始导入</div>
+      <div style="display:flex;justify-content:center"><button class="btn primary" id="xt-pick-import">选择工作簿…</button></div>
+    `;
+  }
+  if (!xtState.sheets.length) {
+    return `${xtFileCard(xtBaseName(xtState.importPath), xtState.importPath, "xt-pick-import")}<div class="xt-empty">工作簿没有 sheet</div>`;
+  }
+  const hasNewGroup = xtState.sheets.some((s) => xtState.rowGroups[s.name] === "__new__");
+  const rows = xtState.sheets
+    .map((sheet) => {
+      const st = xtSheetStatus(sheet);
+      const groupValue = xtState.rowGroups[sheet.name] || "";
+      const name = xtTargetName(sheet);
+      const checked = xtState.checked.has(sheet.name) && !st.disabled;
+      const options = [
+        `<option value="" ${groupValue === "" ? "selected" : ""}>选择组</option>`,
+        ...xtState.groups.map(
+          (g) =>
+            `<option value="${escapeHtml(g.name)}" ${groupValue === g.name ? "selected" : ""}>${escapeHtml(g.label)}</option>`,
+        ),
+        `<option value="__new__" ${groupValue === "__new__" ? "selected" : ""}>＋ 新建组…</option>`,
+      ].join("");
+      return `
+        <div class="xt-row import${checked ? "" : " off"}">
+          <span class="xt-check" data-xt-sheet-check="${escapeHtml(sheet.name)}"
+            data-state="${checked ? "checked" : "unchecked"}" ${st.disabled ? 'data-disabled="true"' : ""}></span>
+          <span class="xt-sheet"><span>${escapeHtml(sheet.name)}</span></span>
+          <span class="xt-arrow">→</span>
+          <span class="xt-target">
+            <select class="xt-select${groupValue ? "" : " unassigned"}" data-xt-row-group="${escapeHtml(sheet.name)}">
+              ${options}
+            </select>
+          </span>
+          <span class="xt-target">
+            <input class="xt-input" data-xt-target="${escapeHtml(sheet.name)}" value="${escapeHtml(name)}" placeholder="清空则跳过">
+          </span>
+          <span class="xt-kind">${sheet.error ? "—" : sheet.kind === "table" ? "表" : sheet.kind === "enum" ? "枚举" : "常量"}</span>
+          <span class="xt-chip ${st.cls}">${st.label}</span>
+        </div>
+      `;
+    })
+    .join("");
+  const newGroupBar = hasNewGroup
+    ? `<div class="xt-newgroup">新建组名
+         <input class="xt-input" id="xt-new-group-name" value="${escapeHtml(xtState.newGroupName)}">
+         <span>组内节点全部新增</span>
+       </div>`
+    : "";
+  return `
+    ${xtFileCard(xtBaseName(xtState.importPath), xtState.importPath, "xt-pick-import")}
+    <div class="xt-hintbar">每行选择目标组；目标节点名直接可改：同名覆盖 / 新名新增 / 清空跳过。左侧只预览勾选行。</div>
+    ${newGroupBar}
+    <div class="xt-table-wrap">
+      <div class="xt-thead import"><span></span><span>源 sheet</span><span></span><span>目标组</span><span>目标节点</span><span>类型</span><span>状态</span></div>
+      ${rows}
+    </div>
+    <div class="xt-note-box">未选择组的行不会导入；源表独有节点默认不勾选。导入只进内存，主界面保存后才落盘；整个导入是一个撤销步骤。</div>
+  `;
+}
+
+function xtRender() {
+  if (!xtState) return;
+  const isExport = xtState.mode === "export";
+  $("xt-title").textContent = isExport ? "导出 Excel" : "导入 Excel";
+  $("xt-mode-label").textContent = isExport ? "导出" : "导入";
+  $("xt-crumb").textContent = isExport
+    ? `${xtState.projectId} › 导出多组`
+    : `${xtState.projectId} › 导入工作簿`;
+  $("xt-project").textContent = xtState.projectId;
+  $("xt-hint").textContent = isExport
+    ? "导出多组勾选 / 单个文件"
+    : "导入逐行选组 / 左侧预览";
+  $("xt-right-title").textContent = isExport ? "将生成" : "Sheet 映射";
+  $("xt-right-sub").textContent = isExport
+    ? `1 个文件 · ${xtSelectedExportCount()} 个 sheet`
+    : `源文件 → ${xtImportStats().groups} 个组`;
+  if (isExport) xtRenderExportTree();
+  else xtRenderImportTree();
+  $("xt-right").innerHTML = isExport ? xtRenderExportPane() : xtRenderImportPane();
+  $("xt-run").textContent = isExport ? "导出 Excel" : "导入选中 Sheet";
+  $("xt-run").disabled = (isExport ? xtSelectedExportCount() : xtSelectedImportCount()) === 0;
+  $("xt-summary").textContent = isExport
+    ? `将导出 ${xtSelectedExportCount()} 个 sheet · 1 个文件（${new Set(
+        xtState.groups
+          .flatMap((g) => g.nodes.map((n) => ({ g: g.name, k: xtNodeKey(g.name, n.name) })))
+          .filter((x) => xtState.selected.has(x.k))
+          .map((x) => x.g),
+      ).size} 个组）`
+    : (() => {
+        const { over, added, groups } = xtImportStats();
+        const unassigned = xtImportUnassigned();
+        return `将导入 ${xtSelectedImportCount()} 个 sheet → ${groups} 个组（覆盖 ${over}，新增 ${added}）${
+          unassigned ? ` · ${unassigned} 个未选择组` : ""
+        }`;
+      })();
+}
+
+function xtBaseName(path) {
+  return String(path || "").split(/[\\/]/).pop() || path || "未选择";
+}
+
+function xtResetImportState() {
+  xtState.importPath = "";
+  xtState.sheets = [];
+  xtState.rowGroups = {};
+  xtState.rowTargets = {};
+  xtState.checked = new Set();
+  xtState.newGroupName = "imported_group";
+}
+
+function xtOpen(mode, scope) {
+  const pid = xtActiveProject();
+  if (!pid) return toast("没有活跃项目", "error");
+  const groups = xtGroups();
+  const nodes = groups.flatMap((g) => g.nodes.map((n) => ({ group: g.name, name: n.name })));
+  let selected = null;
+  if (scope.node) {
+    const key = xtNodeKey(scope.group, scope.node);
+    if (nodes.some((n) => xtNodeKey(n.group, n.name) === key)) selected = new Set([key]);
+  }
+  if (!selected && scope.group) {
+    const g = groups.find((x) => x.name === scope.group);
+    if (g) selected = new Set(g.nodes.map((n) => xtNodeKey(g.name, n.name)));
+  }
+  if (!selected) selected = new Set(nodes.map((n) => xtNodeKey(n.group, n.name)));
+  xtState = {
+    mode,
+    projectId: pid,
+    groups,
+    totalNodes: nodes.length,
+    selected,
+    path: `.excel/${pid}-excel.xlsx`,
+    importPath: "",
+    sheets: [],
+    rowGroups: {},
+    rowTargets: {},
+    checked: new Set(),
+    newGroupName: "imported_group",
+    busy: false,
+  };
+  $("excel-transfer").hidden = false;
+  xtRender();
+  window.__xt = {
+    state: () => xtState,
+    render: xtRender,
+    open: xtOpen,
+    loadImport: xtLoadImportFile,
+    run: xtRun,
+  };
+}
+
+async function xtLoadImportFile(path) {
+  if (!path) return;
+  try {
+    const sheets = await invoke("excel_inspect_workbook", { path });
+    xtState.importPath = path;
+    xtState.sheets = sheets;
+    xtState.rowGroups = {};
+    xtState.rowTargets = {};
+    xtState.checked = new Set();
+    for (const s of sheets) {
+      const g = xtInferGroup(s.name);
+      xtState.rowGroups[s.name] = g;
+      xtState.rowTargets[s.name] = s.name;
+      if (g && !s.error) xtState.checked.add(s.name);
+    }
+    xtRender();
+  } catch (e) {
+    toast(String(e), "error");
+    addLocalLog(2, String(e));
+  }
+}
+
+async function xtPickImportFile() {
+  const path = await pickPath("选择 Excel 工作簿", "xlsx");
+  if (path) await xtLoadImportFile(path);
+}
+
+async function xtPickExportPath() {
+  const path = await invoke("pick_save", {
+    title: "导出 Excel",
+    defaultName: `${xtState.projectId}-excel.xlsx`,
+    extensions: ["xlsx"],
+  }).catch(() => null);
+  if (!path) return;
+  xtState.path = path;
+  xtRender();
+}
+
+async function xtRun() {
+  if (!xtState || xtState.busy) return;
+  if (xtState.mode === "export") {
+    const selections = [];
+    for (const g of xtState.groups) {
+      const names = g.nodes
+        .filter((n) => xtState.selected.has(xtNodeKey(g.name, n.name)))
+        .map((n) => n.name);
+      if (names.length) selections.push({ group: g.name, names });
+    }
+    if (!selections.length) return toast("至少选择一个 sheet", "error");
+    xtState.busy = true;
+    try {
+      const msg = await invoke("excel_export_selected", {
+        path: xtState.path,
+        selections,
+      });
+      toast(msg, "ok");
+      addLocalLog(0, msg);
+      refreshExcelFiles();
+    } catch (e) {
+      toast(String(e), "error");
+      addLocalLog(2, String(e));
+    } finally {
+      xtState.busy = false;
+    }
+    return;
+  }
+
+  // 导入
+  const rows = xtState.sheets
+    .filter((s) => xtState.checked.has(s.name) && !s.error)
+    .map((s) => {
+      const g = xtState.rowGroups[s.name] || "";
+      return {
+        sheet: s.name,
+        group_name: g === "__new__" ? xtState.newGroupName.trim() || "imported_group" : g,
+        node_name: xtTargetName(s),
+        create_group: g === "__new__",
+      };
+    })
+    .filter((r) => r.group_name && r.node_name);
+  if (!rows.length) {
+    toast("没有勾选可导入的行", "error");
+    return;
+  }
+  xtState.busy = true;
+  try {
+    const snap = await invoke("excel_import_multi", {
+      request: { path: xtState.importPath, rows },
+    });
+    applySnapshot(snap);
+    $("excel-transfer").hidden = true;
+    toast(`已导入 ${rows.length} 个 sheet（可撤销；保存后落盘）`, "ok");
+    addLocalLog(0, `[Excel 导入] ${rows.length} 个 sheet，可撤销`);
+  } catch (e) {
+    toast(String(e), "error");
+    addLocalLog(2, String(e));
+  } finally {
+    xtState.busy = false;
+  }
+}
+
+function initExcelTransfer() {
+  $("xt-close").addEventListener("click", () => ($("excel-transfer").hidden = true));
+  $("xt-cancel").addEventListener("click", () => ($("excel-transfer").hidden = true));
+  $("xt-run").addEventListener("click", xtRun);
+  $("xt-tree").addEventListener("click", (e) => {
+    if (!xtState || xtState.mode !== "export") return;
+    const groupHit = e.target.closest("[data-xt-group-check]") || e.target.closest("[data-xt-group]");
+    if (groupHit) {
+      const name = groupHit.dataset.xtGroupCheck || groupHit.dataset.xtGroup;
+      const g = xtState.groups.find((x) => x.name === name);
+      if (!g) return;
+      const keys = g.nodes.map((n) => xtNodeKey(name, n.name));
+      const all = keys.every((k) => xtState.selected.has(k));
+      keys.forEach((k) => (all ? xtState.selected.delete(k) : xtState.selected.add(k)));
+      xtRender();
+      return;
+    }
+    const nodeHit = e.target.closest("[data-xt-node]");
+    if (nodeHit) {
+      const key = nodeHit.dataset.xtNode;
+      if (xtState.selected.has(key)) xtState.selected.delete(key);
+      else xtState.selected.add(key);
+      xtRender();
+    }
+  });
+
+  $("xt-right").addEventListener("click", (e) => {
+    if (!xtState) return;
+    if (e.target.closest("#xt-pick-export")) return xtPickExportPath();
+    if (e.target.closest("#xt-pick-import")) return xtPickImportFile();
+    const rowNode = e.target.closest("[data-xt-row-node]");
+    if (rowNode && xtState.mode === "export") {
+      const key = rowNode.dataset.xtRowNode;
+      if (xtState.selected.has(key)) xtState.selected.delete(key);
+      else xtState.selected.add(key);
+      xtRender();
+      return;
+    }
+    const check = e.target.closest("[data-xt-sheet-check]");
+    if (check && check.dataset.disabled !== "true" && xtState.mode === "import") {
+      const name = check.dataset.xtSheetCheck;
+      if (xtState.checked.has(name)) xtState.checked.delete(name);
+      else xtState.checked.add(name);
+      xtRender();
+    }
+  });
+
+  $("xt-right").addEventListener("change", (e) => {
+    if (!xtState) return;
+    if (e.target.id === "xt-new-group-name") {
+      xtState.newGroupName = e.target.value.trim() || "imported_group";
+      xtRender();
+      return;
+    }
+    const groupSel = e.target.closest("[data-xt-row-group]");
+    if (groupSel) {
+      const name = groupSel.dataset.xtRowGroup;
+      const value = groupSel.value;
+      xtState.rowGroups[name] = value;
+      const sheet = xtState.sheets.find((s) => s.name === name);
+      const target = sheet ? xtTargetName(sheet) : "";
+      if (value && target) xtState.checked.add(name);
+      else xtState.checked.delete(name);
+      xtRender();
+      return;
+    }
+    const target = e.target.closest("[data-xt-target]");
+    if (target) {
+      const name = target.dataset.xtTarget;
+      const value = target.value.trim();
+      xtState.rowTargets[name] = value;
+      if (!value) xtState.checked.delete(name);
+      else if (xtState.rowGroups[name]) xtState.checked.add(name);
+      xtRender();
+    }
+  });
+}
+
 function initExcelMap() {
   $("em-browse").addEventListener("click", emChooseFile);
   $("em-close").addEventListener("click", () => ($("excel-map").hidden = true));
@@ -5544,6 +6238,7 @@ function boot() {
   initSchemaDialog();
   initExcelDialog();
   initExcelMap();
+  initExcelTransfer();
   initIssues();
   initAbout();
   initGlobalSettings();

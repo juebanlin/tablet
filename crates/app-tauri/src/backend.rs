@@ -458,6 +458,45 @@ pub struct MappedFieldUi {
     pub desc: String,
 }
 
+/// 导出对话框里选中的组 / 节点。
+#[derive(Deserialize)]
+pub struct ExcelExportSelection {
+    pub group: String,
+    pub names: Vec<String>,
+}
+
+/// 导入对话框：工作簿里每张 sheet 的识别信息。
+#[derive(Serialize)]
+pub struct ExcelSheetInspect {
+    pub name: String,
+    pub kind: String,
+    pub header_row: u32,
+    pub data_start: u32,
+    pub desc_row: u32,
+    pub type_row: u32,
+    pub export_row: u32,
+    pub columns: u32,
+    pub rows: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+/// 导入对话框的一行：源 sheet → 目标组 / 目标节点。
+#[derive(Deserialize)]
+pub struct ExcelImportRow {
+    pub sheet: String,
+    pub group_name: String,
+    pub node_name: String,
+    #[serde(default)]
+    pub create_group: bool,
+}
+
+#[derive(Deserialize)]
+pub struct ExcelImportRequest {
+    pub path: String,
+    pub rows: Vec<ExcelImportRow>,
+}
+
 #[derive(Deserialize)]
 pub struct ExcelMapRequest {
     pub path: String,
@@ -947,12 +986,16 @@ impl Backend {
             });
 
             for g in &p.groups {
-                let (gm, gc) = marker(
+                let (mut gm, mut gc) = marker(
                     false,
                     g.is_new,
                     g.is_dirty(),
                     self.engine.has_group_error(&pid, &g.name),
                 );
+                if gm.is_empty() && g.tables.iter().any(|t| t.schema.fields.iter().any(|f| f.is_aux())) {
+                    gm = "普".into();
+                    gc = "#b45309".into();
+                }
                 rows.push(TreeRow {
                     project: pid.clone(),
                     project_name: pname.clone(),
@@ -969,16 +1012,17 @@ impl Backend {
                 });
 
                 for t in &g.tables {
+                    let has_aux = t.schema.fields.iter().any(|f| f.is_aux());
                     self.push_node(&mut rows, &pid, &pname, &g.name, &t.name, SelKind::Table,
-                        t.deleted, !t.saved, t.dirty);
+                        t.deleted, !t.saved, t.dirty, has_aux);
                 }
                 for c in &g.constants {
                     self.push_node(&mut rows, &pid, &pname, &g.name, &c.name, SelKind::Constant,
-                        c.deleted, !c.saved, c.dirty);
+                        c.deleted, !c.saved, c.dirty, false);
                 }
                 for e in &g.enums {
                     self.push_node(&mut rows, &pid, &pname, &g.name, &e.name, SelKind::Enum,
-                        e.deleted, !e.saved, e.dirty);
+                        e.deleted, !e.saved, e.dirty, false);
                 }
             }
         }
@@ -1026,9 +1070,14 @@ impl Backend {
         deleted: bool,
         new: bool,
         dirty: bool,
+        has_aux: bool,
     ) {
         let has_err = self.engine.has_node_error(pid, group, name);
-        let (m, c) = marker(deleted, new, dirty, has_err);
+        let (mut m, mut c) = marker(deleted, new, dirty, has_err);
+        if m.is_empty() && has_aux {
+            m = "普".into();
+            c = "#b45309".into();
+        }
         rows.push(TreeRow {
             project: pid.to_string(),
             project_name: pname.to_string(),
@@ -1149,10 +1198,17 @@ impl Backend {
 
     // ── 选择 ────────────────────────────────────────────────
     pub fn select(&mut self, project: &str, kind: &str, group: Option<&str>, name: Option<&str>) {
-        if !self.engine.is_opened(project) {
+        let was_opened = self.engine.is_opened(project);
+        if !was_opened {
             let _ = self.engine.open_project(project);
         }
+        let active_before = self.engine.active_project_id().map(str::to_string);
         let _ = self.engine.set_active_by_id(project);
+        // 首次打开 / 切换 active 项目时写回项目集合与 last_project。节点间切换不写，
+        // 避免每点一个格子/节点就重写 tablet.toml。
+        if !was_opened || active_before.as_deref() != Some(project) {
+            self.persist_project_layout();
+        }
 
         self.selected = match kind {
             "project" => Some(Selected {
@@ -1292,13 +1348,23 @@ impl Backend {
         let valid_count = valid_table_rows(table);
 
         let desc: Vec<String> = fields.iter().map(|f| one_line(&f.desc)).collect();
-        let export: Vec<String> = fields.iter().map(|f| f.export.display().to_string()).collect();
+        let export: Vec<String> = fields
+            .iter()
+            .map(|f| {
+                f.aux
+                    .as_ref()
+                    .map(|m| one_line(&m.raw_export))
+                    .unwrap_or_else(|| f.export.display().to_string())
+            })
+            .collect();
         let types: Vec<String> = fields.iter().map(|f| one_line(&f.tbl_type)).collect();
-        let names: Vec<String> = fields.iter().map(|f| f.name.clone()).collect();
+        let names: Vec<String> = fields.iter().map(|f| f.label().to_string()).collect();
 
         let mut kinds = Vec::with_capacity(fields.len());
         for (i, f) in fields.iter().enumerate() {
-            kinds.push(if i == 0 {
+            kinds.push(if f.is_aux() {
+                "aux".to_string()
+            } else if i == 0 {
                 "text".to_string() // id 列数据可编辑（输入新行），表头才是只读
             } else if is_ref_type(&f.tbl_type) {
                 "ref".to_string()
@@ -1307,22 +1373,32 @@ impl Backend {
             });
         }
 
+        // id 列的表头锁定只针对真正的 tablet id；辅助列（含不合规的 id）允许编辑修复。
+        let id_locked = |i: usize| fields.get(i).is_some_and(|f| !f.is_aux() && f.name == "id");
         let header_kinds = vec![
             vec!["text".to_string(); fields.len()],
-            kinds
+            fields
                 .iter()
                 .enumerate()
-                .map(|(i, _)| if i == 0 { "readonly" } else { "export" }.to_string())
+                .map(|(i, f)| {
+                    if id_locked(i) { "readonly" }
+                    else if f.is_aux() { "text" }
+                    else { "export" }
+                }.to_string())
                 .collect(),
             fields
                 .iter()
                 .enumerate()
-                .map(|(i, _)| if i == 0 { "readonly" } else { "type" }.to_string())
+                .map(|(i, f)| {
+                    if id_locked(i) { "readonly" }
+                    else if f.is_aux() { "text" }
+                    else { "type" }
+                }.to_string())
                 .collect(),
             fields
                 .iter()
                 .enumerate()
-                .map(|(i, _)| if i == 0 { "readonly" } else { "text" }.to_string())
+                .map(|(i, _)| if id_locked(i) { "readonly" } else { "text" }.to_string())
                 .collect(),
         ];
 
@@ -1340,7 +1416,7 @@ impl Backend {
                 }
                 // rows 始终是磁盘原值（引用写 id）；展示值单独给前端渲染。
                 // 复制/粘贴/公式栏必须用原值，否则会把显示名写回引用格。
-                let display = if self.show_ref_name {
+                let display = if self.show_ref_name && !fields[c].is_aux() {
                     self.display_ref_value(&fields[c].tbl_type, &text, &mut ref_cache)
                 } else {
                     text.clone()
@@ -1356,7 +1432,7 @@ impl Backend {
 
         let display_options = fields
             .iter()
-            .filter(|f| matches!(f.tbl_type.trim(), "str" | "int" | "txt"))
+            .filter(|f| !f.is_aux() && matches!(f.tbl_type.trim(), "str" | "int" | "txt"))
             .map(|f| f.name.clone())
             .collect();
 
@@ -1364,11 +1440,11 @@ impl Backend {
         let mut ref_list = Vec::with_capacity(fields.len());
         for f in fields {
             match ref_target_of(&f.tbl_type) {
-                Some((target, multi)) => {
+                Some((target, multi)) if !f.is_aux() => {
                     ref_cols.push(Some(target));
                     ref_list.push(multi);
                 }
-                None => {
+                _ => {
                     ref_cols.push(None);
                     ref_list.push(false);
                 }
@@ -1565,6 +1641,19 @@ impl Backend {
             // Enum 没有引用列。
             _ => None,
         }
+    }
+
+    /// 手动把一列降级为辅助列 / 升级为普通列。
+    pub fn set_column_aux(&mut self, col: usize, aux: bool) -> Result<bool, String> {
+        let Some((group, name, SelKind::Table)) = self.selected_node() else {
+            return Err("请先选中一张表".to_string());
+        };
+        let (group, name) = (group.to_string(), name.to_string());
+        let did = self.engine.set_table_column_aux(&group, &name, col, aux)?;
+        if did {
+            self.revalidate_live(&group, &name);
+        }
+        Ok(did)
     }
 
     pub fn commit_header(&mut self, header_row: usize, col: usize, value: String) {
@@ -2061,6 +2150,134 @@ impl Backend {
         }
         std::fs::write(&out, &bytes).map_err(|e| e.to_string())?;
         Ok(format!("已导出 {}（{} 字节）", out.display(), bytes.len()))
+    }
+
+    /// 导出对话框：选中多个组 / 节点，生成一本 xlsx。
+    pub fn excel_export_selected(
+        &self,
+        path: String,
+        selections: Vec<ExcelExportSelection>,
+    ) -> Result<String, String> {
+        let project = self.engine.active().ok_or("没有活跃的 Project")?;
+        let out = resolve_in_project(&project.project_root, &path);
+        let picks: Vec<(String, Vec<String>)> = selections
+            .into_iter()
+            .map(|s| (s.group, s.names))
+            .collect();
+        let bytes = tablet_core::excel::export_selected_book(project, &picks)
+            .map_err(|e| format!("{e:#}"))?;
+        if let Some(parent) = out.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+        }
+        std::fs::write(&out, &bytes).map_err(|e| e.to_string())?;
+        Ok(format!("已导出 {}（{} 字节）", out.display(), bytes.len()))
+    }
+
+    /// 导入对话框：打开工作簿，识别每张 sheet 的类型与规模。
+    pub fn excel_inspect_workbook(&self, path: &str) -> Result<Vec<ExcelSheetInspect>, String> {
+        let project = self.engine.active().ok_or("没有活跃的 Project")?;
+        let file = resolve_in_project(&project.project_root, path);
+        let infos = tablet_core::excel_mapping::sheet_infos(&file)
+            .map_err(|e| format!("{e:#}"))?;
+        let mut out = Vec::with_capacity(infos.len());
+        for info in infos {
+            match tablet_core::excel_mapping::detect_layout(&file, &info.name) {
+                Ok(d) => out.push(ExcelSheetInspect {
+                    name: info.name,
+                    kind: d.kind.as_str().to_string(),
+                    header_row: d.header_row,
+                    data_start: d.data_start,
+                    desc_row: d.desc_row,
+                    type_row: d.type_row,
+                    export_row: d.export_row,
+                    columns: info.columns,
+                    rows: info.rows,
+                    error: None,
+                }),
+                Err(e) => out.push(ExcelSheetInspect {
+                    name: info.name,
+                    kind: "unknown".to_string(),
+                    header_row: 0,
+                    data_start: 0,
+                    desc_row: 0,
+                    type_row: 0,
+                    export_row: 0,
+                    columns: info.columns,
+                    rows: info.rows,
+                    error: Some(format!("{e:#}")),
+                }),
+            }
+        }
+        Ok(out)
+    }
+
+    /// 导入对话框：一张工作簿的多个 sheet 写到多个组 / 节点。
+    ///
+    /// 解析 / 校验全部在 core 的单个事务里完成；整个导入只产生一个撤销步骤。
+    pub fn excel_import_multi(&mut self, req: ExcelImportRequest) -> Result<String, String> {
+        let project = self.engine.active().ok_or("没有活跃的 Project")?;
+        let pid = project.schema.meta.id.clone();
+        let file = resolve_in_project(&project.project_root, &req.path);
+        if req.rows.is_empty() {
+            return Err("没有选中要导入的 sheet".to_string());
+        }
+
+        let mut specs = Vec::with_capacity(req.rows.len());
+        for row in &req.rows {
+            let d = tablet_core::excel_mapping::detect_layout(&file, &row.sheet)
+                .map_err(|e| format!("sheet {}: {e:#}", row.sheet))?;
+            let preview = tablet_core::excel_mapping::read_sheet_preview(
+                &file,
+                &row.sheet,
+                d.header_row,
+                d.data_start,
+                60,
+            )
+            .map_err(|e| format!("sheet {}: {e:#}", row.sheet))?;
+            let fields = if d.kind == tablet_core::excel_mapping::MappedNodeKind::Table {
+                tablet_core::excel_mapping::suggest_fields(&preview)
+            } else {
+                tablet_core::excel_mapping::suggest_entry_fields(&preview.columns, d.kind)
+            };
+            specs.push(tablet_core::ops::ExcelNodeSpec {
+                sheet: row.sheet.clone(),
+                group_name: row.group_name.clone(),
+                node_name: row.node_name.clone(),
+                create_group: row.create_group,
+                kind: d.kind,
+                header_row: d.header_row,
+                data_start: d.data_start,
+                desc_row: d.desc_row,
+                type_row: d.type_row,
+                export_row: d.export_row,
+                fields,
+            });
+        }
+
+        // 编辑中的组不能导入。
+        for spec in &specs {
+            if self
+                .univer_open_groups
+                .iter()
+                .any(|(p, g)| p == &pid && g.eq_ignore_ascii_case(&spec.group_name))
+            {
+                return Err(format!(
+                    "分组「{}」正在 Univer 窗口中编辑，主界面暂时只读",
+                    spec.group_name
+                ));
+            }
+            if self.excel_sessions.iter().any(|s| {
+                s.project == pid && s.group.eq_ignore_ascii_case(&spec.group_name)
+            }) {
+                return Err(format!(
+                    "分组「{}」正在 Excel 中编辑，主界面暂时只读",
+                    spec.group_name
+                ));
+            }
+        }
+
+        let n = self.engine.import_excel_nodes(&pid, &file, &specs)?;
+        Ok(format!("已导入 {n} 个 sheet；保存后落盘"))
     }
 
     pub fn excel_import(&mut self, group: &str, path: String) -> Result<String, String> {
@@ -2984,7 +3201,7 @@ impl Backend {
         for g in &p.groups {
             if let Some(t) = g.tables.iter().find(|t| t.name == target) {
                 let field = t.display_field.clone()?;
-                let col = t.schema.fields.iter().position(|f| f.name == field)?;
+                let col = t.schema.fields.iter().position(|f| !f.is_aux() && f.name == field)?;
                 let mut m = std::collections::HashMap::new();
                 for r in &t.records {
                     if let Some(id) = r.first() {
@@ -3038,7 +3255,7 @@ impl Backend {
 
         for g in &p.groups {
             if let Some(t) = g.tables.iter().find(|t| !t.deleted && t.name == target) {
-                let id_idx = t.schema.fields.iter().position(|f| f.name == "id");
+                let id_idx = t.schema.fields.iter().position(|f| !f.is_aux() && f.name == "id");
                 let Some(id_idx) = id_idx else {
                     return Ok(RefPickerData {
                         target: target.to_string(),
@@ -3055,14 +3272,14 @@ impl Backend {
                 let extras_idx: Vec<usize> = if strat == "full" {
                     // 全部：除 id 外所有导出列
                     t.schema.fields.iter().enumerate()
-                        .filter(|(_, f)| f.name != "id" && !matches!(f.export, Export::None))
+                        .filter(|(_, f)| !f.is_aux() && f.name != "id" && !matches!(f.export, Export::None))
                         .map(|(i, _)| i)
                         .collect()
                 } else {
                     // 智能：跳过引用列 / 复合类型 / 不导出的列，最多取 2 个辅助列
                     let mut picked = Vec::new();
                     for (i, f) in t.schema.fields.iter().enumerate() {
-                        if f.name == "id" || matches!(f.export, Export::None) { continue; }
+                        if f.is_aux() || f.name == "id" || matches!(f.export, Export::None) { continue; }
                         let ty = f.tbl_type.trim();
                         if ty.starts_with('@') || ty.contains('<') { continue; }
                         picked.push(i);
@@ -3322,7 +3539,7 @@ impl Backend {
         let (mode, columns) = if let Some(t) = self.engine.find_table(group, name) {
             (
                 NodeMode::Table,
-                t.schema.fields.iter().map(|f| f.name.clone()).collect::<Vec<_>>(),
+                t.schema.fields.iter().filter(|f| !f.is_aux()).map(|f| f.name.clone()).collect::<Vec<_>>(),
             )
         } else if self.engine.find_enum(group, name).is_some() {
             (
@@ -3842,9 +4059,12 @@ impl Backend {
     }
 
     pub fn open_project(&mut self, project: &str) {
-        let _ = self.engine.open_project(project);
+        let opened = self.engine.open_project(project).unwrap_or(false);
         if self.engine.active_project_id().is_none() {
             let _ = self.engine.set_active_by_id(project);
+        }
+        if opened {
+            self.persist_project_layout();
         }
     }
 
@@ -3853,6 +4073,20 @@ impl Backend {
             if self.selected.as_ref().is_some_and(|s| s.project == project) {
                 self.selected = None;
             }
+            self.persist_project_layout();
+        }
+    }
+
+    /// 打开 / 关闭项目后把运行时项目集合写回 `tablet.toml`。否则「重新加载」
+    /// 读到的是旧的 `opened_projects`，会把其它已打开项目静默关掉。
+    fn persist_project_layout(&mut self) {
+        let pm = self.engine.global_config.project_management.clone();
+        if let Err(e) = self
+            .engine
+            .persist_global_config(pm.project_sort, &pm.project_order)
+        {
+            self.engine
+                .error_log(format!("保存工作区项目列表失败: {e}"));
         }
     }
 
@@ -3867,6 +4101,7 @@ impl Backend {
         if self.selected.as_ref().is_some_and(|s| s.project == project) {
             self.selected = None;
         }
+        self.persist_project_layout();
         Ok(())
     }
 
@@ -4020,6 +4255,21 @@ impl Backend {
             .find_project(project)
             .ok_or_else(|| format!("项目不存在: {project}"))?;
         launch(&p.project_root.to_string_lossy())
+    }
+
+    /// 打开组所在目录（Tbl 组 = config/<group>，Xlsx 组 = config 根）。
+    /// 节点右键也复用它：节点文件 / sheet 都落在组目录或其工作簿里。
+    pub fn open_group_dir(&self, project: &str, group: &str) -> Result<(), String> {
+        let p = self
+            .engine
+            .find_project(project)
+            .ok_or_else(|| format!("项目不存在: {project}"))?;
+        let g = p
+            .groups
+            .iter()
+            .find(|g| g.name.eq_ignore_ascii_case(group))
+            .ok_or_else(|| format!("分组不存在: {group}"))?;
+        launch(&g.dir.to_string_lossy())
     }
 
     pub fn reload_group(&mut self, project: &str, group: &str) -> Result<(), String> {

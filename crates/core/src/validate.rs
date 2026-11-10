@@ -261,7 +261,7 @@ impl RefIndex {
         for g in groups {
             for t in &g.tables {
                 if t.deleted { continue; }
-                let idx = t.schema.fields.iter().position(|f| f.name == "id");
+                let idx = t.schema.fields.iter().position(|f| !f.is_aux() && f.name == "id");
                 let mut ids = std::collections::HashSet::new();
                 if let Some(idx) = idx {
                     for row in &t.records {
@@ -352,6 +352,7 @@ pub type ColumnSpec = (String, Option<ValueClass>);
 /// Table 的列规格（按字段声明顺序）。
 pub fn table_column_specs(table: &Table) -> Vec<ColumnSpec> {
     table.schema.fields.iter()
+        .filter(|f| !f.is_aux())
         .map(|f| (f.name.clone(), value_class_of_type(&f.tbl_type)))
         .collect()
 }
@@ -443,7 +444,7 @@ impl<'a> NodeRef<'a> {
     fn cell(&self, row: usize, column: &str) -> Option<String> {
         match self {
             NodeRef::Table(t) => {
-                let idx = t.schema.fields.iter().position(|f| f.name == column)?;
+                let idx = t.schema.fields.iter().position(|f| !f.is_aux() && f.name == column)?;
                 t.records.get(row)?.get(idx).cloned()
             }
             NodeRef::Constant(c) => {
@@ -687,6 +688,8 @@ pub fn validate_table_cell_with_refs(
 ) -> Option<ValidationError> {
     let fields = &table.schema.fields;
     if col >= fields.len() { return None; }
+    // 辅助列不参与校验（原始表头 / 类型 / export 都可能不合法）。
+    if fields[col].is_aux() { return None; }
     let value = table.records.get(row).and_then(|r| r.get(col)).map(|s| s.as_str()).unwrap_or("");
     if value.is_empty() { return None; }
     let field_name = fields[col].name.as_str();
@@ -724,6 +727,7 @@ pub fn validate_table_row_with_refs(
     if table.records.get(row).is_none() { return errors; }
 
     for col in 0..fields.len() {
+        if fields[col].is_aux() { continue; }
         if let Some(err) = validate_table_cell_with_refs(table, row, col, sep, refs) {
             errors.push(err);
         }
@@ -948,14 +952,16 @@ pub fn validate_table_schema_with_refs(
         return errors;
     }
 
-    if fields[0].name != "id" {
+    let first_tbl = fields.iter().position(|f| !f.is_aux());
+    if first_tbl.map_or(true, |i| fields[i].name != "id") {
+        let pos = first_tbl.unwrap_or(0);
         errors.push(
             ValidationError::schema(
                 ValidationCode::SchemaIdNotFirst,
                 "第一列必须是主键 id".to_string(),
-                0,
+                pos,
                 Some(TableHeaderRow::Field),
-            ).with_field(&fields[0].name)
+            ).with_field(fields.get(pos).map(|f| f.name.as_str()).unwrap_or(""))
         );
     }
 
@@ -963,6 +969,7 @@ pub fn validate_table_schema_with_refs(
     // 转换后键名（camelCase）→ 首次出现的源名，用于查「大小写转换后才撞」的情况
     let mut seen_keys: std::collections::HashMap<String, String> = std::collections::HashMap::new();
     for (col, field) in fields.iter().enumerate() {
+        if field.is_aux() { continue; }
         if let Some((code, msg)) = validate_field_name(&field.name) {
             errors.push(
                 ValidationError::schema(code, msg, col, Some(TableHeaderRow::Field))
@@ -1164,7 +1171,7 @@ pub fn validate_table(
         let mut rule_errors = validate_node_rules(
             NodeMode::Table, &table.name, &columns, &effective, cidx, table.records.len(),
             |r, c| {
-                let idx = table.schema.fields.iter().position(|f| f.name == c)?;
+                let idx = table.schema.fields.iter().position(|f| !f.is_aux() && f.name == c)?;
                 table.records.get(r)?.get(idx).cloned()
             },
             |r| table.records.get(r).map_or(true, |row| {
@@ -1252,7 +1259,7 @@ mod tests {
                     desc: String::new(),
                     tbl_type: t.to_string(),
                     export: Export::ClientServer,
-                }).collect(),
+                 aux: None, source_col: None,}).collect(),
             },
             records: records.iter().map(|r| r.iter().map(|s| s.to_string()).collect()).collect(),
             dirty: false,

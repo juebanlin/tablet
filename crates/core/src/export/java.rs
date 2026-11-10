@@ -80,7 +80,7 @@ fn gen_table_tpl(table: &Table, pkg: &str, group: &str, enum_names: &HashSet<Str
     writeln!(s, "import java.util.*;").unwrap();
 
     let fields: Vec<&FieldDef> = table.schema.fields.iter()
-        .filter(|f| is_server_export(&f.export))
+        .filter(|f| !f.is_aux() && is_server_export(&f.export))
         .collect();
 
     if fields.iter().any(|f| needs_tuple_import(&f.tbl_type)) {

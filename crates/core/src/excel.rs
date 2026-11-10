@@ -78,9 +78,14 @@ pub fn write_table(ws: &mut Worksheet, table: &Table) -> Result<()> {
     for (i, f) in fields.iter().enumerate() {
         let c = i as u16;
         ws.write_string_with_format(0, c, &f.desc, &header_fmt)?;
-        ws.write_string_with_format(1, c, f.export.display(), &header_fmt)?;
+        let export_text = f
+            .aux
+            .as_ref()
+            .map(|m| m.raw_export.as_str())
+            .unwrap_or_else(|| f.export.display());
+        ws.write_string_with_format(1, c, export_text, &header_fmt)?;
         ws.write_string_with_format(2, c, &f.tbl_type, &header_fmt)?;
-        ws.write_string_with_format(3, c, &f.name, &header_fmt)?;
+        ws.write_string_with_format(3, c, f.label(), &header_fmt)?;
     }
 
     for (r, row) in table.records.iter().enumerate() {
@@ -241,6 +246,82 @@ pub fn export_group_book(group: &Group, include: Option<&[&str]>) -> Result<Vec<
     Ok(wb.save_to_buffer()?)
 }
 
+/// 把多个组里选中的节点导出成**一本**工作簿。
+///
+/// `selection` = `[(组名, 选中节点名列表)]`；sheet 名 = 节点名（项目内唯一），
+/// 因此跨组节点可以放在同一本工作簿里。组归属不写进文件，导入端按 sheet 名推断。
+pub fn export_selected_book(
+    project: &crate::model::Project,
+    selection: &[(String, Vec<String>)],
+) -> Result<Vec<u8>> {
+    let mut wb = Workbook::new();
+    let mut used: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut wrote = 0usize;
+
+    for (group_name, names) in selection {
+        let Some(group) = project
+            .groups
+            .iter()
+            .find(|g| g.name.eq_ignore_ascii_case(group_name))
+        else {
+            anyhow::bail!("找不到分组: {group_name}");
+        };
+        let wanted: std::collections::HashSet<&str> =
+            names.iter().map(|s| s.as_str()).collect();
+        if wanted.is_empty() {
+            continue;
+        }
+        let mut hit = std::collections::HashSet::<&str>::new();
+        for t in &group.tables {
+            if !wanted.contains(t.name.as_str()) {
+                continue;
+            }
+            let ws = wb.add_worksheet();
+            ws.set_name(unique_sheet_name(&t.name, &mut used))?;
+            write_table(ws, t)?;
+            hit.insert(t.name.as_str());
+            wrote += 1;
+        }
+        for c in &group.constants {
+            if !wanted.contains(c.name.as_str()) {
+                continue;
+            }
+            let ws = wb.add_worksheet();
+            ws.set_name(unique_sheet_name(&c.name, &mut used))?;
+            write_constant(ws, c)?;
+            hit.insert(c.name.as_str());
+            wrote += 1;
+        }
+        for e in &group.enums {
+            if !wanted.contains(e.name.as_str()) {
+                continue;
+            }
+            let ws = wb.add_worksheet();
+            ws.set_name(unique_sheet_name(&e.name, &mut used))?;
+            write_enum(ws, e)?;
+            hit.insert(e.name.as_str());
+            wrote += 1;
+        }
+        let mut missing: Vec<&str> = wanted
+            .iter()
+            .filter(|n| !hit.contains(*n))
+            .copied()
+            .collect();
+        if !missing.is_empty() {
+            missing.sort_unstable();
+            anyhow::bail!(
+                "分组 '{}' 里找不到选中节点: {}",
+                group.name,
+                missing.join(", ")
+            );
+        }
+    }
+    if wrote == 0 {
+        anyhow::bail!("没有选中任何 sheet");
+    }
+    Ok(wb.save_to_buffer()?)
+}
+
 fn unique_sheet_name(raw: &str, used: &mut std::collections::HashSet<String>) -> String {
     let base = sanitize_sheet_name(raw);
     if used.insert(base.clone()) {
@@ -265,7 +346,8 @@ fn unique_sheet_name(raw: &str, used: &mut std::collections::HashSet<String>) ->
 /// 单个节点的回写补丁。
 #[derive(Debug, Clone)]
 pub enum NodePatch {
-    Table { name: String, records: Vec<Vec<String>> },
+    /// `fields` 为 Some 时，回写会连同表头结构一起替换（Univer / Excel 里新增列、改表头）。
+    Table { name: String, fields: Option<Vec<crate::model::FieldDef>>, records: Vec<Vec<String>> },
     Constant { name: String, entries: Vec<ConstEntry> },
     Enum { name: String, entries: Vec<EnumEntry> },
 }
@@ -283,8 +365,11 @@ pub struct GroupPatch {
 pub fn apply_group_patch(group: &mut Group, patch: &GroupPatch) {
     for np in &patch.patches {
         match np {
-            NodePatch::Table { name, records } => {
+            NodePatch::Table { name, fields, records } => {
                 if let Some(t) = group.tables.iter_mut().find(|t| &t.name == name) {
+                    if let Some(fields) = fields {
+                        t.schema.fields = fields.clone();
+                    }
                     t.records = records.clone();
                     t.update_dirty();
                 }
@@ -330,8 +415,12 @@ pub fn import_xlsx_into_group(path: &Path, group: &Group) -> Result<GroupPatch> 
         let range = wb
             .worksheet_range(&t.name)
             .with_context(|| format!("读取 sheet '{}' 失败", t.name))?;
-        let records = parse_table_sheet(&range, t)?;
-        patches.push(NodePatch::Table { name: t.name.clone(), records });
+        let (fields, records) = parse_table_sheet(&range, t)?;
+        patches.push(NodePatch::Table {
+            name: t.name.clone(),
+            fields: Some(fields),
+            records,
+        });
     }
     for c in &group.constants {
         let range = wb
@@ -422,57 +511,92 @@ fn is_empty_row(row: &[Data]) -> bool {
     row.iter().all(|c| matches!(c, Data::Empty) || cell_to_string(c).is_empty())
 }
 
-fn parse_table_sheet(range: &Range<Data>, table: &Table) -> Result<Vec<Vec<String>>> {
-    let expected_cols = table.schema.fields.len();
+fn parse_table_sheet(
+    range: &Range<Data>,
+    table: &Table,
+) -> Result<(Vec<crate::model::FieldDef>, Vec<Vec<String>>)> {
+    use crate::model::{AuxMeta, Export, FieldDef};
+
     let total_rows = range.height();
     let total_cols = range.width();
-
     if total_rows < 4 {
         anyhow::bail!(
             "table sheet '{}' 行数 {} < 4，缺表头",
             table.name, total_rows,
         );
     }
-    if total_cols != expected_cols {
-        anyhow::bail!(
-            "table sheet '{}' 列数 {} ≠ schema 字段数 {}",
-            table.name, total_cols, expected_cols,
-        );
+    let rows: Vec<&[Data]> = range.rows().collect();
+    let last_col = (0..total_cols)
+        .rev()
+        .find(|&c| !cell_to_string(&rows[3][c]).trim().is_empty())
+        .map(|c| c + 1)
+        .unwrap_or(0);
+    if last_col == 0 {
+        anyhow::bail!("table sheet '{}' 没有字段列", table.name);
     }
 
-    let rows: Vec<&[Data]> = range.rows().collect();
+    let parse_export = |raw: &str| -> Option<Export> {
+        if let Some(e) = Export::parse_code(raw.trim()) {
+            return Some(e);
+        }
+        match raw.trim() {
+            "前后端" => Some(Export::ClientServer),
+            "客户端" => Some(Export::ClientOnly),
+            "服务器" => Some(Export::ServerOnly),
+            "不导出" => Some(Export::None),
+            _ => None,
+        }
+    };
 
-    // 严格 header 校验：4 行 × N 列，逐格比对（顺序：desc / export / type / field）。
-    // Export 与写出端一致使用 [`Export::display()`] 中文形式。
-    for (col_idx, field) in table.schema.fields.iter().enumerate() {
-        let actual_desc = cell_to_string(&rows[0][col_idx]);
-        let actual_export = cell_to_string(&rows[1][col_idx]);
-        let actual_type = cell_to_string(&rows[2][col_idx]);
-        let actual_name = cell_to_string(&rows[3][col_idx]);
-
-        if actual_desc != field.desc {
-            anyhow::bail!(
-                "table sheet '{}' 列 {} 表头 desc '{}' ≠ schema '{}'",
-                table.name, col_idx, actual_desc, field.desc,
-            );
+    let mut fields: Vec<FieldDef> = Vec::new();
+    let mut col_index: Vec<usize> = Vec::new();
+    let mut used = std::collections::HashSet::new();
+    let mut aux_seq = 0usize;
+    for c in 0..last_col {
+        let label = cell_to_string(&rows[3][c]).trim().to_string();
+        if label.is_empty() {
+            continue;
         }
-        if actual_export != field.export.display() {
-            anyhow::bail!(
-                "table sheet '{}' 列 {} 表头 export '{}' ≠ schema '{}'",
-                table.name, col_idx, actual_export, field.export.display(),
-            );
+        let desc = cell_to_string(&rows[0][c]);
+        let export_raw = cell_to_string(&rows[1][c]);
+        let export = parse_export(&export_raw);
+        let ty = cell_to_string(&rows[2][c]).trim().to_string();
+        let name_ok = crate::validate::validate_field_name(&label).is_none();
+        let type_ok = crate::types::TblType::parse(&ty).is_some();
+        let dup = !used.insert(label.to_lowercase());
+        if name_ok && type_ok && export.is_some() && !dup {
+            fields.push(FieldDef {
+                name: label,
+                desc,
+                tbl_type: ty,
+                export: export.unwrap(),
+                aux: None,
+                source_col: Some(c as u32 + 1),
+            });
+        } else {
+            aux_seq += 1;
+            let mut key = format!("aux_{}", aux_seq);
+            while fields.iter().any(|f| f.name == key) {
+                aux_seq += 1;
+                key = format!("aux_{}", aux_seq);
+            }
+            fields.push(FieldDef {
+                name: key,
+                desc,
+                tbl_type: ty,
+                export: export.unwrap_or(Export::ClientServer),
+                aux: Some(AuxMeta { label, raw_export: export_raw }),
+                source_col: Some(c as u32 + 1),
+            });
         }
-        if actual_type != field.tbl_type {
-            anyhow::bail!(
-                "table sheet '{}' 列 {} 表头 type '{}' ≠ schema '{}'",
-                table.name, col_idx, actual_type, field.tbl_type,
-            );
-        }
-        if actual_name != field.name {
-            anyhow::bail!(
-                "table sheet '{}' 列 {} 表头 name '{}' ≠ schema '{}'",
-                table.name, col_idx, actual_name, field.name,
-            );
+        col_index.push(c);
+    }
+    if let Some(pos) = fields.iter().position(|f| !f.is_aux() && f.name == "id") {
+        if pos > 0 {
+            let f = fields.remove(pos);
+            let c = col_index.remove(pos);
+            fields.insert(0, f);
+            col_index.insert(0, c);
         }
     }
 
@@ -481,12 +605,9 @@ fn parse_table_sheet(range: &Range<Data>, table: &Table) -> Result<Vec<Vec<Strin
         if is_empty_row(row) {
             continue;
         }
-        let cells: Vec<String> = (0..expected_cols)
-            .map(|c| cell_to_string(&row[c]))
-            .collect();
-        records.push(cells);
+        records.push(col_index.iter().map(|&c| cell_to_string(&row[c])).collect());
     }
-    Ok(records)
+    Ok((fields, records))
 }
 
 fn parse_constant_sheet(range: &Range<Data>, constant: &Constant) -> Result<Vec<ConstEntry>> {
@@ -581,8 +702,8 @@ mod tests {
 
     fn t(name: &str) -> Table {
         let fields = vec![
-            FieldDef { name: "id".into(), desc: "编号".into(), tbl_type: "int".into(), export: Export::ClientServer },
-            FieldDef { name: "name".into(), desc: "名字".into(), tbl_type: "str".into(), export: Export::ClientServer },
+            FieldDef { name: "id".into(), desc: "编号".into(), tbl_type: "int".into(), export: Export::ClientServer , aux: None, source_col: None},
+            FieldDef { name: "name".into(), desc: "名字".into(), tbl_type: "str".into(), export: Export::ClientServer , aux: None, source_col: None},
         ];
         Table {
             name: name.to_string(),
@@ -752,7 +873,7 @@ mod tests {
         let patch = import_xlsx_into_group(&tmp.0, &group).unwrap();
         assert_eq!(patch.patches.len(), 1);
         match &patch.patches[0] {
-            NodePatch::Table { name, records } => {
+            NodePatch::Table { name, records, .. } => {
                 assert_eq!(name, "t1");
                 assert_eq!(records, &group.tables[0].records);
             }
@@ -770,7 +891,7 @@ mod tests {
         assert_eq!(patch.patches.len(), 3);
         // 顺序：tables → constants → enums
         match &patch.patches[0] {
-            NodePatch::Table { name, records } => {
+            NodePatch::Table { name, records, .. } => {
                 assert_eq!(name, "t1");
                 assert_eq!(records, &group.tables[0].records);
             }
@@ -826,19 +947,55 @@ mod tests {
     }
 
     #[test]
-    fn import_header_tampering_errs() {
-        // 写出 group_a；用 schema 字段名不同的 group_b 去 import → 表头 name 列不一致
+    fn import_header_changes_update_fields() {
+        // Univer / Excel 里改了表头：回读要以 workbook 为准（不再报“表头不一致”）。
         let group_a = g("hero", &["t1"]);
         let bytes = export_group_book(&group_a, None).unwrap();
         let tmp = TempXlsx::new(&bytes);
 
         let mut group_b = g("hero", &["t1"]);
-        group_b.tables[0].schema.fields[1].name = "alias".into(); // 原是 "name"
+        group_b.tables[0].schema.fields[1].name = "alias".into(); // 内存里是旧名
 
-        let err = import_xlsx_into_group(&tmp.0, &group_b).unwrap_err();
-        let msg = format!("{}", err);
-        assert!(msg.contains("name") || msg.contains("alias"),
-            "应提及表头不一致，got: {}", msg);
+        let patch = import_xlsx_into_group(&tmp.0, &group_b).expect("表头变化应能回读");
+        let NodePatch::Table { fields, records, .. } = &patch.patches[0] else { panic!() };
+        let fields = fields.as_ref().expect("应带回字段结构");
+        assert_eq!(fields[1].name, "name", "以 workbook 表头为准");
+        assert_eq!(records[0][1], "alice");
+    }
+
+    #[test]
+    fn import_new_invalid_column_becomes_aux() {
+        let group = g("hero", &["t1"]);
+        let dir = std::env::temp_dir().join(format!(
+            "tablet_import_aux_{}_{}", std::process::id(),
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("hero.xlsx");
+        let mut wb = rust_xlsxwriter::Workbook::new();
+        let ws = wb.add_worksheet();
+        ws.set_name("t1").unwrap();
+        for (r, row) in [
+            ["编号", "名字", "策划备注"],
+            ["cs", "cs", "随便"],
+            ["int", "str", "任意类型"],
+            ["id", "name", "备注"],
+            ["1", "alice", "保留"],
+        ].iter().enumerate() {
+            for (c, v) in row.iter().enumerate() {
+                ws.write_string(r as u32, c as u16, *v).unwrap();
+            }
+        }
+        std::fs::write(&path, wb.save_to_buffer().unwrap()).unwrap();
+
+        let patch = import_xlsx_into_group(&path, &group).expect("新增非规范列应回读为辅助列");
+        let NodePatch::Table { fields, records, .. } = &patch.patches[0] else { panic!() };
+        let fields = fields.as_ref().unwrap();
+        assert_eq!(fields.len(), 3);
+        assert!(fields[2].is_aux());
+        assert_eq!(fields[2].label(), "备注");
+        assert_eq!(records[0][2], "保留");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     // ----- cell_to_string -----

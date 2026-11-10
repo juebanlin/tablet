@@ -4,6 +4,23 @@ use crate::history::{CellSnapshot, EditHistory, EditOp, Transaction};
 use crate::model::*;
 use crate::validate::*;
 
+/// Excel 多 sheet 导入的一行：源 sheet → 目标组/节点 + 已识别的布局与字段。
+#[derive(Debug, Clone, PartialEq)]
+pub struct ExcelNodeSpec {
+    pub sheet: String,
+    pub group_name: String,
+    pub node_name: String,
+    /// true = 用户明确选择“新建组”，组已存在时报错而不是覆盖。
+    pub create_group: bool,
+    pub kind: crate::excel_mapping::MappedNodeKind,
+    pub header_row: u32,
+    pub data_start: u32,
+    pub desc_row: u32,
+    pub type_row: u32,
+    pub export_row: u32,
+    pub fields: Vec<crate::excel_mapping::MappedField>,
+}
+
 /// 把一条 ValidationError 格式化为日志行（统一 B 格式：`位置:[内容] -> 原因`）：
 /// - Table 表头：`[验证] group/node 表头第N行X列:[field] -> message`
 ///   N = 1 desc / 2 export / 3 type / 4 field（与 UI 表头从上到下一致）
@@ -120,6 +137,7 @@ fn rewrite_group_refs(group: &mut Group, mapping: &HashMap<String, String>) {
     }
     for t in &mut group.tables {
         for f in &mut t.schema.fields {
+            if f.is_aux() { continue; }
             for (old, new) in mapping {
                 if let Some(txt) = rename_ref_in_type(&f.tbl_type, old, new) {
                     f.tbl_type = txt;
@@ -149,6 +167,7 @@ fn rewrite_node_body_refs(body: &mut NodeBody, mapping: &HashMap<String, String>
     match body {
         NodeBody::Table(t) => {
             for f in &mut t.schema.fields {
+                if f.is_aux() { continue; }
                 for (old, new) in mapping {
                     if let Some(txt) = rename_ref_in_type(&f.tbl_type, old, new) {
                         f.tbl_type = txt;
@@ -298,6 +317,7 @@ fn rewrite_refs_after_rename(project: &mut Project, old: &str, new: &str) -> usi
     for g in &mut project.groups {
         for t in &mut g.tables {
             for f in &mut t.schema.fields {
+                if f.is_aux() { continue; }
                 if let Some(s) = rename_ref_in_type(&f.tbl_type, old, new) {
                     f.tbl_type = s;
                     n += 1;
@@ -1099,7 +1119,13 @@ fn write_table_sheet(
     let mut next_col = max_col + 1;
     let mut col_of: Vec<u32> = Vec::with_capacity(fields.len());
     for f in fields {
-        let found = (1..=max_col).find(|&c| ws.value((c, HDR_NAME)) == f.name);
+        // 优先按加载时记下的源列号回写：普通列升级 / 普通列改名后，Excel 里的
+        // 旧表头已经对不上新名字，按名字找会把它当成新列追加到最后。
+        let by_source = f.source_col.filter(|&c| c >= 1 && c <= max_col);
+        let found = by_source.or_else(|| {
+            let header = f.label();
+            (1..=max_col).find(|&c| ws.value((c, HDR_NAME)) == header)
+        });
         let c = match found {
             Some(c) => c,
             None => { let c = next_col; next_col += 1; c }
@@ -1110,9 +1136,15 @@ fn write_table_sheet(
     for (i, f) in fields.iter().enumerate() {
         let c = col_of[i];
         ws.cell_mut((c, HDR_DESC)).set_value(f.desc.clone());
-        ws.cell_mut((c, HDR_EXPORT)).set_value(f.export.display().to_string());
+        if let Some(meta) = &f.aux {
+            // 普通列原样写回：原始表头 / 原始 export 文本。
+            ws.cell_mut((c, HDR_EXPORT)).set_value(meta.raw_export.clone());
+            ws.cell_mut((c, HDR_NAME)).set_value(meta.label.clone());
+        } else {
+            ws.cell_mut((c, HDR_EXPORT)).set_value(f.export.display().to_string());
+            ws.cell_mut((c, HDR_NAME)).set_value(f.name.clone());
+        }
         ws.cell_mut((c, HDR_TYPE)).set_value(f.tbl_type.clone());
-        ws.cell_mut((c, HDR_NAME)).set_value(f.name.clone());
     }
 
     for (ri, row) in table.records.iter().enumerate() {
@@ -1257,7 +1289,77 @@ pub struct ProjectEngine {
     history_applying: bool,
 }
 
-/// 表是否依赖 `names` 里任一节点（类型 `@Xxx` 或规则的 `ref_exists`）。
+/// 普通列在表头改完后再判一次：原始表头 / 类型 / export 都合法且不重名时，
+/// 自动升级为普通 tablet 列（背景色随之消失，开始参与校验 / 引用 / 导出）。
+fn aux_next_key(table: &crate::model::Table) -> String {
+    let mut n = 1usize;
+    loop {
+        let key = format!("aux_{}", n);
+        if !table.schema.fields.iter().any(|f| f.name == key) {
+            return key;
+        }
+        n += 1;
+    }
+}
+
+fn aux_export_valid(raw: &str) -> bool {
+    let v = raw.trim();
+    v.is_empty()
+        || Export::parse_code(v).is_some()
+        || matches!(v, "前后端" | "客户端" | "服务器" | "不导出")
+}
+
+/// 表头改完后重算这一列的“是否 tablet 规范列”：
+/// - aux → 名字 / 类型 / export 都合法且不重名时升级为普通列；
+/// - 普通列 → 被改成不合法时降级为 aux（数据保留，只是不参与导出 / 引用 / 校验）。
+fn aux_refresh(table: &mut crate::model::Table, col: usize, export_hint: Option<String>) {
+    let Some(field) = table.schema.fields.get(col) else { return };
+    let label = field
+        .aux
+        .as_ref()
+        .map(|m| m.label.clone())
+        .unwrap_or_else(|| field.name.clone());
+    let raw_export = export_hint.unwrap_or_else(|| {
+        field
+            .aux
+            .as_ref()
+            .map(|m| m.raw_export.clone())
+            .unwrap_or_else(|| field.export.to_tbl().to_string())
+    });
+    let label_ok = crate::validate::validate_field_name(&label).is_none();
+    let dup = table.schema.fields.iter().enumerate().any(|(i, f)| {
+        i != col && {
+            let other = f.aux.as_ref().map(|m| m.label.as_str()).unwrap_or(f.name.as_str());
+            other.eq_ignore_ascii_case(&label)
+        }
+    });
+    let type_ok = crate::types::TblType::parse(&field.tbl_type).is_some();
+    let export_ok = aux_export_valid(&raw_export);
+    let valid = label_ok && !dup && type_ok && export_ok;
+
+    if field.is_aux() {
+        if valid {
+            if let Some(field) = table.schema.fields.get_mut(col) {
+                field.name = label;
+                field.aux = None;
+            }
+        } else if let Some(field) = table.schema.fields.get_mut(col) {
+            if let Some(meta) = field.aux.as_mut() {
+                meta.label = label;
+                meta.raw_export = raw_export;
+            }
+        }
+    } else if !valid {
+        // 普通列被改坏：保留原始表头 / export 文本，转成普通列。
+        let key = aux_next_key(table);
+        if let Some(field) = table.schema.fields.get_mut(col) {
+            field.name = key;
+            field.aux = Some(crate::model::AuxMeta { label, raw_export });
+        }
+    }
+}
+
+/// 表是否依赖 `names` 里任一节点（类型 `@Xxx` 或规则的 `ref_exists`）。/// 表是否依赖 `names` 里任一节点（类型 `@Xxx` 或规则的 `ref_exists`）。
 fn table_depends_on(t: &Table, names: &std::collections::HashSet<String>) -> bool {
     t.schema.fields.iter().any(|f| type_refs_any(&f.tbl_type, names))
         || t.rules.iter().any(|r| rule_refs_any(r, names))
@@ -2289,6 +2391,11 @@ impl ProjectEngine {
             match kind {
                 NodeKind::Table => {
                     if let Some(t) = g.tables.iter_mut().find(|t| t.name == name) {
+                        if let Some(v) = &value {
+                            if t.schema.fields.iter().any(|f| f.is_aux() && f.label() == v) {
+                                return;
+                            }
+                        }
                         if t.display_field != value {
                             t.display_field = value;
                             t.update_dirty();
@@ -2665,31 +2772,38 @@ impl ProjectEngine {
     /// `header_row` 是 0-based UI 行号（与 `TableHeaderRow::row()` 等价）：
     ///   0=desc, 1=export, 2=type, 3=field —— 顺序与 UI 表头从上到下一致，也与 .tbl 序列化顺序一致。
     pub fn commit_header_edit(&mut self, group: &str, name: &str, header_row: usize, col: usize, val: String) {
-        let mut keyword_err = None;
         self.with_node_tx(group, name, NodeKind::Table, "修改表头", |engine| {
             if let Some(g) = engine.project_mut().groups.iter_mut().find(|g| g.name == group) {
                 if let Some(t) = g.tables.iter_mut().find(|t| t.name == name) {
-                    let mut renamed_from: Option<String> = None;
+                    let old_name = t.schema.fields.get(col).map(|f| f.name.clone());
+                    let was_aux = t.schema.fields.get(col).is_some_and(|f| f.is_aux());
+                    let mut export_hint: Option<String> = None;
                     if let Some(field) = t.schema.fields.get_mut(col) {
                         match header_row {
                             0 => field.desc = val.clone(),
-                            1 => field.export = Export::from_input(&val),
+                            1 => {
+                                export_hint = Some(val.clone());
+                                field.export = Export::from_input(&val);
+                                if let Some(meta) = field.aux.as_mut() {
+                                    meta.raw_export = val.clone();
+                                }
+                            }
                             2 => field.tbl_type = val.clone(),
                             3 => {
-                                let v = val.trim().to_string();
-                                if !is_reserved_keyword(&v) {
-                                    renamed_from = Some(std::mem::replace(&mut field.name, v));
+                                if let Some(meta) = field.aux.as_mut() {
+                                    meta.label = val.clone();
                                 } else {
-                                    keyword_err = Some(val.clone());
+                                    field.name = val.trim().to_string();
                                 }
                             }
                             _ => {}
                         }
                     }
-                    // 字段改名 → 本表规则里的列名跟着改，否则规则会指向一个不存在的列。
-                    if let Some(old) = renamed_from {
-                        let now = t.schema.fields[col].name.clone();
-                        if old != now {
+                    aux_refresh(t, col, export_hint);
+                    // 普通列改名后同步规则里的列名；升级/降级不在这里处理。
+                    if let (Some(old), Some(field)) = (old_name, t.schema.fields.get(col)) {
+                        if !was_aux && !field.is_aux() && old != field.name {
+                            let now = field.name.clone();
                             for r in t.rules.iter_mut() {
                                 r.rename_column(&old, &now);
                             }
@@ -2699,10 +2813,109 @@ impl ProjectEngine {
                 }
             }
             engine.project_mut().resync_schema();
-            if let Some(kw) = keyword_err.take() {
-                engine.ui_log(format!("字段名 '{}' 是保留关键字，不允许使用", kw));
+        });
+    }
+
+    /// 手动降级 / 升级一列：
+    /// - `aux = true`：普通列 → 普通列（保留原始表头 / 类型 / export，不做重置）；
+    /// - `aux = false`：普通列 → 普通列（表头 / 类型 / export 必须合法且不重名）。
+    pub fn set_table_column_aux(
+        &mut self,
+        group: &str,
+        name: &str,
+        col: usize,
+        aux: bool,
+    ) -> Result<bool, String> {
+        let mut err: Option<String> = None;
+        let mut did = false;
+        self.with_node_tx(group, name, NodeKind::Table, if aux { "转为普通列" } else { "转为 TBL 列" }, |engine| {
+            if let Some(g) = engine.project_mut().groups.iter_mut().find(|g| g.name == group) {
+                if let Some(t) = g.tables.iter_mut().find(|t| t.name == name) {
+                    let Some(field) = t.schema.fields.get(col) else { return };
+                    let is_aux = field.is_aux();
+                    let field_name = field.name.clone();
+                    let ty = field.tbl_type.clone();
+                    let label = field.aux.as_ref().map(|m| m.label.clone()).unwrap_or_else(|| field_name.clone());
+                    let raw_export = field
+                        .aux
+                        .as_ref()
+                        .map(|m| m.raw_export.clone())
+                        .unwrap_or_else(|| field.export.to_tbl().to_string());
+                    if aux {
+                        if is_aux { return; }
+                        if field_name == "id" {
+                            err = Some("id 列不能转为普通列".to_string());
+                            return;
+                        }
+                        if let Some(f) = t.schema.fields.get_mut(col) {
+                            f.aux = Some(crate::model::AuxMeta { label: field_name, raw_export });
+                        }
+                        did = true;
+                    } else {
+                        if !is_aux { return; }
+                        if let Some((_, msg)) = crate::validate::validate_field_name(&label) {
+                            let suggested = {
+                                let py = crate::excel_mapping::normalize_field_name(&label);
+                                if crate::validate::validate_field_name(&py).is_none() {
+                                    py
+                                } else {
+                                    format!("field{}", col + 1)
+                                }
+                            };
+                            err = Some(format!(
+                                "表头「{}」不合法：{}；建议改为 {}",
+                                label, msg, suggested
+                            ));
+                            return;
+                        }
+                        let dup = t.schema.fields.iter().enumerate().any(|(i, f)| {
+                            i != col && {
+                                let other = f.aux.as_ref().map(|m| m.label.as_str()).unwrap_or(f.name.as_str());
+                                other.eq_ignore_ascii_case(&label)
+                            }
+                        });
+                        if dup {
+                            err = Some(format!("表头「{}」与其它列重名", label));
+                            return;
+                        }
+                        // 升级时把不合法的类型 / export 换成默认值，并切回可选控件。
+                        let effective_type = if crate::types::TblType::parse(&ty).is_some() {
+                            ty.clone()
+                        } else {
+                            "str".to_string()
+                        };
+                        let effective_export = if raw_export.trim().is_empty() {
+                            Export::ClientServer
+                        } else if let Some(e) = Export::parse_code(raw_export.trim()) {
+                            e
+                        } else {
+                            match raw_export.trim() {
+                                "前后端" => Export::ClientServer,
+                                "客户端" => Export::ClientOnly,
+                                "服务器" => Export::ServerOnly,
+                                "不导出" => Export::None,
+                                _ => Export::ClientServer,
+                            }
+                        };
+                        if let Some(f) = t.schema.fields.get_mut(col) {
+                            f.name = label;
+                            f.tbl_type = effective_type;
+                            f.export = effective_export;
+                            f.aux = None;
+                        }
+                        did = true;
+                    }
+                    t.update_dirty();
+                }
+            }
+            if did {
+                engine.project_mut().resync_schema();
             }
         });
+        if let Some(msg) = err {
+            return Err(msg);
+        }
+        Ok(did)
     }
 
     pub fn insert_row(&mut self, group: &str, name: &str, at: usize) {
@@ -2762,7 +2975,7 @@ impl ProjectEngine {
                         desc: "新字段".to_string(),
                         tbl_type: "str".to_string(),
                         export: Export::ClientServer,
-                    });
+                     aux: None, source_col: None,});
                     for record in &mut t.records {
                         record.insert(at.min(record.len()), String::new());
                     }
@@ -4137,6 +4350,264 @@ impl ProjectEngine {
         Ok(ImportOutcome { group: created_group, nodes: 1 })
     }
 
+    /// 把一张工作簿里的多张 sheet 导入到多个组/节点。
+    ///
+    /// - 解析 / 校验全部在事务外完成，任何一行失败则整个导入不生效；
+    /// - 整个导入是**一个撤销步骤**（label = `Excel 导入`）；
+    /// - 只改内存，不落盘；xlsx 组由保存流程回写工作簿；
+    /// - 目标组不存在时创建 Tbl 组；已有节点按 kind 覆盖，新节点标记未保存。
+    pub fn import_excel_nodes(
+        &mut self,
+        project_id: &str,
+        source: &Path,
+        specs: &[ExcelNodeSpec],
+    ) -> Result<usize, String> {
+        if specs.is_empty() {
+            return Err("没有选中要导入的 sheet".to_string());
+        }
+        if !self.is_opened(project_id) {
+            self.open_project(project_id).map_err(|e| e.to_string())?;
+        }
+
+        enum Data {
+            Table { fields: Vec<FieldDef>, records: Vec<Vec<String>> },
+            Constant(Vec<ConstEntry>),
+            Enum(Vec<EnumEntry>),
+        }
+        struct Prepared {
+            group: String,
+            node: String,
+            create_group: bool,
+            kind: crate::excel_mapping::MappedNodeKind,
+            data: Data,
+        }
+
+        let mut prepared: Vec<Prepared> = Vec::with_capacity(specs.len());
+        for spec in specs {
+            let data = match spec.kind {
+                crate::excel_mapping::MappedNodeKind::Table => {
+                    let plan = crate::excel_mapping::MappingPlan {
+                        source: source.to_path_buf(),
+                        sheet: spec.sheet.clone(),
+                        header_row: spec.header_row,
+                        data_start: spec.data_start,
+                        desc_row: spec.desc_row,
+                        type_row: spec.type_row,
+                        export_row: spec.export_row,
+                        group_name: spec.group_name.clone(),
+                        node_name: spec.node_name.clone(),
+                        fields: spec.fields.clone(),
+                    };
+                    let (fields, records) =
+                        crate::excel_mapping::build_table_parts(&plan)?;
+                    Data::Table { fields, records }
+                }
+                crate::excel_mapping::MappedNodeKind::Constant
+                | crate::excel_mapping::MappedNodeKind::Enum => {
+                    let plan = crate::excel_mapping::EntryMappingPlan {
+                        source: source.to_path_buf(),
+                        sheet: spec.sheet.clone(),
+                        header_row: spec.header_row,
+                        data_start: spec.data_start,
+                        group_name: spec.group_name.clone(),
+                        node_name: spec.node_name.clone(),
+                        kind: spec.kind,
+                        fields: spec.fields.clone(),
+                    };
+                    match crate::excel_mapping::build_entries(&plan)? {
+                        crate::excel_mapping::MappedEntries::Constants(v) => Data::Constant(v),
+                        crate::excel_mapping::MappedEntries::Enums(v) => Data::Enum(v),
+                    }
+                }
+            };
+            prepared.push(Prepared {
+                group: spec.group_name.clone(),
+                node: spec.node_name.clone(),
+                create_group: spec.create_group,
+                kind: spec.kind,
+                data,
+            });
+        }
+
+        // 先做项目级校验：任何一行冲突都不改内存。
+        {
+            let project = self
+                .find_project(project_id)
+                .ok_or_else(|| format!("Project 不存在: {project_id}"))?;
+            let all_names = all_project_node_names(project);
+            let mut targets: HashSet<(String, String)> = HashSet::new();
+            for p in &prepared {
+                if !targets.insert((p.group.to_lowercase(), p.node.to_lowercase())) {
+                    return Err(format!("同一目标被重复导入: {}/{}", p.group, p.node));
+                }
+                if p.create_group
+                    && project
+                        .groups
+                        .iter()
+                        .any(|g| g.name.eq_ignore_ascii_case(&p.group))
+                {
+                    return Err(format!("新建组失败：组已存在: {}", p.group));
+                }
+                let existing = project
+                    .groups
+                    .iter()
+                    .find(|g| g.name.eq_ignore_ascii_case(&p.group))
+                    .and_then(|g| {
+                        if g.tables.iter().any(|t| t.name.eq_ignore_ascii_case(&p.node)) {
+                            Some(crate::excel_mapping::MappedNodeKind::Table)
+                        } else if g.constants.iter().any(|c| c.name.eq_ignore_ascii_case(&p.node)) {
+                            Some(crate::excel_mapping::MappedNodeKind::Constant)
+                        } else if g.enums.iter().any(|e| e.name.eq_ignore_ascii_case(&p.node)) {
+                            Some(crate::excel_mapping::MappedNodeKind::Enum)
+                        } else {
+                            None
+                        }
+                    });
+                if let Some(kind) = existing {
+                    if kind != p.kind {
+                        return Err(format!(
+                            "{}/{} 已存在且类型是{}，不能按{}导入",
+                            p.group,
+                            p.node,
+                            kind.label(),
+                            p.kind.label()
+                        ));
+                    }
+                } else if all_names
+                    .iter()
+                    .any(|name| name.eq_ignore_ascii_case(&p.node))
+                {
+                    return Err(format!(
+                        "节点名已存在（项目内唯一，忽略大小写）: {}",
+                        p.node
+                    ));
+                }
+            }
+        }
+
+        let applied = self.edit_project(project_id, "Excel 导入", |project| {
+            let data_dir = project.data_dir();
+            for p in &prepared {
+                let group_idx = match project
+                    .groups
+                    .iter()
+                    .position(|g| g.name.eq_ignore_ascii_case(&p.group))
+                {
+                    Some(i) => i,
+                    None => {
+                        project.groups.push(Group {
+                            name: p.group.clone(),
+                            original_name: p.group.clone(),
+                            dir: data_dir.join(&p.group),
+                            tables: Vec::new(),
+                            constants: Vec::new(),
+                            enums: Vec::new(),
+                            is_new: true,
+                            storage: crate::model::GroupStorage::Tbl,
+                            book_stamp: None,
+                        });
+                        project.groups.len() - 1
+                    }
+                };
+                let group = &mut project.groups[group_idx];
+                let node_path = if group.is_xlsx() {
+                    group.book_path()
+                } else {
+                    group.dir.join(format!("{}.tbl", p.node))
+                };
+                match &p.data {
+                    Data::Table { fields, records } => {
+                        if let Some(t) = group
+                            .tables
+                            .iter_mut()
+                            .find(|t| t.name.eq_ignore_ascii_case(&p.node))
+                        {
+                            t.name = p.node.clone();
+                            t.schema.fields = fields.clone();
+                            t.records = records.clone();
+                            t.deleted = false;
+                            t.update_dirty();
+                        } else {
+                            group.tables.push(Table {
+                                name: p.node.clone(),
+                                original_name: p.node.clone(),
+                                path: node_path,
+                                schema: crate::model::TableSchema { fields: fields.clone() },
+                                records: records.clone(),
+                                dirty: true,
+                                deleted: false,
+                                original_records: Vec::new(),
+                                original_fields: Vec::new(),
+                                saved: false,
+                                fmt_ver: crate::tbl::DEFAULT_TBL_VERSION,
+                                display_field: None,
+                                original_display_field: None,
+                                rules: Vec::new(),
+                                original_rules: Vec::new(),
+                            });
+                        }
+                    }
+                    Data::Constant(entries) => {
+                        if let Some(c) = group
+                            .constants
+                            .iter_mut()
+                            .find(|c| c.name.eq_ignore_ascii_case(&p.node))
+                        {
+                            c.name = p.node.clone();
+                            c.entries = entries.clone();
+                            c.deleted = false;
+                            c.update_dirty();
+                        } else {
+                            group.constants.push(Constant {
+                                name: p.node.clone(),
+                                original_name: p.node.clone(),
+                                path: node_path,
+                                entries: entries.clone(),
+                                dirty: true,
+                                deleted: false,
+                                original_entries: Vec::new(),
+                                saved: false,
+                            });
+                        }
+                    }
+                    Data::Enum(entries) => {
+                        if let Some(e) = group
+                            .enums
+                            .iter_mut()
+                            .find(|e| e.name.eq_ignore_ascii_case(&p.node))
+                        {
+                            e.name = p.node.clone();
+                            e.entries = entries.clone();
+                            e.deleted = false;
+                            e.update_dirty();
+                        } else {
+                            group.enums.push(EnumDef {
+                                name: p.node.clone(),
+                                original_name: p.node.clone(),
+                                path: node_path,
+                                entries: entries.clone(),
+                                dirty: true,
+                                deleted: false,
+                                original_entries: Vec::new(),
+                                saved: false,
+                                display_field: None,
+                                original_display_field: None,
+                                rules: Vec::new(),
+                                original_rules: Vec::new(),
+                            });
+                        }
+                    }
+                }
+            }
+            sync_schema_from_groups(project);
+        });
+        if applied.is_none() {
+            return Err(format!("Project 未打开: {project_id}"));
+        }
+        self.revalidate_all_projects();
+        Ok(prepared.len())
+    }
+
     /// 原生导入一个 xlsx：文件 = 组，sheet = 节点。
     ///
     /// 工作簿原样复制，保留样式；结构与数据从 workbook 表头 / sheet 读取。
@@ -4371,7 +4842,7 @@ impl ProjectEngine {
                                     desc: "ID".to_string(),
                                     tbl_type: "int".to_string(),
                                     export: Export::ClientServer,
-                                }],
+                                 aux: None, source_col: None,}],
                             },
                             records: Vec::new(),
                             dirty: true,
@@ -4380,7 +4851,7 @@ impl ProjectEngine {
                             original_fields: vec![FieldDef {
                                 name: "id".to_string(), desc: "ID".to_string(),
                                 tbl_type: "int".to_string(), export: Export::ClientServer,
-                            }],
+                             aux: None, source_col: None,}],
                             saved: false,
                             fmt_ver: *fmt_ver,
                             display_field: None,
@@ -5114,8 +5585,8 @@ package = \"com.user.kept\"
                 original_name: "T".to_string(),
                 path: gdir.join("T.tbl"),
                 schema: TableSchema { fields: vec![
-                    FieldDef { name: "id".into(), desc: "ID".into(), tbl_type: "int".into(), export: Export::ClientServer },
-                    FieldDef { name: "name".into(), desc: "名".into(), tbl_type: "str".into(), export: Export::ClientServer },
+                    FieldDef { name: "id".into(), desc: "ID".into(), tbl_type: "int".into(), export: Export::ClientServer , aux: None, source_col: None},
+                    FieldDef { name: "name".into(), desc: "名".into(), tbl_type: "str".into(), export: Export::ClientServer , aux: None, source_col: None},
                 ]},
                 records: vec![vec!["1".into(), "Alice".into()]],
                 dirty: true, deleted: false,
@@ -5199,8 +5670,34 @@ package = \"com.user.kept\"
     // 「还有东西没保存」同时成立，树上那个 🟡 说不清是什么没保存。
     // 现在改名只写内存，搬文件推迟到 save（`apply_pending_renames`）。
 
+    #[test]
+    fn aux_column_promotes_when_header_becomes_valid() {
+        let mut table = Table {
+            name: "T".into(), original_name: "T".into(), path: Default::default(),
+            schema: crate::model::TableSchema { fields: vec![
+                FieldDef { name: "id".into(), desc: "ID".into(), tbl_type: "int".into(),
+                    export: Export::ClientServer, aux: None , source_col: None},
+                FieldDef { name: "aux_1".into(), desc: "".into(), tbl_type: "str".into(),
+                    export: Export::ClientServer,
+                    aux: Some(crate::model::AuxMeta {
+                        label: "note".into(), raw_export: "cs".into(),
+                    }) , source_col: None},
+            ] },
+            records: vec![vec!["1".into(), "hi".into()]],
+            dirty: false, deleted: false, original_records: vec![], original_fields: vec![],
+            saved: true, fmt_ver: crate::tbl::DEFAULT_TBL_VERSION,
+            display_field: None, original_display_field: None,
+            rules: Vec::new(), original_rules: Vec::new(),
+        };
+        assert!(table.schema.fields[1].is_aux());
+        aux_refresh(&mut table, 1, None);
+        assert!(!table.schema.fields[1].is_aux(), "label/type/export 都合法时应升级");
+        assert_eq!(table.schema.fields[1].name, "note");
+        assert_eq!(table.records[0][1], "hi", "升级不改数据列");
+    }
+
     fn id_field() -> FieldDef {
-        FieldDef { name: "id".into(), desc: "ID".into(), tbl_type: "int".into(), export: Export::ClientServer }
+        FieldDef { name: "id".into(), desc: "ID".into(), tbl_type: "int".into(), export: Export::ClientServer, aux: None, source_col: None }
     }
 
     /// 造一份「已经落过盘」的项目：内存建 → `save` → **从盘上重新 load**。
@@ -5503,7 +6000,7 @@ package = \"com.user.kept\"
         let key_field = FieldDef {
             name: "key".into(), desc: String::new(),
             tbl_type: "str".into(), export: Export::ClientServer,
-        };
+         aux: None, source_col: None,};
         let lang = Table {
             name: "Lang".into(), original_name: "Lang".into(),
             path: dir.join("Lang.tbl"),
@@ -5589,7 +6086,7 @@ package = \"com.user.kept\"
         let ref_field = FieldDef {
             name: "ref".into(), desc: String::new(),
             tbl_type: "@B".into(), export: Export::ClientServer,
-        };
+         aux: None, source_col: None,};
         let a = Table {
             name: "A".into(), original_name: "A".into(),
             path: dir.join("A.tbl"),
@@ -5844,7 +6341,7 @@ package = \"com.user.kept\"
             t.schema.fields.push(FieldDef {
                 name: "name".into(), desc: "名字".into(),
                 tbl_type: "str".into(), export: Export::ClientServer,
-            });
+             aux: None, source_col: None,});
             t.records = vec![
                 vec!["1".into(), "alpha".into()],
                 vec!["2".into(), "beta".into()],
@@ -6157,13 +6654,13 @@ package = \"com.user.kept\"
                 desc: String::new(),
                 tbl_type: "@A".into(),
                 export: Export::ClientServer,
-            });
+             aux: None, source_col: None,});
             t.schema.fields.push(FieldDef {
                 name: "other_ref".into(),
                 desc: String::new(),
                 tbl_type: "@B".into(),
                 export: Export::ClientServer,
-            });
+             aux: None, source_col: None,});
             t.records[0].push("1".into());
             t.records[0].push(String::new());
             t.update_dirty();
@@ -6201,13 +6698,13 @@ package = \"com.user.kept\"
                 desc: String::new(),
                 tbl_type: "@A".into(),
                 export: Export::ClientServer,
-            });
+             aux: None, source_col: None,});
             t.schema.fields.push(FieldDef {
                 name: "other_ref".into(),
                 desc: String::new(),
                 tbl_type: "@B".into(),
                 export: Export::ClientServer,
-            });
+             aux: None, source_col: None,});
             t.records[0].push("1".into());
             t.records[0].push(String::new());
             t.update_dirty();
@@ -6586,9 +7083,9 @@ package = \"com.user.kept\"
             storage: crate::model::GroupStorage::Tbl, book_stamp: None,
             tables: vec![
                 mk("HeroBase", FieldDef { name: "leader".into(), desc: "关联英雄".into(),
-                    tbl_type: "@HeroBase".into(), export: Export::ClientServer }),
+                    tbl_type: "@HeroBase".into(), export: Export::ClientServer , aux: None, source_col: None}),
                 mk("Skill", FieldDef { name: "heroes".into(), desc: "关联英雄".into(),
-                    tbl_type: "List<@HeroBase>".into(), export: Export::ClientServer }),
+                    tbl_type: "List<@HeroBase>".into(), export: Export::ClientServer , aux: None, source_col: None}),
             ],
             constants: vec![], enums: vec![], is_new: true,
         });
@@ -6898,7 +7395,7 @@ package = \"com.user.kept\"
                 original_name: "Item".into(),
                 path: src.clone(),
                 schema: crate::model::TableSchema { fields: vec![
-                    crate::model::FieldDef { name: "id".into(), desc: "ID".into(), tbl_type: "int".into(), export: crate::model::Export::ClientServer },
+                    crate::model::FieldDef { name: "id".into(), desc: "ID".into(), tbl_type: "int".into(), export: crate::model::Export::ClientServer , aux: None, source_col: None},
                 ]},
                 records: vec![vec!["1".into()]],
                 dirty: true,
@@ -6931,6 +7428,78 @@ package = \"com.user.kept\"
         let manifest = std::fs::read_to_string(
             dir.join("projects/p1").join(crate::project::PROJECT_MANIFEST_FILE)).unwrap();
         assert!(manifest.contains("[Items/Item] table xlsx"), "{manifest}");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn import_excel_nodes_is_one_undo_step_and_export_selected_book() {
+        let (dir, mut engine) = engine_with_saved_node("import_excel_nodes", "g", "T");
+        let xlsx = dir.join("multi.xlsx");
+        let mut wb = rust_xlsxwriter::Workbook::new();
+        let ws = wb.add_worksheet();
+        ws.set_name("NewT").unwrap();
+        ws.write_string(0, 0, "ID").unwrap();
+        ws.write_string(0, 1, "Name").unwrap();
+        ws.write_string(1, 0, "前后端").unwrap();
+        ws.write_string(1, 1, "前后端").unwrap();
+        ws.write_string(2, 0, "int").unwrap();
+        ws.write_string(2, 1, "str").unwrap();
+        ws.write_string(3, 0, "id").unwrap();
+        ws.write_string(3, 1, "name").unwrap();
+        ws.write_string(4, 0, "1").unwrap();
+        ws.write_string(4, 1, "Alice").unwrap();
+        wb.save(&xlsx).unwrap();
+
+        let spec = ExcelNodeSpec {
+            sheet: "NewT".into(),
+            group_name: "g".into(),
+            node_name: "NewT".into(),
+            create_group: false,
+            kind: crate::excel_mapping::MappedNodeKind::Table,
+            header_row: 4,
+            data_start: 5,
+            desc_row: 1,
+            type_row: 3,
+            export_row: 2,
+            fields: vec![
+                crate::excel_mapping::MappedField {
+                    target_name: "id".into(),
+                    source_col: 1,
+                    tbl_type: "int".into(),
+                    export: Export::ClientServer,
+                    desc: "ID".into(),
+                },
+                crate::excel_mapping::MappedField {
+                    target_name: "name".into(),
+                    source_col: 2,
+                    tbl_type: "str".into(),
+                    export: Export::ClientServer,
+                    desc: "Name".into(),
+                },
+            ],
+        };
+        assert_eq!(engine.import_excel_nodes("p1", &xlsx, &[spec]).unwrap(), 1);
+        let t = engine.find_table("g", "NewT").expect("new node");
+        assert_eq!(t.records[0], vec!["1".to_string(), "Alice".to_string()]);
+        assert!(engine.can_undo(), "导入必须能撤销");
+        assert_eq!(engine.undo_label(), Some("Excel 导入"));
+
+        assert!(engine.undo());
+        assert!(engine.find_table("g", "NewT").is_none(), "一次撤销应移除整次导入");
+        assert!(engine.redo());
+        assert!(engine.find_table("g", "NewT").is_some(), "重做应恢复");
+
+        // 跨组选中导出：一本工作簿里包含两个 sheet。
+        let bytes = crate::excel::export_selected_book(
+            engine.project(),
+            &[("g".into(), vec!["T".into(), "NewT".into()])],
+        )
+        .unwrap();
+        let out = dir.join("selected.xlsx");
+        std::fs::write(&out, bytes).unwrap();
+        let sheets = crate::excel_mapping::list_sheets(&out).unwrap();
+        assert_eq!(sheets, vec!["T".to_string(), "NewT".to_string()]);
 
         let _ = std::fs::remove_dir_all(&dir);
     }

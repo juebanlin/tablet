@@ -464,7 +464,7 @@ pub fn check_project_key_collisions(project: &crate::model::Project) -> anyhow::
     for group in &project.groups {
         for table in &group.tables {
             if table.deleted { continue; }
-            check_key_collision(&table.name, table.schema.fields.iter().map(|f| f.name.as_str()))?;
+            check_key_collision(&table.name, table.schema.fields.iter().filter(|f| !f.is_aux()).map(|f| f.name.as_str()))?;
         }
         for constant in &group.constants {
             if constant.deleted { continue; }
@@ -536,6 +536,7 @@ pub(crate) mod test_fixtures {
             desc: desc.to_string(),
             tbl_type: tbl_type.to_string(),
             export: Export::ClientServer,
+            aux: None, source_col: None,
         }
     }
 

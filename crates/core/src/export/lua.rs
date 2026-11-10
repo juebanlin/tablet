@@ -256,10 +256,10 @@ fn value_to_lua(raw: &str, tbl_type_str: &str, sep: &SeparatorsSection) -> Strin
 pub fn export_table_lua(table: &Table, sep: &SeparatorsSection) -> String {
     let fields = &table.schema.fields;
     let export_cols: Vec<(usize, &FieldDef)> = fields.iter().enumerate()
-        .filter(|(_, f)| is_client_export(&f.export))
+        .filter(|(_, f)| !f.is_aux() && is_client_export(&f.export))
         .collect();
 
-    let index_col = fields.iter().position(|f| f.name == "id").unwrap_or(0);
+    let index_col = fields.iter().position(|f| !f.is_aux() && f.name == "id").unwrap_or(0);
 
     let mut s = String::new();
     writeln!(s, "-- 使用：local {} = require(\"<导出路径>/{}\")  -- 返回 {{id = ...}} 表", table.name, table.name).unwrap();

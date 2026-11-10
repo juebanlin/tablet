@@ -320,6 +320,29 @@ pub fn suggest_fields(preview: &SheetPreview) -> Vec<MappedField> {
     fields
 }
 
+/// 常量 / 枚举的默认列映射：按固定目标列名字匹配源表头；匹配不上的源列不导入。
+pub fn suggest_entry_fields(columns: &[String], kind: MappedNodeKind) -> Vec<MappedField> {
+    let allowed = kind.allowed_targets();
+    let mut used: HashSet<String> = HashSet::new();
+    columns
+        .iter()
+        .enumerate()
+        .map(|(i, raw)| {
+            let mut target = normalize_field_name(raw);
+            if !allowed.contains(&target.as_str()) || !used.insert(target.clone()) {
+                target = String::new();
+            }
+            MappedField {
+                target_name: target,
+                source_col: i as u32 + 1,
+                tbl_type: "str".to_string(),
+                export: Export::ClientServer,
+                desc: raw.trim().to_string(),
+            }
+        })
+        .collect()
+}
+
 /// 读取某一行在所有列上的值（1-based 行号）。
 pub fn read_row_values(path: &Path, sheet: &str, row: u32) -> Result<Vec<String>> {
     let mut book = umya_spreadsheet::reader::xlsx::read(path)
@@ -466,6 +489,19 @@ pub struct DetectedLayout {
 }
 
 pub fn detect_layout(path: &Path, sheet: &str) -> Result<DetectedLayout> {
+    // 常量 / 枚举是固定单行表头：先按第 1 行精确匹配，避免数据行较宽时
+    // detect_header_row 把某条数据行误当成表头。
+    let first = read_row_values(path, sheet, 1)?;
+    if let Some(kind) = fixed_sheet_kind(&first) {
+        return Ok(DetectedLayout {
+            kind,
+            header_row: 1,
+            data_start: 2,
+            desc_row: 0,
+            type_row: 0,
+            export_row: 0,
+        });
+    }
     let header_row = detect_header_row(path, sheet)?;
     let columns = read_row_values(path, sheet, header_row)?;
     let mut kind = classify_columns(&columns);
@@ -487,6 +523,22 @@ pub fn detect_layout(path: &Path, sheet: &str) -> Result<DetectedLayout> {
         type_row,
         export_row,
     })
+}
+
+/// 固定单行表头：常量 5 列 / 枚举 3 列（大小写、前后空格不敏感）。
+fn fixed_sheet_kind(columns: &[String]) -> Option<MappedNodeKind> {
+    let norm: Vec<String> = columns
+        .iter()
+        .map(|c| c.trim().to_ascii_lowercase())
+        .collect();
+    let take = |n: usize| -> Vec<&str> { norm.iter().take(n).map(|s| s.as_str()).collect() };
+    if take(5) == vec!["name", "type", "value", "export", "desc"] {
+        return Some(MappedNodeKind::Constant);
+    }
+    if take(3) == vec!["id", "name", "desc"] {
+        return Some(MappedNodeKind::Enum);
+    }
+    None
 }
 
 /// 标准布局判定：
@@ -708,7 +760,7 @@ pub fn build_table_parts(plan: &MappingPlan) -> Result<(Vec<FieldDef>, Vec<Vec<S
         desc: f.desc.clone(),
         tbl_type: f.tbl_type.clone(),
         export: f.export.clone(),
-    }).collect();
+     aux: None, source_col: None,}).collect();
     for (i, mf) in plan.fields.iter().enumerate() {
         if plan.desc_row > 0 {
             let v = ws.value((mf.source_col, plan.desc_row));

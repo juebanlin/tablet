@@ -36,7 +36,7 @@ fn sep_attrs(sep: &SeparatorsSection, used_keys: &BTreeSet<SepKey>) -> String {
 pub fn export_table_xml(table: &Table, strategy: &EmptyStrategy, sep: &SeparatorsSection) -> String {
     let fields = &table.schema.fields;
     let export_cols: Vec<(usize, &FieldDef)> = fields.iter().enumerate()
-        .filter(|(_, f)| is_server_export(&f.export))
+        .filter(|(_, f)| !f.is_aux() && is_server_export(&f.export))
         .collect();
 
     let used = collect_used_sep_keys_table(table);

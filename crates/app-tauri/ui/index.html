@@ -411,16 +411,37 @@
     </div>
   </div>
 
-  <div class="modal" id="excel-dialog" hidden>
-    <div class="modal-box">
-      <div class="modal-title" id="excel-title">Excel</div>
-      <div class="form-row"><label>文件</label><input class="input" id="excel-path" /><button class="btn" id="excel-browse">浏览…</button></div>
-      <pre class="export-result" id="excel-result" hidden></pre>
-      <div class="modal-message error" id="excel-error" hidden></div>
-      <div class="modal-actions">
-        <button class="btn" id="excel-open" hidden>用 Excel 打开</button>
-        <button class="btn" id="excel-close">关闭</button>
-        <button class="btn primary" id="excel-run">执行</button>
+  <div class="modal" id="excel-transfer" hidden>
+    <div class="modal-box xt-box">
+      <div class="xt-head">
+        <div class="xt-heading">
+          <div class="xt-title" id="xt-title">导出 Excel</div>
+          <div class="xt-crumb" id="xt-crumb"></div>
+        </div>
+        <button class="btn" id="xt-close">关闭</button>
+      </div>
+      <div class="xt-modebar">
+        <span class="xt-mode-badge" id="xt-mode-label">导出</span>
+        <span class="xt-project">项目 <b id="xt-project"></b></span>
+        <span class="xt-hint" id="xt-hint"></span>
+      </div>
+      <div class="xt-body">
+        <div class="xt-left">
+          <div class="xt-pane-head"><span id="xt-tree-title">选择节点</span><span id="xt-tree-summary"></span></div>
+          <div class="xt-tree" id="xt-tree"></div>
+          <div class="xt-note" id="xt-tree-note"></div>
+        </div>
+        <div class="xt-right">
+          <div class="xt-pane-head"><span id="xt-right-title">将生成</span><span id="xt-right-sub"></span></div>
+          <div class="xt-scroll" id="xt-right"></div>
+        </div>
+      </div>
+      <div class="xt-foot">
+        <span class="xt-summary" id="xt-summary"></span>
+        <div class="xt-actions">
+          <button class="btn" id="xt-cancel">取消</button>
+          <button class="btn primary" id="xt-run">导出 Excel</button>
+        </div>
       </div>
     </div>
   </div>

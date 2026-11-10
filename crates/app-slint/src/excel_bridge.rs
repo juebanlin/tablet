@@ -66,7 +66,7 @@ impl std::fmt::Debug for ExcelSession {
 pub fn apply_patch_to_group(group: &mut Group, patch: &GroupPatch) {
     for np in &patch.patches {
         match np {
-            NodePatch::Table { name, records } => {
+            NodePatch::Table { name, records, .. } => {
                 if let Some(t) = group.tables.iter_mut().find(|t| &t.name == name) {
                     t.records = records.clone();
                     t.update_dirty();

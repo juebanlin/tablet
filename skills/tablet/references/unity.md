@@ -41,7 +41,7 @@ tablet **不内置 Unity 专用配置或命令**。Unity 插件 / bat 只是一�
 
 ## 2. 一次性配置导出路径
 
-在 tablet GUI「项目设置 → 导出」里设置（写入 `project.toml`，会跟随项目提交）：
+编辑 `project.toml` 的 `[export]`（会跟随项目提交；也可在命令里用 `-o` 覆盖）：
 
 | 用途 | 配置项 | 落点 |
 |---|---|---|
@@ -94,8 +94,8 @@ tablet-cli -w <config仓库根> --project game export code --csharp-unity
 - 服务端照常用自己的组合（`export data --xml`、`export code --java|--go|--cpp|...`）。
 - 不需要 `workspace save`；`export` 只读磁盘上的 `.tbl` / `.xlsx`，不会写 `projects/`。
   手改过 `.tbl` 后需要把数据/结构落盘时才跑 `workspace save`；manifest 只刷新索引。
-- xlsx 组：先保存 Excel 再点刷新；未保存的编辑 CLI 看不到。
-- tablet GUI 开着同一工作区时，CLI 会被 `.data/tablet.lock` 拒绝（`workspace info` 除外）。
+- xlsx 组：CLI 只读取已保存的工作簿；未保存的编辑看不到。
+- 同一工作区有 tablet 进程持锁时，CLI 会被 `.data/tablet.lock` 拒绝（`workspace info` 除外）。
 - 退出码：`0` 成功；`1` 验证 / 导出失败；`2` 用法错误。错误在 stderr。
 
 ### 3.1 二进制数据（可选，仅 C#/Unity）
@@ -142,7 +142,7 @@ tablet-cli -w <config仓库根> --fmt json workspace info
 - SVN：用 `svn info --show-item`（SVN 1.9+）；没装命令行工具时 `branch` / `revision` 为空，
   `vcs_error` 说明原因。TortoiseSVN 安装时记得勾选 command line client tools。
 - detached HEAD：`branch = null`、`detached = true`、`revision` 是短 hash；UI 显示 `HEAD@abc1234`。
-- **不加载 `.tbl`、不占工作区锁**，即使某张表坏了或 GUI 开着也能读。
+- **不加载 `.tbl`、不占工作区锁**，即使某张表坏了或有其它 tablet 进程持锁也能读。
 - 它是只读快照；外部切分支后重新调用一次即可。
 
 ---
@@ -342,7 +342,7 @@ public class TabletConfigWindow : EditorWindow
 
 | 现象 | 原因 / 处理 |
 |---|---|
-| `无法获取工作区锁` | tablet GUI 开着同一工作区；先关掉 GUI。`workspace info` 不受影响 |
+| `无法获取工作区锁` | 同一工作区有其它 tablet 进程；先结束该进程。`workspace info` 不受影响 |
 | 导出成功但数据是旧的 | xlsx 组在 Excel 里改了没保存；先保存再刷新 |
 | Unity 里 `Resources.LoadAll` 加载不到 | `data_output` 不在 `Assets/Resources/` 下，或 `LoadAll` 的子目录算错（数据实际在 `<data_output>/json`） |
 | 手写的 `.cs` / `.json` 不见了 | 输出目录不是专用目录，导出 sync 删除了未生成的同扩展名文件；换专用子目录 |

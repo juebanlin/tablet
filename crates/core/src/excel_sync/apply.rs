@@ -560,7 +560,7 @@ mod tests {
         g.tables[0].schema.fields.push(crate::model::FieldDef {
             name: "atk".into(), desc: "攻击".into(),
             tbl_type: "int".into(), export: crate::model::Export::ClientServer,
-        });
+         aux: None, source_col: None,});
         for r in &mut g.tables[0].records { r.push("9".into()); }
         let tmp = TempXlsx::new();
         write_two_sheet_book(tmp.path(), &drifted());
@@ -601,7 +601,7 @@ mod tests {
         g.tables[0].schema.fields.push(crate::model::FieldDef {
             name: "atk".into(), desc: "攻击".into(),
             tbl_type: "int".into(), export: crate::model::Export::ClientServer,
-        });
+         aux: None, source_col: None,});
         for (i, r) in g.tables[0].records.iter_mut().enumerate() {
             r.push(if i == 0 { "7".into() } else { "8".into() });
         }
@@ -697,7 +697,7 @@ mod tests {
         g.tables[0].schema.fields.push(crate::model::FieldDef {
             name: "atk".into(), desc: "攻击".into(),
             tbl_type: "int".into(), export: crate::model::Export::ClientServer,
-        });
+         aux: None, source_col: None,});
         for r in &mut g.tables[0].records { r.push("99".into()); }
 
         let tmp = TempXlsx::new();

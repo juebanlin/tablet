@@ -128,7 +128,7 @@ mod tests {
                             desc: f.desc.clone(),
                             tbl_type: f.tbl_type.clone(),
                             export: Export::from_input(&f.export),
-                        }).collect();
+                         aux: None, source_col: None,}).collect();
                         let snap_fields = fields.clone();
                         g.tables.push(Table {
                             name: sec.name.clone(),
