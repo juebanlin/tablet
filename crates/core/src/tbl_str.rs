@@ -38,11 +38,16 @@ pub fn encode(value: &str, tbl_type: &str) -> String {
     if needs_escape(tbl_type) {
         encode_str(value)
     } else {
-        if value.contains(SPECIAL_CHARS) {
+        // `|` 是 v2 的列分隔符，普通字段 / 自定义容器分隔符里出现它是正常的，
+        // encode 负责转义成 `\|`；这里不把它当成异常。其它特殊字符仍需告警。
+        if value.contains(['\\', '\n', '\r', '\t']) {
             eprintln!(
                 "[tbl_str] WARN: 非 txt 字段({})含特殊字符，防御转义: {:?}",
                 tbl_type, value
             );
+            return encode_str(value);
+        }
+        if value.contains('|') {
             return encode_str(value);
         }
         value.to_string()
@@ -81,14 +86,31 @@ pub fn decode(value: &str, tbl_type: &str) -> String {
         decode_str(value)
     } else {
         if value.contains('\\') {
-            eprintln!(
-                "[tbl_str] WARN: 非 txt 字段({})含反斜杠，防御反转义: {:?}",
-                tbl_type, value
-            );
+            if !only_pipe_escapes(value) {
+                eprintln!(
+                    "[tbl_str] WARN: 非 txt 字段({})含反斜杠，防御反转义: {:?}",
+                    tbl_type, value
+                );
+            }
             return decode_str(value);
         }
         value.to_string()
     }
+}
+
+/// 非 txt 字段里 `\|` 是 v2 行分隔符的合法转义（自定义 List/Map 分隔符可能就用 `|`），
+/// 不应该当成数据异常告警；其它反斜杠转义仍然告警。
+fn only_pipe_escapes(value: &str) -> bool {
+    let mut chars = value.chars();
+    while let Some(ch) = chars.next() {
+        if ch == '\\' {
+            match chars.next() {
+                Some('|') => {}
+                _ => return false,
+            }
+        }
+    }
+    true
 }
 
 /// 转义实现（内部）。5 个特殊字符：\ | \n \r \t
@@ -227,6 +249,18 @@ mod tests {
     fn split_row_empty_fields() {
         let r = split_row("a||b");
         assert_eq!(r, vec!["a", "", "b"]);
+    }
+
+    #[test]
+    fn non_txt_pipe_escape_is_not_an_error() {
+        // 自定义 List/Map 分隔符可能用 `|`；v2 行分隔符必须把它写成 `\\|`。
+        assert_eq!(encode("a|b", "List<List<int>>"), "a\\|b");
+        assert_eq!(decode("a\\|b", "List<List<int>>"), "a|b");
+        assert!(only_pipe_escapes("a\\|b"));
+        assert!(only_pipe_escapes("\\|\\|"));
+        assert!(!only_pipe_escapes("a\\\\b"));
+        assert!(!only_pipe_escapes("a\\nb"));
+        assert!(!only_pipe_escapes("a\\"));
     }
 
     #[test]
