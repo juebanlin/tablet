@@ -269,15 +269,17 @@ class SheetGrid {
 
   /**
    * 引用选择器（对齐 Slint 版）：id + 辅助列的表格式列表。
-   * 表可切换「智能 / 全部」列展示；单值单击选中、双击/确定提交；列表引用多选后拼 `;`。
+   * 表可切换「智能 / 全部」列展示；单值单击选中、双击/确定提交；
+   * 列表引用多选后按该列类型的分隔符拼接（List 取项目 `list`、Set 取 `set`，默认 `;`）。
    */
-  async openRefPicker(r, c, target, multi = false) {
+  async openRefPicker(r, c, target, multi = false, sepArg = ";") {
     this.closeRefPicker();
     const td = this.tds[r]?.[c];
     if (!td) return;
     const rect = td.getBoundingClientRect();
     const raw = this.cellText(r, c);
-    const sep = ";";
+    // 分隔符为空说明项目配置异常；退回默认值，避免 split("") 把字符逐个拆开。
+    const sep = sepArg || ";";
     let data;
     try {
       data = await this.onRefPicker(target, null);
@@ -1121,7 +1123,13 @@ class SheetGrid {
     const kind = this.node.kinds[c] || "text";
     // 引用列：单值用选择器；List<@X>/Set<@X> 用多选。
     if (kind === "ref" && this.node.refCols?.[c]) {
-      this.openRefPicker(r, c, this.node.refCols[c], !!this.node.refList?.[c]);
+      this.openRefPicker(
+        r,
+        c,
+        this.node.refCols[c],
+        !!this.node.refList?.[c],
+        this.node.refSeps?.[c] || ";",
+      );
       return;
     }
     // Constant 的 type 列：打开完整的类型选择对话框。

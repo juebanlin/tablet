@@ -654,6 +654,9 @@ pub struct GridPayload {
     pub ref_cols: Vec<Option<String>>,
     /// 每列是否是列表引用（`List<@X>` / `Set<@X>`）。
     pub ref_list: Vec<bool>,
+    /// 列表引用列的多值分隔符（来自项目 `[separators]`：List 取 `list`、Set 取 `set`）。
+    /// 选择器拼值、拆分现有值都必须用它，不能写死 `;`。
+    pub ref_seps: Vec<Option<String>>,
     /// 该节点上次的列宽模式（`.data/user-data.json`，按节点记忆）。
     pub auto_width: bool,
     /// 该节点的手动列宽（列名 → px）；自动模式下也保留。
@@ -1436,17 +1439,29 @@ impl Backend {
             .map(|f| f.name.clone())
             .collect();
 
+        let seps = self
+            .engine
+            .active()
+            .map(|p| p.schema.separators.clone())
+            .unwrap_or_default();
         let mut ref_cols = Vec::with_capacity(fields.len());
         let mut ref_list = Vec::with_capacity(fields.len());
+        let mut ref_seps = Vec::with_capacity(fields.len());
         for f in fields {
             match ref_target_of(&f.tbl_type) {
                 Some((target, multi)) if !f.is_aux() => {
                     ref_cols.push(Some(target));
                     ref_list.push(multi);
+                    ref_seps.push(if multi {
+                        Some(ref_multi_sep(&f.tbl_type, &seps).unwrap_or(";").to_string())
+                    } else {
+                        None
+                    });
                 }
                 _ => {
                     ref_cols.push(None);
                     ref_list.push(false);
+                    ref_seps.push(None);
                 }
             }
         }
@@ -1471,6 +1486,7 @@ impl Backend {
             picker_data_single: self.picker_flags().1,
             ref_cols,
             ref_list,
+            ref_seps,
             auto_width,
             column_widths,
         })
@@ -1533,6 +1549,7 @@ impl Backend {
             picker_data_single: self.picker_flags().1,
             ref_cols: Vec::new(),
             ref_list: Vec::new(),
+            ref_seps: Vec::new(),
             auto_width,
             column_widths,
         })
@@ -1574,6 +1591,7 @@ impl Backend {
             picker_data_single: self.picker_flags().1,
             ref_cols: Vec::new(),
             ref_list: Vec::new(),
+            ref_seps: Vec::new(),
             auto_width,
             column_widths,
         })
@@ -3521,10 +3539,19 @@ impl Backend {
         if !multi {
             return map.get(raw).cloned().unwrap_or_else(|| raw.to_string());
         }
-        raw.split(';')
+        // 多值展示与校验共用项目分隔符（`List` 用 `list`、`Set` 用 `set`），
+        // 写死 `;` 会让自定义分隔符的项目把整串当成一个 id，展示回原始值。
+        let sep = self
+            .engine
+            .active()
+            .and_then(|p| ref_multi_sep(ty, &p.schema.separators))
+            .filter(|s| !s.is_empty())
+            .unwrap_or(";")
+            .to_string();
+        raw.split(sep.as_str())
             .map(|part| map.get(part.trim()).cloned().unwrap_or_else(|| part.to_string()))
             .collect::<Vec<_>>()
-            .join(";")
+            .join(&sep)
     }
 
     // ── 校验规则 ────────────────────────────────────────────
@@ -4295,6 +4322,19 @@ impl Backend {
 }
 
 // ── 导出设置辅助 ────────────────────────────────────────────
+/// 多值引用列的取值分隔符：`List<@X>` 取项目 `[separators].list`，`Set<@X>` 取 `.set`。
+/// 单值引用 / 非引用返回 None。
+fn ref_multi_sep<'a>(ty: &str, sep: &'a SeparatorsSection) -> Option<&'a str> {
+    let s = ty.trim();
+    if s.starts_with("Set<") {
+        Some(sep.set.as_str())
+    } else if s.starts_with("List<") {
+        Some(sep.list.as_str())
+    } else {
+        None
+    }
+}
+
 /// `@Name` → (Name, false)；`List<@Name>` / `Set<@Name>` → (Name, true)。
 fn ref_target_of(ty: &str) -> Option<(String, bool)> {
     let s = ty.trim();

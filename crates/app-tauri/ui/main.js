@@ -315,6 +315,8 @@ function toGridNode(g) {
     refTargets: g.ref_targets || [],
     refCols: g.ref_cols || [],
     refList: g.ref_list || [],
+    // 列表引用列的多值分隔符，由后端按项目 [separators] 给出（List / Set 各有各的）。
+    refSeps: g.ref_seps || [],
     pickerHeaderSingle: g.picker_header_single !== false,
     pickerDataSingle: !!g.picker_data_single,
     autoWidth: g.auto_width !== false,
