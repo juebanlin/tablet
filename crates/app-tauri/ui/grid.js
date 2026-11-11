@@ -1301,7 +1301,7 @@ class SheetGrid {
     const lines = [];
     for (let r = b.r0; r <= b.r1; r++) {
       const row = [];
-      for (let c = b.c0; c <= b.c1; c++) row.push(this.cellText(r, c));
+      for (let c = b.c0; c <= b.c1; c++) row.push(tsvQuote(this.cellText(r, c)));
       lines.push(row.join("\t"));
     }
     return lines.join("\n");
@@ -1328,9 +1328,10 @@ class SheetGrid {
   pasteTSV(text) {
     const b = this.bounds();
     if (!b) return;
-    const rows = text.replace(/\r/g, "").split("\n");
-    if (rows.length && rows[rows.length - 1] === "") rows.pop();
-    const grid = rows.map((line) => line.split("\t"));
+    // Excel / 在线表格的剪贴板里，含换行 / 制表符 / 引号的单元格会用 `"..."` 包裹，
+    // 内部换行是单元格内容的一部分（多语言文本里很常见，例如带 <div> 的多行文案）。
+    // 不能直接按 \n / \t 切，否则一个多行单元格会把后面的整行顶下去。
+    const grid = parseTSV(text);
     let changed = false;
     grid.forEach((line, dr) => {
       const r = b.r0 + dr;
@@ -1670,6 +1671,70 @@ class SheetGrid {
     document.addEventListener("pointermove", move);
     document.addEventListener("pointerup", up);
   }
+}
+
+/**
+ * 解析剪贴板 TSV：
+ * - `\t` 分列，`\r\n` / `\n` 分行；
+ * - 单元格以 `"` 开头时按引号包裹解析，内部可含 `\t` / 换行；`""` 表示一个 `"`；
+ * - 引号内的 CRLF / CR 归一成 `\n`（与 .tbl / txt 值的约定一致）。
+ *
+ * 不用 `split("\n")`：Excel 把含换行的单元格整体加引号，直接切会把一个单元格
+ * 拆成多行，后面的行全部错位（多语言 / 带 HTML 标签的多行文案很常见）。
+ */
+function parseTSV(text) {
+  const rows = [];
+  let row = [];
+  let cell = "";
+  let quoted = false;
+  const pushRow = () => {
+    row.push(cell);
+    rows.push(row);
+    row = [];
+    cell = "";
+  };
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (quoted) {
+      if (ch === '"') {
+        if (text[i + 1] === '"') {
+          cell += '"';
+          i++;
+        } else {
+          quoted = false;
+        }
+      } else if (ch === '\r') {
+        if (text[i + 1] === "\n") i++;
+        cell += "\n";
+      } else {
+        cell += ch;
+      }
+      continue;
+    }
+    if (ch === '"' && cell === "") {
+      quoted = true;
+      continue;
+    }
+    if (ch === "\t") {
+      row.push(cell);
+      cell = "";
+      continue;
+    }
+    if (ch === "\r" || ch === "\n") {
+      if (ch === "\r" && text[i + 1] === "\n") i++;
+      pushRow();
+      continue;
+    }
+    cell += ch;
+  }
+  if (cell !== "" || row.length) pushRow();
+  return rows;
+}
+
+/** 复制回剪贴板：含 \t / 换行 / 引号的单元格按 Excel 规则加引号并转义 `""`。 */
+function tsvQuote(value) {
+  const s = String(value ?? "");
+  return /[\t\n\r"]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
 }
 
 window.SheetGrid = SheetGrid;

@@ -57,7 +57,7 @@ Slint 和 Web 是两套完全不同的 UI 机制。Slint 源码里大量写法�
 | 键盘导航 | 方向键、Shift+方向、Tab、Home/End、Ctrl+Home/End、PageUp/Down | 选中后自动 `scrollIntoView` |
 | 编辑 | 双击 / F2 / 直接打字进入；`input` 覆盖单元格 | Enter 提交下移、Tab 右移、Esc 取消、失焦提交 |
 | 公式栏 | 与当前单元格双向联动；Enter 提交并下移 | 只读列禁止编辑 |
-| 复制 / 剪切 / 粘贴 / 删除 | `copy` / `cut` / `paste` 事件 + TSV；Delete 清空选区 | 不手写系统剪贴板通道 |
+| 复制 / 剪切 / 粘贴 / 删除 | `copy` / `cut` / `paste` 事件 + TSV；Delete 清空选区；单元格按 Excel 规则处理引号（含 `\t` / 换行 / `"` 的值加 `"..."`，`""` 转义），多行单元格不会拆成多行 | 不手写系统剪贴板通道 |
 | 列宽 | 列字母右侧 6px 热区拖拽；双击自适应 | 手动拖拽会关闭「自动列宽」 |
 | 列字母 | Excel 式编号：A…Z、AA、AB… | 与 Slint 版 `col_letter` 一致 |
 | 横向滚动 | 表格区滚动条常驻（覆盖 WebView2 的自动隐藏）；插入列后自动把新列滚进可视区 | 否则列一多就看不出横向滚动入口、新列停在右边界外 |
@@ -262,6 +262,7 @@ node crates/app-tauri/scripts/dev.mjs eval "<js 表达式>"          # 任意页
 - `verify-ui-polish.mjs`：新建项目来源切换复位 / 多列横向滚动与列字母 / 拖选半透明样式
 - `verify-ref-picker.mjs`：枚举 / 表引用的表格展示（智能·全部列）/ 搜索 / 单击双击提交 / 列表多选
 - `verify-ref-sep.mjs`：项目列表分隔符改为 `#` 后的选择器拼值 / 拆分 / 引用名展示 / 还原
+- `verify-paste.mjs`：多行单元格（含 HTML 标签 / 引号）粘贴不拆行、按纯文本渲染、复制往返一致
 - `verify-excel-sync.mjs`：Excel 会话建立 / mtime 轮询 / 自动回写 / 结束会话
 - `verify-univer.mjs`：Univer 窗口打开 / 每组一个窗口 / 编辑回写内存 / 主界面置灰只读 / 保存落盘（需先构建 `ui/univer/`；用 `WORKDIR=<工作区绝对路径>` 指明测试工作区）
 - `verify-audit.mjs`：列宽持久化 / 显示值与原值分离 / 保存失败提示 / 全局设置生效 / 导出预设（需 `WORKDIR` 与含 `hero/HeroBase` 的 full fixture）
