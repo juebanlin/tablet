@@ -31,7 +31,7 @@ use tablet_core::schema_model::{SchemaMetadata, TblSchema};
 use tablet_core::schema_projection::apply_schema_to_project;
 use tablet_core::tblschema::parse_tblschema;
 use tablet_core::template::{BuiltinTemplates, LocalTemplates, TemplateSource};
-use tablet_core::types::{SepKey, SeparatorsSection};
+use tablet_core::types::{Paradigm, SepKey, SeparatorsSection, TblType, TypeParam};
 use tablet_core::excel::{apply_group_patch, export_group_book, import_xlsx_into_group};
 
 /// 与 Slint 版一致：表格尾部留 5 行占位，方便直接输入新记录。
@@ -1446,9 +1446,11 @@ impl Backend {
             }
         }
 
+        // 「被引用展示列」下拉自带一个 ID（空值 = 原始 id），不能再把 id 列列一遍，
+        // 否则会出现 `ID id ...` 两项。
         let display_options = fields
             .iter()
-            .filter(|f| !f.is_aux() && matches!(f.tbl_type.trim(), "str" | "int" | "txt"))
+            .filter(|f| !f.is_aux() && f.name != "id" && matches!(f.tbl_type.trim(), "str" | "int" | "txt"))
             .map(|f| f.name.clone())
             .collect();
 
@@ -3538,33 +3540,39 @@ impl Backend {
         ty: &str,
         raw: &str,
         cache: &mut std::collections::HashMap<String, Option<std::collections::HashMap<String, String>>>,
-    ) -> String {        let Some((target, multi)) = ref_target_of(ty) else { return raw.to_string() };
+    ) -> String {
         if raw.is_empty() {
             return String::new();
         }
-        let key = target.clone();
-        if !cache.contains_key(&key) {
-            cache.insert(key.clone(), self.ref_display_map(&target));
-        }
-        let Some(map) = cache.get(&key).and_then(|m| m.as_ref()) else {
+        let Some(tt) = TblType::parse(ty) else { return raw.to_string() };
+        let targets = tt.ref_targets();
+        if targets.is_empty() {
             return raw.to_string();
-        };
-        if !multi {
-            return map.get(raw).cloned().unwrap_or_else(|| raw.to_string());
         }
-        // 多值展示与校验共用项目分隔符（`List` 用 `list`、`Set` 用 `set`），
-        // 写死 `;` 会让自定义分隔符的项目把整串当成一个 id，展示回原始值。
-        let sep = self
+        // 一次把用到的目标映射都取出来（Map 的键 / 值可能引用不同节点）。
+        let mut maps: HashMap<String, HashMap<String, String>> = HashMap::new();
+        for target in targets {
+            if !cache.contains_key(target) {
+                cache.insert(target.to_string(), self.ref_display_map(target));
+            }
+            if let Some(Some(m)) = cache.get(target) {
+                maps.insert(target.to_string(), m.clone());
+            }
+        }
+        if maps.is_empty() {
+            return raw.to_string();
+        }
+        let seps = self
             .engine
             .active()
-            .and_then(|p| ref_multi_sep(ty, &p.schema.separators))
-            .filter(|s| !s.is_empty())
-            .unwrap_or(";")
-            .to_string();
-        raw.split(sep.as_str())
-            .map(|part| map.get(part.trim()).cloned().unwrap_or_else(|| part.to_string()))
-            .collect::<Vec<_>>()
-            .join(&sep)
+            .map(|p| p.schema.separators.clone())
+            .unwrap_or_default();
+        format_ref_display(&tt, raw, &seps, &mut |target, id| {
+            maps.get(target)
+                .and_then(|m| m.get(id.trim()))
+                .cloned()
+                .unwrap_or_else(|| id.to_string())
+        })
     }
 
     // ── 校验规则 ────────────────────────────────────────────
@@ -4335,6 +4343,189 @@ impl Backend {
 }
 
 // ── 导出设置辅助 ────────────────────────────────────────────
+/// 按列类型的结构逐段翻译引用 id，保留原有的分隔符与嵌套形状。
+///
+/// 与 `TblType::ref_elements` 用同一套分隔符：Map 的键 / 值、Map 的 tuple/list 变体
+/// 出现 `@X` 时也都能把 id 换成展示名。非引用部分原样保留。
+fn format_ref_display(
+    tt: &TblType,
+    value: &str,
+    sep: &SeparatorsSection,
+    lookup: &mut dyn FnMut(&str, &str) -> String,
+) -> String {
+    let p = &tt.params;
+    match &tt.paradigm {
+        Paradigm::Ref => {
+            let t = value.trim();
+            if t.is_empty() {
+                String::new()
+            } else {
+                lookup(tt.ref_name.as_deref().unwrap_or(""), t)
+            }
+        }
+        Paradigm::List => join_parts(value.split(&sep.list), &sep.list, |s| {
+            p.first().map(|x| ref_part(x, s, lookup)).unwrap_or_else(|| s.to_string())
+        }),
+        Paradigm::Set => join_parts(value.split(&sep.set), &sep.set, |s| {
+            p.first().map(|x| ref_part(x, s, lookup)).unwrap_or_else(|| s.to_string())
+        }),
+        Paradigm::Tuple2 => fmt_tuple(value, &sep.tuple2, p, lookup),
+        Paradigm::Tuple3 => fmt_tuple(value, &sep.tuple3, p, lookup),
+        Paradigm::Tuple4 => fmt_tuple(value, &sep.tuple4, p, lookup),
+        Paradigm::Map => fmt_map(value, &sep.map.entry, &sep.map.kv, &p[0], &p[1], lookup),
+        Paradigm::ListTuple2 => join_parts(value.split(&sep.list_tuple2.list), &sep.list_tuple2.list, |s| {
+            fmt_tuple(s, &sep.list_tuple2.tuple, p, lookup)
+        }),
+        Paradigm::ListTuple3 => join_parts(value.split(&sep.list_tuple3.list), &sep.list_tuple3.list, |s| {
+            fmt_tuple(s, &sep.list_tuple3.tuple, p, lookup)
+        }),
+        Paradigm::ListTuple4 => join_parts(value.split(&sep.list_tuple4.list), &sep.list_tuple4.list, |s| {
+            fmt_tuple(s, &sep.list_tuple4.tuple, p, lookup)
+        }),
+        Paradigm::MapTuple2 => fmt_map_tuple(value, &sep.map_tuple2.entry, &sep.map_tuple2.kv, &sep.map_tuple2.tuple, &p[0], &p[1..3], lookup),
+        Paradigm::MapTuple3 => fmt_map_tuple(value, &sep.map_tuple3.entry, &sep.map_tuple3.kv, &sep.map_tuple3.tuple, &p[0], &p[1..4], lookup),
+        Paradigm::MapTuple4 => fmt_map_tuple(value, &sep.map_tuple4.entry, &sep.map_tuple4.kv, &sep.map_tuple4.tuple, &p[0], &p[1..5], lookup),
+        Paradigm::ListList => join_parts(value.split(&sep.list_list.list), &sep.list_list.list, |outer| {
+            join_parts(outer.split(&sep.list_list.item), &sep.list_list.item, |s| {
+                p.first().map(|x| ref_part(x, s, lookup)).unwrap_or_else(|| s.to_string())
+            })
+        }),
+        Paradigm::ListMap => join_parts(value.split(&sep.list_map.list), &sep.list_map.list, |map| {
+            join_parts(map.split(&sep.list_map.entry), &sep.list_map.entry, |entry| {
+                let kv: Vec<&str> = entry.splitn(2, &sep.list_map.kv).collect();
+                if kv.len() == 2 {
+                    format!("{}{}{}", ref_part(&p[0], kv[0], lookup), sep.list_map.kv, ref_part(&p[1], kv[1], lookup))
+                } else {
+                    entry.to_string()
+                }
+            })
+        }),
+        Paradigm::MapList => fmt_map_list(value, &sep.map_list.entry, &sep.map_list.kv, &sep.map_list.item, &p[0], &p[1], lookup),
+        Paradigm::MapMap => join_parts(value.split(&sep.map_map.entry), &sep.map_map.entry, |entry| {
+            let kv: Vec<&str> = entry.splitn(2, &sep.map_map.kv).collect();
+            if kv.len() != 2 {
+                return entry.to_string();
+            }
+            let inner = join_parts(kv[1].split(&sep.map_map.inner_entry), &sep.map_map.inner_entry, |item| {
+                let ikv: Vec<&str> = item.splitn(2, &sep.map_map.inner_kv).collect();
+                if ikv.len() == 2 {
+                    format!("{}{}{}", ref_part(&p[1], ikv[0], lookup), sep.map_map.inner_kv, ref_part(&p[2], ikv[1], lookup))
+                } else {
+                    item.to_string()
+                }
+            });
+            format!("{}{}{}", ref_part(&p[0], kv[0], lookup), sep.map_map.kv, inner)
+        }),
+        Paradigm::Base => value.to_string(),
+    }
+}
+
+fn ref_part(param: &TypeParam, raw: &str, lookup: &mut dyn FnMut(&str, &str) -> String) -> String {
+    match param {
+        TypeParam::Ref(target) => {
+            let t = raw.trim();
+            if t.is_empty() {
+                String::new()
+            } else {
+                lookup(target, t)
+            }
+        }
+        TypeParam::Base(_) => raw.to_string(),
+    }
+}
+
+fn join_parts<'a, I>(
+    parts: I,
+    sep: &str,
+    mut f: impl FnMut(&'a str) -> String,
+) -> String
+where
+    I: Iterator<Item = &'a str>,
+{
+    parts.map(|s| f(s)).collect::<Vec<_>>().join(sep)
+}
+
+fn fmt_tuple(
+    value: &str,
+    tuple_sep: &str,
+    params: &[TypeParam],
+    lookup: &mut dyn FnMut(&str, &str) -> String,
+) -> String {
+    value
+        .split(tuple_sep)
+        .enumerate()
+        .map(|(i, s)| {
+            params
+                .get(i)
+                .map(|p| ref_part(p, s, lookup))
+                .unwrap_or_else(|| s.to_string())
+        })
+        .collect::<Vec<_>>()
+        .join(tuple_sep)
+}
+
+fn fmt_map(
+    value: &str,
+    entry_sep: &str,
+    kv_sep: &str,
+    key: &TypeParam,
+    val: &TypeParam,
+    lookup: &mut dyn FnMut(&str, &str) -> String,
+) -> String {
+    join_parts(value.split(entry_sep), entry_sep, |entry| {
+        let kv: Vec<&str> = entry.splitn(2, kv_sep).collect();
+        if kv.len() == 2 {
+            format!("{}{}{}", ref_part(key, kv[0], lookup), kv_sep, ref_part(val, kv[1], lookup))
+        } else {
+            entry.to_string()
+        }
+    })
+}
+
+fn fmt_map_tuple(
+    value: &str,
+    entry_sep: &str,
+    kv_sep: &str,
+    tuple_sep: &str,
+    key: &TypeParam,
+    tuple_params: &[TypeParam],
+    lookup: &mut dyn FnMut(&str, &str) -> String,
+) -> String {
+    join_parts(value.split(entry_sep), entry_sep, |entry| {
+        let kv: Vec<&str> = entry.splitn(2, kv_sep).collect();
+        if kv.len() == 2 {
+            format!(
+                "{}{}{}",
+                ref_part(key, kv[0], lookup),
+                kv_sep,
+                fmt_tuple(kv[1], tuple_sep, tuple_params, lookup)
+            )
+        } else {
+            entry.to_string()
+        }
+    })
+}
+
+fn fmt_map_list(
+    value: &str,
+    entry_sep: &str,
+    kv_sep: &str,
+    item_sep: &str,
+    key: &TypeParam,
+    item: &TypeParam,
+    lookup: &mut dyn FnMut(&str, &str) -> String,
+) -> String {
+    join_parts(value.split(entry_sep), entry_sep, |entry| {
+        let kv: Vec<&str> = entry.splitn(2, kv_sep).collect();
+        if kv.len() == 2 {
+            let list = join_parts(kv[1].split(item_sep), item_sep, |s| ref_part(item, s, lookup));
+            format!("{}{}{}", ref_part(key, kv[0], lookup), kv_sep, list)
+        } else {
+            entry.to_string()
+        }
+    })
+}
+
 /// 多值引用列的取值分隔符：`List<@X>` 取项目 `[separators].list`，`Set<@X>` 取 `.set`。
 /// 单值引用 / 非引用返回 None。
 fn ref_multi_sep<'a>(ty: &str, sep: &'a SeparatorsSection) -> Option<&'a str> {
@@ -4815,5 +5006,75 @@ trait VcsTitle {
 impl VcsTitle for tablet_core::vcs::VcsInfo {
     fn title(&self) -> String {
         self.display().unwrap_or_else(|| "无版本库".to_string())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 用固定前缀模拟 id→展示名映射，`target` 也带上以验证 Map 两侧引用各自取对目标。
+    fn tr(ty: &str, value: &str, sep: &SeparatorsSection) -> String {
+        let tt = TblType::parse(ty).expect("类型应可解析");
+        let mut lookup = |target: &str, id: &str| format!("{target}#{id}");
+        format_ref_display(&tt, value, sep, &mut lookup)
+    }
+
+    #[test]
+    fn map_ref_display_translates_key_and_value() {
+        let sep = SeparatorsSection::default();
+        // 键是引用：id 换成展示名，值保持原样
+        assert_eq!(tr("Map<@Equip,int>", "2001:1;2002:2", &sep), "Equip#2001:1;Equip#2002:2");
+        // 值是引用
+        assert_eq!(tr("Map<int,@Equip>", "1:2001;2:2002", &sep), "1:Equip#2001;2:Equip#2002");
+        // 键值都是不同引用目标
+        assert_eq!(tr("Map<@A,@B>", "1:2", &sep), "A#1:B#2");
+    }
+
+    #[test]
+    fn map_ref_display_follows_project_separators() {
+        let mut sep = SeparatorsSection::default();
+        sep.map.entry = "#".into();
+        assert_eq!(tr("Map<@Equip,int>", "2001:1#2002:2", &sep), "Equip#2001:1#Equip#2002:2");
+    }
+
+    #[test]
+    fn list_set_and_tuple_ref_display_still_work() {
+        let sep = SeparatorsSection::default();
+        assert_eq!(tr("@Equip", "2001", &sep), "Equip#2001");
+        assert_eq!(tr("List<@Equip>", "2001;2002", &sep), "Equip#2001;Equip#2002");
+        assert_eq!(tr("Set<@Equip>", "2001;2002", &sep), "Equip#2001;Equip#2002");
+        assert_eq!(tr("Tuple2<@Equip,int>", "2001,7", &sep), "Equip#2001,7");
+        assert_eq!(tr("List<Tuple2<@Equip,int>>", "2001,1;2002,2", &sep), "Equip#2001,1;Equip#2002,2");
+    }
+
+    /// 所有含引用的范式都要能翻译，避免只修 Map 又漏掉别的复合类型。
+    #[test]
+    fn every_ref_paradigm_translates() {
+        let sep = SeparatorsSection::default();
+        // 元组
+        assert_eq!(tr("Tuple3<@A,int,@B>", "1,2,3", &sep), "A#1,2,B#3");
+        // Map 的 tuple / list 变体
+        assert_eq!(
+            tr("Map<@A,Tuple2<int,@B>>", "1:2,3;4:5,6", &sep),
+            "A#1:2,B#3;A#4:5,B#6"
+        );
+        assert_eq!(tr("Map<@A,List<@B>>", "1:2,3;4:5", &sep), "A#1:B#2,B#3;A#4:B#5");
+        // 嵌套列表 / 列表内 Map / Map 内 Map
+        assert_eq!(tr("List<List<@A>>", "1,2;3", &sep), "A#1,A#2;A#3");
+        assert_eq!(tr("List<Map<@A,@B>>", "1:2,3:4;5:6", &sep), "A#1:B#2,A#3:B#4;A#5:B#6");
+        assert_eq!(
+            tr("Map<@A,Map<@B,@C>>", "1:2=3,4=5;6:7=8", &sep),
+            "A#1:B#2=C#3,B#4=C#5;A#6:B#7=C#8"
+        );
+    }
+
+    #[test]
+    fn non_ref_parts_are_kept_verbatim() {
+        let sep = SeparatorsSection::default();
+        // Map 里只有值引用时，键原样保留
+        assert_eq!(tr("Map<int,@Equip>", "x:2001", &sep), "x:Equip#2001");
+        // 缺 kv 分隔的脏值不丢，原样返回
+        assert_eq!(tr("Map<@Equip,int>", "2001", &sep), "2001");
     }
 }

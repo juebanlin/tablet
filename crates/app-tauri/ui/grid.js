@@ -556,9 +556,12 @@ class SheetGrid {
     return (this.node?.kinds[c] || "text") === "readonly";
   }
 
-  /** 该列是否只能通过选择器改（引用 / 类型 / 导出），公式栏必须只读。 */
+  /** 该列是否只能通过选择器改（引用 / 类型 / 导出），公式栏必须只读。
+   *  Map / Tuple 等复合引用没有选择器（值结构无法由 id 列表唯一决定），按普通文本编辑处理。 */
   isPickerCol(c) {
-    return ["ref", "type", "export"].includes(this.node?.kinds[c] || "");
+    const kind = this.node?.kinds[c] || "";
+    if (kind === "ref") return !!this.node?.refCols?.[c];
+    return kind === "type" || kind === "export";
   }
 
   isNumericCol(c) {

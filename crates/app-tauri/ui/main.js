@@ -1477,8 +1477,17 @@ function gridMenu(ctx) {
   const items = [];
   if (ctx.shape === "cell") {
     const kind = grid.node?.kinds?.[f.c];
+    // 只有单值 / List / Set 有引用选择器；Map / Tuple 等复合引用直接按文本编辑。
     const pick =
-      kind === "ref" ? "选择引用…" : kind === "type" ? "选择类型…" : kind === "export" ? "选择导出…" : null;
+      kind === "ref"
+        ? grid.node?.refCols?.[f.c]
+          ? "选择引用…"
+          : null
+        : kind === "type"
+          ? "选择类型…"
+          : kind === "export"
+            ? "选择导出…"
+            : null;
     if (pick) {
       items.push({ label: pick, action: () => grid.beginCellEdit(f.r, f.c) });
       items.push({ sep: true });
