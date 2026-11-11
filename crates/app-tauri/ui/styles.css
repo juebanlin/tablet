@@ -469,6 +469,11 @@ button { cursor: default; }
   font-size: var(--fs-sm);
   color: var(--text);
 }
+/* .sheet / td / th 上的 user-select:none 会继承进编辑框，导致双击后拖选不了内容。 */
+.sheet .cell-edit {
+  user-select: text;
+  -webkit-user-select: text;
+}
 .sheet td.editing { padding: 0; }
 
 .col-resize { position: absolute; top: 0; right: 0; width: 6px; height: 100%; cursor: col-resize; z-index: 1; }

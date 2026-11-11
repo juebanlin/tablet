@@ -1363,6 +1363,9 @@ class SheetGrid {
 
     scroll.addEventListener("pointerdown", (e) => {
       if (e.button !== 0) return;
+      // 编辑中的输入框：把事件完全交给浏览器，否则这里的 preventDefault / 单元格点选
+      // 会让「双击后拖选内容」失效（点击输入框本身还会立刻提交并关掉编辑框）。
+      if (e.target.closest(".cell-edit")) return;
       // 阻止原生文本选择 / 拖拽。双击编辑依赖 dblclick，不能因为这里的 preventDefault
       // 或 tbody 重建而丢事件：点选时只有窗口真的换了才重建（见 scrollIntoView）。
       e.preventDefault();
@@ -1447,6 +1450,8 @@ class SheetGrid {
     });
 
     scroll.addEventListener("dblclick", (e) => {
+      // 编辑框内的双击是「选词」，不是重新进入编辑。
+      if (e.target.closest(".cell-edit")) return;
       const td = e.target.closest("td[data-cell]");
       if (td) {
         const [r, c] = td.dataset.cell.split(":").map(Number);
