@@ -21,7 +21,7 @@ use tablet_core::model::{
     ServerTypeScriptExport, SeverityAction, Table, UiConfig, UnityCSharpExport, ValidateConfig,
     XmlExport, ClientTypeScriptExport, GodotCSharpExport,
 };
-use tablet_core::ops::{ProjectAction, ProjectEngine};
+use tablet_core::ops::{format_validation_log, LogLevel as LogEntryLevel, ProjectAction, ProjectEngine};
 use tablet_core::project::load_workspace;
 use tablet_core::rules::{
     builtin_rules, FunctionStatus, Granularity, NodeMode, ParamKind, Rule, RuleExpr, RuleScope,
@@ -65,6 +65,9 @@ pub struct Backend {
     pub user_data_path: PathBuf,
     /// 启动时打不开的 Project（首次快照后弹一次提示，与 Slint 版一致）。
     pub load_alerts: Vec<String>,
+    /// 上一次「主动验证」写进 UI 日志的 (级别, 文本)；再次验证前先按它清掉旧块，
+    /// 避免连点「重新验证」时日志里堆出多份相同明细。日志文件仍按追加语义保留历史。
+    pub last_validation_logs: Vec<(LogEntryLevel, String)>,
     /// Excel 编辑会话：导出到临时工作簿 → 用 Excel 打开 → 轮询 mtime 自动回写。
     pub excel_sessions: Vec<ExcelSession>,
     /// Univer 窗口 label → (project, group)。一个窗口只装一个组，可同时开多个窗口。
@@ -890,6 +893,7 @@ impl Backend {
             user_data,
             user_data_path,
             load_alerts,
+            last_validation_logs: Vec::new(),
             excel_sessions: Vec::new(),
             univer_windows: HashMap::new(),
             univer_fingerprints: HashMap::new(),
@@ -4093,8 +4097,77 @@ impl Backend {
         self.refresh_selected_validation();
     }
 
+    /// 主动验证（工具栏「验证」/ 问题面板「重新验证」）：重算全部已打开 Project，
+    /// 并把明细写进 UI 日志与日志文件。实时校验（编辑时）不走这里，避免刷屏。
+    ///
+    /// 每次验证前先清掉上一次的验证日志块（UI 面板），连点「重新验证」不会堆出
+    /// 多份相同明细；日志文件仍按追加语义保留历史。
     pub fn validate(&mut self) {
+        self.clear_previous_validation_logs();
         self.engine.revalidate_all_projects();
+        let pids = self.engine.opened_ids();
+        let mut total_errors = 0usize;
+        let mut total_warnings = 0usize;
+        for pid in &pids {
+            let issues = self.engine.validate_project_issues(pid);
+            let errors = issues
+                .iter()
+                .filter(|(_, _, e)| e.severity == Severity::Error)
+                .count();
+            let warnings = issues
+                .iter()
+                .filter(|(_, _, e)| e.severity == Severity::Warning)
+                .count();
+            total_errors += errors;
+            total_warnings += warnings;
+            if errors + warnings > 0 {
+                self.log_validation(
+                    LogEntryLevel::Info,
+                    format!("[验证] 项目 {pid}：{errors} 错误 / {warnings} 警告"),
+                );
+            }
+            for (group, node, err) in issues {
+                let level = match err.severity {
+                    Severity::Error => LogEntryLevel::Error,
+                    Severity::Warning => LogEntryLevel::Warning,
+                    Severity::Info => LogEntryLevel::Info,
+                };
+                self.log_validation(level, format_validation_log(&group, &node, &err));
+            }
+        }
+        if total_errors == 0 && total_warnings == 0 {
+            self.log_validation(LogEntryLevel::Info, "验证通过：无错误 / 无警告".to_string());
+        } else {
+            self.log_validation(
+                LogEntryLevel::Info,
+                format!("验证完成：{total_errors} 错误 / {total_warnings} 警告"),
+            );
+        }
+    }
+
+    /// 写一条验证日志并记下它，供下一次验证前整体移除。
+    fn log_validation(&mut self, level: LogEntryLevel, msg: String) {
+        match level {
+            LogEntryLevel::Info => self.engine.ui_log(msg.clone()),
+            LogEntryLevel::Warning => self.engine.warn_log(msg.clone()),
+            LogEntryLevel::Error => self.engine.error_log(msg.clone()),
+        }
+        self.last_validation_logs.push((level, msg));
+    }
+
+    /// 从 UI 日志里移除上一次验证写入的条目（按级别 + 文本从后往前匹配）。
+    fn clear_previous_validation_logs(&mut self) {
+        let old = std::mem::take(&mut self.last_validation_logs);
+        for (level, msg) in old.into_iter().rev() {
+            if let Some(i) = self
+                .engine
+                .logs
+                .iter()
+                .rposition(|l| l.level == level && l.message == msg)
+            {
+                self.engine.logs.remove(i);
+            }
+        }
     }
 
     fn refresh_selected_validation(&mut self) {
