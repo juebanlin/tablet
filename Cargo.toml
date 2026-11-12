@@ -1,11 +1,12 @@
 [workspace]
-members = ["crates/core", "crates/app-cli", "crates/app-slint", "crates/app-tauri"]
+members = ["crates/core", "crates/app-cli", "crates/app-tauri"]
 resolver = "2"
 
 # workspace 级版本号：单一真理源（@docs/03 / docs/00）。
-# 三个 crate 都用 `version.workspace = true` 继承本字段；改版本只需在这里改一次。
+# 三个 crate（tablet-core / tablet-cli / tablet[Tauri GUI]）都用 `version.workspace = true`
+# 继承本字段；改版本只需在这里改一次。
 [workspace.package]
-version = "2.0.3"
+version = "3.0.0"
 
 [profile.dev]
 # 编译速度优先（agent 默认走 dev，频繁 cargo check / build）
@@ -20,6 +21,7 @@ opt-level = 3
 lto = "fat"
 codegen-units = 1
 # 保留符号表、只剥 debuginfo。崩溃日志(tablet-crash.log)里的调用栈靠符号表才能把地址
-# 翻成函数名：Linux/macOS 符号在二进制自身，windows-gnu 同样编进 exe。
+# 翻成函数名：Linux/macOS 符号在二进制自身。Windows Tauri 走 msvc，符号在旁挂 pdb，
+# 不随单 exe 分发；崩溃日志的 file:line:col 不依赖符号（@17）。
 # 别改回 strip = true —— 那会连符号表一起剥掉，堆栈只剩 "stack backtrace:" 一行空壳。
 strip = "debuginfo"

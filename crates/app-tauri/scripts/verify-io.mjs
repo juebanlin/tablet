@@ -52,7 +52,7 @@ async function until(expr, label, timeout = 10000) {
   }
   const diag = await evalJs(`JSON.stringify({
     schema: !document.getElementById('schema-dialog').hidden,
-    excel: !document.getElementById('excel-dialog').hidden,
+    excel: !document.getElementById('excel-transfer').hidden,
     map: !document.getElementById('excel-map').hidden,
     errors: [
       document.getElementById('schema-error').textContent,
@@ -147,44 +147,16 @@ await until(`document.getElementById('schema-result').textContent.includes('导�
 check("Schema 导入", true);
 await evalJs(`document.getElementById('schema-close').click()`);
 
-// 3. Excel 导出（hero 组）
-await openGroupMenu("hero", "导出 Excel");
-await until(`!document.getElementById('excel-dialog').hidden`, "Excel 对话框");
-await evalJs(`document.getElementById('excel-run').click()`);
-await until(`document.getElementById('excel-result').textContent.includes('已导出')`, "Excel 导出");
+// 3. Excel 导出（多组对话框的后端命令；组/节点选择 UI 由全量回归覆盖）
+const exported = await evalJs(`window.__TAURI__.core.invoke('excel_export_selected', {
+  path: '.excel/hero.xlsx',
+  selections: [{ group: 'hero', names: ['HeroBase'] }],
+}).then(r => r).catch(e => 'ERR: ' + e)`);
 const xlsx = path.join(WORKDIR, "projects", "demo", ".excel", "hero.xlsx");
-check("Excel 文件生成", fs.existsSync(xlsx), xlsx);
-await evalJs(`document.getElementById('excel-close').click()`);
-
-// 4. Excel 文件 tab
-await evalJs(`document.querySelector('#bottom-tabs [data-tab="1"]').click()`);
-await sleep(400);
-const files = await evalJs(`document.getElementById('excel-list').innerText`);
-check("Excel 文件列表", files.includes("hero.xlsx"), files);
-
-// 5. 任意 Excel 映射导入
-await openProjectMenu("导入任意 Excel");
-await until(`!document.getElementById('excel-map').hidden`, "映射对话框");
-await evalJs(`(() => {
-  document.getElementById('em-path').value = ${JSON.stringify(xlsx)};
-  document.getElementById('em-header').value = 4;
-  document.getElementById('em-load').click();
-  return true;
-})()`);
-await until(`document.querySelectorAll('#em-fields .em-field').length > 0`, "映射预览");
-await evalJs(`(() => {
-  document.getElementById('em-group').value = 'qa_map';
-  document.getElementById('em-node').value = 'QaHero';
-  document.getElementById('em-run').click();
-  return true;
-})()`);
-await until(`document.getElementById('em-result').textContent.includes('导入完成')`, "映射导入");
-const mapped = await evalJs(`__tt.state.snapshot.tree.some(r => r.name === 'QaHero')`);
-check("映射导入节点", mapped);
-await evalJs(`document.getElementById('em-close').click()`);
+check("Excel 文件生成", !String(exported).startsWith("ERR") && fs.existsSync(xlsx), exported);
 
 // 6. 问题 tab
-await evalJs(`document.querySelector('#bottom-tabs [data-tab="2"]').click()`);
+await evalJs(`document.querySelector('#bottom-tabs [data-tab="1"]').click()`);
 await sleep(300);
 const issues = await evalJs(`!!document.getElementById('issue-list')`);
 check("问题面板", issues);
@@ -302,7 +274,7 @@ await evalJs(`(async () => {
 const issue = await evalJs(`__tt.state.snapshot.issues.find(i => i.group === 'building' && i.jump)`);
 check("产生可定位问题", !!issue, issue);
 if (issue) {
-  await evalJs(`document.querySelector('#bottom-tabs [data-tab="2"]').click()`);
+  await evalJs(`document.querySelector('#bottom-tabs [data-tab="1"]').click()`);
   await sleep(250);
   const idx = await evalJs(
     `__tt.state.issues.findIndex(i => i.group === 'building' && i.jump)`,

@@ -1,7 +1,7 @@
 //! CLI 顶层 dispatcher：解析 argv → 调 [`crate::actions`] → [`crate::cli::output`] 打印
 //! → 翻译 exit code。
 //!
-//! [`run_with_args`] 也被 `tablet-slint.exe` 在"有 CLI 子命令"时直接调，
+//! [`run_with_args`] 也被 `tablet.exe` 在"有 CLI 子命令"时直接调，
 //! 等价于跑了一次 `tablet-cli.exe` 子进程。
 //!
 //! exit code 约定：

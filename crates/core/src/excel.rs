@@ -65,6 +65,77 @@ fn sanitize_sheet_name(name: &str) -> String {
     out
 }
 
+// ── 4 行表头布局（xlsx 组读写在 project.rs / ops.rs 共用）──
+/// Table sheet 的 4 行表头：desc / export / type / 字段名。
+pub(crate) const HDR_DESC: u32 = 1;
+pub(crate) const HDR_EXPORT: u32 = 2;
+pub(crate) const HDR_TYPE: u32 = 3;
+pub(crate) const HDR_NAME: u32 = 4;
+/// 数据行起点
+pub(crate) const DATA_START: u32 = 5;
+
+/// 用一个内存里的 Group 重新生成整本 xlsx（新项目 / 模板落地 / 测试用）。
+/// 正常保存走 `ops` 的增量写回，不会用它。
+pub(crate) fn write_fresh_group(path: &Path, group: &Group) -> Result<()> {
+    let mut wb = Workbook::new();
+    let mut n = 0usize;
+    for table in &group.tables {
+        if table.deleted { continue; }
+        let ws = wb.add_worksheet();
+        ws.set_name(sanitize_sheet_name(&table.name))?;
+        for (i, f) in table.schema.fields.iter().enumerate() {
+            let c = i as u16;
+            ws.write_string(HDR_DESC - 1, c, &f.desc)?;
+            ws.write_string(HDR_EXPORT - 1, c, f.export.display())?;
+            ws.write_string(HDR_TYPE - 1, c, &f.tbl_type)?;
+            ws.write_string(HDR_NAME - 1, c, &f.name)?;
+        }
+        for (r, row) in table.records.iter().enumerate() {
+            for (c, val) in row.iter().enumerate() {
+                ws.write_string(r as u32 + DATA_START - 1, c as u16, val)?;
+            }
+        }
+        n += 1;
+    }
+    for constant in &group.constants {
+        if constant.deleted { continue; }
+        let ws = wb.add_worksheet();
+        ws.set_name(sanitize_sheet_name(&constant.name))?;
+        for (i, h) in ["name", "type", "value", "export", "desc"].iter().enumerate() {
+            ws.write_string(0, i as u16, *h)?;
+        }
+        for (r, e) in constant.entries.iter().enumerate() {
+            ws.write_string(r as u32 + 1, 0, &e.name)?;
+            ws.write_string(r as u32 + 1, 1, &e.tbl_type)?;
+            ws.write_string(r as u32 + 1, 2, &e.value)?;
+            ws.write_string(r as u32 + 1, 3, e.export.display())?;
+            ws.write_string(r as u32 + 1, 4, &e.desc)?;
+        }
+        n += 1;
+    }
+    for enum_def in &group.enums {
+        if enum_def.deleted { continue; }
+        let ws = wb.add_worksheet();
+        ws.set_name(sanitize_sheet_name(&enum_def.name))?;
+        for (i, h) in ["id", "name", "desc"].iter().enumerate() {
+            ws.write_string(0, i as u16, *h)?;
+        }
+        for (r, e) in enum_def.entries.iter().enumerate() {
+            ws.write_string(r as u32 + 1, 0, &e.id)?;
+            ws.write_string(r as u32 + 1, 1, &e.name)?;
+            ws.write_string(r as u32 + 1, 2, &e.desc)?;
+        }
+        n += 1;
+    }
+    if n == 0 {
+        // xlsx 至少要有一个 sheet；运行时保存也用同一个占位名（ops::save_xlsx_group）。
+        let ws = wb.add_worksheet();
+        ws.set_name("_empty")?;
+    }
+    std::fs::write(path, wb.save_to_buffer()?)?;
+    Ok(())
+}
+
 /// 把单个 Table 写到 worksheet。表头 4 行（desc / export / type / field）+ 数据。
 ///
 /// 顺序与 .tbl 文本（@tbl.rs::serialize_table）一致。Export 列写入 [`Export::display()`]
@@ -340,7 +411,7 @@ fn unique_sheet_name(raw: &str, used: &mut std::collections::HashSet<String>) ->
 }
 
 // ============================================================================
-// 回读：xlsx → GroupPatch（@docs/02-核心功能.md §20 / @docs/06-Excel桥接.md §3）
+// 回读：xlsx → GroupPatch（@docs/02-核心功能.md §20 / @docs/06-Excel导出导入.md）
 // ============================================================================
 
 /// 单个节点的回写补丁。

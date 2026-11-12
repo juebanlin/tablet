@@ -12,11 +12,10 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { os: windows-latest, target: windows,        need_nightly: false }
-          - { os: windows-latest, target: windows-win7,   need_nightly: true  }
-          - { os: ubuntu-latest,  target: linux,          need_nightly: false }
-          - { os: ubuntu-latest,  target: linux-cli-musl, need_nightly: false }
-          - { os: macos-latest,   target: macos,          need_nightly: false }
+          - { os: windows-latest, target: windows }
+          - { os: ubuntu-22.04,   target: linux }
+          - { os: ubuntu-22.04,   target: linux-cli-musl }
+          - { os: macos-latest,   target: macos }
     runs-on: ${{ matrix.os }}
     name: build (${{ matrix.target }})
     steps:
@@ -25,25 +24,18 @@ jobs:
       - name: install rust stable
         uses: dtolnay/rust-toolchain@stable
 
-      - name: install rust nightly + rust-src
-        if: matrix.need_nightly
-        # 钉死 nightly 日期: Tier 3 target 走 -Z build-std, nightly 偶尔会改 flag (例如
-        # 2026-06 把 panic_immediate_abort 从 build-std-features 提升为正式 panic 策略),
-        # 不钉死会反复炸 CI. 验证过没问题再手动 bump.
-        uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: nightly-2026-06-07
-          components: rust-src
-
-      # Linux GUI target 需要的系统依赖: OpenGL + 字体 + xcb (winit)
-      - name: install linux gui deps
+      # Tauri 需要 WebKitGTK 4.1 / GTK3 开发包
+      - name: install linux tauri deps
         if: matrix.target == 'linux'
         run: |
           sudo apt update
-          sudo apt install -y \
-            libgl1-mesa-dev libfontconfig1-dev \
-            libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev \
-            libxkbcommon-dev
+          sudo apt install -y libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev libsoup-3.0-dev libjavascriptcoregtk-4.1-dev libssl-dev libxdo-dev build-essential pkg-config
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: crates/app-tauri/univer-editor/package-lock.json
 
       # musl 静态链需要 musl-tools
       - name: install musl-tools
@@ -109,7 +101,7 @@ jobs:
 
       - name: build release notes
         # 上半: 自上一个 tag 起的 commit 列表 (无前序 tag 时退化为最近 50 条)
-        # 下半: 9 个产物的固定说明表格
+        # 下半: 各产物的固定说明表格
         run: |
           set -euo pipefail
           tag="${GITHUB_REF#refs/tags/}"
@@ -129,18 +121,16 @@ jobs:
             echo
             echo "| 文件 | 平台 | 类型 | 备注 |"
             echo "|---|---|---|---|"
-            echo "| tablet-${ver}-windows.exe | Windows 10/11 x64 | GUI | VC++ runtime 静态链, 免装可再发行包 |"
-            echo "| tablet-cli-${ver}-windows.exe | Windows 10/11 x64 | CLI | 同上 |"
-            echo "| tablet-${ver}-windows-win7.exe | Windows 7 SP1 x64 | GUI | Tier 3, nightly + build-std |"
-            echo "| tablet-cli-${ver}-windows-win7.exe | Windows 7 SP1 x64 | CLI | 同上 |"
-            echo "| tablet-${ver}-linux | x86_64 Linux (glibc) | GUI | 需 libgl1 / libfontconfig1 / fonts-noto-cjk |"
+            echo "| tablet-${ver}-windows.exe | Windows 10 1803+/11 x64 | GUI (Tauri) | 需 WebView2 运行时（Win11 自带） |"
+            echo "| tablet-cli-${ver}-windows.exe | Windows 10/11 x64 | CLI | 无需 WebView2 |"
+            echo "| tablet-${ver}-linux | x86_64 Linux (glibc) | GUI (Tauri) | 需 WebKitGTK 4.1 / GTK3；建议 fonts-noto-cjk |"
             echo "| tablet-cli-${ver}-linux | x86_64 Linux (glibc) | CLI | 动态链 |"
             echo "| tablet-cli-${ver}-linux-cli-musl | x86_64 Linux (any) | CLI | 全静态链, 任意 Linux 直接跑 |"
-            echo "| tablet_${ver}_amd64.deb | Debian/Ubuntu x64 | GUI+CLI | apt 安装, 含 .desktop + 图标 |"
-            echo "| tablet-${ver}-macos | macOS 10.13+ universal | GUI | intel + arm64, 未签名 |"
-            echo "| tablet-cli-${ver}-macos | macOS 10.13+ universal | CLI | 同上 |"
-            echo "| Tablet-${ver}.app.zip | macOS 10.13+ universal | GUI 便携包 | 解压直接运行 |"
-            echo "| Tablet-${ver}.dmg | macOS 10.13+ universal | GUI 安装包 | 拖入 Applications |"
+            echo "| tablet_${ver}_amd64.deb | Debian/Ubuntu x64 | GUI+CLI | apt 安装, 依赖 WebKitGTK 4.1 |"
+            echo "| tablet-${ver}-macos | macOS 11+ universal | GUI (Tauri) | intel + arm64, 未签名 |"
+            echo "| tablet-cli-${ver}-macos | macOS 11+ universal | CLI | 同上 |"
+            echo "| Tablet-${ver}.app.zip | macOS 11+ universal | GUI 便携包 | 解压直接运行 |"
+            echo "| Tablet-${ver}.dmg | macOS 11+ universal | GUI 安装包 | 拖入 Applications |"
           } > release-notes.md
           cat release-notes.md
 

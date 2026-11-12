@@ -1,14 +1,14 @@
 [package]
-name = "tablet-tauri"
+name = "tablet"
 version.workspace = true
 edition = "2021"
-# 只依赖 tablet-core（Apache-2.0）+ tablet-cli（Apache-2.0）+ Tauri（MIT/Apache-2.0），
-# 不含 Slint，因此可以对外分发、不传染 GPL（@docs/17 §2.3）。
+# 只依赖 tablet-core（Apache-2.0）+ tablet-cli（Apache-2.0）+ Tauri（MIT/Apache-2.0）。
+# 这是唯一的 GUI 产物 tablet[.exe]（@docs/17）。
 license = "Apache-2.0"
 build = "build.rs"
 
 [[bin]]
-name = "tablet-tauri"
+name = "tablet"
 path = "src/main.rs"
 
 [dependencies]
@@ -24,7 +24,7 @@ time = { version = "0.3", features = ["macros", "formatting"] }
 anyhow = "1"
 # Univer 窗口的工作簿载荷走 base64（xlsx 二进制经 JSON IPC）。
 base64 = "0.22"
-# 原生文件/目录选择（GUI 的「浏览…」），与 Slint 版使用同一套 rfd。
+# 原生文件/目录选择（GUI 的「浏览…」）。
 rfd = "0.17"
 
 [target.'cfg(windows)'.dependencies]

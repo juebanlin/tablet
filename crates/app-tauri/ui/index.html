@@ -67,7 +67,6 @@
 
         <div class="grid-ribbon">
           <button class="btn" id="btn-revert" disabled>还原</button>
-          <button class="btn" id="btn-excel" disabled>Excel 编辑</button>
           <button class="btn" id="btn-univer" disabled title="用内置 Univer 打开当前组（支持多标签）">Univer 编辑</button>
           <button class="btn" id="btn-rules" disabled>校验规则</button>
           <label class="check"><input type="checkbox" id="show-ref-name" /> 显示引用名称</label>
@@ -91,7 +90,6 @@
         </div>
 
         <div class="status-bar">
-          <span class="status-item" id="excel-session"></span>
           <span class="status-item" id="univer-session"></span>
           <span class="status-item" id="selection-info"></span>
           <span class="spacer"></span>
@@ -111,12 +109,11 @@
 
     <div class="splitter-h" id="splitter-h"></div>
 
-    <!-- 4. BottomPanel：日志 / Excel 文件 -->
+    <!-- 4. BottomPanel：日志 / 问题 -->
     <section class="bottom-panel" id="bottom-panel">
       <div class="tabbar" id="bottom-tabs">
         <button class="tab active" data-tab="0">日志</button>
-        <button class="tab" data-tab="1">Excel 文件</button>
-        <button class="tab" data-tab="2">问题</button>
+        <button class="tab" data-tab="1">问题</button>
       </div>
 
       <div class="bottom-body">
@@ -135,20 +132,7 @@
         </div>
 
         <div class="pane" data-pane="1" hidden>
-          <div class="excel-filebar">
-            <button class="btn" id="excel-sync">同步</button>
-            <button class="btn" id="excel-refresh">刷新</button>
-            <button class="btn" id="excel-delete" disabled>删除</button>
-            <button class="btn" id="excel-open-selected">打开</button>
-            <button class="btn" id="excel-open-folder">打开目录</button>
-            <span class="spacer"></span>
-            <span class="log-summary" id="excel-dir"></span>
-          </div>
-          <div class="excel-list" id="excel-list"></div>
-        </div>
-
-        <div class="pane" data-pane="2" hidden>
-          <div class="excel-filebar">
+          <div class="pane-toolbar">
             <button class="btn" id="issue-refresh">重新验证</button>
             <span class="spacer"></span>
             <span class="log-summary" id="issue-summary"></span>
@@ -560,24 +544,6 @@
       </div>
       <pre class="export-result" id="em-result" hidden></pre>
       <div class="modal-message error" id="em-error" hidden></div>
-    </div>
-  </div>
-
-  <div class="modal" id="excel-sync-dialog" hidden>
-    <div class="modal-box es-box">
-      <div class="modal-title">Excel 同步</div>
-      <div class="es-head">
-        <span class="es-col-g">组 / 节点</span>
-        <span class="es-col-size">tablet</span>
-        <span class="es-col-ops">操作</span>
-        <span class="es-col-size">Excel</span>
-      </div>
-      <div class="es-list" id="es-list"></div>
-      <div class="modal-actions">
-        <button class="btn" id="es-refresh">刷新</button>
-        <span class="spacer"></span>
-        <button class="btn primary" id="es-close">关闭</button>
-      </div>
     </div>
   </div>
 

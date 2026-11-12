@@ -188,7 +188,7 @@ function applySnapshot(s) {
 
   if (!state.initialized) {
     state.initialized = true;
-    // 默认展开当前项目及其所有组（与 Slint 版启动观感一致）。
+    // 默认展开当前项目及其所有组（与 旧版启动观感一致）。
     for (const row of s.tree) {
       if (row.kind === "project" && row.active && !row.closed) {
         state.expandedProjects.add(row.project);
@@ -220,18 +220,11 @@ function applySnapshot(s) {
   $("btn-undo").disabled = !st.can_undo;
   $("btn-redo").disabled = !st.can_redo;  $("btn-undo").title = st.undo_label || "";
   $("btn-redo").title = st.redo_label || "";
-  $("excel-session").textContent = (st.excel_editing || []).length
-    ? `Excel 编辑中：${st.excel_editing.join("、")}`
-    : "";
   state.univerEditing = new Set(st.univer_editing || []);
   const selectedGroup = state.selected?.group;
   const sameProject = state.selected?.project === st.active_project;
   const lockedByUniver = !!selectedGroup && sameProject && state.univerEditing.has(selectedGroup);
-  const lockedByExcel =
-    !!selectedGroup &&
-    sameProject &&
-    (st.excel_editing || []).includes(selectedGroup);
-  const lockedGroup = lockedByUniver || lockedByExcel ? selectedGroup : null;
+  const lockedGroup = lockedByUniver ? selectedGroup : null;
   $("univer-session").textContent = (st.univer_editing || []).length
     ? `Univer 编辑中（主界面只读）：${st.univer_editing.join("、")}`
     : "";
@@ -239,15 +232,12 @@ function applySnapshot(s) {
   grid.setAutoCommitOnBlur(st.auto_commit_on_blur !== false);
   $("grid-lock-overlay").hidden = !lockedGroup;
   if (lockedGroup) {
-    document.querySelector(".grid-lock-title").textContent = lockedByExcel
-      ? "该组正在 Excel 中编辑"
-      : "该组正在 Univer 窗口中编辑";
-    document.querySelector(".grid-lock-sub").textContent = lockedByExcel
-      ? "Excel 改动会自动回写内存；主界面此时只读"
-      : "主界面此时只读，避免两边同时修改数据";
-    $("grid-lock-open").textContent = lockedByExcel ? "结束 Excel 编辑" : "聚焦 Univer 窗口";
+    document.querySelector(".grid-lock-title").textContent = "该组正在 Univer 窗口中编辑";
+    document.querySelector(".grid-lock-sub").textContent =
+      "主界面此时只读，避免两边同时修改数据";
+    $("grid-lock-open").textContent = "聚焦 Univer 窗口";
   }
-  if (lockedGroup || (st.univer_editing || []).length || (st.excel_editing || []).length) {
+  if (lockedGroup || (st.univer_editing || []).length) {
     // 撤销/重做是项目级的，可能改到任何被外部编辑器占用的组；锁定期先禁用。
     $("btn-undo").disabled = true;
     $("btn-redo").disabled = true;
@@ -266,7 +256,6 @@ function applySnapshot(s) {
   $("grid-empty").hidden = !!g;
   $("grid-scroll").hidden = !g;
   $("btn-rules").disabled = !g || g.mode === "constant" || !!lockedGroup;
-  $("btn-excel").disabled = !g || !!lockedGroup;
   $("btn-univer").disabled = !g;
   $("btn-univer").title = lockedGroup
     ? "该组已在 Univer 窗口中打开（点击聚焦窗口）"
@@ -422,7 +411,7 @@ function renderTree() {
   for (const p of projects) {
     const openExpanded = !p.closed && state.expandedProjects.has(p.project);
 
-    // 先算组/节点命中，再决定项目根是否展示（与 Slint 的“任一子项命中即展示”一致）。
+    // 先算组/节点命中，再决定项目根是否展示（与 旧版 的“任一子项命中即展示”一致）。
     const groupViews = [];
     if (!p.closed) {
       for (const g of p.groups) {
@@ -467,7 +456,7 @@ function renderTree() {
           key: gKey,
           indent: 1,
           caret: gExpanded ? "▼" : "▶",
-          // 与 Slint 一致：xlsx 组（节点 = 工作簿 sheet）用 📗，tbl 组用目录 📁。
+          // 与旧版行为一致：xlsx 组（节点 = 工作簿 sheet）用 📗，tbl 组用目录 📁。
           icon: g.xlsx ? "📗" : "📁",
           label: g.label,
           mark: g.mark,
@@ -561,7 +550,7 @@ function selectTree(kind, project, group, name) {
 function onGridSelection(sel) {
   $("selection-info").textContent = sel.info;
   $("hover-info").textContent = sel.hover ? `光标: ${sel.hover}` : "";
-  // 单格有校验问题时，状态栏在坐标后追加原因（与 Slint 版一致：即时重算）。
+  // 单格有校验问题时，状态栏在坐标后追加原因（与旧版行为一致：即时重算）。
   if (sel.kind === "cell") {
     const r = grid.focus.r;
     const c = grid.focus.c;
@@ -582,7 +571,7 @@ function onGridSelection(sel) {
   // 整个表格向下跳一行”——拖动选区会在按下瞬间被这 28px 位移带偏。
   bar.hidden = !grid.node;
   if (!grid.node) return;
-  // 展开态只在单格选区有效；切到区域 / 整行 / 整列时收起（与 Slint 版一致）。
+  // 展开态只在单格选区有效；切到区域 / 整行 / 整列时收起（与旧版行为一致）。
   if (sel.kind !== "cell" && bar.classList.contains("expanded")) {
     if (!input.readOnly) grid.setActiveValue(input.value);
     bar.classList.remove("expanded");
@@ -646,7 +635,7 @@ function initToolbar() {
     runOp("save_workspace", {}).then(() => toast("工作区已保存", "ok"));
   });
   $("btn-reload").addEventListener("click", async () => {
-    // 有未保存改动先确认（与 Slint 版一致），不能直接丢掉内存里的修改。
+    // 有未保存改动先确认（与旧版行为一致），不能直接丢掉内存里的修改。
     if (state.snapshot?.status?.dirty) {
       const ok = await openModal({
         title: "重新加载",
@@ -674,7 +663,6 @@ function initToolbar() {
     const sel = state.selected;
     if (!sel?.group) return;
     if (state.univerEditing.has(sel.group)) univerEdit(sel.project, sel.group);
-    else runOp("excel_end_edit", { project: sel.project, group: sel.group });
   });
   $("btn-new-project").addEventListener("click", () => openCreateProject());
   $("btn-revert").addEventListener("click", () => {
@@ -704,10 +692,8 @@ function initToolbar() {
       $("btn-save").click();
     } else if (k === "z" || k === "y") {
       e.preventDefault();
-      const anyLocked =
-        (status().univer_editing || []).length || (status().excel_editing || []).length;
-      if (anyLocked) {
-        return toast("有组正在 Excel / Univer 中编辑，暂不能撤销/重做", "error");
+      if ((status().univer_editing || []).length) {
+        return toast("有组正在 Univer 中编辑，暂不能撤销/重做", "error");
       }
       runOp(k === "y" || (k === "z" && e.shiftKey) ? "redo" : "undo", {});
     }
@@ -724,8 +710,7 @@ function initBottomPanel() {
     document.querySelectorAll(".bottom-body .pane").forEach((p) => {
       p.hidden = +p.dataset.pane !== state.bottomTab;
     });
-    if (state.bottomTab === 1) refreshExcelFiles();
-    if (state.bottomTab === 2) renderIssues();
+    if (state.bottomTab === 1) renderIssues();
   });
   $("btn-clear-log").addEventListener("click", () => {
     state.logs = [];
@@ -865,7 +850,7 @@ function showContextMenu(x, y, items) {
   hideContextSubmenu();
   const menu = $("ctx-menu");
   menu.innerHTML = "";
-  // 与 Slint 版一致：不可用的项直接不出现（不再灰显）；顺带去掉空分隔线。
+  // 与旧版行为一致：不可用的项直接不出现（不再灰显）；顺带去掉空分隔线。
   const list = normalizeContextItems(items);
   if (!list.length) {
     menu.hidden = true;
@@ -883,7 +868,7 @@ let modalResolve = null;
 let modalValidator = null;
 let modalValidateSeq = 0;
 
-/** 输入校验结果写回弹窗：有错误时禁用「确定」（与 Slint 的实时校验一致）。 */
+/** 输入校验结果写回弹窗：有错误时禁用「确定」（与 旧版 的实时校验一致）。 */
 async function runModalValidation() {
   if (!modalValidator) return;
   const seq = ++modalValidateSeq;
@@ -986,7 +971,7 @@ async function pasteNodeFmt(project, group, fmt) {
   await runOp("paste_node", { project, group, fmt: fmt || null });
 }
 
-// 粘贴 Group：无冲突直接粘；有重名时弹命名确认（与 Slint 版一致）。
+// 粘贴 Group：无冲突直接粘；有重名时弹命名确认（与旧版行为一致）。
 let pgState = null;
 
 async function pasteGroupFmt(project, storage) {
@@ -1088,16 +1073,6 @@ async function importXlsxFlow(project) {
   toast("已导入 Excel Group", "ok");
 }
 
-async function excelEdit(project, group) {
-  if (!project) return toast("没有活跃项目", "error");
-  try {
-    await invoke("excel_begin_edit", { project, group });
-    toast(`已用 Excel 打开 ${group}（编辑后自动回写内存，保存后落盘）`, "ok");
-  } catch (e) {
-    toast(String(e), "error");
-  }
-}
-
 /** 打开内置 Univer 编辑窗口；一个窗口 = 一个组，可同时开多个。 */
 async function univerEdit(project, group) {
   if (!project) return toast("没有活跃项目", "error");
@@ -1195,18 +1170,7 @@ function groupMenu(t) {
     (r) => r.kind === "group" && r.project === t.project && r.group === t.group,
   );
   const xlsx = !!row?.xlsx;
-  const excelSession = (status().excel_editing || []).includes(t.group);
   const excelItems = [
-    {
-      label: xlsx ? "用 Excel 打开（原文件）" : "用 Excel 打开（整组）",
-      disabled: locked,
-      action: () =>
-        xlsx
-          ? invoke("open_xlsx_book", { project: t.project, group: t.group }).catch((e) =>
-              toast(String(e), "error"),
-            )
-          : excelEdit(t.project, t.group),
-    },
     { label: "导出 Excel…", action: () => openExcelTransfer("export", { group: t.group }) },
     {
       label: "导入 Excel…",
@@ -1218,25 +1182,6 @@ function groupMenu(t) {
     excelItems.push({
       label: "重新加载",
       action: () => runOp("reload_group", { project: t.project, group: t.group }),
-    });
-  }
-  if (excelSession) {
-    excelItems.push({ sep: true });
-    excelItems.push({
-      label: "结束 Excel 编辑",
-      action: () => runOp("excel_end_edit", { project: t.project, group: t.group }),
-    });
-    excelItems.push({
-      label: "放弃 Excel 改动",
-      danger: true,
-      action: async () => {
-        const ok = await openModal({
-          title: "放弃 Excel 改动",
-          message: `结束 ${t.group} 的 Excel 会话，且不把工作簿改动合并回内存？`,
-          input: false,
-        });
-        if (ok) await runOp("excel_abandon", { project: t.project, group: t.group });
-      },
     });
   }
 
@@ -1860,7 +1805,7 @@ function setPsTab(tab) {
   document.querySelectorAll("#project-settings .ps-pane").forEach((p) => {
     p.hidden = p.dataset.pane !== tab;
   });
-  // 「应用模板」只在分隔符 / 导出页出现（与 Slint 版一致）。
+  // 「应用模板」只在分隔符 / 导出页出现（与旧版行为一致）。
   $("ps-apply-template").style.display = tab === "sep" || tab === "export" ? "" : "none";
   refreshPsModified();
 }
@@ -2164,7 +2109,7 @@ function initProjectDialogs() {
   });
 }
 
-// ── 类型选择器（对齐 Slint TypeSelector）────────────────────
+// ── 类型选择器（对齐 旧版 TypeSelector）────────────────────
 // 双 tab：数据类型（范式 + 参数槽 + 结果/示例/Java/Go/Lua 预览）/ 引用类型。
 let tsState = null;
 let tsPreviewSeq = 0;
@@ -2385,7 +2330,7 @@ function initTypeSelector() {
 
 // ── 校验规则编辑器 ─────────────────────────────────────────
 //
-// 对齐 Slint 版（@docs/16）与 rule-builder-v2 的交互：一条规则一张卡片，
+// 对齐旧版（@docs/16）与 rule-builder-v2 的交互：一条规则一张卡片，
 // 卡片里是可增删的「组 / 验证器 / 条件」行；行的参数统一在底部 inspector 编辑。
 // 草稿用草稿树保存，组内按连接符（and / or，AND 优先）组合；条件行保存时
 // 与同组验证器合并成 `when(条件, 验证器)`，不会单独成规则。
@@ -2744,7 +2689,7 @@ function normalizeNode(node) {
   );
 }
 
-/** 根必须是组；单成员组折叠成成员本身（与 Slint 版 normalize 一致）。 */
+/** 根必须是组；单成员组折叠成成员本身（与 旧版 normalize 一致）。 */
 function normalizeDraft(draft) {
   if (draft.type !== "group") return groupWith([draft], ["and"]);
   const children = draft.children.map(normalizeNode);
@@ -3437,7 +3382,7 @@ async function resetRules() {
 }
 
 function addRule() {
-  // 新卡片默认带一个验证器行（与 rule-builder-v2 / Slint 一致），并直接选中它。
+  // 新卡片默认带一个验证器行（与 rule-builder-v2 / 旧版 一致），并直接选中它。
   rulesState.drafts.push({
     target: currentTarget(),
     level: "error",
@@ -3492,7 +3437,7 @@ async function saveRules() {
 
 // ── 事件 ─────────────────────────────────────────────────
 
-/** 有未保存改动时切换作用域 / 列：先显示内联确认条（与 Slint 版一致）。 */
+/** 有未保存改动时切换作用域 / 列：先显示内联确认条（与旧版行为一致）。 */
 function requestSwitch(next) {
   if (rulesState.dirty) {
     const label = next.scope === "table" ? "「表级规则」" : `列「${next.target || ""}」`;
@@ -3874,7 +3819,7 @@ function refreshGsModified() {
   }
 }
 
-/** 使用默认值：只重置当前 tab（与 Slint 版一致）。 */
+/** 使用默认值：只重置当前 tab（与旧版行为一致）。 */
 function applyGsDefaults() {
   const defs = gsState.defaults;
   if (!defs) return;
@@ -4047,7 +3992,7 @@ function initExportDialog() {
   $("ex-none").addEventListener("click", () =>
     document.querySelectorAll("#ex-formats input[data-fmt]").forEach((i) => (i.checked = false)),
   );
-  // 与 Slint 版一致的四个快捷预设。
+  // 与旧版行为一致的四个快捷预设。
   const presets = {
     all: ["json", "xml", "bin", "java", "go", "cpp", "csharp_dotnet", "typescript_server",
       "lua", "gdscript", "typescript_client", "csharp_unity", "csharp_godot"],
@@ -4076,7 +4021,7 @@ function toast(message, level = "info") {
 }
 
 // ── Schema 导入 / 导出 ──────────────────────────────────────
-// ── Schema 导入 / 导出（对齐 Slint 的节点树对话框）──────────
+// ── Schema 导入 / 导出（对齐 旧版 的节点树对话框）──────────
 const schemaState = {
   mode: "export", // export | template | import
   outline: [],
@@ -4247,7 +4192,7 @@ async function openSchemaDialog(mode = "export") {
     renderSchemaInTree();
     return;
   }
-  // 每次打开都从空白元数据开始（与 Slint 版一致）；路径保留上次输入。
+  // 每次打开都从空白元数据开始（与旧版行为一致）；路径保留上次输入。
   for (const id of ["schema-meta-id", "schema-meta-name", "schema-meta-category", "schema-meta-version"]) {
     $(id).value = "";
   }
@@ -4365,161 +4310,6 @@ function initSchemaDialog() {
       syncSchemaGroups(out ? "out" : "in");
       updateSchemaStats();
     }
-  });
-}
-
-let excelFileCache = [];
-let excelSelection = new Set();
-
-function updateExcelSelection() {
-  document.querySelectorAll("#excel-list .excel-card").forEach((c) =>
-    c.classList.toggle("selected", excelSelection.has(c.dataset.file)),
-  );
-  $("excel-delete").disabled = excelSelection.size === 0;
-}
-
-function openExcelFile(file) {
-  invoke("open_folder", { path: `.excel/${file}` }).catch((e) => addLocalLog(2, String(e)));
-}
-
-async function refreshExcelFiles() {
-  try {
-    const files = await invoke("excel_files");
-    excelFileCache = files;
-    excelSelection = new Set([...excelSelection].filter((f) => files.includes(f)));
-    $("excel-list").innerHTML = files.length
-      ? `<div class="excel-cards">${files
-          .map(
-            (f) =>
-              `<div class="excel-card" data-file="${escapeHtml(
-                f,
-              )}"><span class="excel-icon">📄</span><span class="excel-card-name">${escapeHtml(
-                f,
-              )}</span></div>`,
-          )
-          .join("")}</div>`
-      : '<div class="sys-empty">(无 Excel 文件)</div>';
-    updateExcelSelection();
-    $("excel-dir").textContent = ".excel/";
-  } catch (e) {
-    addLocalLog(2, String(e));
-  }
-}
-
-async function tryDeleteExcelFiles() {
-  if (!excelSelection.size) return;
-  const names = [...excelSelection];
-  const ok = await openModal({
-    title: "删除 Excel 文件",
-    message: `确定删除 ${names.join("、")}？只删 .excel 下的工作簿，不影响已导入的数据。`,
-    input: false,
-  });
-  if (!ok) return;
-  try {
-    for (const f of names) await invoke("excel_delete", { file: f });
-    excelSelection.clear();
-    await refreshExcelFiles();
-    toast(`已删除 ${names.length} 个 Excel 文件`, "ok");
-  } catch (e) {
-    toast(String(e), "error");
-  }
-}
-
-// ── Excel 同步面板（core excel_sync 计划）──────────────────
-async function refreshExcelSync() {
-  try {
-    const rows = await invoke("excel_sync_plan");
-    $("es-list").innerHTML =
-      rows
-        .map((r) => {
-          const ops =
-            r.ops
-              .map(
-                (o) =>
-                  `<button class="mini-btn" data-es-op="${o.code}" data-es-group="${escapeHtml(
-                    r.group,
-                  )}" data-es-node="${escapeHtml(r.node)}" ${
-                    o.code === 8 ? 'disabled title="该操作尚未实现"' : ""
-                  }>${escapeHtml(o.label)}</button>`,
-              )
-              .join("") || "";
-          const notes = [r.header_edited ? "表头 type/export 被改过" : "", r.outside ? "区域外有内容" : ""]
-            .filter(Boolean)
-            .join(" · ");
-          return `<div class="es-row">
-            <span class="es-col-g"><span class="es-name">${escapeHtml(r.group)}/${escapeHtml(
-            r.node,
-          )}</span>${r.desc_diff ? '<span class="es-dot" title="desc 有差异"></span>' : ""}${
-            notes ? `<span class="es-note">${escapeHtml(notes)}</span>` : ""
-          }</span>
-            <span class="es-col-size">${r.left ? escapeHtml(r.left) : "(新节点)"}</span>
-            <span class="es-col-ops">${ops || '<span class="es-blocked">—</span>'}</span>
-            <span class="es-col-size">${r.right ? escapeHtml(r.right) : "(新 sheet)"}${
-            r.blocked ? `<span class="es-blocked">${escapeHtml(r.blocked)}</span>` : ""
-          }</span>
-          </div>`;
-        })
-        .join("") || '<div class="sys-empty">没有可同步的组</div>';
-  } catch (e) {
-    toast(String(e), "error");
-  }
-}
-
-function openExcelSyncDialog() {
-  $("excel-sync-dialog").hidden = false;
-  refreshExcelSync();
-}
-
-function initExcelDialog() {
-  $("excel-refresh").addEventListener("click", refreshExcelFiles);
-  $("excel-list").addEventListener("click", (e) => {
-    const card = e.target.closest(".excel-card[data-file]");
-    if (!card) return;
-    const file = card.dataset.file;
-    if (e.ctrlKey || e.metaKey) {
-      if (excelSelection.has(file)) excelSelection.delete(file);
-      else excelSelection.add(file);
-    } else {
-      excelSelection = new Set([file]);
-    }
-    updateExcelSelection();
-  });
-  $("excel-list").addEventListener("dblclick", (e) => {
-    const card = e.target.closest(".excel-card[data-file]");
-    if (card) openExcelFile(card.dataset.file);
-  });
-  $("excel-open-selected").addEventListener("click", () => {
-    const list = excelSelection.size ? [...excelSelection] : excelFileCache.slice(0, 1);
-    list.forEach(openExcelFile);
-  });
-  $("excel-delete").addEventListener("click", tryDeleteExcelFiles);
-  $("excel-sync").addEventListener("click", openExcelSyncDialog);
-  $("es-refresh").addEventListener("click", refreshExcelSync);
-  $("es-close").addEventListener("click", () => ($("excel-sync-dialog").hidden = true));
-  $("es-list").addEventListener("click", async (e) => {
-    const b = e.target.closest("[data-es-op]");
-    if (!b) return;
-    try {
-      const snap = await invoke("excel_sync_action", {
-        group: b.dataset.esGroup,
-        node: b.dataset.esNode,
-        code: Number(b.dataset.esOp),
-      });
-      applySnapshot(snap);
-      toast("已同步", "ok");
-      await refreshExcelSync();
-      await refreshExcelFiles();
-    } catch (err) {
-      toast(String(err), "error");
-    }
-  });
-  $("excel-open-folder").addEventListener("click", () =>
-    invoke("open_folder", { path: null }).catch((e) => addLocalLog(2, String(e))),
-  );
-  $("btn-excel").addEventListener("click", () => {
-    const sel = state.selected;
-    if (!sel || !sel.group) return addLocalLog(1, "请先选择一个分组或节点");
-    excelEdit(sel.project, sel.group);
   });
 }
 
@@ -5832,7 +5622,6 @@ async function xtRun() {
       });
       toast(msg, "ok");
       addLocalLog(0, msg);
-      refreshExcelFiles();
     } catch (e) {
       toast(String(e), "error");
       addLocalLog(2, String(e));
@@ -6249,7 +6038,6 @@ function boot() {
   initProjectDialogs();
   initRulesEditor();
   initSchemaDialog();
-  initExcelDialog();
   initExcelMap();
   initExcelTransfer();
   initIssues();
@@ -6259,7 +6047,7 @@ function boot() {
   initContextMenus();
 
   $("tree-list").addEventListener("click", onTreeClick);
-  // 双击项目 / 组行展开收起（与 Slint 版一致）。
+  // 双击项目 / 组行展开收起（与旧版行为一致）。
   $("tree-list").addEventListener("dblclick", (e) => {
     const item = e.target.closest(".tree-item");
     if (!item) return;
@@ -6306,7 +6094,7 @@ function boot() {
     addLocalLog(0, "工作区已加载");
   });
 
-  // 主窗口关闭：有未保存改动先确认（Slint 版的同款保护）。
+  // 主窗口关闭：有未保存改动先确认（旧版的同款保护）。
   try {
     const mainWin = window.__TAURI__?.webviewWindow?.getCurrentWebviewWindow?.();
     mainWin?.onCloseRequested?.((event) => {
@@ -6328,23 +6116,8 @@ function boot() {
     invoke("snapshot").then(applySnapshot).catch(() => {});
   });
 
-  // Excel 编辑会话轮询：Excel 保存后 mtime 变化 → 自动导入回内存。
+  // 外部修改轮询：xlsx 组干净就自动重载；本地有脏改动则提示一次并跳过。
   setInterval(async () => {
-    try {
-      const changed = await invoke("excel_poll");
-      for (const it of changed) {
-        try {
-          const snap = await invoke("excel_sync_group", {
-            project: it.project,
-            group: it.group,
-          });
-          applySnapshot(snap);
-          toast(`Excel 已回写：${it.group}`, "ok");
-        } catch {
-          // Excel 可能正在写盘，下一轮重试。
-        }
-      }
-    } catch {}
     // xlsx 组外部修改：干净就自动重载；本地有脏改动则提示一次并跳过。
     try {
       const changes = await invoke("xlsx_poll");

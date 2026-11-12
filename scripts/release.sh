@@ -1,35 +1,34 @@
 #!/usr/bin/env bash
-# tablet 平台发布脚本
+# tablet 平台发布脚本（Tauri 单 GUI + CLI）
 #
 # 用法:
 #   scripts/release.sh <target>
 #
 # target:
-#   windows          x86_64-pc-windows-gnu          (Tier 1, 需 Windows 宿主)
-#   windows-win7     x86_64-win7-windows-msvc        (Tier 3, 需 Windows 宿主 + nightly)
-#   linux            x86_64-unknown-linux-gnu        (Tier 1, 需 Linux 宿主)
-#   linux-cli-musl   x86_64-unknown-linux-musl       (Tier 2, 仅 tablet-cli, 静态链, 任意 Linux 可跑)
-#   macos            x86_64-apple-darwin + aarch64-apple-darwin → universal (需 macOS 宿主, 最低 10.13)
+#   windows          x86_64-pc-windows-msvc        (Tier 1, 需 Windows 宿主；Tauri 要求 MSVC)
+#   linux            x86_64-unknown-linux-gnu      (Tier 1, 需 Linux 宿主 + WebKitGTK 4.1)
+#   linux-cli-musl   x86_64-unknown-linux-musl     (Tier 2, 仅 tablet-cli, 静态链, 任意 Linux 可跑)
+#   macos            x86_64-apple-darwin + aarch64-apple-darwin → universal (需 macOS 宿主, 最低 11.0)
 #   host             自动按宿主跑所有可跑目标:
-#                      Windows → windows + windows-win7
+#                      Windows → windows
 #                      Linux   → linux + linux-cli-musl
 #                      macOS   → macos
 #
 # 产物:
-#   dist/<target>/tablet(.exe)        ← GUI（顶层入口，零参数 / --gui 走 GUI、其它参数转 CLI）
+#   dist/<target>/tablet(.exe)        ← Tauri GUI（零参数 / --gui 走 GUI、其它参数转 CLI）
 #   dist/<target>/tablet-cli(.exe)    ← 纯 CLI（Jenkins / 自动化批处理）
 #
 # 设计:
-#   不做跨编译。Slint 渲染栈 (D3D/OpenGL/Metal/字体) 跨编出来的二进制
-#   在用户机器上很容易炸；让 CI matrix 的每个 runner 各编各的目标即可。
+#   不做跨编译；CI matrix 的每个 runner 各编各的目标。
+#   Tauri 的 beforeBuildCommand 只在 `cargo tauri build` 下执行，这里用裸 cargo build，
+#   所以必须显式先跑 Univer 前端构建（npm ci && npm run build）。
 #
 # GitHub Actions 复用:
 #   matrix:
 #     - { os: windows-latest, target: windows }
-#     - { os: windows-latest, target: windows-win7 }
-#     - { os: ubuntu-latest,  target: linux }
-#     - { os: ubuntu-latest,  target: linux-cli-musl }
-#     - { os: macos-latest,   target: macos }
+#     - { os: ubuntu-22.04,  target: linux }
+#     - { os: ubuntu-22.04,  target: linux-cli-musl }
+#     - { os: macos-latest,  target: macos }
 #   再 run: bash scripts/release.sh ${{ matrix.target }}
 
 set -euo pipefail
@@ -42,86 +41,59 @@ cd "$WS_DIR"
 DIST_DIR="$WS_DIR/dist"
 mkdir -p "$DIST_DIR"
 
+FRONTEND_DIR="$WS_DIR/crates/app-tauri/univer-editor"
+
+# Tauri 的 UI 资源在编译期内嵌（frontendDist: ui），ui/univer 是构建产物且被 gitignore。
+# 裸 cargo build 不会触发 tauri 的 beforeBuildCommand，缺了它运行时会提示「资源未构建」。
+build_frontend() {
+    echo ">>> [frontend] npm ci && npm run build (Univer)"
+    (cd "$FRONTEND_DIR" && npm ci --no-audit --no-fund && npm run build)
+    test -f "$WS_DIR/crates/app-tauri/ui/univer/index.html" || {
+        echo "frontend 构建后仍缺少 ui/univer/index.html" >&2
+        exit 1
+    }
+}
+
 # ------------------------------------------------------------------
 # 各 target 实现
 # ------------------------------------------------------------------
 
 build_windows() {
-    local triple="x86_64-pc-windows-gnu"
+    local triple="x86_64-pc-windows-msvc"
     local out="$DIST_DIR/windows"
+    rm -rf "$out"
     mkdir -p "$out"
 
-    # windows-gnu 的 rust-std 默认不装(宿主通常是 msvc). 该 target 自带 MinGW 运行库
-    # (rust-mingw 组件含 self-contained 的 crt/libgcc).
-    #
-    # ⚠️ 但 rustup 自带的那份 MinGW **不含 windres**, 而 build.rs 嵌 exe 图标要调它.
-    #    本机之所以能过, 是因为系统另装了 MinGW(/d/workerspace/sdk/mingw64).
-    #    CI 的 windows-latest 上有没有 windres **尚未验证**; 没有的话 build.rs 的
-    #    expect("winresource failed") 会直接中断构建(不是丢图标那么简单).
-    #    二选一待定: CI 装 MinGW, 或把 build.rs 改成缺 windres 只警告不中断.
+    build_frontend
+
+    # Tauri 必须 MSVC：gnu 下 WebView2Loader 是外挂 DLL，破坏单 exe。
+    # 本机 rustup 默认宿主可能是 gnu，这里优先显式指定 msvc toolchain。
+    local tc="stable-x86_64-pc-windows-msvc"
+    local -a cargo_cmd=(cargo)
+    if rustup toolchain list 2>/dev/null | grep -q "^${tc}\b"; then
+        cargo_cmd=(cargo "+${tc}")
+    fi
     rustup target add "$triple" >/dev/null
 
-    echo ">>> [windows] cargo build --release --target=$triple"
-    # 为什么是 gnu 而不是 msvc:
-    #   1. 符号表直接编进 exe → 崩溃日志的调用栈自带函数名。msvc 做不到: 符号只在
-    #      外挂 pdb 里, 且无法内嵌(实测 /Z7 与 strip=none 均仍依赖 pdb).
-    #   2. 整包小 ~17MB(msvc 的 +crt-static 会把整个静态 UCRT 链进去).
-    # +crt-static: 静态链 CRT, 用户机器无需装 "VC++ 可再发行包"
-    #              (实测已消掉 VCRUNTIME140 依赖, 只剩系统 DLL).
-    RUSTFLAGS="-C target-feature=+crt-static" \
-        cargo build --release --target "$triple" \
-            -p tablet-slint -p tablet-cli
+    echo ">>> [windows] ${cargo_cmd[*]} build --release --target=$triple -p tablet -p tablet-cli"
+    "${cargo_cmd[@]}" build --release --target "$triple" -p tablet -p tablet-cli
 
     cp "target/$triple/release/tablet.exe"     "$out/"
     cp "target/$triple/release/tablet-cli.exe" "$out/"
     echo ">>> [windows] OK -> $out"
-}
-
-build_windows_win7() {
-    local triple="x86_64-win7-windows-msvc"
-    local out="$DIST_DIR/windows-win7"
-    mkdir -p "$out"
-
-    # Tier 3 target 需要 nightly + build-std (std 不预编译)
-    echo ">>> [windows-win7] 需要 nightly + rust-src + build-std"
-
-    if ! rustup toolchain list | grep -q '^nightly'; then
-        echo ">>> 安装 nightly toolchain"
-        rustup toolchain install nightly --component rust-src
-    else
-        rustup component add rust-src --toolchain nightly >/dev/null
-    fi
-
-    echo ">>> [windows-win7] cargo +nightly build --release --target=$triple"
-    # 为什么 win7 保持 msvc 而不跟主 windows 包一起切 gnu:
-    #   gnu 的 +crt-static 并不会静态链掉 UCRT —— 实测 exe 仍导入 8 个 api-ms-win-crt-*,
-    #   而 UCRT 不是 Win7 自带组件(需装 KB2999226)。msvc 的 +crt-static 则是真全静态
-    #   (实测 0 个 CRT 外部依赖)。这个包存在的唯一理由就是在老 Win7 上一定能跑, 不值得
-    #   为"崩溃堆栈带函数名"去赌目标机器装没装那个更新。要调用链就随包发 pdb(见 @04).
-    # 这里曾经用 -C panic=immediate-abort 省体积, 已弃用: 该策略按设计**既不调用
-    # panic hook、也不格式化 panic 消息**(rust-lang/rust#147286), 会让 win7 崩溃时
-    # 完全无声、tablet-crash.log 也拿不到记录。改回 panic=abort(实测 abort 仍走 hook、
-    # 仍打印消息), 代价是二进制变大。仍然 -Z build-std 重编 core/std (Tier 3 无预编译 std),
-    # panic_abort 版 std 比 unwinding 版小, 配合 abort 仍是对的.
-    RUSTFLAGS="-C target-feature=+crt-static -C panic=abort" \
-        cargo +nightly build --release \
-            -Z build-std=std,panic_abort \
-            --target "$triple" \
-            -p tablet-slint -p tablet-cli
-
-    cp "target/$triple/release/tablet.exe"     "$out/"
-    cp "target/$triple/release/tablet-cli.exe" "$out/"
-    echo ">>> [windows-win7] OK -> $out"
-    echo "    警告: Tier 3 target 无 CI 保证, 升级 nightly 可能突然炸; 发布前需 Win7 SP1 真机回归"
+    echo "    要求目标机器有 WebView2 运行时（Win11 自带；Win10 一般随 Edge 安装）"
 }
 
 build_linux() {
     local triple="x86_64-unknown-linux-gnu"
     local out="$DIST_DIR/linux"
+    rm -rf "$out"
     mkdir -p "$out"
 
-    echo ">>> [linux] cargo build --release --target=$triple"
-    cargo build --release --target "$triple" -p tablet-slint -p tablet-cli
+    build_frontend
+
+    echo ">>> [linux] cargo build --release --target=$triple -p tablet -p tablet-cli"
+    cargo build --release --target "$triple" -p tablet -p tablet-cli
 
     cp "target/$triple/release/tablet"     "$out/"
     cp "target/$triple/release/tablet-cli" "$out/"
@@ -140,7 +112,7 @@ build_linux() {
 
     cp "$out/tablet"     "$pkg_dir/usr/bin/"
     cp "$out/tablet-cli" "$pkg_dir/usr/bin/"
-    strip "$pkg_dir/usr/bin/tablet" "$pkg_dir/usr/bin/tablet-cli" 2>/dev/null || true
+    # 不 strip：release profile 的符号表用于崩溃日志，且 --strip-debug 之外的 strip 会连符号一起删。
     cp "$WS_DIR/res/icon-256.png" "$pkg_dir/usr/share/icons/hicolor/256x256/apps/tablet.png"
     cp "$WS_DIR/packaging/linux/tablet.desktop" "$pkg_dir/usr/share/applications/"
 
@@ -152,13 +124,14 @@ Version: $version
 Architecture: $arch
 Maintainer: juebanlin <juebanlin@gmail.com>
 Installed-Size: $installed_size
-Depends: libgl1, libx11-6, libxcursor1, libxrandr2, libxi6
+Depends: libwebkit2gtk-4.1-0, libgtk-3-0, libsoup-3.0-0, libjavascriptcoregtk-4.1-0, libglib2.0-0
+Recommends: fonts-noto-cjk
 Section: devel
 Priority: optional
 Homepage: https://github.com/juebanlin/tablet
 Description: TBL 配置管理工具
- 游戏/应用配置表编辑工具，支持多 Project 管理、
- 12 种语言平台导出、Excel 桥接、可视化编辑。
+ 游戏/应用配置表编辑工具，支持多 Project 管理、Univer 可视化编辑、
+ Excel 导入/导出、12 种语言平台导出。
 CTRL
 
     dpkg-deb --build "$pkg_dir" 2>/dev/null && \
@@ -168,15 +141,16 @@ CTRL
     rm -rf "$pkg_dir"
 
     echo ">>> [linux] OK -> $out"
-    echo "    用户机器可能需要: apt install libgl1 libfontconfig1 fonts-noto-cjk"
+    echo "    用户机器需要 WebKitGTK 4.1 / GTK3；建议: apt install libwebkit2gtk-4.1-0 fonts-noto-cjk"
 }
 
 build_linux_cli_musl() {
     local triple="x86_64-unknown-linux-musl"
     local out="$DIST_DIR/linux-cli-musl"
+    rm -rf "$out"
     mkdir -p "$out"
 
-    # 仅 tablet-cli: tablet-slint 依赖 X11/Wayland/fontconfig 等动态库, musl 静态链路死路一条.
+    # 仅 tablet-cli: Tauri GUI 依赖 WebKitGTK/GTK 动态库, musl 静态链路不可行.
     # CLI 全静态 → 任意 x86_64 Linux (老 glibc / 容器 scratch / Alpine) 直接跑.
     echo ">>> [linux-cli-musl] 安装 musl target"
     rustup target add "$triple" >/dev/null
@@ -191,18 +165,21 @@ build_linux_cli_musl() {
 
 build_macos() {
     local out="$DIST_DIR/macos"
+    rm -rf "$out"
     mkdir -p "$out"
+
+    build_frontend
 
     rustup target add x86_64-apple-darwin aarch64-apple-darwin >/dev/null
 
-    # 最低部署目标 10.13 (High Sierra, 2017): 覆盖 ~99% 仍在用的 mac.
-    export MACOSX_DEPLOYMENT_TARGET=10.13
+    # Tauri 2 的实际下限是 10.15；这里与 packaging/macos/Info.plist 对齐到 11.0。
+    export MACOSX_DEPLOYMENT_TARGET=11.0
 
-    echo ">>> [macos] build x86_64-apple-darwin (min 10.13)"
-    cargo build --release --target x86_64-apple-darwin -p tablet-slint -p tablet-cli
+    echo ">>> [macos] build x86_64-apple-darwin (min 11.0)"
+    cargo build --release --target x86_64-apple-darwin -p tablet -p tablet-cli
 
-    echo ">>> [macos] build aarch64-apple-darwin (min 10.13)"
-    cargo build --release --target aarch64-apple-darwin -p tablet-slint -p tablet-cli
+    echo ">>> [macos] build aarch64-apple-darwin (min 11.0)"
+    cargo build --release --target aarch64-apple-darwin -p tablet -p tablet-cli
 
     echo ">>> [macos] lipo -> universal binary"
     for bin in tablet tablet-cli; do
@@ -243,7 +220,7 @@ build_macos() {
     # 清理 .app 目录（zip 和 dmg 已包含）
     rm -rf "$app_dir"
 
-    echo ">>> [macos] OK -> $out (universal, intel + arm64, min 10.13)"
+    echo ">>> [macos] OK -> $out (universal, intel + arm64, min 11.0)"
     echo "    正式发布需 Apple Developer ID 签名 + 公证, 否则 Gatekeeper 拦截"
 }
 
@@ -253,7 +230,7 @@ build_macos() {
 
 target="${1:-}"
 if [[ -z "$target" ]]; then
-    echo "usage: $0 <windows|windows-win7|linux|linux-cli-musl|macos|host>" >&2
+    echo "usage: $0 <windows|linux|linux-cli-musl|macos|host>" >&2
     exit 2
 fi
 
@@ -268,8 +245,7 @@ fi
 
 case "$target" in
     windows)        build_windows ;;
-    windows-win7)   build_windows_win7 ;;
-    windows-host)   build_windows; build_windows_win7 ;;
+    windows-host)   build_windows ;;
     linux)          build_linux ;;
     linux-cli-musl) build_linux_cli_musl ;;
     linux-host)     build_linux; build_linux_cli_musl ;;

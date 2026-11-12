@@ -8,7 +8,7 @@
 //! - [`cli`]：仅 CLI 二进制用：clap 派生类型、stdout 打印、exit code 翻译。
 //!   GUI 不该引用本模块。
 //!
-//! 顶层 re-export `run_with_args`，方便 `tablet-slint.exe` 在 CLI 模式下一句调过去。
+//! 顶层 re-export `run_with_args`，方便 `tablet.exe` 在 CLI 模式下一句调过去。
 //!
 //! 模块路径就是契约：`tablet_cli::actions::*` = 可复用，`tablet_cli::cli::*` 或带 `_cli`
 //! 后缀的函数 = CLI 专用。

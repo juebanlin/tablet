@@ -1,4 +1,4 @@
-// 新建项目（Slint 布局：空 / 文件 / 模板 + 段选择）与项目设置自验。
+// 新建项目（旧版 布局：空 / 文件 / 模板 + 段选择）与项目设置自验。
 const PORT = process.env.CDP_PORT || 9222;
 
 const targets = await (await fetch(`http://127.0.0.1:${PORT}/json/list`)).json();

@@ -1,6 +1,6 @@
 // Tauri 版开发/调试工具：通过 WebView2 的 CDP 端口操作真实页面。
 //
-// 前提：WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port=9222 启动 tablet-tauri。
+// 前提：WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port=9222 启动 tablet。
 //
 // 用法：
 //   node crates/app-tauri/scripts/dev.mjs shot [文件名]

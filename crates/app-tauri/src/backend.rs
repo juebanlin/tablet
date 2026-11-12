@@ -32,9 +32,9 @@ use tablet_core::schema_projection::apply_schema_to_project;
 use tablet_core::tblschema::parse_tblschema;
 use tablet_core::template::{BuiltinTemplates, LocalTemplates, TemplateSource};
 use tablet_core::types::{Paradigm, SepKey, SeparatorsSection, TblType, TypeParam};
-use tablet_core::excel::{apply_group_patch, export_group_book, import_xlsx_into_group};
+use tablet_core::excel::{apply_group_patch, import_xlsx_into_group};
 
-/// 与 Slint 版一致：表格尾部留 5 行占位，方便直接输入新记录。
+/// 与旧版行为一致：表格尾部留 5 行占位，方便直接输入新记录。
 const EXTRA_ROWS: usize = 5;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -63,33 +63,17 @@ pub struct Backend {
     /// 本机视图偏好（列宽等），独立于项目数据；不参与 dirty / 保存闸门。
     pub user_data: tablet_core::local_state::UserData,
     pub user_data_path: PathBuf,
-    /// 启动时打不开的 Project（首次快照后弹一次提示，与 Slint 版一致）。
+    /// 启动时打不开的 Project（首次快照后弹一次提示，与旧版行为一致）。
     pub load_alerts: Vec<String>,
     /// 上一次「主动验证」写进 UI 日志的 (级别, 文本)；再次验证前先按它清掉旧块，
     /// 避免连点「重新验证」时日志里堆出多份相同明细。日志文件仍按追加语义保留历史。
     pub last_validation_logs: Vec<(LogEntryLevel, String)>,
-    /// Excel 编辑会话：导出到临时工作簿 → 用 Excel 打开 → 轮询 mtime 自动回写。
-    pub excel_sessions: Vec<ExcelSession>,
     /// Univer 窗口 label → (project, group)。一个窗口只装一个组，可同时开多个窗口。
     pub univer_windows: HashMap<String, (String, String)>,
     /// 每个已加载 Univer 标签的 Group 指纹：回写时检测主界面是否改过同一组。
     pub univer_fingerprints: HashMap<(String, String), u64>,
     /// 正在 Univer 窗口中打开的组：主界面这些组只读，避免两边同时改。
     pub univer_open_groups: HashSet<(String, String)>,
-}
-
-pub struct ExcelSession {
-    pub project: String,
-    pub group: String,
-    pub path: PathBuf,
-    pub mtime: Option<std::time::SystemTime>,
-}
-
-#[derive(Serialize)]
-pub struct ExcelPollItem {
-    pub project: String,
-    pub group: String,
-    pub path: String,
 }
 
 /// Univer 窗口的「打开某组」请求。
@@ -188,7 +172,6 @@ pub struct Status {
     pub auto_commit_on_blur: bool,
     /// 项目树显示元数据 ID（全局设置；树面板勾选框与设置页共用）。
     pub show_meta_id: bool,
-    pub excel_editing: Vec<String>,
     /// 项目排序方式（tablet.toml，跨启动保留）。
     pub project_sort: String,
     /// 正在 Univer 窗口中打开、主界面因此只读的组（当前项目）。
@@ -428,28 +411,6 @@ pub struct PasteGroupPreviewUi {
     pub group_conflict: bool,
     pub has_conflict: bool,
     pub nodes: Vec<PasteGroupRowUi>,
-}
-
-// ── Excel 同步面板（core excel_sync 计划）──────────────────
-#[derive(Serialize)]
-pub struct ExcelSyncOpUi {
-    pub code: u32,
-    pub label: String,
-}
-
-#[derive(Serialize)]
-pub struct ExcelSyncRowUi {
-    pub group: String,
-    pub node: String,
-    /// "n行 m列"；None = 这一侧没有
-    pub left: Option<String>,
-    pub right: Option<String>,
-    pub ops: Vec<ExcelSyncOpUi>,
-    pub blocked: Option<String>,
-    pub desc_diff: bool,
-    pub header_edited: bool,
-    /// Excel 区域外还有内容（不参与同步，但值得提示）
-    pub outside: bool,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -804,9 +765,6 @@ fn parse_group_storage(storage: Option<String>) -> Option<GroupStorage> {
     })
 }
 
-fn sync_summary(s: &tablet_core::excel_sync::SheetSummary) -> String {    format!("{}行 {}列", s.rows, s.cols)
-}
-
 /// 单格式导出结果 → 对话框文本（GUI 直接调 core，不经过 CLI action 层）。
 fn push_export(
     lines: &mut Vec<String>,
@@ -821,31 +779,6 @@ fn push_export(
             lines.push(format!("{name}: 失败 - {e}"));
         }
     }
-}
-
-fn sync_op_code(op: &tablet_core::excel_sync::SyncOp) -> u32 {
-    use tablet_core::excel_sync::{PushScope, SyncOp};
-    match op {
-        SyncOp::Push { scope: PushScope::MatchedOnly } => 1,
-        SyncOp::Pull => 2,
-        SyncOp::Push { scope: PushScope::WithTabletColumns } => 3,
-        SyncOp::Push { scope: PushScope::WholeTable } => 5,
-        SyncOp::CreateFile => 7,
-        SyncOp::ImportSheet => 8,
-    }
-}
-
-fn sync_op_from_code(code: u32) -> Option<tablet_core::excel_sync::SyncOp> {
-    use tablet_core::excel_sync::{PushScope, SyncOp};
-    Some(match code {
-        1 => SyncOp::Push { scope: PushScope::MatchedOnly },
-        2 => SyncOp::Pull,
-        3 => SyncOp::Push { scope: PushScope::WithTabletColumns },
-        5 => SyncOp::Push { scope: PushScope::WholeTable },
-        7 => SyncOp::CreateFile,
-        8 => SyncOp::ImportSheet,
-        _ => return None,
-    })
 }
 
 impl Backend {
@@ -874,8 +807,8 @@ impl Backend {
         for warning in &load_warnings {
             engine.warn_log(warning.clone());
         }
-        // 上次 Excel 快速编辑的临时副本在这里清（正常结束会话时已删，这里兜底崩溃/强杀）。
-        cleanup_excel_cache(&mut engine);
+        // 上次 Univer 回写的临时副本在这里清（正常回写结束时已删，这里兜底崩溃/强杀）。
+        cleanup_univer_cache(&mut engine);
         engine.revalidate_all_projects();
         let user_data_path = tablet_core::local_state::user_data_path(workdir);
         let user_data = tablet_core::local_state::UserData::load(&user_data_path);
@@ -894,7 +827,6 @@ impl Backend {
             user_data_path,
             load_alerts,
             last_validation_logs: Vec::new(),
-            excel_sessions: Vec::new(),
             univer_windows: HashMap::new(),
             univer_fingerprints: HashMap::new(),
             univer_open_groups: HashSet::new(),
@@ -1158,7 +1090,7 @@ impl Backend {
             active_project: self.engine.active_project_id().map(str::to_string),
             active_project_name: active.map(|p| p.schema.meta.name.clone()),
             selected_label,
-            // 保存只作用于 active project，脏标记也必须只反映它（与 Slint 一致）。
+            // 保存只作用于 active project，脏标记也必须只反映它（与旧版行为一致）。
             dirty: self.engine.active().is_some_and(|p| p.is_dirty()),
             can_undo: self.engine.can_undo(),
             can_redo: self.engine.can_redo(),
@@ -1183,12 +1115,6 @@ impl Backend {
                 .project_sort
                 .as_str()
                 .to_string(),
-            excel_editing: self
-                .excel_sessions
-                .iter()
-                .filter(|s| Some(s.project.as_str()) == self.engine.active_project_id())
-                .map(|s| s.group.clone())
-                .collect(),
             univer_editing: self
                 .univer_open_groups
                 .iter()
@@ -2136,15 +2062,6 @@ impl Backend {
     }
 
     // ── Excel 导出 / 导入（GUI 直接走 core，不依赖 CLI action 层）────
-    fn group_book_bytes(&self, project: &str, group: &str) -> Result<Vec<u8>, String> {
-        let g = self
-            .engine
-            .find_project(project)
-            .and_then(|p| p.groups.iter().find(|g| g.name == group))
-            .ok_or_else(|| format!("找不到分组: {project}::{group}"))?;
-        export_group_book(g, None).map_err(|e| e.to_string())
-    }
-
     /// 把 xlsx 解析成 GroupPatch 并只应用到内存；返回修补的节点数。
     fn apply_workbook_in_memory(
         &mut self,
@@ -2175,18 +2092,6 @@ impl Backend {
         }
         self.engine.revalidate_all_projects();
         Ok(nodes)
-    }
-
-    pub fn excel_export(&self, group: &str, path: String) -> Result<String, String> {
-        let project = self.engine.active().ok_or("没有活跃的 Project")?;
-        let pid = project.schema.meta.id.clone();
-        let out = resolve_in_project(&project.project_root, &path);
-        let bytes = self.group_book_bytes(&pid, group)?;
-        if let Some(parent) = out.parent() {
-            std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-        }
-        std::fs::write(&out, &bytes).map_err(|e| e.to_string())?;
-        Ok(format!("已导出 {}（{} 字节）", out.display(), bytes.len()))
     }
 
     /// 导出对话框：选中多个组 / 节点，生成一本 xlsx。
@@ -2303,159 +2208,10 @@ impl Backend {
                     spec.group_name
                 ));
             }
-            if self.excel_sessions.iter().any(|s| {
-                s.project == pid && s.group.eq_ignore_ascii_case(&spec.group_name)
-            }) {
-                return Err(format!(
-                    "分组「{}」正在 Excel 中编辑，主界面暂时只读",
-                    spec.group_name
-                ));
-            }
         }
 
         let n = self.engine.import_excel_nodes(&pid, &file, &specs)?;
         Ok(format!("已导入 {n} 个 sheet；保存后落盘"))
-    }
-
-    pub fn excel_import(&mut self, group: &str, path: String) -> Result<String, String> {
-        let project = self.engine.active().ok_or("没有活跃的 Project")?;
-        let project_id = project.schema.meta.id.clone();
-        if self
-            .univer_open_groups
-            .contains(&(project_id.clone(), group.to_string()))
-        {
-            return Err(format!(
-                "分组「{group}」正在 Univer 窗口中编辑，主界面暂时只读"
-            ));
-        }
-        let file = resolve_in_project(&project.project_root, &path);
-        let nodes = self.apply_workbook_in_memory(&project_id, group, &file, "Excel 回写")?;
-        Ok(format!(
-            "已导入内存：{group}（{nodes} 个节点），保存后落盘"
-        ))
-    }
-
-    /// `.excel/` 下的工作簿列表（GUI 导出 Excel 的默认落点）。
-    pub fn excel_files(&self) -> Vec<String> {
-        let Some(project) = self.engine.active() else { return Vec::new() };
-        let dir = project.project_root.join(".excel");
-        let Ok(entries) = std::fs::read_dir(&dir) else { return Vec::new() };
-        let mut out: Vec<String> = entries
-            .flatten()
-            .filter_map(|e| {
-                let p = e.path();
-                if p.extension().map_or(false, |x| x.eq_ignore_ascii_case("xlsx")) {
-                    Some(p.file_name()?.to_string_lossy().to_string())
-                } else {
-                    None
-                }
-            })
-            .collect();
-        out.sort();
-        out
-    }
-
-    pub fn excel_dir(&self) -> Option<std::path::PathBuf> {
-        let project = self.engine.active()?;
-        Some(project.project_root.join(".excel"))
-    }
-
-    /// 删除 `.excel/<file>`（文件浏览器「删除」）。
-    pub fn excel_delete(&self, file: &str) -> Result<(), String> {
-        let project = self.engine.active().ok_or("没有活跃的 Project")?;
-        let name = std::path::Path::new(file)
-            .file_name()
-            .and_then(|s| s.to_str())
-            .ok_or("非法文件名")?;
-        let path = project.project_root.join(".excel").join(name);
-        std::fs::remove_file(&path)
-            .map_err(|e| format!("删除 {} 失败: {e}", path.display()))
-    }
-
-    /// Excel 同步面板：按 core `plan_group` 算出每一行（组/节点 + 两侧尺寸 + 可用操作）。
-    pub fn excel_sync_plan(&self) -> Vec<ExcelSyncRowUi> {
-        use tablet_core::excel_sync;
-        let Some(project) = self.engine.active() else { return Vec::new() };
-        let excel_dir = project.project_root.join(".excel");
-        let mut books: std::collections::HashMap<String, std::path::PathBuf> =
-            std::collections::HashMap::new();
-        if let Ok(entries) = std::fs::read_dir(&excel_dir) {
-            for entry in entries.flatten() {
-                let p = entry.path();
-                if p.extension().map_or(false, |e| e.eq_ignore_ascii_case("xlsx")) {
-                    if let Some(stem) = p.file_stem().and_then(|s| s.to_str()) {
-                        books.insert(stem.to_string(), p);
-                    }
-                }
-            }
-        }
-        let mut rows = Vec::new();
-        for group in &project.groups {
-            // xlsx 组本身就是工作簿，没有「两份拷贝要同步」这回事。
-            if group.is_xlsx() {
-                continue;
-            }
-            let sheets = books
-                .get(&group.name)
-                .and_then(|p| excel_sync::read_xlsx_sheets(p, Some(group)).ok());
-            let plan = excel_sync::plan_group(group, sheets.as_deref());
-            let outside: Vec<String> = sheets
-                .as_deref()
-                .unwrap_or(&[])
-                .iter()
-                .filter(|s| s.has_content_outside_region())
-                .map(|s| s.name.clone())
-                .collect();
-            for pair in plan.pairs {
-                rows.push(ExcelSyncRowUi {
-                    group: group.name.clone(),
-                    node: pair.node.clone(),
-                    left: pair.left.as_ref().map(sync_summary),
-                    right: pair.right.as_ref().map(sync_summary),
-                    ops: pair
-                        .ops
-                        .iter()
-                        .map(|op| ExcelSyncOpUi {
-                            code: sync_op_code(op),
-                            label: op.label().to_string(),
-                        })
-                        .collect(),
-                    blocked: pair.blocked_reason.clone(),
-                    desc_diff: pair.desc_diff,
-                    header_edited: pair.header_edited,
-                    outside: outside.iter().any(|n| *n == pair.node),
-                });
-            }
-        }
-        rows
-    }
-
-    /// 执行一次同步操作。core 会重算计划校验「操作是否仍然合法」，过期直接拒绝。
-    pub fn excel_sync_action(&mut self, group: &str, node: &str, code: u32) -> Result<(), String> {
-        let op = sync_op_from_code(code).ok_or("未知同步操作")?;
-        let pid = self.engine.active_project_id().ok_or("无活动项目")?.to_string();
-        let excel_dir = self
-            .engine
-            .find_project(&pid)
-            .ok_or("找不到项目")?
-            .project_root
-            .join(".excel");
-        std::fs::create_dir_all(&excel_dir).map_err(|e| e.to_string())?;
-        let path = excel_dir.join(format!("{group}.xlsx"));
-        let msg = {
-            let project = self.engine.find_project_mut(&pid).ok_or("找不到项目")?;
-            let g = project
-                .groups
-                .iter_mut()
-                .find(|g| g.name == group)
-                .ok_or("找不到组")?;
-            tablet_core::excel_sync::execute(&path, g, node, &op).map_err(|e| e.to_string())?
-        };
-        // 同步同时改了内存与工作簿，属于外部基线变化：旧撤销栈不再成立。
-        self.engine.clear_history(&pid);
-        self.engine.revalidate(group, node);
-        self.engine.ui_log(format!("[同步] {msg}"));
-        Ok(())
     }
 
     pub fn excel_preview(
@@ -2723,127 +2479,6 @@ impl Backend {
         ))
     }
 
-    /// 开始 Excel 编辑：导出临时工作簿 → 用 Excel 打开 → 记录 mtime 供轮询。
-    ///
-    /// 每次拉起都是**独立副本**（与 Slint 版一致）：文件落在
-    /// `<project>/.tbl-cache/<group>-<millis>.xlsx`。Excel 会一直持有上次副本的锁，
-    /// 若复用同名路径，第二次导出在 Windows 上会直接 `os error 32`（表现为“拉不起 Excel”）。
-    /// `.tbl-cache` 而不是 `.excel`：后者是用户导出的工作簿与同步面板的落点，
-    /// 临时副本不应该出现在文件列表里、也不该被同步计划当成「那一份」。
-    pub fn excel_begin_edit(
-        &mut self,
-        project: &str,
-        group: &str,
-        open: bool,
-    ) -> Result<String, String> {
-        let root = self
-            .engine
-            .find_project(project)
-            .map(|p| p.project_root.clone())
-            .ok_or_else(|| format!("项目不存在: {project}"))?;
-        let out = unique_excel_cache(&root, group);
-        let bytes = self.group_book_bytes(project, group)?;
-        if let Some(parent) = out.parent() {
-            std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-        }
-        std::fs::write(&out, &bytes).map_err(|e| e.to_string())?;
-        let mtime = std::fs::metadata(&out).and_then(|m| m.modified()).ok();
-
-        if open {
-            if let Err(e) = launch(&shell_path(&out)) {
-                let _ = std::fs::remove_file(&out);
-                return Err(e);
-            }
-        }
-
-        // 同组上一份副本可能还被 Excel 开着：能删就删，删不掉留给启动清理。
-        let stale: Vec<PathBuf> = self
-            .excel_sessions
-            .iter()
-            .filter(|s| s.project == project && s.group == group)
-            .map(|s| s.path.clone())
-            .collect();
-        for p in stale {
-            let _ = std::fs::remove_file(p);
-        }
-        self.excel_sessions
-            .retain(|s| !(s.project == project && s.group == group));
-        self.excel_sessions.push(ExcelSession {
-            project: project.to_string(),
-            group: group.to_string(),
-            path: out.clone(),
-            mtime,
-        });
-        Ok(out.display().to_string())
-    }
-
-    /// 轮询哪些会话的工作簿被 Excel 改过（mtime 变化）。
-    pub fn excel_poll(&self) -> Vec<ExcelPollItem> {
-        let mut out = Vec::new();
-        for s in &self.excel_sessions {
-            let now = std::fs::metadata(&s.path).and_then(|m| m.modified()).ok();
-            if now != s.mtime {
-                out.push(ExcelPollItem {
-                    project: s.project.clone(),
-                    group: s.group.clone(),
-                    path: s.path.display().to_string(),
-                });
-            }
-        }
-        out
-    }
-
-    /// 把 Excel 的改动导入回来，并更新 mtime（失败则保持旧 mtime，下一轮重试）。
-    pub fn excel_sync(&mut self, project: &str, group: &str) -> Result<String, String> {
-        if self
-            .univer_open_groups
-            .contains(&(project.to_string(), group.to_string()))
-        {
-            return Err(format!(
-                "分组「{group}」正在 Univer 窗口中编辑，暂不回写 Excel"
-            ));
-        }
-        let Some(idx) = self
-            .excel_sessions
-            .iter()
-            .position(|s| s.project == project && s.group == group)
-        else {
-            return Err("没有该 Group 的 Excel 会话".to_string());
-        };
-        let path = self.excel_sessions[idx].path.clone();
-        let nodes = self.apply_workbook_in_memory(project, group, &path, "Excel 回写")?;
-        self.excel_sessions[idx].mtime =
-            std::fs::metadata(&path).and_then(|m| m.modified()).ok();
-        Ok(format!(
-            "Excel 已回写内存：{group}（{nodes} 个节点），保存后落盘"
-        ))
-    }
-
-    /// 结束 Excel 会话：有改动则先回写内存；回写失败时**保留会话**，让用户可重试。
-    pub fn excel_end_edit(&mut self, project: &str, group: &str) -> Result<(), String> {
-        let changed = self.excel_sessions.iter().any(|s| {
-            s.project == project
-                && s.group == group
-                && std::fs::metadata(&s.path).and_then(|m| m.modified()).ok() != s.mtime
-        });
-        if changed {
-            self.excel_sync(project, group)?;
-        }
-        let ended: Vec<PathBuf> = self
-            .excel_sessions
-            .iter()
-            .filter(|s| s.project == project && s.group == group)
-            .map(|s| s.path.clone())
-            .collect();
-        self.excel_sessions
-            .retain(|s| !(s.project == project && s.group == group));
-        // 结束会话即丢弃临时副本；Excel 若还开着会删失败，留给下次启动清理。
-        for p in ended {
-            let _ = std::fs::remove_file(p);
-        }
-        Ok(())
-    }
-
     // ── Univer 编辑窗口 ─────────────────────────────────────
     /// 窗口 label：同一个组固定同一个 label，重复点按钮只会聚焦已有窗口。
     pub fn univer_window_label(project: &str, group: &str) -> String {
@@ -2867,15 +2502,6 @@ impl Backend {
             .is_some_and(|p| p.groups.iter().any(|g| g.name == group));
         if !exists {
             return Err(format!("找不到分组: {project}::{group}"));
-        }
-        if self
-            .excel_sessions
-            .iter()
-            .any(|s| s.project == project && s.group == group)
-        {
-            return Err(format!(
-                "分组「{group}」正在 Excel 编辑中，先结束 Excel 编辑再打开 Univer"
-            ));
         }
         self.univer_windows.insert(
             label.to_string(),
@@ -3010,20 +2636,16 @@ impl Backend {
             .remove(&(project.to_string(), group.to_string()));
     }
 
-    // ── xlsx 组外部修改轮询（与 Slint 版一致）──────────────
+    // ── xlsx 组外部修改轮询 ────────────────────────────────
     pub fn xlsx_poll(&self) -> Vec<XlsxExternalChangeUi> {
         self.engine
             .xlsx_external_changes()
             .into_iter()
             .filter(|c| {
-                // Univer/Excel 正在编辑的组不自动重载，避免覆盖外部编辑器里的内容。
+                // Univer 正在编辑的组不自动重载，避免覆盖编辑中的内容。
                 !self
                     .univer_open_groups
                     .contains(&(c.project_id.clone(), c.group.clone()))
-                    && !self
-                        .excel_sessions
-                        .iter()
-                        .any(|s| s.project == c.project_id && s.group == c.group)
             })
             .map(|c| XlsxExternalChangeUi {
                 project: c.project_id,
@@ -3049,18 +2671,14 @@ impl Backend {
         let group = sel.group.clone();
         let locked = self
             .univer_open_groups
-            .contains(&(project.clone(), group.clone()))
-            || self
-                .excel_sessions
-                .iter()
-                .any(|s| s.project == project && s.group == group);
+            .contains(&(project.clone(), group.clone()));
         locked.then_some((project, group))
     }
 
     pub fn ensure_unlocked(&self) -> Result<(), String> {
         if let Some((_, group)) = self.locked_group() {
             Err(format!(
-                "分组「{group}」正在 Excel / Univer 中编辑，主界面暂时只读"
+                "分组「{group}」正在 Univer 中编辑，主界面暂时只读"
             ))
         } else {
             Ok(())
@@ -3074,14 +2692,6 @@ impl Backend {
         {
             Err(format!(
                 "分组「{group}」正在 Univer 窗口中编辑，主界面暂时只读"
-            ))
-        } else if self
-            .excel_sessions
-            .iter()
-            .any(|s| s.project == project && s.group == group)
-        {
-            Err(format!(
-                "分组「{group}」正在 Excel 编辑中，先结束 Excel 编辑再操作"
             ))
         } else {
             Ok(())
@@ -3123,72 +2733,6 @@ impl Backend {
         }
     }
 
-
-    /// 放弃 Excel 改动：结束会话但不把工作簿合并回内存（Slint 的「强制放弃」）。
-    pub fn excel_abandon(&mut self, project: &str, group: &str) {
-        let ended: Vec<PathBuf> = self
-            .excel_sessions
-            .iter()
-            .filter(|s| s.project == project && s.group == group)
-            .map(|s| s.path.clone())
-            .collect();
-        self.excel_sessions
-            .retain(|s| !(s.project == project && s.group == group));
-        for p in ended {
-            let _ = std::fs::remove_file(p);
-        }
-    }
-
-    /// xlsx 组「用 Excel 打开（原文件）」：先保存该项目，再打开工作簿本体。
-    pub fn open_xlsx_book(&mut self, project: &str, group: &str) -> Result<(), String> {
-        let is_xlsx = self
-            .engine
-            .find_project(project)
-            .and_then(|p| p.groups.iter().find(|g| g.name == group))
-            .is_some_and(|g| g.is_xlsx());
-        if !is_xlsx {
-            return Err(format!("分组「{group}」不是 xlsx 组"));
-        }
-        if !self.engine.save_project(project) {
-            return Err("保存失败，未打开工作簿（原因见日志）".to_string());
-        }
-        let path = self
-            .engine
-            .find_project(project)
-            .and_then(|p| p.groups.iter().find(|g| g.name == group))
-            .map(|g| g.book_path())
-            .ok_or_else(|| format!("找不到分组: {group}"))?;
-        if !path.is_file() {
-            return Err("工作簿不存在，先给这个组加一个节点".to_string());
-        }
-        launch(&shell_path(&path))
-    }
-
-    pub fn open_folder(&self, path: Option<String>) -> Result<(), String> {
-        let has_path = path.is_some();
-        let target = match path {
-            Some(p) => {
-                let root = self
-                    .engine
-                    .active()
-                    .map(|p| p.project_root.clone())
-                    .unwrap_or_else(|| self.workdir.clone());
-                resolve_in_project(&root, &p)
-            }
-            None => self.excel_dir().ok_or("没有活跃的 Project")?,
-        };
-        if target.is_file() {
-            return launch(&shell_path(&target));
-        }
-        if !target.exists() {
-            // 文件路径（带扩展名）不存在时不要 create_dir_all，否则会造出一个同名目录。
-            if has_path && target.extension().is_some() {
-                return Err(format!("文件不存在: {}", target.display()));
-            }
-            std::fs::create_dir_all(&target).map_err(|e| e.to_string())?;
-        }
-        launch(&shell_path(&target))
-    }
 
     pub fn open_url(&self, url: &str) -> Result<(), String> {
         launch(url)
@@ -3386,7 +2930,7 @@ impl Backend {
                 });
             }
         }
-        // 目标不存在：不报错，选择器里显示警告并禁用确定（与 Slint 版一致）。
+        // 目标不存在：不报错，选择器里显示警告并禁用确定（与旧版行为一致）。
         Ok(RefPickerData {
             target: target.to_string(),
             is_table: true,
@@ -3807,7 +3351,7 @@ impl Backend {
     }
 
     /// 新建项目统一收口：覆盖 id/name → 进内存（Pending）→ 设为 active。
-    /// 不立即落盘：与 Slint 版一致，用户点「保存」才写 `projects/<id>/`。
+    /// 不立即落盘：与旧版行为一致，用户点「保存」才写 `projects/<id>/`。
     fn apply_new_project(
         &mut self,
         mut schema: TblSchema,
@@ -3815,7 +3359,7 @@ impl Backend {
         name: String,
     ) -> Result<String, String> {
         schema.meta.id = id;
-        // 新建项目继承全局分隔符模板（与 Slint 版一致）。
+        // 新建项目继承全局分隔符模板（与旧版行为一致）。
         schema.separators = self.engine.global_config.separators.clone();
         if !name.trim().is_empty() {
             schema.meta.name = name;
@@ -4238,7 +3782,7 @@ impl Backend {
     }
 
     /// 当前选中节点在 (row, col) 上的校验原因（状态栏「红框是为什么」）。
-    /// 与 Slint 版一致：即时重算，不受「实时校验」开关影响。
+    /// 与旧版行为一致：即时重算，不受「实时校验」开关影响。
     pub fn cell_issue(&self, row: usize, col: usize) -> Option<CellIssue> {
         use tablet_core::model::SeverityAction;
         use tablet_core::validate::{
@@ -4842,68 +4386,32 @@ fn group_fingerprint(group: &tablet_core::model::Group) -> u64 {
     h.finish()
 }
 
-/// Excel 快速编辑的临时工作簿路径：`<project>/.tbl-cache/<group>-<millis>.xlsx`。
+/// 启动时清掉上次 Univer 回写留下的临时工作簿（`.tbl-cache/univer-*.xlsx`）。
 ///
-/// 每次拉起都换一个新文件名，避免与 Excel 正持锁的上一份副本撞车；
-/// 毫秒后缀碰撞时再追加序号（同一毫秒内连点两次）。
-fn unique_excel_cache(project_root: &Path, group: &str) -> PathBuf {
-    let dir = project_root.join(".tbl-cache");
-    let millis = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_millis() as u64)
-        .unwrap_or(0);
-    let mut path = dir.join(format!("{group}-{millis}.xlsx"));
-    let mut n = 1;
-    while path.exists() {
-        path = dir.join(format!("{group}-{millis}-{n}.xlsx"));
-        n += 1;
-    }
-    path
-}
-
-/// 启动时清掉上次 Excel 快速编辑留下的临时工作簿（`.tbl-cache/*.xlsx`）。
-///
-/// 删不掉的（Excel 还开着旧副本）静默跳过：新会话用新文件名，不受影响；
+/// 回写正常结束时会立即删除；这里兜底崩溃 / 强杀。占用中的文件静默跳过，
 /// 下次启动再清。
-fn cleanup_excel_cache(engine: &mut ProjectEngine) {
-    let (mut removed, mut locked) = (0usize, 0usize);
+fn cleanup_univer_cache(engine: &mut ProjectEngine) {
+    let mut removed = 0usize;
     for project in &engine.projects {
         let Ok(entries) = std::fs::read_dir(project.cache_dir()) else {
             continue;
         };
         for entry in entries.flatten() {
             let p = entry.path();
-            // `~$xxx.xlsx` 是 Excel 的锁文件，Excel 关掉后自己会消失，不算清理目标。
-            let is_lock_file = p
+            let is_univer_temp = p
                 .file_name()
                 .and_then(|n| n.to_str())
-                .is_some_and(|n| n.starts_with("~$"));
-            if !is_lock_file
+                .is_some_and(|n| n.starts_with("univer-"))
                 && p.extension()
-                    .is_some_and(|e| e.eq_ignore_ascii_case("xlsx"))
-            {
-                match std::fs::remove_file(&p) {
-                    Ok(_) => removed += 1,
-                    Err(_) => locked += 1,
-                }
+                    .is_some_and(|e| e.eq_ignore_ascii_case("xlsx"));
+            if is_univer_temp && std::fs::remove_file(&p).is_ok() {
+                removed += 1;
             }
         }
     }
     if removed > 0 {
-        engine.ui_log(format!("[Excel] 已清理 {removed} 个上次编辑残留的临时工作簿"));
+        engine.ui_log(format!("[Univer] 已清理 {removed} 个上次回写残留的临时工作簿"));
     }
-    if locked > 0 {
-        engine.ui_log(format!(
-            "[Excel] {locked} 个临时工作簿仍被占用（Excel 未关闭），留待下次启动清理"
-        ));
-    }
-}
-
-/// `cmd /C start` / `open` 对 `\\?\C:\...` 这种 verbatim 前缀不稳定，交给 shell 前
-/// 转成普通绝对路径（canonicalize 在 Windows 上会加上该前缀）。
-fn shell_path(path: &std::path::Path) -> String {
-    let s = path.to_string_lossy().to_string();
-    s.strip_prefix(r"\\?\").unwrap_or(&s).to_string()
 }
 
 fn launch(target: &str) -> Result<(), String> {
@@ -5057,7 +4565,7 @@ fn one_line(s: &str) -> String {
 
 /// 单个节点的状态标记：删除 / 新增 / 修改 / 错误，同一时刻只显示一个。
 fn marker(deleted: bool, new: bool, dirty: bool, error: bool) -> (String, String) {
-    // 与 Slint 一致：校验错误优先展示（`!`），不被 * / + / - 盖住。
+    // 与旧版行为一致：校验错误优先展示（`!`），不被 * / + / - 盖住。
     if error {
         ("!".into(), "#dc3232".into())
     } else if deleted {
@@ -5071,7 +4579,7 @@ fn marker(deleted: bool, new: bool, dirty: bool, error: bool) -> (String, String
     }
 }
 
-/// 给 vcs 探测留的薄封装：`VcsInfo` 的 title 形态与 Slint 版标题栏一致。
+/// 给 vcs 探测留的薄封装：`VcsInfo` 的 title 形态与 旧版标题栏一致。
 trait VcsTitle {
     fn title(&self) -> String;
 }

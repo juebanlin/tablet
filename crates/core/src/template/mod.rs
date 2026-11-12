@@ -109,7 +109,7 @@ pub fn instantiate_template(schema: &TblSchema, target_dir: &Path) -> Result<()>
         if g.is_xlsx() {
             std::fs::create_dir_all(&config_dir)
                 .with_context(|| format!("创建目录失败: {}", config_dir.display()))?;
-            crate::excel_sync::apply::write_fresh_group(&g.book_path(), g)?;
+            crate::excel::write_fresh_group(&g.book_path(), g)?;
             continue;
         }
         for t in &g.tables { planned.push((t.path.clone(), crate::tbl::serialize_table(t))); }

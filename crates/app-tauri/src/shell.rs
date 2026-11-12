@@ -3,7 +3,7 @@
 
 //! GUI 壳子共用的启动范式（@docs/17 §4）。
 //!
-//! 两套 GUI（Slint / Tauri）只应该提供「窗口 + 画界面」。启动分流、工作区锁、
+//! Tauri GUI 只应该提供「窗口 + 画界面」。启动分流、工作区锁、
 //! 日志初始化、崩溃日志安装、控制台释放这些与 UI 无关的事统一放在这里，
 //! 避免每个 `main.rs` 各养一份、慢慢分叉。
 
@@ -64,7 +64,7 @@ pub struct Shell {
 impl Shell {
     /// 取锁 → 初始化日志 → 安装崩溃日志 hook。
     ///
-    /// `app` 是崩溃日志里的程序名（`tablet` / `tablet-tauri`），两份日志混发时能区分。
+    /// `app` 是崩溃日志里的程序名（Tauri 单 GUI，固定为 `tablet`）。
     pub fn init(app: &'static str, workdir_arg: Option<PathBuf>) -> anyhow::Result<Self> {
         // 本地时区必须在早期单线程阶段取；之后多线程环境下 API 会返回 None。
         let time_offset = time::UtcOffset::current_local_offset().unwrap_or(time::UtcOffset::UTC);
@@ -155,9 +155,9 @@ fn init_logging(workdir: &Path, time_offset: time::UtcOffset) -> anyhow::Result<
     Ok(log_path)
 }
 
-/// 统一入口：两份 GUI 的 `main` 都只留一行 `dispatch("名字", run_gui)`。
+/// 统一入口：`main` 只留一行 `dispatch("tablet", run_gui)`。
 ///
-/// CLI 分支在 `tauri::Builder` / Slint 窗口之前就 `process::exit`，退出码原样透传
+/// CLI 分支在 `tauri::Builder` 之前就 `process::exit`，退出码原样透传
 /// （Jenkins 依赖）；GUI 分支先释放 Windows 控制台再起窗口。
 pub fn dispatch(app: &'static str, launch_gui: fn(Option<PathBuf>) -> anyhow::Result<()>) -> ! {
     let args: Vec<String> = std::env::args().collect();

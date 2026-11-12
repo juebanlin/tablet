@@ -3,7 +3,7 @@
 // 前提：
 //   1. 已构建 crates/app-tauri/ui/univer（cd crates/app-tauri/univer-editor && npm run build）
 //   2. 用带 hero/HeroBase、building/Building 的 fixture 建好工作区，并带 CDP 启动 app：
-//      WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port=9222 tablet-tauri.exe --gui --workdir=<dir>
+//      WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port=9222 tablet.exe --gui --workdir=<dir>
 //   3. 工作区里 HeroBase 第一条记录是 id=1001，Building 第一条是 id=1。
 import fs from "node:fs";
 import path from "node:path";

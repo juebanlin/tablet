@@ -185,7 +185,7 @@ HP / Hp / hp                         → hp
    - 后端命令 `excel_preview` / `excel_detect_layout` / `excel_check_mapping` / `excel_import_mapped`；
    - Project 根右键入口；
    - 预览 / 实时校验 / 表·常量·枚举导入接线。
-   - Slint 版对话框暂停维护。
+   - 3.0 起只有 Tauri 版；旧 Slint 对话框已随 app-slint 删除。
 4. **测试**
    - 单 header 行、id 不在第一列、大小写混乱、缺 id、字段名冲突；
    - 源文件字节不变；

@@ -32,7 +32,7 @@ pub const BUILD_TARGET: &str = env!("BUILD_TARGET");
 /// 构建时间（ISO8601 UTC）：同一版本号有多份构建时用来核对。
 pub const BUILD_TIME: &str = env!("BUILD_TIME");
 
-/// 崩溃日志安装器。两份 GUI 共用，只有 `app` 不同（区分 `tablet` / `tablet-tauri`）。
+/// 崩溃日志安装器。Tauri GUI 与 CLI 共用同一实现，`app` 用来标识程序名。
 pub struct CrashLog {
     app: &'static str,
     workdir: PathBuf,

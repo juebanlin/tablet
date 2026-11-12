@@ -22,11 +22,12 @@
 ## 本机工具链
 
 - 本机 Rust **默认宿主是 gnu**；编 msvc 目标要显式加 `+toolchain`（如 `cargo +stable-x86_64-pc-windows-msvc ...`）。
-  Windows 发布包按 docs/09 走 `windows-gnu`。
+  Windows GUI 是 Tauri，发布包必须走 `windows-msvc`（docs/09）；不再有 Win7 / gnu 包。
+- **Tauri 是唯一 GUI**（Slint 版已删除）；表格编辑只用内置 Univer，不要重新引入外部 Excel 编辑/同步。
 
 ## 版本号
 
-- `Cargo.toml` 的 `[workspace.package] version` 是**单一真理源**，三个 crate 用 `version.workspace = true` 继承。
+- `Cargo.toml` 的 `[workspace.package] version` 是**单一真理源**，三个 crate（`tablet-core` / `tablet-cli` / `tablet`）用 `version.workspace = true` 继承。
 - **发版打 tag 后立即 bump** 这里的版本号。
 
 ## 文档
@@ -54,6 +55,6 @@
 - 读到旧的或非法的内容 → **报错展示，带位置**（行号 / 列 / 字段名），由用户自己处理。
 - 已经把格式改成新版了就当旧文件不存在；不要为了"老项目能打开"而加回兼容路径。
 - 具体到 `export` 列：**只认短码** `cs` / `c` / `s` / `-`（留空 = `cs`）。中文
-  「前后端 / 客户端 / 服务器 / 不导出」**仅用于 UI 展示与 Excel 同步回读**，不是磁盘格式的一部分。
+  「前后端 / 客户端 / 服务器 / 不导出」**仅用于 UI 展示与 Excel 导入回读**，不是磁盘格式的一部分。
   实现上就是 `Export::parse_code`（严格，`.tbl` / `.tblschema` 解析用）与
   `Export::from_input`（宽松，人给的输入 / Excel 用）两个入口——**不要合并**。

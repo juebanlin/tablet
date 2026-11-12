@@ -21,19 +21,19 @@ pinyin = "0.10"
 regex = "1"
 
 # ── Excel（xlsx）：三个库各司其职，均为各自领域成熟选择，勿轻易合并/替换 ──
-# 只写：新建 xlsx。excel.rs 用它写带样式表头 / 冻结窗格 / 工作表保护的导出产物；
-# excel_sync::apply 用它写**纯数据文本**（无样式、无冻结、无保护）的同步文件。
+# 只写：excel.rs 用它写带样式表头 / 冻结窗格 / 工作表保护的导出产物，
+# 以及新项目 / 模板落地时的 write_fresh_group。
 rust_xlsxwriter = "0.99"
 # 只读：把策划改完的 xlsx 回读成强类型 Data，做严格表头/列数校验（excel.rs::import_xlsx_into_group）。
 calamine = "0.36"
-# 读 + 写 + 保格式：原地编辑既有 xlsx 不丢其已有样式（excel_sync 同步引擎，S22 同步面板）。
+# 读 + 写 + 保格式：xlsx 组的加载 / 保存、Excel 映射导入都走它；原地编辑既有 xlsx 不丢样式。
 # ⚠️ 下限 3.1：3.0.1 的读写往返会把**边框定义**清空（`<left style="thin">` → `<left/>`），
-#    连带让「只有边框」的格子连样式引用都掉光。见 apply.rs 的 umya_round_trip_keeps_all_cell_styles。
+#    连带让「只有边框」的格子连样式引用都掉光。
 umya-spreadsheet = "3.1"
 
 [dev-dependencies]
-# 只给测试用：直接读 xlsx 的 zip 条目，钉住「没被同步的 sheet 是原始字节直通」这条
-# 保真契约（lazy_read 的核心，见 excel_sync.rs 模块注释）。umya 自己用的就是它。
+# 只给测试用：直接读 xlsx 的 zip 条目，钉住「没改的 sheet 是原始字节直通」这条
+# 保真契约（lazy_read 的核心）。umya 自己用的就是它。
 zip = "8"
 
 [build-dependencies]

@@ -15,8 +15,8 @@ use tauri::{Emitter, Manager};
 
 use backend::{
     Backend, CreateProjectRequest, ExcelExportSelection, ExcelImportRequest, ExcelMapRequest,
-    ExcelPollItem, ExcelPreview, ExcelSheetInspect, ExportFormatsUi,
-    CellIssue, EditResult, ExcelSyncRowUi, ExportReport, ExportUi, GlobalSettingsUi, PasteGroupPreviewUi,
+    ExcelPreview, ExcelSheetInspect, ExportFormatsUi,
+    CellIssue, EditResult, ExportReport, ExportUi, GlobalSettingsUi, PasteGroupPreviewUi,
     PasteGroupRowUi,
     ProjectSettings, RefPickerData, RuleItem, RulesPayload,
     SchemaImportPreview, SchemaOutlineGroup, SchemaPreview, SepInput, Snapshot, TemplateItem,
@@ -578,26 +578,6 @@ fn schema_import(
 }
 
 #[tauri::command]
-fn excel_export(
-    state: tauri::State<'_, AppState>,
-    group: String,
-    path: String,
-) -> Result<String, String> {
-    lock(&state)?.excel_export(&group, path)
-}
-
-#[tauri::command]
-fn excel_import(
-    state: tauri::State<'_, AppState>,
-    group: String,
-    path: String,
-) -> Result<Snapshot, String> {
-    let mut b = lock(&state)?;
-    b.excel_import(&group, path)?;
-    Ok(b.snapshot())
-}
-
-#[tauri::command]
 fn excel_export_selected(
     state: tauri::State<'_, AppState>,
     path: String,
@@ -621,33 +601,6 @@ fn excel_import_multi(
 ) -> Result<Snapshot, String> {
     let mut b = lock(&state)?;
     b.excel_import_multi(request)?;
-    Ok(b.snapshot())
-}
-
-#[tauri::command]
-fn excel_files(state: tauri::State<'_, AppState>) -> Result<Vec<String>, String> {
-    Ok(lock(&state)?.excel_files())
-}
-
-#[tauri::command]
-fn excel_delete(state: tauri::State<'_, AppState>, file: String) -> Result<(), String> {
-    lock(&state)?.excel_delete(&file)
-}
-
-#[tauri::command]
-fn excel_sync_plan(state: tauri::State<'_, AppState>) -> Result<Vec<ExcelSyncRowUi>, String> {
-    Ok(lock(&state)?.excel_sync_plan())
-}
-
-#[tauri::command]
-fn excel_sync_action(
-    state: tauri::State<'_, AppState>,
-    group: String,
-    node: String,
-    code: u32,
-) -> Result<Snapshot, String> {
-    let mut b = lock(&state)?;
-    b.excel_sync_action(&group, &node, code)?;
     Ok(b.snapshot())
 }
 
@@ -708,11 +661,6 @@ fn excel_import_mapped(
     let mut b = lock(&state)?;
     b.excel_import_mapped(request)?;
     Ok(b.snapshot())
-}
-
-#[tauri::command]
-fn open_folder(state: tauri::State<'_, AppState>, path: Option<String>) -> Result<(), String> {
-    lock(&state)?.open_folder(path)
 }
 
 #[tauri::command]
@@ -816,65 +764,6 @@ fn pick_folder(title: String) -> Option<String> {
 #[tauri::command]
 fn set_title(window: tauri::Window, title: String) -> Result<(), String> {
     window.set_title(&title).map_err(|e| e.to_string())
-}
-
-#[tauri::command]
-fn excel_begin_edit(
-    state: tauri::State<'_, AppState>,
-    project: String,
-    group: String,
-    open: Option<bool>,
-) -> Result<String, String> {
-    let mut b = lock(&state)?;
-    b.ensure_group_unlocked(&project, &group)?;
-    b.excel_begin_edit(&project, &group, open.unwrap_or(true))
-}
-
-#[tauri::command]
-fn excel_poll(state: tauri::State<'_, AppState>) -> Result<Vec<ExcelPollItem>, String> {
-    Ok(lock(&state)?.excel_poll())
-}
-
-#[tauri::command]
-fn excel_sync_group(
-    state: tauri::State<'_, AppState>,
-    project: String,
-    group: String,
-) -> Result<Snapshot, String> {
-    let mut b = lock(&state)?;
-    b.excel_sync(&project, &group)?;
-    Ok(b.snapshot())
-}
-
-#[tauri::command]
-fn excel_end_edit(
-    state: tauri::State<'_, AppState>,
-    project: String,
-    group: String,
-) -> Result<Snapshot, String> {
-    let mut b = lock(&state)?;
-    b.excel_end_edit(&project, &group)?;
-    Ok(b.snapshot())
-}
-
-#[tauri::command]
-fn excel_abandon(
-    state: tauri::State<'_, AppState>,
-    project: String,
-    group: String,
-) -> Result<Snapshot, String> {
-    let mut b = lock(&state)?;
-    b.excel_abandon(&project, &group);
-    Ok(b.snapshot())
-}
-
-#[tauri::command]
-fn open_xlsx_book(
-    state: tauri::State<'_, AppState>,
-    project: String,
-    group: String,
-) -> Result<(), String> {
-    lock(&state)?.open_xlsx_book(&project, &group)
 }
 
 // ── Univer 编辑窗口 ─────────────────────────────────────────
@@ -1163,12 +1052,12 @@ fn paste_group_named(
 }
 
 fn main() {
-    shell::dispatch("tablet-tauri", run_gui);
+    shell::dispatch("tablet", run_gui);
 }
 
 fn run_gui(workdir_arg: Option<std::path::PathBuf>) -> anyhow::Result<()> {
     // 锁 / 日志 / 崩溃日志；shell 必须活到窗口结束（锁在 drop 时释放）。
-    let shell = shell::Shell::init("tablet-tauri", workdir_arg)?;
+    let shell = shell::Shell::init("tablet", workdir_arg)?;
     let backend = Backend::load(&shell.workdir)?;
 
     tauri::Builder::default()
@@ -1224,33 +1113,20 @@ fn run_gui(workdir_arg: Option<std::path::PathBuf>) -> anyhow::Result<()> {
             schema_outline,
             schema_import_preview,
             schema_import,
-            excel_export,
             excel_export_selected,
             excel_inspect_workbook,
             excel_import_multi,
-            excel_import,
-            excel_begin_edit,
-            excel_poll,
-            excel_sync_group,
-            excel_end_edit,
-            excel_abandon,
-            open_xlsx_book,
             open_univer_editor,
             univer_initial_context,
             univer_load_group,
             univer_apply_group,
             univer_close_group,
-            excel_files,
-            excel_delete,
-            excel_sync_plan,
-            excel_sync_action,
             excel_preview,
             excel_detect_layout,
             excel_semantic_rows,
             excel_sheet_info,
             excel_check_mapping,
             excel_import_mapped,
-            open_folder,
             open_url,
             ref_picker,
             cell_issue,

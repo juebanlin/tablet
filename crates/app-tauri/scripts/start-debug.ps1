@@ -8,7 +8,7 @@
 #   node crates/app-tauri/scripts/dev.mjs shot
 param(
   [string]$Workdir = ".",
-  [string]$Exe = "target\x86_64-pc-windows-msvc\debug\tablet-tauri.exe",
+  [string]$Exe = "target\x86_64-pc-windows-msvc\debug\tablet.exe",
   [int]$Port = 9222
 )
 

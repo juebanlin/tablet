@@ -932,7 +932,7 @@ fn table_from_sheet(
     ws: &umya_spreadsheet::Worksheet,
     book_path: &Path,
 ) -> Result<Table> {
-    use crate::excel_sync::vo::{DATA_START, HDR_DESC, HDR_EXPORT, HDR_NAME, HDR_TYPE};
+    use crate::excel::{DATA_START, HDR_DESC, HDR_EXPORT, HDR_NAME, HDR_TYPE};
     use crate::model::{FieldDef, Table, TableSchema};
 
     let (max_col, max_row) = ws.highest_column_and_row();
@@ -1192,7 +1192,7 @@ pub(crate) fn load_xlsx_group_all_sheets(
 /// - Table：4 行表头里存在**合法的 id 列**（字段名 id、类型可解析、export 可解析）。
 ///   其余列不合规也不要紧，`table_from_sheet` 会按普通列（aux）收进来，不丢数据。
 fn detect_new_sheet_mode(ws: &umya_spreadsheet::Worksheet) -> Option<crate::schema_model::SchemaMode> {
-    use crate::excel_sync::vo::{HDR_EXPORT, HDR_NAME, HDR_TYPE};
+    use crate::excel::{HDR_EXPORT, HDR_NAME, HDR_TYPE};
     use crate::schema_model::SchemaMode;
     let cell = |c: u32, r: u32| ws.value((c, r)).trim().to_string();
     if cell(1, 1) == "name" && cell(2, 1) == "type" && cell(3, 1) == "value"

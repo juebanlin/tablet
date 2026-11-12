@@ -1,8 +1,8 @@
 // 表格交互自验：通过 WebView2 的 CDP 端口驱动真实页面。
-// 前置：带 --remote-debugging-port=9222 启动 tablet-tauri，且工作区里至少有一个 table 节点。
+// 前置：带 --remote-debugging-port=9222 启动 tablet，且工作区里至少有一个 table 节点。
 // 用法：
 //   $env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS = "--remote-debugging-port=9222"
-//   tablet-tauri.exe --gui --workdir=<工作区>
+//   tablet.exe --gui --workdir=<工作区>
 //   node crates/app-tauri/scripts/verify-grid.mjs
 import fs from "node:fs";
 

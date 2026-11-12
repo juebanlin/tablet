@@ -1,5 +1,5 @@
 // 校验规则编辑器自验（CDP 驱动真实页面，交互对齐 rule-builder-v2）。
-// 前提：带 --remote-debugging-port=9222 启动 tablet-tauri，工作区含 hero/HeroBase。
+// 前提：带 --remote-debugging-port=9222 启动 tablet，工作区含 hero/HeroBase。
 const PORT = process.env.CDP_PORT || 9222;
 
 const targets = await (await fetch(`http://127.0.0.1:${PORT}/json/list`)).json();

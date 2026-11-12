@@ -1112,7 +1112,7 @@ fn write_table_sheet(
     ws: &mut umya_spreadsheet::Worksheet,
     table: &crate::model::Table,
 ) -> Result<(), String> {
-    use crate::excel_sync::vo::{DATA_START, HDR_DESC, HDR_EXPORT, HDR_NAME, HDR_TYPE};
+    use crate::excel::{DATA_START, HDR_DESC, HDR_EXPORT, HDR_NAME, HDR_TYPE};
 
     let fields = &table.schema.fields;
     let (max_col, max_row) = ws.highest_column_and_row();
@@ -4691,7 +4691,7 @@ impl ProjectEngine {
 
     // --- PLACEHOLDER_ACTIONS ---
 
-    /// 结构动作的 core 级校验。任何 UI（Slint / Tauri）和脚本都必须经过这里，
+    /// 结构动作的 core 级校验。任何 UI（Tauri）和脚本都必须经过这里，
     /// 不能各自实现或绕过：
     /// - 组名只能是中英文 / 数字 / 下划线，项目内忽略大小写唯一；
     /// - 节点名（Table / Constant / Enum）必须是 PascalCase，项目内跨组唯一（忽略大小写）；
@@ -5483,6 +5483,19 @@ impl ProjectEngine {
 mod project_toml_template_tests {
     use super::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
+
+    /// 直接取 xlsx（zip）里某个条目的原始字节（lazy-read 保真测试用）。
+    fn zip_entry(path: &std::path::Path, name: &str) -> Vec<u8> {
+        use std::io::Read;
+        let file = std::fs::File::open(path).unwrap();
+        let mut archive = zip::ZipArchive::new(file).unwrap();
+        let mut entry = archive
+            .by_name(name)
+            .unwrap_or_else(|_| panic!("zip 里没有 {name}"));
+        let mut buf = Vec::new();
+        entry.read_to_end(&mut buf).unwrap();
+        buf
+    }
 
     fn unique_tmp(label: &str) -> PathBuf {
         static COUNTER: AtomicUsize = AtomicUsize::new(0);
@@ -6536,7 +6549,7 @@ package = \"com.user.kept\"
         // 重新加载，此时 workbook 是「别人写的」
         let loaded = crate::project::load_specific_project(&dir, "p1").expect("reload");
         let mut engine = ProjectEngine::new(loaded, GlobalConfig::default());
-        let untouched = crate::excel_sync::testutil::zip_entry(&book, "xl/worksheets/sheet2.xml");
+        let untouched = zip_entry(&book, "xl/worksheets/sheet2.xml");
 
         // 只改 Hot
         {
@@ -6546,7 +6559,7 @@ package = \"com.user.kept\"
         }
         assert!(engine.save_all());
 
-        let after = crate::excel_sync::testutil::zip_entry(&book, "xl/worksheets/sheet2.xml");
+        let after = zip_entry(&book, "xl/worksheets/sheet2.xml");
         assert_eq!(untouched, after, "没改的 sheet 被重写了（lazy_read 失守）");
 
         let _ = std::fs::remove_dir_all(&dir);
@@ -7471,7 +7484,7 @@ package = \"com.user.kept\"
             storage: crate::model::GroupStorage::Xlsx,
             book_stamp: None,
         };
-        crate::excel_sync::apply::write_fresh_group(&src, &group).unwrap();
+        crate::excel::write_fresh_group(&src, &group).unwrap();
 
         let out = engine.import_xlsx_group(&pid, &src).expect("import xlsx");
         assert_eq!(out.group, "Items");
@@ -7615,7 +7628,7 @@ package = \"com.user.kept\"
     }
 
     /// core 级命名规则：组名项目内唯一、节点名跨组唯一（忽略大小写）。
-    /// UI（Slint / Tauri）不能绕过 `execute_action` 直接 push。
+    /// UI（Tauri）不能绕过 `execute_action` 直接 push。
     #[test]
     fn tree_actions_reject_duplicate_names() {
         let (dir, mut engine) = engine_with_saved_node("dup_names", "hero", "HeroBase");

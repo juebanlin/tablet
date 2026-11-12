@@ -2,7 +2,7 @@
 
 `tablet` 工程的"how"层：源码三层的抽象划分、仓库目录布局、`tablet.toml` 配置、Git 协作约定、`tablet-cli` 二进制的命令骨架与子命令清单。
 
-核心层（`tablet-core`）暴露的能力（导出 / 导入 / 验证 / Project / 模板 / 测试数据生成）的语义在 @02；本文聚焦**工程怎么组织代码、仓库怎么放文件、命令行怎么调用**。GUI 共享同一份 `actions/` 业务编排层，行为完全一致，UI 设计见 @04，Slint 实现细节见 @05。
+核心层（`tablet-core`）暴露的能力（导出 / 导入 / 验证 / Project / 模板 / 测试数据生成）的语义在 @02；本文聚焦**工程怎么组织代码、仓库怎么放文件、命令行怎么调用**。GUI 共享同一份 `actions/` 业务编排层，行为完全一致，UI 设计见 @04，Tauri 实现与打包见 @17。
 
 ## 1. 工具源码三层
 
@@ -54,7 +54,7 @@ tablet/
     │       │   └── dispatcher.rs    ← run_with_args(&[String]) -> Result<i32>
     │       └── main.rs         ← ~10 行：转发到 dispatcher，把 Result<i32> → process::exit
     │
-    └── app-slint/              ← Slint GUI（产物 tablet，@05）
+    └── app-tauri/              ← Tauri GUI（package / 产物 tablet，@17）
         └── src/main.rs         ← 头部分流：classify(args) → Route::Cli 走 tablet_cli::run_with_args
                                   零参数 / --gui [--workdir] 走 run_gui()
                                   Windows 下 GUI 分支 FreeConsole() 释放 console（双击启动后无黑窗驻留）
@@ -106,7 +106,7 @@ game-config/
 
 - 一个**文件夹** = 一个 **Group** = 一个 **Excel 文件**
 - 文件夹内每个 `.tbl` 文件 = 一个 **Table / Constant / Enum** = Excel 中的一个 tab
-- 用 Excel 编辑时整个 Group 生成一个 xlsx，每个配置项对应一个 tab（详见 @06）
+- 组以 xlsx 存储 / Excel 导出时，整个 Group 生成一个 xlsx，每个配置项对应一个 sheet（详见 @06）
 
 Group 名仅在工具内部使用，不进生成代码路径，因此允许中文（@01.8.1、@02.1）。
 
@@ -334,7 +334,7 @@ UI 上的视觉反馈（红框/树节点 `!` /日志框）见 @04.5.4。
 ### 6.2 .gitignore
 
 ```gitignore
-# Excel 桥接缓存：每个 Project 自带一份，全部忽略
+# 编辑器临时工作簿（Univer 回写 / 导出缓存）：每个 Project 自带一份，全部忽略
 projects/*/.tbl-cache/
 
 # Excel 临时文件
@@ -1012,7 +1012,7 @@ tablet-cli --fmt json validate --group hero
 
 ---
 
-### 8.5 excel — Excel 桥接
+### 8.5 excel — Excel 导入 / 导出
 
 #### `excel export`
 
@@ -1531,7 +1531,7 @@ fn classify(args: &[String]) -> Route {
 | 启动方式 | 行为 |
 |---------|------|
 | 零参数（双击 / `tablet.exe`） | GUI，workdir = exe 所在目录（即 cwd） |
-| `tablet --gui [--workdir=path]` | GUI，workdir 显式指定（开发期 `cargo run -p tablet-slint -- --gui --workdir=...`） |
+| `tablet --gui [--workdir=path]` | GUI，workdir 显式指定（开发期 `cargo run -p tablet -- --gui --workdir=...`） |
 | 其它任何参数（含 `--help` / 子命令 / `-w` / `-s`） | CLI：剔除 `--gui` 后转发给 `tablet_cli::run_with_args` |
 
 CLI 分支和直接跑 `tablet-cli.exe` 行为完全一致；GUI 分支在 Windows 下额外调 `FreeConsole()` 释放 console，避免双击启动后黑窗驻留。
@@ -1603,7 +1603,7 @@ tablet-cli schema delete-node --group temp --name TestTable
 tablet-cli schema delete-group --name temp
 ```
 
-### 13.4 Excel 桥接
+### 13.4 Excel 导入 / 导出
 
 ```bash
 # 导出给策划编辑

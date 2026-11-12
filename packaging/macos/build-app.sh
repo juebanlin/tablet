@@ -3,7 +3,7 @@
 #
 # 用法: bash packaging/macos/build-app.sh [--dmg]
 #
-# 前置: cargo build -p tablet-slint --release (macOS 上)
+# 前置: cargo build -p tablet --release (macOS 上)
 
 set -euo pipefail
 
@@ -21,7 +21,7 @@ echo "=== 构建 $APP_NAME.app v$VERSION ==="
 # 检查二进制
 if [ ! -f "$BUILD_DIR/$BINARY" ]; then
     echo "未找到 $BUILD_DIR/$BINARY，先编译..."
-    cargo build -p tablet-slint --release
+    cargo build -p tablet --release
 fi
 
 # 清理旧包

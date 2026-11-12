@@ -1,6 +1,6 @@
 // 表格交互层：选择 / 编辑 / 键盘 / 剪贴板 / 列宽。
 //
-// 需求是从 Slint 版反推出来的（@docs/04 §3–§4），实现方式按 Web 习惯重做：
+// 需求是从 旧版反推出来的（@docs/04 §3–§4），实现方式按 Web 习惯重做：
 //   - 表头、行号固定，数据区双向滚动（CSS sticky）
 //   - 单格 / 矩形 / 整行 / 整列选择，支持拖选与 Shift 扩选
 //   - 双击、F2、直接打字进入编辑；Enter / Tab / Esc / 方向键都有明确语义
@@ -12,7 +12,7 @@ const ALPHA = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
 /** 最后一条数据列之后的空白宽度：内容刚好铺满视口时也能横向滚动。 */
 const SPACER_W = 160;
 
-/** 列序号 → Excel 列字母：0=A、25=Z、26=AA……与 Slint 版 col_letter 一致。 */
+/** 列序号 → Excel 列字母：0=A、25=Z、26=AA……与 旧版 col_letter 一致。 */
 function colLetter(idx) {
   let s = "";
   let n = Math.max(0, idx | 0);
@@ -187,7 +187,7 @@ class SheetGrid {
       if (this.virtual) this.renderVirtualRows(true);
     }
 
-    // 切节点：清空选区并回到左上角（与 Slint 版一致）。
+    // 切节点：清空选区并回到左上角（与旧版行为一致）。
     if (!sameNode) {
       this.kind = "none";
       this.anchor = { r: 0, c: 0 };
@@ -268,7 +268,7 @@ class SheetGrid {
   }
 
   /**
-   * 引用选择器（对齐 Slint 版）：id + 辅助列的表格式列表。
+   * 引用选择器（对齐旧版）：id + 辅助列的表格式列表。
    * 表可切换「智能 / 全部」列展示；单值单击选中、双击/确定提交；
    * 列表引用多选后按该列类型的分隔符拼接（List 取项目 `list`、Set 取 `set`，默认 `;`）。
    */
@@ -1395,7 +1395,7 @@ class SheetGrid {
       }
       const header = e.target.closest("th[data-header]");
       if (header) {
-        // 导出 / 类型是选择器：单击即展开（与 Slint 默认 picker-trigger=header-single 一致）。
+        // 导出 / 类型是选择器：单击即展开（与 旧版 默认 picker-trigger=header-single 一致）。
         const [hi, ci] = header.dataset.header.split(":").map(Number);
         const kind = this.node?.headerKinds?.[hi]?.[ci] || "text";
         if ((kind === "export" || kind === "type") && (this.node?.pickerHeaderSingle ?? true)) {

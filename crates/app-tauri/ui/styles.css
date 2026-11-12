@@ -2,7 +2,7 @@
  * tablet Tauri 主题
  * 设计取向：现代桌面应用（中性灰阶 + 单一蓝色强调 + 轻阴影 + 圆角），
  * 跟随系统浅色 / 深色。字体用系统可变字体，中文走系统 CJK 字体回退。
- * 布局与交互语义保持不变，视觉细节不与 Slint 版逐像素对齐。
+ * 布局与交互语义保持不变，视觉细节不逐像素对齐旧实现。
  * ============================================================ */
 
 :root {
@@ -369,7 +369,7 @@ button { cursor: default; }
 .grid-lock-sub { font-size: var(--fs-sm); color: var(--muted); }
 .grid-lock-card .btn { margin-top: 4px; }
 /* WebView2 默认是「覆盖式、自动隐藏」滚动条：列一多，横向滚动条平时看不见，
-   容易被当成不支持横向滚动。表格区改成常驻滚动条（Slint 版 ScrollView 也是常驻）。 */
+   容易被当成不支持横向滚动。表格区改成常驻滚动条（旧实现也是常驻）。 */
 .grid-scroll::-webkit-scrollbar { width: 12px; height: 12px; }
 .grid-scroll::-webkit-scrollbar-track { background: var(--surface-2); }
 .grid-scroll::-webkit-scrollbar-thumb {
@@ -543,8 +543,7 @@ button { cursor: default; }
 .log-line.warn .lv, .log-line.warn .msg { color: var(--warn); }
 .log-line.error .lv, .log-line.error .msg { color: var(--danger); }
 
-.excel-filebar { height: 32px; flex: none; display: flex; align-items: center; gap: 6px; padding: 0 8px; border-bottom: 1px solid var(--border); }
-.excel-empty { flex: 1; display: flex; align-items: center; justify-content: center; font-size: var(--fs-sm); color: var(--disabled); }
+.pane-toolbar { height: 32px; flex: none; display: flex; align-items: center; gap: 6px; padding: 0 8px; border-bottom: 1px solid var(--border); }
 
 /* ── 控件 ────────────────────────────────────────────────── */
 .btn {
@@ -656,7 +655,7 @@ button { cursor: default; }
 .form-row .combo { flex: 1; min-width: 0; }
 
 /* ── 校验规则编辑器 ─────────────────────────────────────────
- * 对齐 rule-builder-v2 / Slint 版：左侧列清单 + 右侧规则卡片树 + 底部 inspector。
+ * 对齐 rule-builder-v2 / 旧版：左侧列清单 + 右侧规则卡片树 + 底部 inspector。
  * 卡片区是唯一可伸缩的滚动区；inspector 固定高度，避免把弹窗顶出可视区。
  */
 .rules-overlay {
@@ -703,7 +702,7 @@ button { cursor: default; }
   background: var(--surface-2);
 }
 .rules-hint { margin-left: auto; color: var(--muted); font-size: var(--fs-xs); }
-/* 切换作用域 / 列时若有未保存改动：内联确认条（与 Slint 版一致）。 */
+/* 切换作用域 / 列时若有未保存改动：内联确认条（与旧版行为一致）。 */
 .rules-discard {
   flex: none;
   display: flex;
@@ -1123,19 +1122,8 @@ button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
   white-space: pre-wrap;
 }
 
-/* ── Excel 文件 / 问题 / toast / 关于 ─────────────────────── */
-.excel-list, .issue-list { flex: 1; min-height: 0; overflow: auto; }
-.excel-item {
-  height: 28px;
-  display: flex;
-  align-items: center;
-  padding: 0 10px;
-  border-bottom: 1px solid var(--border);
-  font-family: var(--font-mono);
-  font-size: var(--fs-xs);
-  color: var(--text-2);
-}
-.excel-item:hover { background: var(--accent-soft); color: var(--accent); }
+/* ── 问题 / toast / 关于 ──────────────────────────────────── */
+.issue-list { flex: 1; min-height: 0; overflow: auto; }
 
 .issue-row {
   display: flex;
@@ -1509,10 +1497,6 @@ button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
   color: var(--muted);
 }
 
-/* Excel 文件行内操作 */
-.excel-item .excel-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
-.excel-item .mini-btn { margin-left: 6px; }
-
 /* ── 表头下拉菜单 ─────────────────────────────────────────── */
 .cell-menu {
   position: fixed;
@@ -1543,7 +1527,7 @@ button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .cell-menu-custom { display: flex; gap: 6px; padding: 6px 2px 0; border-top: 1px solid var(--border); margin-top: 6px; }
 .cell-menu-custom .input { flex: 1; min-width: 0; height: 24px; }
 
-/* ── 新建项目（Slint 布局：三来源 + 段选择 + 身份）────────── */
+/* ── 新建项目（三来源 + 段选择 + 身份）────────── */
 .ps-hint { color: var(--text-2); font-size: var(--fs-sm); padding: 8px 0; }
 .cp-sources { display: flex; gap: 6px; margin-bottom: 8px; }
 .cp-tpl-list {
@@ -1572,7 +1556,7 @@ button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .cp-preview { font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--muted); margin: 4px 0 8px; }
 .cp-check { margin: 4px 0; }
 
-/* 新建项目：左侧来源 / 右侧身份（Slint 对话框布局） */
+/* 新建项目：左侧来源 / 右侧身份（旧对话框布局） */
 #create-project .ps-body { display: flex; gap: 16px; align-items: flex-start; }
 #create-project .ps-pane { flex: 1; min-width: 0; }
 #create-project .cp-identity {
@@ -1755,84 +1739,6 @@ input[type="checkbox"].ps-mod { background: none !important; }
 }
 :root[data-theme="dark"] .ps-mod,
 :root[data-theme="dark"] .export-checks label.check.ps-mod { background: #1b2942 !important; }
-
-/* ── Excel 文件卡片 / Excel 同步面板 ─────────────────────── */
-.excel-cards {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
-  padding: 4px;
-  align-content: flex-start;
-}
-.excel-card {
-  width: 104px;
-  height: 68px;
-  flex: none;
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  background: var(--surface);
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 2px;
-  padding: 4px;
-  font-size: var(--fs-xs);
-}
-.excel-card:hover { background: var(--surface-3); }
-.excel-card.selected { border-color: var(--accent); background: var(--selection); }
-.excel-icon { font-size: 16px; }
-.excel-card-name {
-  max-width: 96px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  color: var(--text-2);
-}
-
-.es-box {
-  width: 920px;
-  max-width: 96vw;
-  height: min(560px, 86vh);
-  display: flex;
-  flex-direction: column;
-}
-.es-head {
-  display: flex;
-  gap: 8px;
-  height: 24px;
-  align-items: center;
-  padding: 0 8px;
-  background: var(--header-bg);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm) var(--radius-sm) 0 0;
-  font-size: var(--fs-xs);
-  color: var(--muted);
-}
-.es-list {
-  flex: 1;
-  min-height: 0;
-  overflow: auto;
-  border: 1px solid var(--border);
-  border-top: 0;
-  border-radius: 0 0 var(--radius-sm) var(--radius-sm);
-}
-.es-row {
-  display: flex;
-  gap: 8px;
-  align-items: center;
-  min-height: 22px;
-  padding: 2px 8px;
-  border-bottom: 1px solid var(--surface-3);
-  font-size: var(--fs-sm);
-}
-.es-col-g { width: 200px; flex: none; display: flex; align-items: center; gap: 6px; overflow: hidden; }
-.es-col-size { width: 100px; flex: none; font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--text-2); }
-.es-col-ops { width: 180px; flex: none; display: flex; gap: 3px; flex-wrap: wrap; }
-.es-name { font-family: var(--font-mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.es-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--warn); flex: none; }
-.es-note { font-size: 10px; color: var(--warn); }
-.es-blocked { color: var(--danger); font-size: var(--fs-xs); }
 
 /* ── 粘贴 Group 命名确认 ─────────────────────────────────── */
 .pg-box { width: 620px; }

@@ -1,5 +1,5 @@
 // 项目设置（分隔符 / 导出）自验（CDP 驱动真实页面）。
-// 前提：带 --remote-debugging-port=9222 启动 tablet-tauri。
+// 前提：带 --remote-debugging-port=9222 启动 tablet。
 const PORT = process.env.CDP_PORT || 9222;
 
 const targets = await (await fetch(`http://127.0.0.1:${PORT}/json/list`)).json();

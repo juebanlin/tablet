@@ -14,14 +14,22 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
 
-      # app-slint 是 workspace 成员，cargo test --workspace 要链接它，缺这些会挂在链接期
-      - name: install linux gui deps
+      # cargo test --workspace 会编译/链接 Tauri，Linux 上需要 WebKitGTK 4.1 + GTK3 开发包
+      - name: install linux tauri deps
         run: |
           sudo apt-get update
-          sudo apt-get install -y \
-            libgl1-mesa-dev libfontconfig1-dev \
-            libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev \
-            libxkbcommon-dev
+          sudo apt-get install -y             libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev             librsvg2-dev libsoup-3.0-dev libjavascriptcoregtk-4.1-dev             libssl-dev libxdo-dev build-essential pkg-config
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: crates/app-tauri/univer-editor/package-lock.json
+
+      # Tauri 的 UI 资源在编译期内嵌；univer 产物被 gitignore，测试前也要先构建。
+      - name: build univer frontend
+        run: npm ci --no-audit --no-fund && npm run build
+        working-directory: crates/app-tauri/univer-editor
 
       - name: cargo test --workspace
         run: cargo test --workspace
