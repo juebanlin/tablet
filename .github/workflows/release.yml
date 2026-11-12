@@ -13,6 +13,7 @@ jobs:
       matrix:
         include:
           - { os: windows-latest, target: windows }
+          - { os: windows-latest, target: windows-legacy, need_nightly: true }
           - { os: ubuntu-22.04,   target: linux }
           - { os: ubuntu-22.04,   target: linux-cli-musl }
           - { os: macos-latest,   target: macos }
@@ -23,6 +24,13 @@ jobs:
 
       - name: install rust stable
         uses: dtolnay/rust-toolchain@stable
+
+      - name: install rust nightly + rust-src (windows-legacy)
+        if: matrix.need_nightly
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly-2026-11-10
+          components: rust-src
 
       # Tauri 需要 WebKitGTK 4.1 / GTK3 开发包
       - name: install linux tauri deps
@@ -49,7 +57,14 @@ jobs:
 
       - name: build
         shell: bash
-        run: bash scripts/release.sh ${{ matrix.target }}
+        env:
+          NIGHTLY_TOOLCHAIN: nightly-2026-11-10
+        run: |
+          if [ "${{ matrix.target }}" = "windows-legacy" ]; then
+            bash scripts/build-windows-legacy.sh
+          else
+            bash scripts/release.sh "${{ matrix.target }}"
+          fi
 
       - name: upload artifact
         uses: actions/upload-artifact@v7
@@ -83,14 +98,18 @@ jobs:
             target="${d#dist/tablet-}"; target="${target%/}"
             for f in "$d"*; do
               base="$(basename "$f")"
-              case "$base" in
-                tablet.exe)     out="tablet-${version}-${target}.exe" ;;
-                tablet-cli.exe) out="tablet-cli-${version}-${target}.exe" ;;
-                tablet)         out="tablet-${version}-${target}" ;;
-                tablet-cli)     out="tablet-cli-${version}-${target}" ;;
-                *.deb)          out="$base" ;;
-                *.dmg)          out="$base" ;;
-                *.app.zip)      out="$base" ;;
+              case "$target:$base" in
+                windows:tablet.exe)     out="tablet-${version}-windows10-1803-x64.exe" ;;
+                windows:tablet-cli.exe) out="tablet-cli-${version}-windows-x64.exe" ;;
+                linux:tablet)           out="tablet-${version}-linux22.04-x64" ;;
+                linux:tablet-cli)       out="tablet-cli-${version}-linux-x64" ;;
+                linux-cli-musl:tablet-cli) out="tablet-cli-${version}-linux-musl-x64" ;;
+                macos:tablet)           out="tablet-${version}-macos10.15-universal" ;;
+                macos:tablet-cli)       out="tablet-cli-${version}-macos10.15-universal" ;;
+                windows-legacy:*.zip)   out="$base" ;;
+                *:*.deb)                out="$base" ;;
+                *:*.dmg)                out="$base" ;;
+                *:*.app.zip)            out="$base" ;;
                 *) echo "跳过: $f" >&2; continue ;;
               esac
               cp -r "$f" "dist/release/$out"
@@ -119,18 +138,19 @@ jobs:
             echo
             echo "## 产物说明"
             echo
-            echo "| 文件 | 平台 | 类型 | 备注 |"
-            echo "|---|---|---|---|"
-            echo "| tablet-${ver}-windows.exe | Windows 10 1803+/11 x64 | GUI (Tauri) | 需 WebView2 运行时（Win11 自带） |"
-            echo "| tablet-cli-${ver}-windows.exe | Windows 10/11 x64 | CLI | 无需 WebView2 |"
-            echo "| tablet-${ver}-linux | x86_64 Linux (glibc) | GUI (Tauri) | 需 WebKitGTK 4.1 / GTK3；建议 fonts-noto-cjk |"
-            echo "| tablet-cli-${ver}-linux | x86_64 Linux (glibc) | CLI | 动态链 |"
-            echo "| tablet-cli-${ver}-linux-cli-musl | x86_64 Linux (any) | CLI | 全静态链, 任意 Linux 直接跑 |"
-            echo "| tablet_${ver}_amd64.deb | Debian/Ubuntu x64 | GUI+CLI | apt 安装, 依赖 WebKitGTK 4.1 |"
-            echo "| tablet-${ver}-macos | macOS 11+ universal | GUI (Tauri) | intel + arm64, 未签名 |"
-            echo "| tablet-cli-${ver}-macos | macOS 11+ universal | CLI | 同上 |"
-            echo "| Tablet-${ver}.app.zip | macOS 11+ universal | GUI 便携包 | 解压直接运行 |"
-            echo "| Tablet-${ver}.dmg | macOS 11+ universal | GUI 安装包 | 拖入 Applications |"
+            echo "| 文件 | 平台 / 最低版本 | 形态 | 运行时要求 | 说明 |"
+            echo "|---|---|---|---|---|"
+            echo "| tablet-${ver}-windows10-1803-x64.exe | Windows 10 1803+ / 11 x64 | 便携 GUI | WebView2（Win11 自带；Win10 一般随 Edge 安装） | 推荐 |"
+            echo "| tablet-cli-${ver}-windows-x64.exe | Windows 10 x64 | CLI | 无 | Jenkins / 自动化 |"
+            echo "| tablet-${ver}-windows-legacy-win7-win10lt1803-x64.zip | Win7 SP1 / 8.1 / Win10 <1803 | ZIP 套件 | 固定版 WebView2 109（包内附说明） | 实验性，无安全更新 |"
+            echo "| tablet_${ver}_amd64.deb | Ubuntu 22.04+ / Debian 12+ | deb | WebKitGTK 4.1 | apt 安装 |"
+            echo "| tablet-${ver}-linux22.04-x64 | 同上（glibc 2.35+） | 便携 GUI | WebKitGTK 4.1 / GTK3 | 解压即用 |"
+            echo "| tablet-cli-${ver}-linux-x64 | x86_64 Linux (glibc) | CLI | 动态链 | Jenkins / 自动化 |"
+            echo "| tablet-cli-${ver}-linux-musl-x64 | 任意 x86_64 Linux | 静态 CLI | 无 | 老 glibc / Alpine / 容器 |"
+            echo "| tablet-${ver}-macos10.15-universal | macOS 10.15+ | GUI 便携 | 系统 WKWebView | intel + arm64，未签名 |"
+            echo "| tablet-cli-${ver}-macos10.15-universal | macOS 10.15+ | CLI | 无 | 同上 |"
+            echo "| Tablet-${ver}.app.zip | macOS 10.15+ | GUI 便携包 | 系统 WKWebView | 解压直接运行 |"
+            echo "| Tablet-${ver}.dmg | macOS 10.15+ | GUI 安装包 | 系统 WKWebView | 拖入 Applications |"
           } > release-notes.md
           cat release-notes.md
 

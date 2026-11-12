@@ -31,7 +31,7 @@ crates/
 
 | 产物 | 来源 | 目标系统 | 说明 |
 | --- | --- | --- | --- |
-| `tablet.exe` / `tablet` | `app-tauri` | Win10 1803+ / Linux / macOS 11+ | 单文件，依赖系统 WebView2（Windows）或 WebKitGTK（Linux） |
+| `tablet.exe` / `tablet` | `app-tauri` | Win10 1803+ / Linux / macOS 10.15+ | 单文件，依赖系统 WebView2（Windows）或 WebKitGTK（Linux） |
 | `tablet-cli.exe` / `tablet-cli` | `app-cli` | 同 @09 | 纯 CLI，Jenkins / 自动化用 |
 
 - 工作区锁（`<workdir>/.data/tablet.lock`）由 core 独占；同一项目互斥、不同项目可并行。
@@ -75,7 +75,7 @@ cargo build --release -p tablet --target x86_64-pc-windows-msvc
 | Win11 / Win10 1803+ | ✅ | WebView2 随 OS / Edge 分发；未安装时需人工装 Evergreen 运行时 |
 | Win7 / 8.1 | ❌ | WebView2 已冻结，Tauri 不支持 |
 | Linux x86_64 | ✅ | 需 WebKitGTK 4.1 / GTK3；musl 只发 CLI |
-| macOS 11+ | ✅ | universal（intel + arm64），未签名需右键打开 |
+| macOS 10.15+ | ✅ | universal（intel + arm64），未签名需右键打开 |
 
 ## 5. GUI + CLI 双模式
 

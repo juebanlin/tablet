@@ -8,7 +8,7 @@
 #   windows          x86_64-pc-windows-msvc        (Tier 1, 需 Windows 宿主；Tauri 要求 MSVC)
 #   linux            x86_64-unknown-linux-gnu      (Tier 1, 需 Linux 宿主 + WebKitGTK 4.1)
 #   linux-cli-musl   x86_64-unknown-linux-musl     (Tier 2, 仅 tablet-cli, 静态链, 任意 Linux 可跑)
-#   macos            x86_64-apple-darwin + aarch64-apple-darwin → universal (需 macOS 宿主, 最低 11.0)
+#   macos            x86_64-apple-darwin + aarch64-apple-darwin → universal (需 macOS 宿主, 最低 10.15)
 #   host             自动按宿主跑所有可跑目标:
 #                      Windows → windows
 #                      Linux   → linux + linux-cli-musl
@@ -172,13 +172,13 @@ build_macos() {
 
     rustup target add x86_64-apple-darwin aarch64-apple-darwin >/dev/null
 
-    # Tauri 2 的实际下限是 10.15；这里与 packaging/macos/Info.plist 对齐到 11.0。
-    export MACOSX_DEPLOYMENT_TARGET=11.0
+    # Tauri 2 官方下限 10.15；与 packaging/macos/Info.plist 对齐。
+    export MACOSX_DEPLOYMENT_TARGET=10.15
 
-    echo ">>> [macos] build x86_64-apple-darwin (min 11.0)"
+    echo ">>> [macos] build x86_64-apple-darwin (min 10.15)"
     cargo build --release --target x86_64-apple-darwin -p tablet -p tablet-cli
 
-    echo ">>> [macos] build aarch64-apple-darwin (min 11.0)"
+    echo ">>> [macos] build aarch64-apple-darwin (min 10.15)"
     cargo build --release --target aarch64-apple-darwin -p tablet -p tablet-cli
 
     echo ">>> [macos] lipo -> universal binary"
@@ -220,7 +220,7 @@ build_macos() {
     # 清理 .app 目录（zip 和 dmg 已包含）
     rm -rf "$app_dir"
 
-    echo ">>> [macos] OK -> $out (universal, intel + arm64, min 11.0)"
+    echo ">>> [macos] OK -> $out (universal, intel + arm64, min 10.15)"
     echo "    正式发布需 Apple Developer ID 签名 + 公证, 否则 Gatekeeper 拦截"
 }
 
