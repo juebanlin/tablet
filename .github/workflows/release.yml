@@ -125,6 +125,8 @@ jobs:
           set -euo pipefail
           tag="${GITHUB_REF#refs/tags/}"
           ver="${tag#v}"   # 产物名里的版本号（tag 带 v，Cargo 版本不带）
+          repo="${GITHUB_REPOSITORY}"
+          dl="https://github.com/${repo}/releases/download/${tag}"
           prev="$(git describe --tags --abbrev=0 "$tag^" 2>/dev/null || true)"
           {
             echo "## 改动 (${prev:-初始}..${tag})"
@@ -138,19 +140,19 @@ jobs:
             echo
             echo "## 产物说明"
             echo
-            echo "| 文件 | 平台 / 最低版本 | 形态 | 运行时要求 | 说明 |"
+            echo "| 文件（点击下载） | 平台 / 最低版本 | 形态 | 运行时要求 | 说明 |"
             echo "|---|---|---|---|---|"
-            echo "| tablet-${ver}-windows10-1803-x64.exe | Windows 10 1803+ / 11 x64 | 便携 GUI | WebView2（Win11 自带；Win10 一般随 Edge 安装） | 推荐 |"
-            echo "| tablet-cli-${ver}-windows-x64.exe | Windows 10 x64 | CLI | 无 | Jenkins / 自动化 |"
-            echo "| tablet-${ver}-windows-legacy-win7-win10lt1803-x64.zip | Win7 SP1 / 8.1 / Win10 <1803 | ZIP 套件 | 固定版 WebView2 109（包内附说明） | 实验性，无安全更新 |"
-            echo "| tablet_${ver}_amd64.deb | Ubuntu 22.04+ / Debian 12+ | deb | WebKitGTK 4.1 | apt 安装 |"
-            echo "| tablet-${ver}-linux22.04-x64 | 同上（glibc 2.35+） | 便携 GUI | WebKitGTK 4.1 / GTK3 | 解压即用 |"
-            echo "| tablet-cli-${ver}-linux-x64 | x86_64 Linux (glibc) | CLI | 动态链 | Jenkins / 自动化 |"
-            echo "| tablet-cli-${ver}-linux-musl-x64 | 任意 x86_64 Linux | 静态 CLI | 无 | 老 glibc / Alpine / 容器 |"
-            echo "| tablet-${ver}-macos10.15-universal | macOS 10.15+ | GUI 便携 | 系统 WKWebView | intel + arm64，未签名 |"
-            echo "| tablet-cli-${ver}-macos10.15-universal | macOS 10.15+ | CLI | 无 | 同上 |"
-            echo "| Tablet-${ver}.app.zip | macOS 10.15+ | GUI 便携包 | 系统 WKWebView | 解压直接运行 |"
-            echo "| Tablet-${ver}.dmg | macOS 10.15+ | GUI 安装包 | 系统 WKWebView | 拖入 Applications |"
+            echo "| [tablet-${ver}-windows10-1803-x64.exe](${dl}/tablet-${ver}-windows10-1803-x64.exe) | Windows 10 1803+ / 11 x64 | 便携 GUI | WebView2（Win11 自带；Win10 一般随 Edge 安装） | 推荐 |"
+            echo "| [tablet-cli-${ver}-windows-x64.exe](${dl}/tablet-cli-${ver}-windows-x64.exe) | Windows 10 x64 | CLI | 无 | Jenkins / 自动化 |"
+            echo "| [tablet-${ver}-windows-legacy-win7-win10lt1803-x64.zip](${dl}/tablet-${ver}-windows-legacy-win7-win10lt1803-x64.zip) | Win7 SP1 / 8.1 / Win10 <1803 | ZIP 套件 | 固定版 WebView2 109（包内附说明） | 实验性，无安全更新 |"
+            echo "| [tablet_${ver}_amd64.deb](${dl}/tablet_${ver}_amd64.deb) | Ubuntu 22.04+ / Debian 12+ | deb | WebKitGTK 4.1 | apt 安装 |"
+            echo "| [tablet-${ver}-linux22.04-x64](${dl}/tablet-${ver}-linux22.04-x64) | 同上（glibc 2.35+） | 便携 GUI | WebKitGTK 4.1 / GTK3 | 解压即用 |"
+            echo "| [tablet-cli-${ver}-linux-x64](${dl}/tablet-cli-${ver}-linux-x64) | x86_64 Linux (glibc) | CLI | 动态链 | Jenkins / 自动化 |"
+            echo "| [tablet-cli-${ver}-linux-musl-x64](${dl}/tablet-cli-${ver}-linux-musl-x64) | 任意 x86_64 Linux | 静态 CLI | 无 | 老 glibc / Alpine / 容器 |"
+            echo "| [tablet-${ver}-macos10.15-universal](${dl}/tablet-${ver}-macos10.15-universal) | macOS 10.15+ | GUI 便携 | 系统 WKWebView | intel + arm64，未签名 |"
+            echo "| [tablet-cli-${ver}-macos10.15-universal](${dl}/tablet-cli-${ver}-macos10.15-universal) | macOS 10.15+ | CLI | 无 | 同上 |"
+            echo "| [Tablet-${ver}.app.zip](${dl}/Tablet-${ver}.app.zip) | macOS 10.15+ | GUI 便携包 | 系统 WKWebView | 解压直接运行 |"
+            echo "| [Tablet-${ver}.dmg](${dl}/Tablet-${ver}.dmg) | macOS 10.15+ | GUI 安装包 | 系统 WKWebView | 拖入 Applications |"
           } > release-notes.md
           cat release-notes.md
 
