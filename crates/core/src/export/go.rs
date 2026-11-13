@@ -611,6 +611,14 @@ mod tests {
     }
 
     #[test]
+    fn date_maps_to_int64_parser() {
+        let no_enum = HashSet::new();
+        assert_eq!(go_type_for("date", &no_enum), "int64");
+        let t = TblType::parse("date").unwrap();
+        assert_eq!(parse_expr("raw", &t, "sep"), "parseInt64(raw)");
+    }
+
+    #[test]
     fn nested_tuple_uses_list_tuple2_paradigm() {
         // 对应 Java 运行时那个「List<Tuple2<...>> 先命中 List<?>」的 bug：
         // Go 的解析表达式按 TblType 生成，不存在运行时模板匹配，这里钉住产物。

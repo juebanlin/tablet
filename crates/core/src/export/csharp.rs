@@ -669,6 +669,8 @@ mod tests {
     fn base_types() {
         assert_eq!(cs_base_type(BaseType::Int), "int");
         assert_eq!(cs_base_type(BaseType::Long), "long");
+        assert_eq!(cs_base_type(BaseType::Date), "long");
+        assert_eq!(cs_base_parse_fn(BaseType::Date), "TblParse.ParseInt64");
         assert_eq!(cs_base_type(BaseType::Str), "string");
         assert_eq!(cs_base_type(BaseType::Bool), "bool");
     }

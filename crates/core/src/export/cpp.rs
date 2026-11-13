@@ -608,6 +608,8 @@ mod tests {
     fn base_types() {
         assert_eq!(cpp_base_type(BaseType::Int), "int32_t");
         assert_eq!(cpp_base_type(BaseType::Long), "int64_t");
+        assert_eq!(cpp_base_type(BaseType::Date), "int64_t");
+        assert_eq!(cpp_base_parse_fn(BaseType::Date), "parse_int64");
         assert_eq!(cpp_base_type(BaseType::Float), "float");
         assert_eq!(cpp_base_type(BaseType::Str), "std::string");
         assert_eq!(cpp_base_type(BaseType::Bool), "bool");

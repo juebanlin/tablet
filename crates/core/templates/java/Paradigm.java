@@ -34,7 +34,7 @@ public enum Paradigm {
     private static Paradigm ofNode(TypeNode t) {
         switch (t.name) {
             case "int": return INT;
-            case "long": return LONG;
+            case "long": case "date": return LONG;
             case "float": return FLOAT;
             case "double": return DOUBLE;
             case "bool": return BOOL;
@@ -312,7 +312,7 @@ public enum Paradigm {
         if (t.startsWith("@")) return Integer.parseInt(raw);
         switch (t) {
             case "int": return Integer.parseInt(raw);
-            case "long": return Long.parseLong(raw);
+            case "long": case "date": return Long.parseLong(raw);
             case "float": return Float.parseFloat(raw);
             case "double": return Double.parseDouble(raw);
             case "bool": return "true".equals(raw) || "1".equals(raw);

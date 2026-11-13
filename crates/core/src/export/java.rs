@@ -376,6 +376,14 @@ mod tests {
     }
 
     #[test]
+    fn date_maps_to_long_and_runtime_parser_recognizes_it() {
+        assert_eq!(java_field_type("date", &no_enums()), "long");
+        assert_eq!(field_type_ann("date", "start_at", "startAt"), r#"value = "date", name = "start_at""#);
+        assert!(TPL_PARADIGM.contains(r#"case "long": case "date": return LONG;"#));
+        assert!(TPL_PARADIGM.contains(r#"case "long": case "date": return Long.parseLong(raw);"#));
+    }
+
+    #[test]
     fn enum_has_get_id() {
         // 枚举不实现 ITpl，getId() 只为与 Tpl 类的取值风格一致；fromId 是反射加载要用，不能动
         let e = EnumDef {
