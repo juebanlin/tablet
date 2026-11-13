@@ -38,6 +38,25 @@ fn snapshot(state: tauri::State<'_, AppState>) -> Result<Snapshot, String> {
 }
 
 #[tauri::command]
+fn dependency_graph(
+    state: tauri::State<'_, AppState>,
+    project: Option<String>,
+) -> Result<tablet_core::dep_graph::DepGraph, String> {
+    let b = lock(&state)?;
+    let project = match project {
+        Some(id) => b
+            .engine
+            .find_project(&id)
+            .ok_or_else(|| format!("项目未打开: {id}"))?,
+        None => b
+            .engine
+            .active()
+            .ok_or_else(|| "没有打开的项目".to_string())?,
+    };
+    Ok(tablet_core::dep_graph::analyze(project))
+}
+
+#[tauri::command]
 fn select_node(
     state: tauri::State<'_, AppState>,
     project: String,
@@ -1066,6 +1085,7 @@ fn run_gui(workdir_arg: Option<std::path::PathBuf>) -> anyhow::Result<()> {
         })
         .invoke_handler(tauri::generate_handler![
             snapshot,
+            dependency_graph,
             select_node,
             commit_cell,
             commit_cell_fast,

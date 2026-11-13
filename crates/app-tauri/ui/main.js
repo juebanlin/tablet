@@ -655,6 +655,7 @@ function initToolbar() {
       toast(`校验完成：${errs} 错误 / ${warns} 警告`, errs ? "error" : "ok");
     });
   });
+  $("btn-dependency").addEventListener("click", () => openDependencyGraph(status().active_project));
   $("btn-rules").addEventListener("click", () => openRulesEditor());
   $("btn-univer").addEventListener("click", () =>
     univerEdit(state.selected?.project, state.selected?.group),
@@ -1084,6 +1085,12 @@ async function univerEdit(project, group) {
   }
 }
 
+function openDependencyGraph(project) {
+  if (!project) return toast("没有打开的项目", "error");
+  if (!window.DependencyView) return toast("依赖图模块未加载", "error");
+  window.DependencyView.open(project);
+}
+
 function projectMenu(t) {
   const row = state.snapshot?.tree.find((r) => r.kind === "project" && r.project === t.project);
   if (row?.closed) {
@@ -1150,6 +1157,7 @@ function projectMenu(t) {
         },
       ],
     },
+    { label: "依赖图…", action: () => openDependencyGraph(t.project) },
     { sep: true },
     { label: "项目设置…", action: () => openProjectSettings(t.project) },
     {
@@ -6019,6 +6027,7 @@ function initAbout() {
 
 // ── 启动 ────────────────────────────────────────────────────
 function boot() {
+  window.DependencyView?.init();
   syncSystemTheme();
   window.matchMedia?.("(prefers-color-scheme: dark)").addEventListener?.("change", syncSystemTheme);
   grid = new SheetGrid({

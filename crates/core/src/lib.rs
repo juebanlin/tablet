@@ -7,6 +7,7 @@ pub mod export_keys;
 pub mod ui_keys;
 pub mod types;
 pub mod date;
+pub mod dep_graph;
 pub mod enums;
 pub mod tbl;
 pub mod tbl_str;

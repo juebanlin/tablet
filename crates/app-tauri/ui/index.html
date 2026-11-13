@@ -16,6 +16,7 @@
       <button class="btn" id="btn-save" disabled>保存</button>
       <button class="btn" id="btn-reload">重新加载</button>
       <button class="btn" id="btn-validate">验证</button>
+      <button class="btn" id="btn-dependency">依赖图</button>
       <button class="btn" id="btn-export">导出</button>
       <button class="btn" id="btn-global-settings">设置</button>
       <span class="spacer"></span>
@@ -142,6 +143,75 @@
       </div>
     </section>
   </div>
+  <div class="modal dep-overlay" id="dependency-overlay" hidden>
+    <div class="dep-shell">
+      <header class="dep-header">
+        <div class="dep-heading">
+          <div class="dep-kicker">PROJECT GRAPH</div>
+          <div class="dep-title">依赖图</div>
+          <div class="dep-sub" id="dep-status">选择一个项目…</div>
+        </div>
+        <div class="dep-summary" id="dep-summary"></div>
+        <button class="dep-close" id="dep-close" type="button" title="关闭">×</button>
+      </header>
+
+      <div class="dep-toolbar">
+        <label class="dep-search">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <circle cx="11" cy="11" r="6.5"></circle><path d="m16 16 4.2 4.2"></path>
+          </svg>
+          <input class="input" id="dep-search" placeholder="搜索节点、分组或字段" autocomplete="off">
+        </label>
+        <select class="combo" id="dep-role-filter" title="按角色过滤">
+          <option value="all">全部角色</option>
+          <option value="base">基表</option>
+          <option value="business">业务表</option>
+          <option value="root">无入边</option>
+          <option value="bridge">桥接</option>
+          <option value="satellite">附属</option>
+          <option value="orphan">未接入</option>
+          <option value="missing">断引用目标</option>
+          <option value="constant">常量</option>
+          <option value="cycle">循环</option>
+        </select>
+        <label class="check"><input type="checkbox" id="dep-only-issues" /> 只看问题</label>
+        <span class="spacer"></span>
+        <button class="chip-btn" id="dep-labels" type="button">字段标签</button>
+        <button class="btn" id="dep-refresh" type="button">刷新</button>
+        <div class="dep-zoom">
+          <button class="icon-btn" id="dep-zoom-out" type="button" title="缩小">−</button>
+          <button class="dep-zoom-label" id="dep-zoom" type="button" title="恢复 100%">100%</button>
+          <button class="icon-btn" id="dep-zoom-in" type="button" title="放大">+</button>
+          <button class="icon-btn" id="dep-fit" type="button" title="适应窗口">⌗</button>
+        </div>
+      </div>
+
+      <div class="dep-body">
+        <aside class="dep-sidebar">
+          <div class="dep-side-head"><span>节点</span><span id="dep-node-count">0</span></div>
+          <div class="dep-node-list" id="dep-node-list"></div>
+        </aside>
+        <section class="dep-canvas-panel">
+          <div class="dep-scroll" id="dep-scroll">
+            <div class="dep-canvas-space" id="dep-canvas-space">
+              <div class="dep-canvas" id="dep-canvas">
+                <svg id="dep-edges"></svg>
+                <div id="dep-nodes"></div>
+              </div>
+            </div>
+          </div>
+        </section>
+        <aside class="dep-inspector" id="dep-inspector"></aside>
+      </div>
+
+      <footer class="dep-footer">
+        <span>箭头向下：引用方 → 被引用方 · 左键拖动平移 · 滚轮缩放</span>
+        <span class="spacer"></span>
+        <span>只读分析 · 不改项目数据</span>
+      </footer>
+    </div>
+  </div>
+
   <div class="modal" id="global-settings" hidden>
     <div class="modal-box ps-box">
       <div class="modal-title">全局设置</div>
@@ -833,6 +903,7 @@
     <option value="txt"></option>
   </datalist>
   <script src="grid.js"></script>
+  <script src="dependency.js"></script>
   <script src="main.js"></script>
 </body>
 </html>
