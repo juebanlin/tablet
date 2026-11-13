@@ -512,7 +512,7 @@ pub fn to_pascal_case(s: &str) -> String {
 
 pub fn parse_base_value(raw: &str, bt: &BaseType) -> Value {
     match bt {
-        BaseType::Int | BaseType::Long => {
+        BaseType::Int | BaseType::Long | BaseType::Date => {
             raw.parse::<i64>().map(Value::from).unwrap_or(Value::from(0))
         }
         BaseType::Float | BaseType::Double => {

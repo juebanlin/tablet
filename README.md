@@ -31,7 +31,7 @@
 
 | 能力 | 说明 |
 |---|---|
-| **表格编辑** | Excel 式选区 / 编辑 / 剪贴板互通；7 种基础类型 + 14 种复合范式（List / Set / Map / Tuple2–4 / `@Ref` ...） |
+| **表格编辑** | Excel 式选区 / 编辑 / 剪贴板互通；8 种基础类型（含 `date` 日期时间）+ 14 种复合范式（List / Set / Map / Tuple2–4 / `@Ref` ...） |
 | **Univer 编辑** | 一组一个独立窗口，多标签；回写只进内存，主界面点保存才落盘。Excel 导入/导出支持多组选表；任意布局的 Excel 可映射导入（选表头 / 数据区 / id 列 + 列映射，多 Sheet 独立处理） |
 | **两种存储后端** | 默认 `.tbl` 目录（文本、可 diff）；也可整组用一个 `.xlsx`（节点 = sheet），直接接管存量 Excel |
 | **校验** | 内置校验 + 节点级 `# @rule`；错误 / 警告 / 提示三级，按项目策略决定阻断保存、仅提示还是忽略 |
@@ -51,6 +51,12 @@
   git pull → tablet-cli validate → tablet-cli export all
       → 生成 server/data + server/code + client → 编译运行
 ```
+
+## v3.1.0 亮点
+
+- **`date` 基础类型**：底层存 Unix 毫秒时间戳（`long`），Tauri 表格按本机时区显示 `YYYY-MM-DD HH:mm:ss`，双击/F2 用日期控件编辑；Excel 导出为真实日期单元格（`yyyy-mm-dd hh:mm:ss`），导入接受日期序列值与毫秒数字。
+- **生成代码不变形**：Java/C# 用 `long`、Go 用 `int64`、C++ 用 `int64_t`、TS/Lua 用 `number`，二进制导出沿用 `TAG_I64`；业务侧不需要日期库也能直接消费时间戳。
+- **仅顶层列**：`date` 不进入 `List<>` / `Map<>` / `Tuple*` 参数位，避免复合类型的分隔符与日期文本互相干扰。
 
 ## v3.0.0 亮点
 
@@ -76,7 +82,7 @@
 
 ```text
 $ tablet-cli --help
-tablet-cli v3.0.0 — TBL 配置管理工具（命令行模式）
+tablet-cli v3.1.0 — TBL 配置管理工具（命令行模式）
 
 Usage: tablet-cli [OPTIONS] <COMMAND>
 

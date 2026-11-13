@@ -457,7 +457,9 @@ button { cursor: default; }
 .sheet th.rownum.in-range { background: var(--selection-header); color: var(--text); }
 
 .sheet td input.cell-edit,
-.sheet td select.cell-edit {
+.sheet td select.cell-edit,
+.sheet th input.cell-edit,
+.sheet th select.cell-edit {
   position: absolute;
   inset: 0;
   width: 100%;
@@ -468,6 +470,11 @@ button { cursor: default; }
   background: var(--surface);
   font-size: var(--fs-sm);
   color: var(--text);
+}
+/* 表头编辑沿用单元格的「铺满整列」行为；否则列拉宽后输入框仍是浏览器默认宽度。 */
+.sheet th input.cell-edit,
+.sheet th select.cell-edit {
+  text-align: left;
 }
 /* .sheet / td / th 上的 user-select:none 会继承进编辑框，导致双击后拖选不了内容。 */
 .sheet .cell-edit {

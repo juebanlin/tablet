@@ -923,6 +923,21 @@ pub(crate) fn file_stamp(path: &Path) -> Option<(std::time::SystemTime, u64)> {
     Some((meta.modified().ok()?, meta.len()))
 }
 
+/// 读取单元格的存储文本。`date` 字段的数值单元格是 Excel 日期序列值，转回 Unix 毫秒；
+/// 文本单元格（含用户直接填的毫秒数字）按原样返回，交给校验层判断。
+fn storage_cell_value(ws: &umya_spreadsheet::Worksheet, c: u32, r: u32, is_date: bool) -> String {
+    let raw = ws.value((c, r));
+    if !is_date {
+        return raw;
+    }
+    let Some(serial) = ws.cell((c, r)).and_then(|cell| cell.value_number()) else {
+        return raw;
+    };
+    crate::date::excel_number_to_epoch_ms(serial)
+        .map(|ms| ms.to_string())
+        .unwrap_or(raw)
+}
+
 /// Table sheet → `Table`。结构完全来自 workbook 的 4 行表头：
 /// desc / export / type / 字段名。
 ///
@@ -1010,9 +1025,14 @@ fn table_from_sheet(
         }
     }
 
+    let date_cols: Vec<bool> = fields.iter().map(|f| crate::date::is_date_type(&f.tbl_type)).collect();
     let mut records: Vec<Vec<String>> = Vec::new();
     for r in DATA_START..=max_row {
-        let cells: Vec<String> = col_of.iter().map(|&c| ws.value((c, r))).collect();
+        let cells: Vec<String> = col_of
+            .iter()
+            .enumerate()
+            .map(|(i, &c)| storage_cell_value(ws, c, r, date_cols[i]))
+            .collect();
         if cells.iter().all(|v| v.is_empty()) { continue; }
         records.push(cells);
     }
@@ -1061,10 +1081,11 @@ fn constant_from_sheet(
     for r in 2..=max_row {
         let name = ws.value((1, r));
         if name.trim().is_empty() { continue; }
+        let tbl_type = ws.value((2, r)).trim().to_string();
         entries.push(ConstEntry {
             name: name.trim().to_string(),
-            tbl_type: ws.value((2, r)).trim().to_string(),
-            value: ws.value((3, r)),
+            value: storage_cell_value(ws, 3, r, crate::date::is_date_type(&tbl_type)),
+            tbl_type,
             export: Export::from_input(&ws.value((4, r))),
             desc: ws.value((5, r)),
         });

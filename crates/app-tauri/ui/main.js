@@ -2301,9 +2301,19 @@ function initTypeSelector() {
     }
     const ref = e.target.closest("[data-tsref]");
     if (ref) {
-      tsState.refName = ref.dataset.tsref;
+      const name = ref.dataset.tsref;
+      const now = Date.now();
+      // 引用列表只有单选；连续点同一项 = 双击，直接确认关闭。
+      // 单击会重建列表 DOM，所以不能依赖原生 dblclick。
+      const doubleClick =
+        name === tsState.lastRefClick &&
+        now - (tsState.lastRefClickAt || 0) < 450;
+      tsState.lastRefClick = name;
+      tsState.lastRefClickAt = now;
+      tsState.refName = name;
       renderTsRefList();
       updateTsPreview();
+      if (doubleClick) confirmTypeSelector();
       return;
     }
     const chip = e.target.closest("[data-tsfilter]");
@@ -4322,7 +4332,7 @@ let emSearch = "";
 let emCheckTimer = 0;
 let emCheckSeq = 0;
 
-const EM_TYPES = ["int", "long", "float", "double", "bool", "str", "txt"];
+const EM_TYPES = ["int", "long", "date", "float", "double", "bool", "str", "txt"];
 const EM_EXPORTS = [
   { code: "cs", label: "前后端" },
   { code: "c", label: "客户端" },

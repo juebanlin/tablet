@@ -31,7 +31,7 @@ function escAttr(s) {
 /** 类型下拉：基础 / 常用容器 / 当前项目的引用目标 / 自定义。 */
 function typeOptionsHtml(current, refs) {
   const groups = [
-    ["基础", ["int", "long", "float", "double", "str", "bool", "txt"]],
+    ["基础", ["int", "long", "date", "float", "double", "str", "bool", "txt"]],
     [
       "容器",
       [
@@ -435,19 +435,31 @@ class SheetGrid {
       e.stopPropagation();
       if (e.key === "Escape") this.closeRefPicker();
     });
+    // 单击选中 / 切换勾选；短时间内再次点同一行 = 双击，直接提交关闭。
+    // 不能只依赖原生 dblclick：单击后 renderBody 会重建 <tr>，第二个 click
+    // 落在新节点上，部分 WebView 就不再派发 dblclick。
+    //
+    // 多选列双击的语义是「确保双击项已勾选，然后提交当前所有已选项」：
+    // 先单击几项、再双击任意一项，可以一次性确定整组勾选结果。
+    let lastClickId = "";
+    let lastClickAt = 0;
     q("tbody").addEventListener("click", (e) => {
       const tr = e.target.closest("tr[data-id]");
-      if (tr) pick(tr.dataset.id);
-    });
-    q("tbody").addEventListener("dblclick", (e) => {
-      const tr = e.target.closest("tr[data-id]");
       if (!tr) return;
-      if (multi) pick(tr.dataset.id);
-      else {
-        state.selectedId = tr.dataset.id;
-        state.manual = tr.dataset.id;
-        confirm();
+      const id = tr.dataset.id;
+      const now = Date.now();
+      const doubleClick = id === lastClickId && now - lastClickAt < 450;
+      lastClickId = id;
+      lastClickAt = now;
+      pick(id);
+      if (!doubleClick) return;
+      if (multi && !state.chosen.has(id)) {
+        // 双击前的两次 click 可能把未选项加进来又切掉；这里强制保留被双击项。
+        state.chosen.add(id);
+        state.manual = [...state.chosen].join(sep);
+        manualEl.value = state.manual;
       }
+      confirm();
     });
     q("[data-ref-ok]").addEventListener("click", confirm);
     q("[data-ref-cancel]").addEventListener("click", () => this.closeRefPicker());
@@ -1120,6 +1132,16 @@ class SheetGrid {
   }
 
   // ── 编辑 ────────────────────────────────────────────────
+  /** 当前格是否是 date 列（顶层 date 才走日期控件；非法类型串按普通文本处理）。 */
+  isDateCell(r, c) {
+    if (!this.node) return false;
+    const rawTy =
+      this.node.mode === "constant"
+        ? this.node.rows?.[r]?.[1]
+        : this.node.headers?.[2]?.[c];
+    return String(rawTy || "").trim().toLowerCase() === "date";
+  }
+
   beginCellEdit(r, c, initial) {
     if (this.locked) return;
     if (!this.node || this.isReadonlyCol(c)) return;
@@ -1141,7 +1163,11 @@ class SheetGrid {
       return;
     }
     // Constant 的 export 列用候选输入；Table 的同类语义在表头，不在这里。
-    const inputKind = kind === "export" ? "export" : "text";
+    // date 列双击/F2 用日期控件；直接打字时仍走文本框，方便手输毫秒时间戳。
+    const raw = this.cellText(r, c);
+    const numeric = raw.trim() === "" || Number.isFinite(Number(raw));
+    const useDate = this.isDateCell(r, c) && initial === undefined && numeric;
+    const inputKind = useDate ? "date" : kind === "export" ? "export" : "text";
     this.beginEdit({ type: "cell", r, c }, initial, inputKind);
   }
 
@@ -1197,6 +1223,14 @@ class SheetGrid {
       input = document.createElement("select");
       input.innerHTML = typeOptionsHtml(value, this.node.refTargets || []);
       input.classList.add("cell-edit", "select-edit");
+    } else if (inputKind === "date") {
+      input = document.createElement("input");
+      input.type = "datetime-local";
+      input.step = "1";
+      input.className = "cell-edit";
+      input.value = dateInputValue(value);
+      this.editing.dateInputValue = input.value;
+      this.editing.isDate = true;
     } else {
       input = document.createElement("input");
       input.className = "cell-edit";
@@ -1208,7 +1242,7 @@ class SheetGrid {
     el.innerHTML = "";
     el.appendChild(input);
     input.focus();
-    if (input.select) input.select();
+    if (input.type !== "datetime-local" && input.select) input.select();
 
     input.addEventListener("keydown", (e) => {
       e.stopPropagation();
@@ -1244,7 +1278,11 @@ class SheetGrid {
     if (!this.editing) return;
     const ed = this.editing;
     const input = ed.el.querySelector("input,select");
-    const value = input ? input.value : ed.original;
+    let value = input ? input.value : ed.original;
+    if (ed.isDate && input) {
+      // 未改动时保留原始毫秒值，避免控件只到秒导致“打开再关闭”也变脏。
+      value = input.value === ed.dateInputValue ? ed.original : localDateToEpoch(input.value);
+    }
     this.editing = null;
 
     if (save && value !== ed.original) {
@@ -1671,6 +1709,27 @@ class SheetGrid {
     document.addEventListener("pointermove", move);
     document.addEventListener("pointerup", up);
   }
+}
+
+/** 毫秒时间戳 → datetime-local 需要的本地墙上时间（秒级）。 */
+function dateInputValue(raw) {
+  const text = String(raw ?? "").trim();
+  if (!text) return "";
+  const ms = Number(text);
+  if (!Number.isFinite(ms)) return "";
+  const d = new Date(ms);
+  if (Number.isNaN(d.getTime())) return "";
+  const pad = (n, len = 2) => String(n).padStart(len, "0");
+  return `${pad(d.getFullYear(), 4)}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(
+    d.getHours(),
+  )}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+}
+
+/** datetime-local 的本地墙上时间 → 毫秒时间戳字符串；空值表示清空。 */
+function localDateToEpoch(value) {
+  if (!value) return "";
+  const ms = new Date(value).getTime();
+  return Number.isFinite(ms) ? String(ms) : "";
 }
 
 /**

@@ -297,17 +297,22 @@ TblFieldType ::= 范式
 
 UI 类型选择器分 [数据类型] / [引用类型] 两个 tab，但只是用户视角的业务分组——schema 层、序列化、代码生成对所有 variant 一视同仁。
 
-### 7.1 基础类型（7 个）
+### 7.1 基础类型（8 个）
 
 | 类型 | 说明 | Java | Go | Lua |
 |------|------|------|----|-----|
 | int | 32 位整数 | int | int32 | number |
 | long | 64 位整数 | long | int64 | number |
+| date | 日期时间（Unix 毫秒时间戳，底层 long；仅独立列） | long | int64 | number |
 | float | 单精度浮点 | float | float32 | number |
 | double | 双精度浮点 | double | float64 | number |
 | str | 简单标识符（属性名、技能名、枚举值） | String | string | string |
 | bool | 布尔 | boolean | bool | boolean |
 | txt | 自由文本（描述、文案、JSON、HTML） | String | string | string |
+
+`date` 的值是 **Unix 毫秒时间戳**（如 `1704067200000` = 2024-01-01 00:00:00 UTC），
+存储、校验和代码生成都按 `long` 处理；只有 UI 展示 / 编辑与 Excel 导出会把它转成人可读的日期。
+`date` 和 `txt` 一样**只能独立成列**，不能进入 `List<>` / `Map<>` / `Tuple*` 的参数位。
 
 **`str` vs `txt`**：
 
@@ -340,7 +345,7 @@ UI 类型选择器分 [数据类型] / [引用类型] 两个 tab，但只是用�
 约束：
 
 - Set 元素必须是基础类型
-- Map 的 K 不能是 bool（仅 `int / long / float / double / str`）
+- Map 的 K 不能是 bool（仅 `int / long / float / double / str`；`date` 也不能作为 key）
 - Map 的 V 支持基础类型、元组、`List<P>`
 
 ### 7.3 17 种合法范式（按嵌套层数）
@@ -367,7 +372,7 @@ UI 类型选择器分 [数据类型] / [引用类型] 两个 tab，但只是用�
 | — | Ref（@Xxx） | `1001`（id） | — |
 
 同一范式内每个 P 位置可独立选择基础类型（如 `Tuple2<int,str>` `Map<str,List<int>>`）。
-> 注意：`txt` **不能进入任何复合类型**——仅 `Paradigm::Base` 允许 `txt`。嵌套字符串用 `str`。
+> 注意：`txt` / `date` **不能进入任何复合类型**——仅 `Paradigm::Base` 允许它们。嵌套字符串用 `str`。
 
 ### 7.4 分隔符配置
 
@@ -556,7 +561,7 @@ camelCase 撞名等价于 PascalCase 撞名（源名必以小写字母开头，�
 
 | 检查项 | 说明 | 错误示例 |
 |--------|------|----------|
-| 基础类型格式 | int/long 必须整数；float/double 必须数字；bool 必须 `true/false`；str 不验证 | `"abc"` 作 int |
+| 基础类型格式 | int/long/date 必须整数；float/double 必须数字；bool 必须 `true/false`；str 不验证 | `"abc"` 作 int；`"2024-01-01"` 作 date |
 | 元组元素数量 | Tuple2 恰好 2 个，Tuple3/4 同理 | `"1,2,3"` 作 Tuple2 |
 | 元组元素类型 | 每个位置匹配对应基础类型 | `"1,abc"` 作 Tuple2\<int,int\> |
 | 集合元素类型 | List/Set 每元素匹配 | `"1;abc;3"` 作 List\<int\> |
@@ -579,7 +584,7 @@ camelCase 撞名等价于 PascalCase 撞名（源名必以小写字母开头，�
 | 位置 | 拦截 | 原因 |
 |------|:---:|------|
 | 表头任意行（desc / export / type / field 行） | ✅ | 字段名进代码生成（变量名 / 类型签名）；type 行进 TblType 解析；export 行进枚举字面 |
-| Table 数据格 — int / long / float / double / bool 类型 | ✅ | 基础类型 parse 错位 |
+| Table 数据格 — int / long / date / float / double / bool 类型 | ✅ | 基础类型 parse 错位 |
 | Table 数据格 — 复合类型（Tuple / List / Set / Map / List\<Tuple\> 等） | ✅ | 中文逗号 ≠ ASCII 分隔符，会让 split 错位 |
 | Table 数据格 — `@TableName` / `@EnumName` 引用 | ✅ | 实际值是 int(id)，按 int 校验 |
 | **Table 数据格 — `txt` 类型**（自由文本：desc 列、name 列、文案列、JSON/HTML/XML） | ❌ 放开 | 玩家可见的自由文本，必须允许中文逗号 / 全角空格 / 引号等 |
@@ -599,6 +604,7 @@ camelCase 撞名等价于 PascalCase 撞名（源名必以小写字母开头，�
 |------|--------|-----|------|
 | Table desc 列填策划文案 | `str` | `步兵基础兵种，克制骑兵` | ✅ 通过 |
 | Table desc 列填 M1 编号 | `str` | `M1：[步兵]` | ✅ 通过 |
+| Table 日期列填 ISO 文本 | `date` | `2024-01-01 12:00:00` | ❌ 拦（必须是毫秒时间戳） |
 | Table 等级列 | `int` | `１００`（全角数字） | ❌ 拦 |
 | Table 技能 ID 列表写错分隔符 | `List<int>` | `1，2，3`（中文逗号） | ❌ 拦（分隔符错位） |
 | `List<str>` 列写中文逗号 | `List<str>` | `战士，法师，弓手` | ❌ 拦（仍是分隔符错位，应写 `战士;法师;弓手`） |
@@ -613,7 +619,7 @@ camelCase 撞名等价于 PascalCase 撞名（源名必以小写字母开头，�
 
 | 类型分类 | 允许空值 | 加载时默认值 | JSON 表达 |
 |---------|---------|-------------|-----------|
-| 基础类型 | ✅ | int=0 / long=0 / float=0.0 / double=0.0 / str="" / bool=false | null |
+| 基础类型 | ✅ | int=0 / long=0 / date=0 / float=0.0 / double=0.0 / str="" / bool=false | null |
 | 集合类型（List/Set/Map/嵌套） | ✅ | 空集合（`[]` / `{}`） | null |
 | 元组类型（Tuple2/3/4） | ❌ | — | — |
 | 引用 `@Xxx` | ✅（视作"未引用"） | int=0 | null |
@@ -692,7 +698,8 @@ camelCase 撞名等价于 PascalCase 撞名（源名必以小写字母开头，�
 
 **类型与比较口径**：
 
-- 只有**标量列**参与规则：`int` / `long` / `float` / `bool` / `str` / `txt` / `@Xxx`。
+- 只有**标量列**参与规则：`int` / `long` / `date` / `float` / `bool` / `str` / `txt` / `@Xxx`。
+  `date` 按整数值（Unix 毫秒）参与数值比较，`range()` / `compare()` / `positive_int()` 都可用。
   `List<>` / `Set<>` / `Map<>` / `Tuple*` / `MapList` 等复合并列表不支持（报 `RuleTypeIncompatible`）。
 - 值比较：**两端都是整数列**时按数值比较（`01` 与 `1` 相同）；其余按 trim 后原字符串比较。
   `ref_exists` 以目标列的值类为准。

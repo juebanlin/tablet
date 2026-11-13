@@ -73,7 +73,7 @@ fn export_visible(export: &Export, runtime: CSharpRuntime) -> bool {
 fn cs_base_type(bt: BaseType) -> &'static str {
     match bt {
         BaseType::Int => "int",
-        BaseType::Long => "long",
+        BaseType::Long | BaseType::Date => "long",
         BaseType::Float => "float",
         BaseType::Double => "double",
         BaseType::Str => "string",
@@ -84,7 +84,7 @@ fn cs_base_type(bt: BaseType) -> &'static str {
 
 fn cs_base_default(bt: BaseType) -> &'static str {
     match bt {
-        BaseType::Int | BaseType::Long => "0",
+        BaseType::Int | BaseType::Long | BaseType::Date => "0",
         BaseType::Float => "0f",
         BaseType::Double => "0d",
         BaseType::Str => "\"\"",
@@ -96,7 +96,7 @@ fn cs_base_default(bt: BaseType) -> &'static str {
 fn cs_base_parse_fn(bt: BaseType) -> &'static str {
     match bt {
         BaseType::Int => "TblParse.ParseInt32",
-        BaseType::Long => "TblParse.ParseInt64",
+        BaseType::Long | BaseType::Date => "TblParse.ParseInt64",
         BaseType::Float => "TblParse.ParseFloat",
         BaseType::Double => "TblParse.ParseDouble",
         BaseType::Str => "TblParse.ParseStr",
@@ -376,7 +376,7 @@ fn gen_table_load_bin(
                 Paradigm::Base => {
                     let getter = match t.params.first() {
                         Some(TypeParam::Base(BaseType::Int)) => "GetInt32",
-                        Some(TypeParam::Base(BaseType::Long)) => "GetInt64",
+                        Some(TypeParam::Base(BaseType::Long | BaseType::Date)) => "GetInt64",
                         Some(TypeParam::Base(BaseType::Float)) => "GetFloat32",
                         Some(TypeParam::Base(BaseType::Double)) => "GetFloat64",
                         Some(TypeParam::Base(BaseType::Bool)) => "GetBool",

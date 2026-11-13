@@ -121,10 +121,12 @@ const full = await evalJs(`({
   active: [...document.querySelectorAll('[data-strategy].primary')].map(b => b.dataset.strategy).join('')
 })`);
 check("全部列展示", full.fields.includes("bonus") && full.active === "full", full);
-await evalJs(`(() => {
-  const tr = document.querySelector('.ref-popup tbody tr[data-id]');
-  tr.dispatchEvent(new MouseEvent('click', { bubbles: true }));
-  tr.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
+await evalJs(`(async () => {
+  const tb = document.querySelector('.ref-popup tbody');
+  const hit = () => tb.querySelector('tr[data-id]').dispatchEvent(new MouseEvent('click', { bubbles: true, detail: 1 }));
+  hit();
+  await new Promise(r => setTimeout(r, 60));
+  hit();
   return true;
 })()`);
 await sleep(300);
@@ -143,9 +145,18 @@ const after = await evalJs(`({
   manual: document.querySelector('[data-ref-manual]').value
 })`);
 check("勾选同步当前值", after.manual === "1;2;3" && after.preview.includes("3 项"), after);
-await evalJs(`document.querySelector('[data-ref-ok]').click()`);
+// 多选也支持双击：双击已勾选项 -> 保留全部勾选并提交。
+await evalJs(`(async () => {
+  const tb = document.querySelector('.ref-popup tbody');
+  const hit = () => tb.querySelectorAll('tr[data-id]')[2].dispatchEvent(new MouseEvent('click', { bubbles: true, detail: 1 }));
+  hit();
+  await new Promise(r => setTimeout(r, 60));
+  hit();
+  return true;
+})()`);
 await sleep(300);
-check("多选提交", (await evalJs(`__tt.state.snapshot.grid.rows[0][5]`)) === "1;2;3");
+check("多选双击提交", (await evalJs(`__tt.state.snapshot.grid.rows[0][5]`)) === "1;2;3");
+check("多选双击后关闭", (await evalJs(`!document.querySelector('.ref-popup')`)) === true);
 
 const failed = results.filter((r) => !r.ok);
 console.log(results.map((r) => `${r.ok ? "PASS" : "FAIL"}  ${r.name}`).join("\n"));

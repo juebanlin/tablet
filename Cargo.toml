@@ -6,7 +6,7 @@ resolver = "2"
 # 三个 crate（tablet-core / tablet-cli / tablet[Tauri GUI]）都用 `version.workspace = true`
 # 继承本字段；改版本只需在这里改一次。
 [workspace.package]
-version = "3.0.1"
+version = "3.1.0"
 
 [profile.dev]
 # 编译速度优先（agent 默认走 dev，频繁 cargo check / build）

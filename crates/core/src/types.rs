@@ -2,6 +2,10 @@
 pub enum BaseType {
     Int,
     Long,
+    /// Unix 毫秒时间戳（UTC 时间轴上的瞬时值）。
+    /// 存储与 long 完全一致；额外提供 UI 日期展示 / 编辑与 Excel 日期互转语义。
+    /// 仅允许独立列（Paradigm::Base），不可嵌套在复合类型中。
+    Date,
     Float,
     Double,
     Str,
@@ -14,10 +18,10 @@ pub enum BaseType {
 
 impl BaseType {
     pub fn all() -> &'static [BaseType] {
-        &[BaseType::Int, BaseType::Long, BaseType::Float, BaseType::Double, BaseType::Str, BaseType::Bool, BaseType::Txt]
+        &[BaseType::Int, BaseType::Long, BaseType::Date, BaseType::Float, BaseType::Double, BaseType::Str, BaseType::Bool, BaseType::Txt]
     }
 
-    /// 可用于嵌套位置的基础类型（不含 `txt`，因为 `txt` 仅允许独立列）。
+    /// 可用于嵌套位置的基础类型（不含 `txt` / `date`，二者仅允许独立列）。
     pub fn all_nestable() -> &'static [BaseType] {
         &[BaseType::Int, BaseType::Long, BaseType::Float, BaseType::Double, BaseType::Str, BaseType::Bool]
     }
@@ -30,6 +34,7 @@ impl BaseType {
         match self {
             BaseType::Int => "int",
             BaseType::Long => "long",
+            BaseType::Date => "date",
             BaseType::Float => "float",
             BaseType::Double => "double",
             BaseType::Str => "str",
@@ -42,6 +47,7 @@ impl BaseType {
         match s {
             "int" => Some(BaseType::Int),
             "long" => Some(BaseType::Long),
+            "date" => Some(BaseType::Date),
             "float" => Some(BaseType::Float),
             "double" => Some(BaseType::Double),
             "str" => Some(BaseType::Str),
@@ -56,6 +62,7 @@ impl BaseType {
         match self {
             BaseType::Int => "32 位整数",
             BaseType::Long => "64 位整数",
+            BaseType::Date => "日期时间（Unix 毫秒时间戳，底层 long）",
             BaseType::Float => "单精度浮点",
             BaseType::Double => "双精度浮点",
             BaseType::Str => "字符串（支持空格标点，不含 \\ | 换行制表）",
@@ -67,7 +74,7 @@ impl BaseType {
     pub fn java_type(&self) -> &'static str {
         match self {
             BaseType::Int => "int",
-            BaseType::Long => "long",
+            BaseType::Long | BaseType::Date => "long",
             BaseType::Float => "float",
             BaseType::Double => "double",
             BaseType::Str => "String",
@@ -79,7 +86,7 @@ impl BaseType {
     pub fn java_boxed(&self) -> &'static str {
         match self {
             BaseType::Int => "Integer",
-            BaseType::Long => "Long",
+            BaseType::Long | BaseType::Date => "Long",
             BaseType::Float => "Float",
             BaseType::Double => "Double",
             BaseType::Str => "String",
@@ -91,7 +98,7 @@ impl BaseType {
     pub fn go_type(&self) -> &'static str {
         match self {
             BaseType::Int => "int32",
-            BaseType::Long => "int64",
+            BaseType::Long | BaseType::Date => "int64",
             BaseType::Float => "float32",
             BaseType::Double => "float64",
             BaseType::Str => "string",
@@ -102,7 +109,7 @@ impl BaseType {
 
     pub fn lua_type(&self) -> &'static str {
         match self {
-            BaseType::Int | BaseType::Long | BaseType::Float | BaseType::Double => "number",
+            BaseType::Int | BaseType::Long | BaseType::Date | BaseType::Float | BaseType::Double => "number",
             BaseType::Str => "string",
             BaseType::Bool => "boolean",
             BaseType::Txt => "string",
@@ -113,6 +120,7 @@ impl BaseType {
         match (self, idx % 3) {
             (BaseType::Int, 0) => "1", (BaseType::Int, 1) => "2", (BaseType::Int, _) => "3",
             (BaseType::Long, 0) => "1000", (BaseType::Long, 1) => "2000", (BaseType::Long, _) => "3000",
+            (BaseType::Date, 0) => "1704067200000", (BaseType::Date, 1) => "1717200000000", (BaseType::Date, _) => "1735689600000",
             (BaseType::Float, 0) => "1.5", (BaseType::Float, 1) => "2.5", (BaseType::Float, _) => "3.5",
             (BaseType::Double, 0) => "3.14", (BaseType::Double, 1) => "6.28", (BaseType::Double, _) => "9.42",
             (BaseType::Str, 0) => "fire sword", (BaseType::Str, 1) => "max hp", (BaseType::Str, _) => "hero name",
@@ -125,6 +133,7 @@ impl BaseType {
         match (self, idx % 2) {
             (BaseType::Int, 0) => "1", (BaseType::Int, _) => "2",
             (BaseType::Long, 0) => "1000", (BaseType::Long, _) => "2000",
+            (BaseType::Date, 0) => "1704067200000", (BaseType::Date, _) => "1717200000000",
             (BaseType::Float, 0) => "1.0", (BaseType::Float, _) => "2.0",
             (BaseType::Double, 0) => "1.0", (BaseType::Double, _) => "2.0",
             (BaseType::Str, 0) => "hp", (BaseType::Str, _) => "mp",
@@ -139,6 +148,11 @@ impl BaseType {
         match self {
             BaseType::Int => format!("{}", (seed % 100) as i32 + 1),
             BaseType::Long => format!("{}", (seed % 10000) as i64 + 1000),
+            BaseType::Date => {
+                // 随机示例固定落在一个可读的日期区间内，避免产生超出展示范围的极端值。
+                let base = 1_704_067_200_000i64; // 2024-01-01 00:00:00 UTC
+                format!("{}", base + (seed as i64 % 31_536_000_000))
+            }
             BaseType::Float => format!("{:.1}", (seed % 100) as f32 / 10.0),
             BaseType::Double => format!("{:.2}", (seed % 1000) as f64 / 100.0),
             BaseType::Str => {
@@ -159,6 +173,7 @@ impl BaseType {
         match self {
             BaseType::Int => format!("{}", (seed % 50) as i32 + 1),
             BaseType::Long => format!("{}", (seed % 5000) as i64 + 1000),
+            BaseType::Date => "1704067200000".to_string(),
             BaseType::Float => format!("{:.1}", (seed % 20) as f32 + 1.0),
             BaseType::Double => format!("{:.1}", (seed % 20) as f64 + 1.0),
             BaseType::Str => {
@@ -315,9 +330,9 @@ impl TblType {
 
     pub fn parse(s: &str) -> Option<Self> {
         let tt = Self::parse_inner(s)?;
-        // txt 仅允许独立列（Paradigm::Base），禁止嵌套在复合类型中。
+        // txt / date 仅允许独立列（Paradigm::Base），禁止嵌套在复合类型中。
         if tt.paradigm != Paradigm::Base && tt.paradigm != Paradigm::Ref {
-            if tt.params.iter().any(|p| matches!(p, TypeParam::Base(BaseType::Txt))) {
+            if tt.params.iter().any(|p| matches!(p, TypeParam::Base(BaseType::Txt | BaseType::Date))) {
                 return None;
             }
         }
@@ -779,6 +794,9 @@ fn validate_base(value: &str, bt: BaseType) -> Option<&'static str> {
     match bt {
         BaseType::Int => { if value.parse::<i32>().is_err() { Some("不是合法int") } else { None } }
         BaseType::Long => { if value.parse::<i64>().is_err() { Some("不是合法long") } else { None } }
+        BaseType::Date => {
+            if value.parse::<i64>().is_err() { Some("不是合法date（Unix 毫秒时间戳）") } else { None }
+        }
         BaseType::Float => { if value.parse::<f32>().is_err() { Some("不是合法float") } else { None } }
         BaseType::Double => { if value.parse::<f64>().is_err() { Some("不是合法double") } else { None } }
         BaseType::Bool => { if value != "true" && value != "false" { Some("必须是true或false") } else { None } }
@@ -1431,6 +1449,24 @@ mod tests {
         let t = TblType::parse("@HeroType").unwrap();
         assert_eq!(t.paradigm, Paradigm::Ref);
         assert_eq!(t.ref_name.as_deref(), Some("HeroType"));
+    }
+
+    #[test]
+    fn date_is_top_level_only_and_maps_to_long() {
+        let t = TblType::parse("date").unwrap();
+        assert_eq!(t.to_type_string(), "date");
+        assert_eq!(t.java_decl(), "long");
+        assert_eq!(t.go_decl(), "int64");
+        assert_eq!(t.lua_decl(), "number");
+        assert!(t.validate_value("1704067200000", &SeparatorsSection::default()).is_none());
+        assert!(t.validate_value("2024-01-01 00:00:00", &SeparatorsSection::default()).is_some());
+
+        // 仅允许独立列，不能嵌套进 List / Tuple / Map 参数位。
+        assert!(TblType::parse("List<date>").is_none());
+        assert!(TblType::parse("Tuple2<int,date>").is_none());
+        assert!(TblType::parse("Map<str,date>").is_none());
+        assert!(BaseType::all().contains(&BaseType::Date));
+        assert!(!BaseType::all_nestable().contains(&BaseType::Date));
     }
 
     #[test]

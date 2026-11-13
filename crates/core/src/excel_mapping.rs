@@ -644,6 +644,25 @@ pub enum MappedEntries {
     Enums(Vec<EnumEntry>),
 }
 
+/// 映射导入读取单元格：`date` 目标字段的数值单元格是 Excel 日期序列值，转成 Unix 毫秒。
+fn mapped_cell_value(
+    ws: &umya_spreadsheet::Worksheet,
+    c: u32,
+    r: u32,
+    is_date: bool,
+) -> String {
+    let raw = ws.value((c, r));
+    if !is_date {
+        return raw;
+    }
+    let Some(serial) = ws.cell((c, r)).and_then(|cell| cell.value_number()) else {
+        return raw;
+    };
+    crate::date::excel_number_to_epoch_ms(serial)
+        .map(|ms| ms.to_string())
+        .unwrap_or(raw)
+}
+
 /// 常量 / 枚举：从数据起始行往下逐行读成条目。全空的映射单元格跳过。
 pub fn build_entries(plan: &EntryMappingPlan) -> Result<MappedEntries, String> {
     validate_entry_plan(plan)?;
@@ -690,10 +709,13 @@ pub fn build_entries(plan: &EntryMappingPlan) -> Result<MappedEntries, String> {
                     parse_export_value(&export_raw)
                         .ok_or_else(|| format!("第 {} 行：export 值不合法: {:?}", r, export_raw))?
                 };
+                let value = find("value")
+                    .map(|c| mapped_cell_value(ws, c, r, crate::date::is_date_type(&ty)))
+                    .unwrap_or_default();
                 constants.push(ConstEntry {
                     name,
                     tbl_type: ty,
-                    value: get(r, "value"),
+                    value,
                     export,
                     desc: get(r, "desc"),
                 });
@@ -794,8 +816,13 @@ pub fn build_table_parts(plan: &MappingPlan) -> Result<(Vec<FieldDef>, Vec<Vec<S
     let mut seen_ids: HashSet<String> = HashSet::new();
     for r in plan.data_start..=max_row {
         let mut cells = Vec::with_capacity(plan.fields.len());
-        for f in &plan.fields {
-            cells.push(ws.value((f.source_col, r)));
+        for (i, f) in plan.fields.iter().enumerate() {
+            cells.push(mapped_cell_value(
+                ws,
+                f.source_col,
+                r,
+                crate::date::is_date_type(&fields[i].tbl_type),
+            ));
         }
         if cells.iter().all(|v| v.is_empty()) { continue; }
         let id = cells[0].trim();
@@ -923,6 +950,46 @@ mod tests {
         assert_eq!(infer_type(&["1.5".into()]), "float");
         assert_eq!(infer_type(&["true".into(), "FALSE".into()]), "bool");
         assert_eq!(infer_type(&["a".into()]), "str");
+    }
+
+    #[test]
+    fn maps_excel_date_cell_to_epoch_ms() {
+        let dir = std::env::temp_dir().join(format!(
+            "tablet_excel_mapping_date_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("dated.xlsx");
+        let ms = 1_704_067_200_000i64;
+        let serial = crate::date::epoch_ms_to_excel_serial(ms).unwrap();
+        let fmt = rust_xlsxwriter::Format::new().set_num_format("yyyy-mm-dd hh:mm:ss");
+        let mut wb = rust_xlsxwriter::Workbook::new();
+        let ws = wb.add_worksheet();
+        ws.set_name("Event").unwrap();
+        ws.write_string(0, 0, "ID").unwrap();
+        ws.write_string(0, 1, "Start").unwrap();
+        ws.write_string(1, 0, "1").unwrap();
+        ws.write_number_with_format(1, 1, serial, &fmt).unwrap();
+        std::fs::write(&path, wb.save_to_buffer().unwrap()).unwrap();
+
+        let plan = MappingPlan {
+            source: path,
+            sheet: "Event".into(),
+            header_row: 1,
+            data_start: 2,
+            desc_row: 0,
+            type_row: 0,
+            export_row: 0,
+            group_name: "time".into(),
+            node_name: "Event".into(),
+            fields: vec![
+                MappedField { target_name: "id".into(), source_col: 1, tbl_type: "int".into(), export: Export::ClientServer, desc: "ID".into() },
+                MappedField { target_name: "start_at".into(), source_col: 2, tbl_type: "date".into(), export: Export::ClientServer, desc: "开始时间".into() },
+            ],
+        };
+        let (_, records) = build_table_parts(&plan).unwrap();
+        assert_eq!(records[0][1], ms.to_string());
     }
 
     #[test]

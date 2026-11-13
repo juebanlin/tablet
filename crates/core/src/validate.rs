@@ -336,7 +336,7 @@ pub fn value_class_of_type(tbl_type: &str) -> Option<ValueClass> {
     match t.paradigm {
         Paradigm::Ref => Some(ValueClass::Text),
         Paradigm::Base => match t.params.first() {
-            Some(TypeParam::Base(b)) if matches!(b, BaseType::Int | BaseType::Long) =>
+            Some(TypeParam::Base(b)) if matches!(b, BaseType::Int | BaseType::Long | BaseType::Date) =>
                 Some(ValueClass::Int),
             Some(TypeParam::Base(BaseType::Float)) => Some(ValueClass::Float),
             Some(TypeParam::Base(_)) => Some(ValueClass::Text),

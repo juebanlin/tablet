@@ -72,7 +72,7 @@ fn is_ts_identifier(s: &str) -> bool {
 
 fn base_to_ts_type(bt: BaseType) -> &'static str {
     match bt {
-        BaseType::Int | BaseType::Long | BaseType::Float | BaseType::Double => "number",
+        BaseType::Int | BaseType::Long | BaseType::Date | BaseType::Float | BaseType::Double => "number",
         BaseType::Str => "string",
         BaseType::Bool => "boolean",
         BaseType::Txt => "string",
@@ -81,7 +81,7 @@ fn base_to_ts_type(bt: BaseType) -> &'static str {
 
 fn base_to_ts(raw: &str, bt: BaseType) -> String {
     match bt {
-        BaseType::Int | BaseType::Long => {
+        BaseType::Int | BaseType::Long | BaseType::Date => {
             raw.parse::<i64>().map(|v| v.to_string()).unwrap_or_else(|_| "0".to_string())
         }
         BaseType::Float | BaseType::Double => {
@@ -390,7 +390,7 @@ fn default_for_field(tbl_type_str: &str) -> String {
     match &tt.paradigm {
         Paradigm::Base => match &tt.params[0] {
             TypeParam::Base(bt) => match bt {
-                BaseType::Int | BaseType::Long | BaseType::Float | BaseType::Double => "0".to_string(),
+                BaseType::Int | BaseType::Long | BaseType::Date | BaseType::Float | BaseType::Double => "0".to_string(),
                 BaseType::Str => "\"\"".to_string(),
                 BaseType::Bool => "false".to_string(),
                 BaseType::Txt => "\"\"".to_string(),

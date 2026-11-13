@@ -33,7 +33,7 @@ fn is_server_export(export: &Export) -> bool {
 fn cpp_base_type(bt: BaseType) -> &'static str {
     match bt {
         BaseType::Int => "int32_t",
-        BaseType::Long => "int64_t",
+        BaseType::Long | BaseType::Date => "int64_t",
         BaseType::Float => "float",
         BaseType::Double => "double",
         BaseType::Str => "std::string",
@@ -44,7 +44,7 @@ fn cpp_base_type(bt: BaseType) -> &'static str {
 
 fn cpp_base_default(bt: BaseType) -> &'static str {
     match bt {
-        BaseType::Int | BaseType::Long => "0",
+        BaseType::Int | BaseType::Long | BaseType::Date => "0",
         BaseType::Float | BaseType::Double => "0",
         BaseType::Str => "{}",
         BaseType::Bool => "false",
@@ -55,7 +55,7 @@ fn cpp_base_default(bt: BaseType) -> &'static str {
 fn cpp_base_parse_fn(bt: BaseType) -> &'static str {
     match bt {
         BaseType::Int => "parse_int32",
-        BaseType::Long => "parse_int64",
+        BaseType::Long | BaseType::Date => "parse_int64",
         BaseType::Float => "parse_float",
         BaseType::Double => "parse_double",
         BaseType::Str => "parse_str",

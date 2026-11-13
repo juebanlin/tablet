@@ -1107,6 +1107,14 @@ fn ensure_sheet<'a>(
         .map_err(|e| format!("打开 sheet {} 失败: {}", name, e))
 }
 
+/// `date` 字段的存储值（Unix 毫秒）→ Excel 序列值；空值/非法值返回 None。
+fn value_as_excel_date(raw: &str) -> Option<f64> {
+    raw.trim()
+        .parse::<i64>()
+        .ok()
+        .and_then(crate::date::epoch_ms_to_excel_serial)
+}
+
 /// 把一个 Table 写进 sheet：4 行表头 + 数据，列按**字段名**对齐（策划的私有列原样留着）。
 fn write_table_sheet(
     ws: &mut umya_spreadsheet::Worksheet,
@@ -1151,7 +1159,18 @@ fn write_table_sheet(
         let r = DATA_START + ri as u32;
         for (i, v) in row.iter().enumerate() {
             if let Some(&c) = col_of.get(i) {
-                ws.cell_mut((c, r)).set_value(v.clone());
+                let is_date = fields.get(i).is_some_and(|f| crate::date::is_date_type(&f.tbl_type));
+                let cell = ws.cell_mut((c, r));
+                if is_date {
+                    if let Some(serial) = value_as_excel_date(v) {
+                        cell.set_value(serial.to_string());
+                        cell.style_mut()
+                            .number_format_mut()
+                            .set_format_code(crate::excel::DATE_NUM_FORMAT);
+                        continue;
+                    }
+                }
+                cell.set_value(v.clone());
             }
         }
     }
@@ -1179,7 +1198,19 @@ fn write_constant_sheet(ws: &mut umya_spreadsheet::Worksheet, constant: &crate::
         let r = ri as u32 + 2;
         ws.cell_mut((1, r)).set_value(e.name.clone());
         ws.cell_mut((2, r)).set_value(e.tbl_type.clone());
-        ws.cell_mut((3, r)).set_value(e.value.clone());
+        if crate::date::is_date_type(&e.tbl_type) {
+            if let Some(serial) = value_as_excel_date(&e.value) {
+                let cell = ws.cell_mut((3, r));
+                cell.set_value(serial.to_string());
+                cell.style_mut()
+                    .number_format_mut()
+                    .set_format_code(crate::excel::DATE_NUM_FORMAT);
+            } else {
+                ws.cell_mut((3, r)).set_value(e.value.clone());
+            }
+        } else {
+            ws.cell_mut((3, r)).set_value(e.value.clone());
+        }
         ws.cell_mut((4, r)).set_value(e.export.display().to_string());
         ws.cell_mut((5, r)).set_value(e.desc.clone());
     }

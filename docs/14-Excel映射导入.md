@@ -146,7 +146,7 @@ HP / Hp / hp                         → hp
   - 全部数字（含小数）→ `float`
   - 全部 `true/false` → `bool`
   - 其它 → `str`
-- 用户必须能覆盖；Phase A 固定提供 `int / float / bool / str / txt`，复合类型 / `@Ref` 在 Phase B 再做。
+- 用户必须能覆盖；Phase A 固定提供 `int / long / date / float / bool / str / txt`，复合类型 / `@Ref` 在 Phase B 再做。
 - 推断结果只是建议，不静默决定最终类型。
 
 ### 4.4 export / desc

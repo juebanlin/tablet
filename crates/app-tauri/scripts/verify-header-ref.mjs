@@ -135,16 +135,16 @@ await openHeader("2:1");
 await until(`!document.getElementById('type-selector').hidden`, "再次打开类型选择器");
 await evalJs(`document.querySelector('[data-tstab=ref]').click()`);
 await sleep(200);
-await evalJs(`(() => {
-  const it = [...document.querySelectorAll('.ts-ref-item')].find(e => e.textContent.includes('HeroType'));
-  it.click();
+await evalJs(`(async () => {
+  const hit = () => [...document.querySelectorAll('.ts-ref-item')].find(e => e.textContent.includes('HeroType')).click();
+  hit();
+  await new Promise(r => setTimeout(r, 60));
+  hit();
   return true;
 })()`);
-await sleep(200);
-check("引用类型预览", (await evalJs(`document.getElementById('ts-result').textContent`)) === "@HeroType");
-await evalJs(`document.getElementById('ts-ok').click()`);
 await sleep(300);
-check("引用类型提交", (await evalJs(`__tt.state.snapshot.grid.headers[2][1]`)) === "@HeroType");
+check("引用类型双击提交", (await evalJs(`__tt.state.snapshot.grid.headers[2][1]`)) === "@HeroType");
+check("引用类型双击后关闭", (await evalJs(`document.getElementById('type-selector').hidden`)) === true);
 
 // 3.5 Map 参数位
 await openHeader("2:1");

@@ -82,7 +82,7 @@ fn t_go_decl(t: &TblType) -> String {
 fn base_parse_fn(bt: BaseType) -> &'static str {
     match bt {
         BaseType::Int => "parseInt32",
-        BaseType::Long => "parseInt64",
+        BaseType::Long | BaseType::Date => "parseInt64",
         BaseType::Float => "parseFloat32",
         BaseType::Double => "parseFloat64",
         BaseType::Str => "parseStr",
@@ -137,7 +137,7 @@ fn parse_expr(raw_var: &str, t: &TblType, sep_var: &str) -> String {
             TypeParam::Base(BaseType::Double) => format!("parseListFloat64({}, {}.List)", raw_var, sep_var),
             TypeParam::Base(BaseType::Str) => format!("parseListString({}, {}.List)", raw_var, sep_var),
             TypeParam::Base(BaseType::Bool) => format!("parseListBool({}, {}.List)", raw_var, sep_var),
-            TypeParam::Base(BaseType::Txt) => unreachable!("txt not allowed in List"),
+            TypeParam::Base(BaseType::Txt | BaseType::Date) => unreachable!("txt/date not allowed in List"),
         },
         Paradigm::Set => match &p[0] {
             TypeParam::Base(BaseType::Int) | TypeParam::Ref(_) => format!("parseSetInt32({}, {}.Set)", raw_var, sep_var),
@@ -146,7 +146,7 @@ fn parse_expr(raw_var: &str, t: &TblType, sep_var: &str) -> String {
             TypeParam::Base(BaseType::Double) => format!("parseSetFloat64({}, {}.Set)", raw_var, sep_var),
             TypeParam::Base(BaseType::Str) => format!("parseSetString({}, {}.Set)", raw_var, sep_var),
             TypeParam::Base(BaseType::Bool) => format!("parseSetBool({}, {}.Set)", raw_var, sep_var),
-            TypeParam::Base(BaseType::Txt) => unreachable!("txt not allowed in Set"),
+            TypeParam::Base(BaseType::Txt | BaseType::Date) => unreachable!("txt/date not allowed in Set"),
         },
 
         Paradigm::Map => format!(
@@ -217,7 +217,7 @@ fn parse_expr(raw_var: &str, t: &TblType, sep_var: &str) -> String {
                 "ParseListItems({raw}, {sep}.ListListList, func(s string) []bool {{ return parseListBool(s, {sep}.ListListItem) }})",
                 raw=raw_var, sep=sep_var
             ),
-            TypeParam::Base(BaseType::Txt) => unreachable!("txt not allowed in ListList"),
+            TypeParam::Base(BaseType::Txt | BaseType::Date) => unreachable!("txt/date not allowed in ListList"),
         },
 
         Paradigm::ListMap => format!(
@@ -255,7 +255,7 @@ fn parse_expr(raw_var: &str, t: &TblType, sep_var: &str) -> String {
                 "ParseMap({raw}, {sep}.MapListKv, {sep}.MapListEntry, {fk}, func(s string) []bool {{ return parseListBool(s, {sep}.MapListItem) }})",
                 raw=raw_var, sep=sep_var, fk=f(&p[0])
             ),
-            TypeParam::Base(BaseType::Txt) => unreachable!("txt not allowed in MapList"),
+            TypeParam::Base(BaseType::Txt | BaseType::Date) => unreachable!("txt/date not allowed in MapList"),
         },
 
         // 引用类型默认按 table ref 处理 → int32(id)；enum ref 由调用方在生成时改写

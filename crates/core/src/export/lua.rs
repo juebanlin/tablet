@@ -34,7 +34,7 @@ fn is_lua_identifier(s: &str) -> bool {
 
 fn base_to_lua(raw: &str, bt: BaseType) -> String {
     match bt {
-        BaseType::Int | BaseType::Long => {
+        BaseType::Int | BaseType::Long | BaseType::Date => {
             raw.parse::<i64>().map(|v| v.to_string()).unwrap_or_else(|_| "0".to_string())
         }
         BaseType::Float | BaseType::Double => {

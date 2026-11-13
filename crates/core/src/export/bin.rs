@@ -80,7 +80,7 @@ pub fn tag_of(tbl_type: Option<&TblType>) -> u8 {
     match t.paradigm {
         Paradigm::Base => match t.params.first() {
             Some(crate::types::TypeParam::Base(BaseType::Int)) => TAG_I32,
-            Some(crate::types::TypeParam::Base(BaseType::Long)) => TAG_I64,
+            Some(crate::types::TypeParam::Base(BaseType::Long | BaseType::Date)) => TAG_I64,
             Some(crate::types::TypeParam::Base(BaseType::Float)) => TAG_F32,
             Some(crate::types::TypeParam::Base(BaseType::Double)) => TAG_F64,
             Some(crate::types::TypeParam::Base(BaseType::Bool)) => TAG_BOOL,
@@ -523,6 +523,11 @@ mod tests {
             }
         }
         (kind, hash, names, out)
+    }
+
+    #[test]
+    fn date_uses_i64_tag() {
+        assert_eq!(tag_of(TblType::parse("date").as_ref()), TAG_I64);
     }
 
     #[test]

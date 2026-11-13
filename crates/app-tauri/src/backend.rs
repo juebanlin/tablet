@@ -33,6 +33,7 @@ use tablet_core::tblschema::parse_tblschema;
 use tablet_core::template::{BuiltinTemplates, LocalTemplates, TemplateSource};
 use tablet_core::types::{Paradigm, SepKey, SeparatorsSection, TblType, TypeParam};
 use tablet_core::excel::{apply_group_patch, import_xlsx_into_group};
+use tablet_core::date;
 
 /// 与旧版行为一致：表格尾部留 5 行占位，方便直接输入新记录。
 const EXTRA_ROWS: usize = 5;
@@ -1306,12 +1307,15 @@ impl Backend {
         let types: Vec<String> = fields.iter().map(|f| one_line(&f.tbl_type)).collect();
         let names: Vec<String> = fields.iter().map(|f| f.label().to_string()).collect();
 
+        let date_cols: Vec<bool> = fields.iter().map(|f| date::is_date_type(&f.tbl_type)).collect();
         let mut kinds = Vec::with_capacity(fields.len());
         for (i, f) in fields.iter().enumerate() {
             kinds.push(if f.is_aux() {
                 "aux".to_string()
             } else if i == 0 {
                 "text".to_string() // id 列数据可编辑（输入新行），表头才是只读
+            } else if date_cols[i] {
+                "date".to_string()
             } else if is_ref_type(&f.tbl_type) {
                 "ref".to_string()
             } else {
@@ -1348,6 +1352,7 @@ impl Backend {
                 .collect(),
         ];
 
+        let has_date = date_cols.iter().any(|&d| d);
         let mut rows = Vec::with_capacity(valid_count + EXTRA_ROWS);
         let mut display_rows = Vec::new();
         let mut errors = Vec::new();
@@ -1362,7 +1367,9 @@ impl Backend {
                 }
                 // rows 始终是磁盘原值（引用写 id）；展示值单独给前端渲染。
                 // 复制/粘贴/公式栏必须用原值，否则会把显示名写回引用格。
-                let display = if self.show_ref_name && !fields[c].is_aux() {
+                let display = if date_cols[c] {
+                    date::display_value(&text)
+                } else if self.show_ref_name && !fields[c].is_aux() {
                     self.display_ref_value(&fields[c].tbl_type, &text, &mut ref_cache)
                 } else {
                     text.clone()
@@ -1371,7 +1378,7 @@ impl Backend {
                 display_row.push(display);
             }
             rows.push(row);
-            if self.show_ref_name {
+            if self.show_ref_name || has_date {
                 display_rows.push(display_row);
             }
         }
@@ -1440,6 +1447,7 @@ impl Backend {
     fn constant_grid(&self, group: &str, name: &str) -> Option<GridPayload> {
         let constant = self.engine.find_constant(group, name)?;
         let valid_count = valid_constant_rows(constant);
+        let has_date = constant.entries.iter().any(|e| date::is_date_type(&e.tbl_type));
         let mut rows = Vec::with_capacity(valid_count + EXTRA_ROWS);
         let mut display_rows = Vec::new();
         let mut errors = Vec::new();
@@ -1459,12 +1467,18 @@ impl Backend {
                 ],
                 None => vec![String::new(); 5],
             });
-            if self.show_ref_name {
+            if self.show_ref_name || has_date {
                 display_rows.push(match entry {
                     Some(e) => vec![
                         e.name.clone(),
                         e.tbl_type.clone(),
-                        self.display_ref_value(&e.tbl_type, &e.value, &mut ref_cache),
+                        if date::is_date_type(&e.tbl_type) {
+                            date::display_value(&e.value)
+                        } else if self.show_ref_name {
+                            self.display_ref_value(&e.tbl_type, &e.value, &mut ref_cache)
+                        } else {
+                            e.value.clone()
+                        },
                         e.export.display().to_string(),
                         e.desc.clone(),
                     ],
@@ -1581,15 +1595,18 @@ impl Backend {
         row: usize,
         col: usize,
     ) -> Option<String> {
-        if !self.show_ref_name {
-            return None;
-        }
         let mut cache = std::collections::HashMap::new();
         match kind {
             SelKind::Table => {
                 let table = self.engine.find_table(group, name)?;
                 let ty = table.schema.fields.get(col)?.tbl_type.clone();
                 let raw = table.records.get(row).and_then(|r| r.get(col)).cloned().unwrap_or_default();
+                if date::is_date_type(&ty) {
+                    return Some(date::display_value(&raw));
+                }
+                if !self.show_ref_name {
+                    return None;
+                }
                 Some(self.display_ref_value(&ty, &raw, &mut cache))
             }
             SelKind::Constant => {
@@ -1599,6 +1616,12 @@ impl Backend {
                 }
                 let constant = self.engine.find_constant(group, name)?;
                 let entry = constant.entries.get(row)?;
+                if date::is_date_type(&entry.tbl_type) {
+                    return Some(date::display_value(&entry.value));
+                }
+                if !self.show_ref_name {
+                    return None;
+                }
                 Some(self.display_ref_value(&entry.tbl_type, &entry.value, &mut cache))
             }
             // Enum 没有引用列。

@@ -3,21 +3,40 @@
 类型字符串由 `TblType::parse` 解析，**只接受本文列出的形式**。写别的（`List<List<List<int>>>`、`Tuple5<..>`、
 `Set<Tuple2<..>>`、`Integer`、`string`）一律报"类型不合法"。
 
-## 基础类型（7）
+## 基础类型（8）
 
 | 类型 | 含义 | 值示例 | Java | Go | Lua |
 |---|---|---|---|---|---|
 | `int` | 32 位整数 | `100` | `int` | `int32` | number |
 | `long` | 64 位整数 | `123456789012` | `long` | `int64` | number |
+| `date` | 日期时间（Unix 毫秒时间戳）**只能独立成列** | `1704067200000` | `long` | `int64` | number |
 | `float` | 单精度 | `1.5` | `float` | `float32` | number |
 | `double` | 双精度 | `3.14` | `double` | `float64` | number |
 | `str` | 简单字符串（不含 `\|` / 换行 / 制表符） | `hello` | `String` | `string` | string |
 | `bool` | 布尔 | `true` / `false` | `boolean` | `bool` | boolean |
 | `txt` | 自由文本（描述、JSON、多行）**只能独立成列** | `多行\n文本` | `String` | `string` | string |
 
+### `date` 最小示例
+
+```text
+#!tblschema v1
+# @meta id: time_demo
+
+[time/Event] table
+id       | int  | cs | 事件ID
+name     | str  | cs | 名称
+start_at | date | cs | 开始时间
+# @preset
+1 | 开服活动 | 1704067200000
+```
+
+`1704067200000` 是 Unix 毫秒时间戳（UTC 2024-01-01 00:00:00）。写日期文本（如
+`2024-01-01 08:00:00`）会被验证拒绝；需要可读时间时由 UI / Excel 负责转换。
+`date` 只能这样独立成列，不能写 `List<date>` / `Tuple2<int,date>` / `Map<str,date>`。
+
 ## 复合范式
 
-`P` = 任意基础类型（`txt` 除外）或 `@Ref`。
+`P` = 任意基础类型（`txt` / `date` 除外）或 `@Ref`。
 
 | 类型 | 值示例 | 用到的分隔符 |
 |---|---|---|
@@ -62,6 +81,7 @@ Map 的 key 用 `int` / `long` / `float` / `double` / `str`。`bool` key 解析�
 | `List<List<List<P>>>` / `List<Map<K,Map<..>>>` / `Map<K,Map<K2,Map<..>>>` / `Set<List<P>>` / `List<Set<P>>` | 只允许两层，且内层只能是基础类型 / 引用 |
 | `Set<Tuple2<..>>` | Set 元素只能是基础类型 / 引用 |
 | `List<txt>` / `Map<str,txt>` | `txt` 不能嵌套 |
+| `List<date>` / `Tuple2<int,date>` / `Map<str,date>` | `date` 不能嵌套 |
 | `Map<bool,P>` | 解析器不拦，但生成代码没验证过；改用 int / str key |
 | `Tuple1<..>` / `Tuple5<..>` | 只有 2/3/4 |
 
@@ -71,7 +91,7 @@ Map 的 key 用 `int` / `long` / `float` / `double` / `str`。`bool` key 解析�
 
 | 类型 | 空值语义 |
 |---|---|
-| `int` / `long` / `float` / `double` | `0` / `0.0` |
+| `int` / `long` / `date` / `float` / `double` | `0` / `0.0`（date 的 0 = 1970-01-01） |
 | `str` / `txt` | `""` |
 | `bool` | `false` |
 | List / Set / Map | 空集合 |

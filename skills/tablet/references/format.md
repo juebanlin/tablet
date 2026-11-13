@@ -157,7 +157,7 @@ Map_Map.kv  Map_Map.entry  Map_Map.inner_kv  Map_Map.inner_entry
 **不支持跨表条件**。
 
 - 只对 **Table / Enum** 有意义；**constant 段不支持**（`value` 逐行类型不同）。
-- 只对**标量列**生效（`int` / `long` / `float` / `bool` / `str` / `txt` / `@Xxx`）；`List<>` / `Map<>` / `Tuple*` 等复合类型不参与。整数列按数值比较（`01` == `1`），其余按 trim 后字符串比较。
+- 只对**标量列**生效（`int` / `long` / `date` / `float` / `bool` / `str` / `txt` / `@Xxx`）；`List<>` / `Map<>` / `Tuple*` 等复合类型不参与。整数列（含 `date` 的毫秒值）按数值比较（`01` == `1`），其余按 trim 后字符串比较。
 - 级别缺省 `error`；`[warn]` / `[info]` 是否阻断由项目策略决定（`project.toml` 的 `[validate]`，默认 warn=仅提示、info=忽略）。
 - 规则只存 `project.tblmanifest`，不写进 `.tbl`，也不进 Excel。
 - 一列 / 一张表可以有多条规则。系统已保证的约束（table/enum 的 `id` 唯一·必填·正整数、enum 的 `name`

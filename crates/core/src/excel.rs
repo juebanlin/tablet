@@ -22,6 +22,7 @@ use anyhow::{Context, Result};
 use calamine::{open_workbook, Data, Range, Reader, Xlsx};
 use rust_xlsxwriter::{Format, FormatBorder, ProtectionOptions, Workbook, Worksheet};
 
+use crate::date;
 use crate::model::{ConstEntry, Constant, EnumDef, EnumEntry, Export, Group, Table};
 
 const HEADER_BG: &str = "#E0E0E0";
@@ -36,6 +37,24 @@ fn header_format() -> Format {
 
 fn body_format() -> Format {
     Format::new().set_border(FormatBorder::Thin)
+}
+
+/// Excel 里的日期显示格式；单元格底层仍是序列值，不是文本。
+pub(crate) const DATE_NUM_FORMAT: &str = "yyyy-mm-dd hh:mm:ss";
+
+fn date_format_with_border() -> Format {
+    body_format().set_num_format(DATE_NUM_FORMAT)
+}
+
+fn plain_date_format() -> Format {
+    Format::new().set_num_format(DATE_NUM_FORMAT)
+}
+
+/// `date` 字段的存储值（Unix 毫秒）→ Excel 序列值。空值/非法值返回 None，
+/// 非法值按文本照写，让校验层给出带位置的错误。
+fn date_serial_of(raw: &str) -> Option<f64> {
+    let ms = raw.trim().parse::<i64>().ok()?;
+    date::epoch_ms_to_excel_serial(ms)
 }
 
 fn sheet_protection() -> ProtectionOptions {
@@ -90,9 +109,22 @@ pub(crate) fn write_fresh_group(path: &Path, group: &Group) -> Result<()> {
             ws.write_string(HDR_TYPE - 1, c, &f.tbl_type)?;
             ws.write_string(HDR_NAME - 1, c, &f.name)?;
         }
+        let date_fmt = plain_date_format();
         for (r, row) in table.records.iter().enumerate() {
             for (c, val) in row.iter().enumerate() {
-                ws.write_string(r as u32 + DATA_START - 1, c as u16, val)?;
+                let is_date = table
+                    .schema
+                    .fields
+                    .get(c)
+                    .is_some_and(|f| date::is_date_type(&f.tbl_type));
+                let row_idx = r as u32 + DATA_START - 1;
+                if is_date {
+                    if let Some(serial) = date_serial_of(val) {
+                        ws.write_number_with_format(row_idx, c as u16, serial, &date_fmt)?;
+                        continue;
+                    }
+                }
+                ws.write_string(row_idx, c as u16, val)?;
             }
         }
         n += 1;
@@ -104,12 +136,22 @@ pub(crate) fn write_fresh_group(path: &Path, group: &Group) -> Result<()> {
         for (i, h) in ["name", "type", "value", "export", "desc"].iter().enumerate() {
             ws.write_string(0, i as u16, *h)?;
         }
+        let date_fmt = plain_date_format();
         for (r, e) in constant.entries.iter().enumerate() {
-            ws.write_string(r as u32 + 1, 0, &e.name)?;
-            ws.write_string(r as u32 + 1, 1, &e.tbl_type)?;
-            ws.write_string(r as u32 + 1, 2, &e.value)?;
-            ws.write_string(r as u32 + 1, 3, e.export.display())?;
-            ws.write_string(r as u32 + 1, 4, &e.desc)?;
+            let row = r as u32 + 1;
+            ws.write_string(row, 0, &e.name)?;
+            ws.write_string(row, 1, &e.tbl_type)?;
+            if date::is_date_type(&e.tbl_type) {
+                if let Some(serial) = date_serial_of(&e.value) {
+                    ws.write_number_with_format(row, 2, serial, &date_fmt)?;
+                } else {
+                    ws.write_string(row, 2, &e.value)?;
+                }
+            } else {
+                ws.write_string(row, 2, &e.value)?;
+            }
+            ws.write_string(row, 3, e.export.display())?;
+            ws.write_string(row, 4, &e.desc)?;
         }
         n += 1;
     }
@@ -143,6 +185,7 @@ pub(crate) fn write_fresh_group(path: &Path, group: &Group) -> Result<()> {
 pub fn write_table(ws: &mut Worksheet, table: &Table) -> Result<()> {
     let header_fmt = header_format();
     let body_fmt = body_format();
+    let date_fmt = date_format_with_border();
     let fields = &table.schema.fields;
     let col_count = fields.len() as u16;
 
@@ -162,6 +205,13 @@ pub fn write_table(ws: &mut Worksheet, table: &Table) -> Result<()> {
     for (r, row) in table.records.iter().enumerate() {
         let row_idx = (r + 4) as u32;
         for (c, cell) in row.iter().enumerate() {
+            let is_date = fields.get(c).is_some_and(|f| date::is_date_type(&f.tbl_type));
+            if is_date {
+                if let Some(serial) = date_serial_of(cell) {
+                    ws.write_number_with_format(row_idx, c as u16, serial, &date_fmt)?;
+                    continue;
+                }
+            }
             ws.write_string_with_format(row_idx, c as u16, cell, &body_fmt)?;
         }
     }
@@ -178,6 +228,7 @@ pub fn write_table(ws: &mut Worksheet, table: &Table) -> Result<()> {
 pub fn write_constant(ws: &mut Worksheet, constant: &Constant) -> Result<()> {
     let header_fmt = header_format();
     let body_fmt = body_format();
+    let date_fmt = date_format_with_border();
     const HEADERS: [&str; 5] = ["name", "type", "value", "export", "desc"];
 
     for (i, h) in HEADERS.iter().enumerate() {
@@ -188,7 +239,15 @@ pub fn write_constant(ws: &mut Worksheet, constant: &Constant) -> Result<()> {
         let row = (r + 1) as u32;
         ws.write_string_with_format(row, 0, &e.name, &body_fmt)?;
         ws.write_string_with_format(row, 1, &e.tbl_type, &body_fmt)?;
-        ws.write_string_with_format(row, 2, &e.value, &body_fmt)?;
+        if date::is_date_type(&e.tbl_type) {
+            if let Some(serial) = date_serial_of(&e.value) {
+                ws.write_number_with_format(row, 2, serial, &date_fmt)?;
+            } else {
+                ws.write_string_with_format(row, 2, &e.value, &body_fmt)?;
+            }
+        } else {
+            ws.write_string_with_format(row, 2, &e.value, &body_fmt)?;
+        }
         ws.write_string_with_format(row, 3, e.export.display(), &body_fmt)?;
         ws.write_string_with_format(row, 4, &e.desc, &body_fmt)?;
     }
@@ -578,6 +637,31 @@ fn cell_to_string(cell: &Data) -> String {
     }
 }
 
+/// Excel 日期单元格 → Unix 毫秒。calamine 对带日期格式的数字会直接给出
+/// `Data::DateTime`（已处理 1900/1904 日期系统），普通数字则按 1900 序列值解释。
+fn cell_to_date_epoch_ms(cell: &Data) -> Option<i64> {
+    match cell {
+        Data::DateTime(d) => {
+            let (y, mo, da, h, mi, s, ms) = d.to_ymd_hms_milli();
+            date::local_ymd_hms_milli_to_epoch_ms(y, mo, da, h, mi, s, ms)
+        }
+        Data::Float(f) => date::excel_number_to_epoch_ms(*f),
+        Data::Int(i) => date::excel_number_to_epoch_ms(*i as f64),
+        _ => None,
+    }
+}
+
+/// 按目标字段类型读取单元格：date 字段优先把 Excel 日期/序列值转成 Unix 毫秒；
+/// 其它情况保持原有的文本口径（含用户直接填的毫秒数字文本）。
+fn cell_to_storage(cell: &Data, is_date: bool) -> String {
+    if is_date {
+        if let Some(ms) = cell_to_date_epoch_ms(cell) {
+            return ms.to_string();
+        }
+    }
+    cell_to_string(cell)
+}
+
 fn is_empty_row(row: &[Data]) -> bool {
     row.iter().all(|c| matches!(c, Data::Empty) || cell_to_string(c).is_empty())
 }
@@ -671,12 +755,19 @@ fn parse_table_sheet(
         }
     }
 
+    let date_cols: Vec<bool> = fields.iter().map(|f| date::is_date_type(&f.tbl_type)).collect();
     let mut records: Vec<Vec<String>> = Vec::new();
     for row in rows.iter().skip(4) {
         if is_empty_row(row) {
             continue;
         }
-        records.push(col_index.iter().map(|&c| cell_to_string(&row[c])).collect());
+        records.push(
+            col_index
+                .iter()
+                .enumerate()
+                .map(|(i, &c)| cell_to_storage(&row[c], date_cols[i]))
+                .collect(),
+        );
     }
     Ok((fields, records))
 }
@@ -712,10 +803,11 @@ fn parse_constant_sheet(range: &Range<Data>, constant: &Constant) -> Result<Vec<
         if is_empty_row(row) {
             continue;
         }
+        let tbl_type = cell_to_string(&row[1]);
         entries.push(ConstEntry {
             name: cell_to_string(&row[0]),
-            tbl_type: cell_to_string(&row[1]),
-            value: cell_to_string(&row[2]),
+            value: cell_to_storage(&row[2], date::is_date_type(&tbl_type)),
+            tbl_type,
             export: Export::from_input(&cell_to_string(&row[3])),
             desc: cell_to_string(&row[4]),
         });
@@ -849,6 +941,56 @@ mod tests {
             enums: vec![e("e1")],
             is_new: false,
             storage: crate::model::GroupStorage::Tbl, book_stamp: None,
+        }
+    }
+
+    fn t_date() -> Table {
+        let fields = vec![
+            FieldDef { name: "id".into(), desc: "编号".into(), tbl_type: "int".into(), export: Export::ClientServer, aux: None, source_col: None},
+            FieldDef { name: "start_at".into(), desc: "开始时间".into(), tbl_type: "date".into(), export: Export::ClientServer, aux: None, source_col: None},
+        ];
+        Table {
+            name: "Timed".into(),
+            original_name: "Timed".into(),
+            path: PathBuf::from("Timed.tbl"),
+            schema: TableSchema { fields: fields.clone() },
+            records: vec![
+                vec!["1".into(), "1704067200000".into()],
+                vec!["2".into(), "1717200000000".into()],
+            ],
+            dirty: false, deleted: false,
+            original_records: vec![
+                vec!["1".into(), "1704067200000".into()],
+                vec!["2".into(), "1717200000000".into()],
+            ],
+            original_fields: fields,
+            saved: false,
+            fmt_ver: DEFAULT_TBL_VERSION,
+            display_field: None, original_display_field: None,
+            rules: Vec::new(), original_rules: Vec::new(),
+        }
+    }
+
+    fn c_date() -> Constant {
+        Constant {
+            name: "TimeConst".into(),
+            original_name: "TimeConst".into(),
+            path: PathBuf::from("TimeConst.tbl"),
+            original_entries: vec![ConstEntry {
+                name: "OPEN_AT".into(),
+                tbl_type: "date".into(),
+                value: "1704067200000".into(),
+                export: Export::ClientServer,
+                desc: "开服时间".into(),
+            }],
+            entries: vec![ConstEntry {
+                name: "OPEN_AT".into(),
+                tbl_type: "date".into(),
+                value: "1704067200000".into(),
+                export: Export::ClientServer,
+                desc: "开服时间".into(),
+            }],
+            dirty: false, deleted: false, saved: false,
         }
     }
 
@@ -990,6 +1132,58 @@ mod tests {
             }
             _ => panic!("[2] expected Enum"),
         }
+    }
+
+    #[test]
+    fn date_round_trip_through_xlsx_export_and_import() {
+        let group = Group {
+            name: "time".into(),
+            original_name: "time".into(),
+            dir: PathBuf::from("time"),
+            tables: vec![t_date()],
+            constants: vec![c_date()],
+            enums: vec![],
+            is_new: false,
+            storage: crate::model::GroupStorage::Tbl,
+            book_stamp: None,
+        };
+        let bytes = export_group_book(&group, None).unwrap();
+        let tmp = TempXlsx::new(&bytes);
+        let patch = import_xlsx_into_group(&tmp.0, &group).unwrap();
+        match &patch.patches[0] {
+            NodePatch::Table { records, .. } => assert_eq!(records, &group.tables[0].records),
+            _ => panic!("expected Table patch"),
+        }
+        match &patch.patches[1] {
+            NodePatch::Constant { entries, .. } => assert_eq!(entries[0].value, "1704067200000"),
+            _ => panic!("expected Constant patch"),
+        }
+    }
+
+    #[test]
+    fn date_round_trip_through_fresh_xlsx_group_loader() {
+        let dir = std::env::temp_dir();
+        let path = dir.join(format!(
+            "tablet_date_group_{}_{}.xlsx",
+            std::process::id(),
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().subsec_nanos()
+        ));
+        let group = Group {
+            name: "time".into(),
+            original_name: "time".into(),
+            dir: dir.clone(),
+            tables: vec![t_date()],
+            constants: vec![c_date()],
+            enums: vec![],
+            is_new: false,
+            storage: crate::model::GroupStorage::Xlsx,
+            book_stamp: None,
+        };
+        write_fresh_group(&path, &group).unwrap();
+        let loaded = crate::project::load_xlsx_group_all_sheets("time", &dir, &path).unwrap();
+        let _ = std::fs::remove_file(&path);
+        assert_eq!(loaded.tables[0].records, group.tables[0].records);
+        assert_eq!(loaded.constants[0].entries[0].value, "1704067200000");
     }
 
     #[test]

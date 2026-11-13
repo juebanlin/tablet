@@ -1,6 +1,6 @@
 ---
 name: tablet
-description: 生成 / 修改 / 校验 tablet 配置表，并用 tablet-cli 跑通「建项目 → 验证 → 导出」流水线。当用户要新建或扩展 .tblschema 模板、设计字段与类型、追加 # @preset 预设数据、手改 .tbl 数据文件、用 CLI 导入 / 导出 Excel 组、给列 / 表加校验规则（# @rule，多规则各自级别）、从 Unity 插件 / bat 调外部工具刷新配置、查看工作区版本分支，或执行 tablet-cli 命令（project new / schema / validate / export / excel / workspace）时使用。涵盖 .tblschema v1 与 .tbl v3/v2 格式、7 个基础类型 + 复合范式 + @Ref、规则表达式（when/and/or）、错误/警告/信息分级、12 种导出格式、解析器强制的命名规则、退出码约定。
+description: 生成 / 修改 / 校验 tablet 配置表，并用 tablet-cli 跑通「建项目 → 验证 → 导出」流水线。当用户要新建或扩展 .tblschema 模板、设计字段与类型、追加 # @preset 预设数据、手改 .tbl 数据文件、用 CLI 导入 / 导出 Excel 组、给列 / 表加校验规则（# @rule，多规则各自级别）、从 Unity 插件 / bat 调外部工具刷新配置、查看工作区版本分支，或执行 tablet-cli 命令（project new / schema / validate / export / excel / workspace）时使用。涵盖 .tblschema v1 与 .tbl v3/v2 格式、8 个基础类型 + 复合范式 + @Ref、规则表达式（when/and/or）、错误/警告/信息分级、12 种导出格式、解析器强制的命名规则、退出码约定。
 user-invocable: true
 allowed-tools:
   - Read
@@ -97,7 +97,7 @@ C#/Unity 需要二进制数据时：`export data --bin`（整项目 `bin/config.
 合法类型字符串只有这些（详见 `references/types.md`）：
 
 ```
-int long float double str bool txt
+int long date float double str bool txt
 Tuple2<..> Tuple3<..> Tuple4<..>      List<..>  Set<..>  Map<..,..>
 List<Tuple2<..>>  List<Tuple3<..>>  List<Tuple4<..>>
 List<List<..>>  List<Map<..,..>>  Map<..,Map<..,..>>
@@ -105,7 +105,8 @@ Map<..,Tuple2<..>>  Map<..,Tuple3<..>>  Map<..,Tuple4<..>>  Map<..,List<..>>
 @SomeTable   @SomeEnum
 ```
 
-- `txt` 只能独立成列，不能嵌套；其余基础类型可嵌套，`@Ref` 也能出现在参数位。
+- `txt` / `date` 只能独立成列，不能嵌套；其余基础类型可嵌套，`@Ref` 也能出现在参数位。
+- `date` 存 Unix 毫秒时间戳（如 `1704067200000`），生成代码按 `long` / `int64` / `number`。
 - `@Ref` 的目标必须是 table 或 enum，**不能是 constant**；数据里存的是 int id。
 - `List<List<..>>` / `List<Map<..>>` / `Map<..,Map<..>>` 只允许两层且内层为基础类型 / 引用；`Set<Tuple<..>>`、三层以上嵌套都不合法。
 - `str` 不能含 `|` 换行 制表符——需要这些字符就用 `txt`。
@@ -115,6 +116,7 @@ Map<..,Tuple2<..>>  Map<..,Tuple3<..>>  Map<..,Tuple4<..>>  Map<..,List<..>>
 | 类型 | 写法 | 示例 |
 |---|---|---|
 | 基础 | 直接写 | `100` / `1.5` / `true` / `hello` |
+| `date` | Unix 毫秒 | `1704067200000` |
 | Tuple | 逗号 | `5,10` |
 | List / Set | 分号 | `1;2;3` |
 | Map | `k:v` 之间分号 | `hp:100;mp:50` |
