@@ -2,7 +2,7 @@
 
 **把游戏配置表从「一堆 Excel 附件」变成可 review、可验证、可生成代码的工程资产。**
 
-策划照常在表格里填数据，程序拿到的是类型安全的代码：数据以 `.tbl` 纯文本进入 Git，Excel 只当编辑器；一条命令同时产出 JSON / XML 和 10 份多语言配置代码。
+策划照常在表格里填数据，程序拿到的是类型安全的代码：数据以 `.tbl` 纯文本进入 Git，Excel 只用于导入 / 导出（或整组直接作为存储）；一条命令同时产出 JSON / XML 和 10 份多语言配置代码。
 
 - **`tablet`**：桌面端（Tauri + WebView2，内置 Univer 表格编辑）。双击 / 零参数走 GUI，其它参数自动转给 CLI——部署只需要一个 exe。
 - **`tablet-cli`**：命令行入口，给 Jenkins / CI / 自动化脚本用，与 GUI 共享同一份 core。
@@ -132,7 +132,7 @@ tablet-cli --project slg-prod export all
         └── <group>.xlsx        工作簿组：一个文件，sheet = 节点
 ```
 
-`.tbl`、`.tblschema`、`project.tblmanifest`、`project.toml` 都应进版本控制；`.tbl-cache/` 与 `.data/` 是工具临时物。
+`.tbl`、`.tblschema`、`project.tblmanifest`、`project.toml` 都应进版本控制；`.tbl-cache/`（Univer 临时工作簿）、`.excel/`（导出 Excel 默认落点）与 `.data/`（本机偏好）默认不入库。
 
 ## 下载与构建
 

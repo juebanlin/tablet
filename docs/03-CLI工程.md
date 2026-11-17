@@ -32,8 +32,7 @@ tablet/
     │   │   ├── validate/       ← cell / row / schema / project 四层验证
     │   │   ├── template/       ← 项目模板（TemplateSource / Builtin / Local / instantiate）
     │   │   ├── export/         ← JSON / XML / Java / Go / Lua
-    │   │   ├── excel.rs        ← xlsx 严格互转（CLI / GUI 编辑桥接共用）
-    │   │   └── excel_sync.rs   ← Excel 同步引擎（umya-spreadsheet，仅 GUI 同步面板用）
+    │   │   └── excel.rs        ← xlsx 严格互转（CLI / GUI 导入导出 / 映射共用）
     │   ├── templates/          ← Java/Go/Lua 模板源（生成代码用）
     │   └── schemas/            ← 内置 .tblschema（include_str! 嵌入；@02 项目模板 / @08 测试驱动共用）
     │
@@ -87,7 +86,7 @@ game-config/
 │   │   │   │   └── ItemDrop.tbl
 │   │   │   └── global/
 │   │   │       └── GlobalConst.tbl    ← Constant
-│   │   └── .tbl-cache/         ← 临时 xlsx + .tbl.tmp，gitignore（§6、@06）
+│   │   └── .tbl-cache/         ← Univer 回写临时工作簿，gitignore（§6.2）
 │   └── slg-prod/...            ← 另一个 Project
 ├── tblschema/                  ← 本地模板库（可选）
 │   ├── slg-base.tblschema
@@ -98,7 +97,7 @@ game-config/
 └── .gitignore                  ← 详见 §6
 ```
 
-`projects/<id>/` 自包含一个 Project 全部所需（schema + 数据 + 元数据 + Excel 缓存）。同一仓库可并存多个 Project，启动时 UI 默认进入 `[project] last_project` 指定的那个；不存在则进入扫描结果中第一个。
+`projects/<id>/` 自包含一个 Project 全部所需（schema + 数据 + 元数据 + Univer 临时工作簿）。同一仓库可并存多个 Project，启动时 UI 默认进入 `[project] last_project` 指定的那个；不存在则进入扫描结果中第一个。
 
 老仓库的根目录 `config/` 在新版本启动时**自动迁移**到 `projects/default/`（@02 Project / 老结构迁移），不保留双结构。
 
@@ -334,8 +333,11 @@ UI 上的视觉反馈（红框/树节点 `!` /日志框）见 @04.5.4。
 ### 6.2 .gitignore
 
 ```gitignore
-# 编辑器临时工作簿（Univer 回写 / 导出缓存）：每个 Project 自带一份，全部忽略
+# Univer 回写临时工作簿：回写结束 / 进程启动时自动清理
 projects/*/.tbl-cache/
+
+# 导出 Excel 的默认落点（对话框里可改路径）
+projects/*/.excel/
 
 # Excel 临时文件
 *.xlsx~
@@ -372,12 +374,13 @@ gen/
 ```
 <repo-root>/
 ├── tablet.toml                 # 全局配置（进 git）
-├── projects/                     # 全部 Project（进 git，除 .tbl-cache/）
+├── projects/                     # 全部 Project（进 git，除 .excel/ .tbl-cache/）
 │   ├── slg-test/
 │   │   ├── project.toml
 │   │   ├── project.tblmanifest
 │   │   ├── config/
-│   │   └── .tbl-cache/           # ← .gitignore
+│   │   ├── .excel/             # ← 导出 Excel 默认落点（.gitignore）
+│   │   └── .tbl-cache/         # ← Univer 临时工作簿（.gitignore）
 │   └── slg-prod/...
 ├── .data/                        # 本机用户数据 + 进程锁（.gitignore）
 ├── tblschema/                    # 本地模板库（可选进 git，按团队约定）

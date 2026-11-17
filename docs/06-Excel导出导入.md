@@ -33,7 +33,7 @@ Excel 日期不带时区，序列值按本机墙上时间解释；同机导出�
 ## 3. 导出
 
 - 选中多个组 / 节点 → 一本工作簿，一个节点一个 sheet；sheet 名 = 节点名。
-- 导出只读取内存里的当前状态，不要求先保存；输出默认落在 `<project>/.excel/`。
+- 导出只读取内存里的当前状态，不要求先保存；输出默认落在 `<project>/.excel/`（只是默认保存路径，不扫描、不自动同步）。
 - 代码路径：`tablet_core::excel::export_selected_book`；CLI 单组导出走 `export_group_book`。
 
 ## 4. 导入

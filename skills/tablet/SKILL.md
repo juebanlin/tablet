@@ -434,8 +434,9 @@ tablet-cli -w <config仓库根> --project game export code --csharp-unity
 # 运行日志（写在 workdir 根）
 tablet.log
 tablet-crash.log
-# Excel 桥接 / 编辑产生的临时工作簿（tablet 进程启动、退出时自动清理）
+# 导出 Excel 的默认落点（对话框里可改路径）
 projects/*/.excel/
+# Univer 回写临时工作簿（回写结束 / 进程启动时自动清理）
 projects/*/.tbl-cache/
 # xlsx 组保存时的中间文件
 **/*.xlsx.tmp

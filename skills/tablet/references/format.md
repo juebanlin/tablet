@@ -381,5 +381,6 @@ Enum sheet（1 行表头）
     ├── config/<group>/<Name>.tbl    Tbl 组：数据与结构真相源
     ├── config/<group>.xlsx          Xlsx 组：结构与数据真相源（4 行表头 + sheet）
     ├── gen/                         导出默认落点
-    └── .tbl-cache/                  Excel 桥接临时文件
+    ├── .excel/                      导出 Excel 默认落点（可改路径）
+    └── .tbl-cache/                  Univer 回写临时工作簿（自动清理）
 ```
