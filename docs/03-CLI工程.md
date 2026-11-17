@@ -357,7 +357,7 @@ gen/
 ```text
 .data/
   .gitignore        # 内容 *，应用首次写数据时创建
-  user-data.json    # 根结构 UserData：ui.grid（列宽）…；预留 session / 崩溃草稿（撤销不在这里）
+  user-data.json    # 根结构 UserData：ui.grid（列宽）、ui.export（导出格式勾选）…；预留 session / 崩溃草稿（撤销不在这里）
   tablet.lock       # GUI / CLI 互斥锁（原 .tablet.lock）
   tmp/              # 原子写临时文件
 ```

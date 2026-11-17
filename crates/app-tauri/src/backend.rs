@@ -1278,6 +1278,23 @@ impl Backend {
             .map_err(|e| format!("保存列宽失败: {e}"))
     }
 
+    // ── 导出偏好（格式勾选）─────────────────────────────────
+    /// 上次「导出」对话框各格式的勾选状态；没有记录时返回空表，由 UI 用默认值。
+    pub fn export_formats(&self) -> std::collections::BTreeMap<String, bool> {
+        self.user_data.ui.export.formats.clone()
+    }
+
+    /// 记住本次格式勾选，写 `.data/user-data.json`，与项目 dirty 无关。
+    pub fn save_export_formats(
+        &mut self,
+        formats: std::collections::BTreeMap<String, bool>,
+    ) -> Result<(), String> {
+        self.user_data.ui.export.formats = formats;
+        self.user_data
+            .save(&self.user_data_path)
+            .map_err(|e| format!("保存导出偏好失败: {e}"))
+    }
+
     // ── 表格投影 ────────────────────────────────────────────
     fn grid(&self) -> Option<GridPayload> {
         let sel = self.selected.as_ref()?;

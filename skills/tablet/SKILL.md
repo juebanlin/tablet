@@ -451,7 +451,7 @@ Thumbs.db
 
 `projects/*/gen/` 是 `export` 的产物，**不要手改**；要不要提交取决于你们是否让 CI 重新生成。
 
-`.data/` 是每个 checkout 的本机用户数据（`user-data.json`：列宽等视图偏好）和进程锁
+`.data/` 是每个 checkout 的本机用户数据（`user-data.json`：列宽、导出格式勾选等视图偏好）和进程锁
 （`tablet.lock`），**不要提交**。
 
 - **SVN 仓库**：用同一份清单 `svn propset svn:ignore -F .svnignore .`；`tablet-cli.exe` 可以直接提交，

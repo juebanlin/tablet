@@ -77,10 +77,20 @@ pub struct GridPreferences {
     pub nodes: BTreeMap<NodeKey, NodeViewState>,
 }
 
+/// 「导出」对话框的格式勾选（本机习惯，按格式短码记忆）。
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct ExportPreferences {
+    /// 格式短码 → 上次是否勾选；没有记录的格式由 UI 用内置默认值补齐。
+    #[serde(default)]
+    pub formats: BTreeMap<String, bool>,
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct UiPreferences {
     #[serde(default)]
     pub grid: GridPreferences,
+    #[serde(default)]
+    pub export: ExportPreferences,
 }
 
 /// 预留：崩溃恢复草稿 / 会话历史（连续撤销是内存态，不写这里；见 docs/12）。
@@ -383,6 +393,25 @@ mod tests {
         assert!(!n.widths.contains_key("neg"));
         assert!(!n.widths.contains_key("huge"));
         assert!(!n.widths.contains_key("zero"));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn export_formats_round_trip() {
+        let dir = tmp_dir("export");
+        let path = user_data_path(&dir);
+        let mut data = UserData::default();
+        data.ui.export.formats.insert("json".into(), true);
+        data.ui.export.formats.insert("bin".into(), false);
+        data.save(&path).unwrap();
+
+        let back = UserData::load(&path);
+        assert_eq!(back.ui.export.formats.get("json"), Some(&true));
+        assert_eq!(back.ui.export.formats.get("bin"), Some(&false));
+        assert!(!back.ui.export.formats.contains_key("java"), "没勾过的格式不落盘");
+
+        data.clear_all_ui();
+        assert!(data.ui.export.formats.is_empty());
         let _ = fs::remove_dir_all(&dir);
     }
 

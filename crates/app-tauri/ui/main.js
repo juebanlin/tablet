@@ -3971,10 +3971,38 @@ function initGlobalSettings() {
 }
 
 // ── 导出执行 ────────────────────────────────────────────────
-function openExportDialog() {
+// 格式勾选记在 `.data/user-data.json`（ui.export.formats）：下次打开沿用上次选择，
+// 属于本机操作习惯，不参与项目 dirty。没有记录的格式保持 HTML 里的默认值。
+function exportFormatBoxes() {
+  return document.querySelectorAll("#ex-formats input[data-fmt]");
+}
+
+function exportFormatsFromBoxes() {
+  const out = {};
+  exportFormatBoxes().forEach((i) => (out[i.dataset.fmt] = i.checked));
+  return out;
+}
+
+function persistExportFormats() {
+  invoke("save_export_formats", { formats: exportFormatsFromBoxes() }).catch((e) =>
+    addLocalLog(2, String(e)),
+  );
+}
+
+async function openExportDialog() {
   $("ex-result").hidden = true;
   $("ex-result").textContent = "";
   $("ex-error").hidden = true;
+  try {
+    const saved = await invoke("export_formats");
+    exportFormatBoxes().forEach((i) => {
+      if (Object.prototype.hasOwnProperty.call(saved || {}, i.dataset.fmt)) {
+        i.checked = !!saved[i.dataset.fmt];
+      }
+    });
+  } catch (e) {
+    addLocalLog(2, String(e));
+  }
   $("export-dialog").hidden = false;
 }
 
@@ -4004,12 +4032,15 @@ function initExportDialog() {
   $("btn-export").addEventListener("click", openExportDialog);
   $("ex-cancel").addEventListener("click", () => ($("export-dialog").hidden = true));
   $("ex-run").addEventListener("click", runExport);
-  $("ex-all").addEventListener("click", () =>
-    document.querySelectorAll("#ex-formats input[data-fmt]").forEach((i) => (i.checked = true)),
-  );
-  $("ex-none").addEventListener("click", () =>
-    document.querySelectorAll("#ex-formats input[data-fmt]").forEach((i) => (i.checked = false)),
-  );
+  $("ex-formats").addEventListener("change", persistExportFormats);
+  $("ex-all").addEventListener("click", () => {
+    exportFormatBoxes().forEach((i) => (i.checked = true));
+    persistExportFormats();
+  });
+  $("ex-none").addEventListener("click", () => {
+    exportFormatBoxes().forEach((i) => (i.checked = false));
+    persistExportFormats();
+  });
   // 与旧版行为一致的四个快捷预设。
   const presets = {
     all: ["json", "xml", "bin", "java", "go", "cpp", "csharp_dotnet", "typescript_server",
@@ -4022,9 +4053,10 @@ function initExportDialog() {
   document.querySelectorAll("#export-dialog [data-expre]").forEach((btn) => {
     btn.addEventListener("click", () => {
       const want = new Set(presets[btn.dataset.expre] || []);
-      document.querySelectorAll("#ex-formats input[data-fmt]").forEach((i) => {
+      exportFormatBoxes().forEach((i) => {
         i.checked = want.has(i.dataset.fmt);
       });
+      persistExportFormats();
     });
   });
 }

@@ -470,6 +470,21 @@ fn save_grid_view(
 }
 
 #[tauri::command]
+fn export_formats(
+    state: tauri::State<'_, AppState>,
+) -> Result<std::collections::BTreeMap<String, bool>, String> {
+    Ok(lock(&state)?.export_formats())
+}
+
+#[tauri::command]
+fn save_export_formats(
+    state: tauri::State<'_, AppState>,
+    formats: std::collections::BTreeMap<String, bool>,
+) -> Result<(), String> {
+    lock(&state)?.save_export_formats(formats)
+}
+
+#[tauri::command]
 fn xlsx_poll(
     state: tauri::State<'_, AppState>,
 ) -> Result<Vec<backend::XlsxExternalChangeUi>, String> {
@@ -1121,6 +1136,8 @@ fn run_gui(workdir_arg: Option<std::path::PathBuf>) -> anyhow::Result<()> {
             set_show_ref_name,
             set_display_field,
             save_grid_view,
+            export_formats,
+            save_export_formats,
             xlsx_poll,
             reload_xlsx_external,
             set_project_sort,
