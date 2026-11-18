@@ -953,6 +953,22 @@ fn save_xlsx_group(group: &mut crate::model::Group) -> XlsxSaveOutcome {
         placeholder = Some(EMPTY_SHEET.to_string());
     }
 
+    // ── 删除节点 = 删 sheet ──
+    // 必须放在「新节点重名检查」之前：删掉旧节点后在同一份工作簿里新建同名节点
+    // （重置表的常见操作）时，旧 sheet 应当先腾出名字，否则会被误判成撞名而整组保存失败。
+    for (old, deleted) in group.tables.iter().map(|t| (t.original_name.clone(), t.deleted))
+        .chain(group.constants.iter().map(|c| (c.original_name.clone(), c.deleted)))
+        .chain(group.enums.iter().map(|e| (e.original_name.clone(), e.deleted)))
+    {
+        if deleted {
+            if book.sheet_collection_no_check().iter().any(|s| s.name() == old) {
+                if book.remove_sheet_by_name(&old).is_ok() {
+                    out.deleted += 1;
+                }
+            }
+        }
+    }
+
     // ── 新节点的名字不能撞上策划的私有 sheet ──
     // （新节点 `saved == false`；盘上已有同名 sheet 说明那是策划自己加的表，
     //   直接写进去会把人家的内容盖掉。）
@@ -990,20 +1006,6 @@ fn save_xlsx_group(group: &mut crate::model::Group) -> XlsxSaveOutcome {
         }
         if let Ok(ws) = book.sheet_by_name_mut(old) {
             ws.set_name(new);
-        }
-    }
-
-    // ── 删除节点 = 删 sheet ──
-    for (old, deleted) in group.tables.iter().map(|t| (t.original_name.clone(), t.deleted))
-        .chain(group.constants.iter().map(|c| (c.original_name.clone(), c.deleted)))
-        .chain(group.enums.iter().map(|e| (e.original_name.clone(), e.deleted)))
-    {
-        if deleted {
-            if book.sheet_collection_no_check().iter().any(|s| s.name() == old) {
-                if book.remove_sheet_by_name(&old).is_ok() {
-                    out.deleted += 1;
-                }
-            }
         }
     }
 
@@ -1118,12 +1120,48 @@ fn value_as_excel_date(raw: &str) -> Option<f64> {
 /// 把一个 Table 写进 sheet：4 行表头 + 数据，列按**字段名**对齐（策划的私有列原样留着）。
 fn write_table_sheet(
     ws: &mut umya_spreadsheet::Worksheet,
-    table: &crate::model::Table,
+    table: &mut crate::model::Table,
 ) -> Result<(), String> {
     use crate::excel::{DATA_START, HDR_DESC, HDR_EXPORT, HDR_NAME, HDR_TYPE};
 
+    let (mut max_col, mut max_row) = ws.highest_column_and_row();
+
+    // 用户删掉的字段，它原来占用的列必须从工作簿里真正移除：加载器按表头重建
+    // schema，留着表头就等于下次打开又把它读回来；只清空值也会留下一个空列。
+    // 只动「上次落盘时属于 schema、这次已不在」的列；真正没进过 schema 的私有列
+    // 会随删除整体左移，内容不动。
+    let current_cols: std::collections::BTreeSet<u32> = table
+        .schema
+        .fields
+        .iter()
+        .filter_map(|f| f.source_col)
+        .collect();
+    let mut removed_cols: Vec<u32> = table
+        .original_fields
+        .iter()
+        .filter_map(|f| f.source_col)
+        .filter(|c| !current_cols.contains(c) && *c >= 1 && *c <= max_col)
+        .collect();
+    removed_cols.sort_unstable();
+    removed_cols.dedup();
+    if !removed_cols.is_empty() {
+        // 从右往左删，避免左侧列号变化影响还没删的列。
+        for &c in removed_cols.iter().rev() {
+            ws.remove_column_by_index(c - 1, 1);
+        }
+        // 被删列右侧的字段要跟着左移，否则下一次保存会按旧列号写到错误位置。
+        for f in &mut table.schema.fields {
+            if let Some(sc) = f.source_col {
+                let shift = removed_cols.iter().filter(|&&r| r < sc).count() as u32;
+                f.source_col = Some(sc.saturating_sub(shift));
+            }
+        }
+        let (c, r) = ws.highest_column_and_row();
+        max_col = c;
+        max_row = r;
+    }
     let fields = &table.schema.fields;
-    let (max_col, max_row) = ws.highest_column_and_row();
+
     let mut next_col = max_col + 1;
     let mut col_of: Vec<u32> = Vec::with_capacity(fields.len());
     for f in fields {
@@ -5811,6 +5849,229 @@ package = \"com.user.kept\"
     fn config_dir(dir: &Path) -> PathBuf {
         dir.join("projects").join("p1").join("config")
     }
+
+    /// xlsx 组删节点：保存后对应 sheet 必须从工作簿里消失。
+    #[test]
+    fn deleting_xlsx_node_removes_its_sheet_on_save() {
+        let dir = unique_tmp("xlsx_del_node");
+        std::fs::create_dir_all(&dir).unwrap();
+        let project_root = dir.join("projects").join("p1");
+        std::fs::create_dir_all(project_root.join("config")).unwrap();
+        std::fs::write(dir.join(crate::CONFIG_FILE), "").unwrap();
+
+        let node = |name: &str| Table {
+            name: name.into(),
+            original_name: name.into(),
+            path: project_root.join("config/g.xlsx"),
+            schema: TableSchema { fields: vec![id_field()] },
+            records: vec![vec!["1".into()]],
+            dirty: true,
+            deleted: false,
+            original_records: Vec::new(),
+            original_fields: Vec::new(),
+            saved: false,
+            fmt_ver: crate::tbl::DEFAULT_TBL_VERSION,
+            display_field: None,
+            original_display_field: None,
+            rules: Vec::new(),
+            original_rules: Vec::new(),
+        };
+        let mut project = make_project(dir.clone(), project_root.clone(), "p1");
+        project.groups.push(Group {
+            name: "g".into(),
+            original_name: "g".into(),
+            dir: project_root.join("config"),
+            tables: vec![node("Keep"), node("Drop")],
+            constants: Vec::new(),
+            enums: Vec::new(),
+            is_new: true,
+            storage: GroupStorage::Xlsx,
+            book_stamp: None,
+        });
+        let (_, _, warnings, failed) = save_project_files(&mut project);
+        assert!(!failed, "{warnings:?}");
+
+        let loaded = crate::project::load_specific_project(&dir, "p1").expect("重新加载");
+        let mut engine = ProjectEngine::new(loaded, GlobalConfig::default());
+        engine.delete_node("g", "Drop");
+        // 用户实际顺序：先删节点（不保存），再新建一个节点，最后一起保存。
+        engine.execute_action(&ProjectAction::NewTable {
+            project_id: "p1".into(),
+            group: "g".into(),
+            name: "Fresh".into(),
+            fmt_ver: crate::tbl::DEFAULT_TBL_VERSION,
+        }).expect("新建表");
+        assert!(engine.save_all(), "保存应成功");
+
+        let path = project_root.join("config/g.xlsx");
+        let book = umya_spreadsheet::reader::xlsx::read(&path).unwrap();
+        let sheets: Vec<&str> = book
+            .sheet_collection()
+            .iter()
+            .map(|s| s.name())
+            .collect();
+        assert_eq!(sheets, vec!["Keep", "Fresh"], "Drop 的 sheet 必须从工作簿里删掉");
+
+        let reloaded = crate::project::load_specific_project(&dir, "p1").expect("再加载");
+        let tables: Vec<&str> = reloaded
+            .groups
+            .iter()
+            .find(|g| g.name == "g")
+            .unwrap()
+            .tables
+            .iter()
+            .map(|t| t.name.as_str())
+            .collect();
+        assert_eq!(tables, vec!["Keep", "Fresh"]);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// xlsx 组「删掉旧节点 + 新建同名节点」一次保存：旧 sheet 先删、新 sheet 再建。
+    #[test]
+    fn deleting_and_recreating_same_named_xlsx_node_in_one_save() {
+        let dir = unique_tmp("xlsx_recreate_node");
+        std::fs::create_dir_all(&dir).unwrap();
+        let project_root = dir.join("projects").join("p1");
+        std::fs::create_dir_all(project_root.join("config")).unwrap();
+        std::fs::write(dir.join(crate::CONFIG_FILE), "").unwrap();
+
+        let node = |name: &str| Table {
+            name: name.into(),
+            original_name: name.into(),
+            path: project_root.join("config/g.xlsx"),
+            schema: TableSchema { fields: vec![id_field()] },
+            records: vec![vec!["1".into()]],
+            dirty: true, deleted: false,
+            original_records: Vec::new(), original_fields: Vec::new(),
+            saved: false, fmt_ver: crate::tbl::DEFAULT_TBL_VERSION,
+            display_field: None, original_display_field: None,
+            rules: Vec::new(), original_rules: Vec::new(),
+        };
+        let mut project = make_project(dir.clone(), project_root.clone(), "p1");
+        project.groups.push(Group {
+            name: "g".into(), original_name: "g".into(),
+            dir: project_root.join("config"),
+            tables: vec![node("Drop")],
+            constants: Vec::new(), enums: Vec::new(), is_new: true,
+            storage: GroupStorage::Xlsx, book_stamp: None,
+        });
+        let (_, _, warnings, failed) = save_project_files(&mut project);
+        assert!(!failed, "{warnings:?}");
+
+        let loaded = crate::project::load_specific_project(&dir, "p1").expect("重新加载");
+        let mut engine = ProjectEngine::new(loaded, GlobalConfig::default());
+        engine.delete_node("g", "Drop");
+        engine.execute_action(&ProjectAction::NewTable {
+            project_id: "p1".into(),
+            group: "g".into(),
+            name: "Drop".into(),
+            fmt_ver: crate::tbl::DEFAULT_TBL_VERSION,
+        }).expect("新建同名表");
+        assert!(engine.save_all(), "删旧建新一次保存应成功");
+
+        let book = umya_spreadsheet::reader::xlsx::read(&project_root.join("config/g.xlsx")).unwrap();
+        let sheets: Vec<&str> = book.sheet_collection().iter().map(|s| s.name()).collect();
+        assert_eq!(sheets, vec!["Drop"], "只留新建的那张 sheet");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// xlsx 组删列：保存后删除的字段列必须从工作簿里消失。
+    ///
+    /// 回归：`write_table_sheet` 只按当前 schema 写列，旧字段的列既不写也不清，
+    /// 重新打开时又被解析回字段——用户看到「删了保存成功，打开还在」。
+    #[test]
+    fn deleting_xlsx_field_removes_its_column_on_save() {
+        let dir = unique_tmp("xlsx_del_col");
+        std::fs::create_dir_all(&dir).unwrap();
+        let project_root = dir.join("projects").join("p1");
+        std::fs::create_dir_all(project_root.join("config")).unwrap();
+        std::fs::write(dir.join(crate::CONFIG_FILE), "").unwrap();
+
+        let field = |name: &str, ty: &str| FieldDef {
+            name: name.into(),
+            desc: name.into(),
+            tbl_type: ty.into(),
+            export: Export::ClientServer,
+            aux: None,
+            source_col: None,
+        };
+        let fields = vec![id_field(), field("name", "str"), field("hp", "int")];
+        let mut project = make_project(dir.clone(), project_root.clone(), "p1");
+        project.groups.push(Group {
+            name: "g".into(),
+            original_name: "g".into(),
+            dir: project_root.join("config"),
+            tables: vec![Table {
+                name: "T".into(),
+                original_name: "T".into(),
+                path: project_root.join("config/g.xlsx"),
+                schema: TableSchema { fields: fields.clone() },
+                records: vec![vec!["1".into(), "Alice".into(), "100".into()]],
+                dirty: true,
+                deleted: false,
+                original_records: Vec::new(),
+                original_fields: Vec::new(),
+                saved: false,
+                fmt_ver: crate::tbl::DEFAULT_TBL_VERSION,
+                display_field: None,
+                original_display_field: None,
+                rules: Vec::new(),
+                original_rules: Vec::new(),
+            }],
+            constants: Vec::new(),
+            enums: Vec::new(),
+            is_new: true,
+            storage: GroupStorage::Xlsx,
+            book_stamp: None,
+        });
+        let (_, _, warnings, failed) = save_project_files(&mut project);
+        assert!(!failed, "{warnings:?}");
+
+        // 从盘上重新加载，字段带 source_col，才是 App 打开时的真实状态。
+        let loaded = crate::project::load_specific_project(&dir, "p1").expect("重新加载");
+        let mut engine = ProjectEngine::new(loaded, GlobalConfig::default());
+        let names = |engine: &ProjectEngine| {
+            engine
+                .find_project("p1")
+                .unwrap()
+                .groups
+                .iter()
+                .find(|g| g.name == "g")
+                .unwrap()
+                .tables
+                .iter()
+                .find(|t| t.name == "T")
+                .unwrap()
+                .schema
+                .fields
+                .iter()
+                .map(|f| f.name.clone())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(names(&engine), vec!["id", "name", "hp"]);
+
+        engine.delete_column("g", "T", 2);
+        assert!(engine.save_all(), "保存应成功");
+
+        let reloaded = crate::project::load_specific_project(&dir, "p1").expect("再加载");
+        let t = reloaded
+            .groups
+            .iter()
+            .find(|g| g.name == "g")
+            .unwrap()
+            .tables
+            .iter()
+            .find(|t| t.name == "T")
+            .unwrap();
+        let got: Vec<&str> = t.schema.fields.iter().map(|f| f.name.as_str()).collect();
+        assert_eq!(got, vec!["id", "name"], "hp 列删掉后不该在重新打开时复活");
+        assert_eq!(t.records, vec![vec!["1".to_string(), "Alice".to_string()]]);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
 
     /// 只改列属性（类型 / 导出 / 描述）：`.tbl` 要写，`project.tblmanifest` 不该重写。
     ///
